@@ -198,17 +198,61 @@ export const listDurableObjectNamespaces = async (access: CloudflareAccountAcces
     );
 };
 
-/** A Durable Objects dataset the probe found that can be metered, and how to query it. */
-export interface DurableObjectsDataset {
+/** One sum field a probe looks for. */
+export interface SumWant<TSum extends string = string> {
+    name: TSum;
+
+    /**
+     * What the field's schema description must say for it to be taken, when
+     * the name alone does not state its unit. A field whose description does
+     * not match is left alone and reported, never read in a unit we guessed.
+     */
+    unit?: RegExp;
+}
+
+/**
+ * What a probe looks for: a dataset field on the account type, starting with
+ * `prefix`, whose group has at least one of `sums`, one of the attribution
+ * `dimensions` (in order of preference), and an hour or instant time filter.
+ */
+export interface DatasetSpec<TSum extends string = string, TBy extends string = string> {
+    by: ReadonlyArray<TBy>;
+    /** Names the probe in its cache, so two probes of one account never overwrite each other. */
+    key: string;
+
+    /** The product, as the unavailable message names it ("Durable Objects"). */
+    label: string;
+
+    /**
+     * A dimension that names the dispatch namespace of a row, when the dataset
+     * has one. Reported as {@link ProbedDataset.namespace}; never required by the
+     * probe — the reader decides whether it can do without it.
+     */
+    namespaceDimension?: RegExp;
+    /** The datasets tried first, in this order. Any other `prefix*` field follows, alphabetically. */
+    preferred: ReadonlyArray<string>;
+    prefix: string;
+    /** What the dataset must report, as the unavailable message says it. */
+    requirement: string;
+    sums: ReadonlyArray<SumWant<TSum>>;
+}
+
+/** A dataset a probe found that can be metered, and how to query it. */
+export interface ProbedDataset<TSum extends string = string, TBy extends string = string> {
     /** The dimension rows are attributed by. */
-    by: "namespaceId" | "scriptName";
+    by: TBy;
     /** The dataset's field on the account type, e.g. `durableObjectsPeriodicGroups`. */
     field: string;
     /** The time filter: `hour` filters `datetimeHour_geq/_leq`, `instant` filters `datetime_geq/_leq`. */
     filter: "hour" | "instant";
-    /** The sum fields the dataset has, of `rowsRead` and `rowsWritten`. */
-    sums: ("rowsRead" | "rowsWritten")[];
+    /** The dispatch-namespace dimension ({@link DatasetSpec.namespaceDimension}), when the dataset has one. */
+    namespace?: string;
+    /** The wanted sum fields the dataset has, in the order the spec lists them. */
+    sums: TSum[];
 }
+
+/** A Durable Objects dataset the probe found that reports rows, and how to query it. */
+export type DurableObjectsDataset = ProbedDataset<"rowsRead" | "rowsWritten", "namespaceId" | "scriptName">;
 
 interface TypeRef {
     kind?: string;
@@ -247,8 +291,20 @@ const typeName = (name: string): string => {
     return JSON.stringify(name);
 };
 
-/** The datasets the probe tries first, in this order. Any other `durableObjects*` field follows, alphabetically. */
-const PREFERRED_DATASETS = ["durableObjectsPeriodicGroups", "durableObjectsInvocationsAdaptiveGroups"];
+/**
+ * The Durable Objects datasets that report rows: tried first, in this order.
+ * Any other `durableObjects*` field follows, alphabetically.
+ */
+const DURABLE_OBJECTS_ROWS: DatasetSpec<"rowsRead" | "rowsWritten", "namespaceId" | "scriptName"> = {
+    // A namespace id names one namespace; a script name can be shared across dispatch namespaces.
+    by: ["namespaceId", "scriptName"],
+    key: "durableObjects:rows",
+    label: "Durable Objects",
+    preferred: ["durableObjectsPeriodicGroups", "durableObjectsInvocationsAdaptiveGroups"],
+    prefix: "durableObjects",
+    requirement: "rowsRead/rowsWritten with a scriptName or namespaceId dimension",
+    sums: [{ name: "rowsRead" }, { name: "rowsWritten" }],
+};
 
 /** Fields of the given types, read in one aliased introspection request. */
 const typeFields = async (access: CloudflareAccountAccess, names: ReadonlyArray<string>, selection: string): Promise<Record<string, unknown>> => {
@@ -265,12 +321,14 @@ const typeFields = async (access: CloudflareAccountAccess, names: ReadonlyArray<
 export const PROBE_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
- * The schema discovery's outcome per account — the dataset, or why there is
- * none — with when it was found. Per account, so one account's schema (or
- * plan) never decides another's, and for {@link PROBE_TTL_MS} only, so a
- * schema that gains the dataset is noticed without a new isolate.
+ * The schema discovery's outcome per account and probe — the dataset, or why
+ * there is none — with when it was found. Per account, so one account's schema
+ * (or plan) never decides another's, per probe ({@link DatasetSpec.key}), so the
+ * rows probe and the CPU probe of one account never overwrite each other, and
+ * for {@link PROBE_TTL_MS} only, so a schema that gains the dataset is noticed
+ * without a new isolate.
  */
-const probed = new Map<string, { at: number; outcome: DurableObjectsDataset | UsageUnavailableError }>();
+const probed = new Map<string, { at: number; outcome: ProbedDataset | UsageUnavailableError }>();
 
 /** Forget every probe outcome — for tests, which each describe their own schema. */
 export const resetDurableObjectsProbe = (): void => {
@@ -301,8 +359,46 @@ const accountTypeName = async (access: CloudflareAccountAccess): Promise<string>
     return account;
 };
 
+/** A described type's fields: names, with their descriptions. */
+type Described = Map<string, string | undefined>;
+
+/** The wanted sums a dataset has — a unit-checked one only when its description states the unit — and the ones it has in an unstated unit. */
+const wantedSums = <TSum extends string>(spec: DatasetSpec<TSum>, sums: Described): { present: TSum[]; unstated: string[] } => {
+    const present: TSum[] = [];
+    const unstated: string[] = [];
+
+    for (const want of spec.sums) {
+        if (!sums.has(want.name)) {
+            continue;
+        }
+
+        const description = sums.get(want.name) ?? "";
+
+        if (want.unit === undefined || want.unit.test(description)) {
+            present.push(want.name);
+        } else {
+            unstated.push(`${want.name} does not state its unit (${description === "" ? "no description" : JSON.stringify(description.slice(0, 80))})`);
+        }
+    }
+
+    return { present, unstated };
+};
+
+/** The time filter a filter type offers, if any. */
+const timeFilterOf = (filters: Described): ProbedDataset["filter"] | undefined => {
+    if (filters.has("datetimeHour_geq") && filters.has("datetimeHour_leq")) {
+        return "hour";
+    }
+
+    return filters.has("datetime_geq") && filters.has("datetime_leq") ? "instant" : undefined;
+};
+
 /** Pick the dataset to meter from what the schema describes, or say why none fits. */
-const chooseDataset = async (access: CloudflareAccountAccess, candidates: ReadonlyArray<IntrospectedField>): Promise<DurableObjectsDataset> => {
+const chooseDataset = async <TSum extends string, TBy extends string>(
+    access: CloudflareAccountAccess,
+    spec: DatasetSpec<TSum, TBy>,
+    candidates: ReadonlyArray<IntrospectedField>,
+): Promise<ProbedDataset<TSum, TBy>> => {
     const groups = candidates.map((field) => {
         return { field: field.name, filter: namedType(field.args?.find((argument) => argument.name === "filter")?.type), group: namedType(field.type) };
     });
@@ -323,61 +419,46 @@ const chooseDataset = async (access: CloudflareAccountAccess, candidates: Readon
     });
     // One request for every sum, dimensions and filter type, in that order per dataset.
     const names = shapes.flatMap((shape) => [shape.sum ?? "Unknown", shape.dimensions ?? "Unknown", shape.filter ?? "Unknown"]);
-    const described = await typeFields(access, names, "fields { name } inputFields { name }");
-    const fieldNames = (index: number): Set<string> => {
-        const type = described[`t${String(index)}`] as { fields?: { name: string }[] | null; inputFields?: { name: string }[] | null } | null;
+    const described = await typeFields(access, names, "fields { name description } inputFields { name }");
+    const fieldsOf = (index: number): Described => {
+        const type = described[`t${String(index)}`] as {
+            fields?: { description?: null | string; name: string }[] | null;
+            inputFields?: { name: string }[] | null;
+        } | null;
 
-        return new Set([...(type?.fields ?? []), ...(type?.inputFields ?? [])].map((field) => field.name));
+        return new Map<string, string | undefined>([
+            ...(type?.fields ?? []).map((field): [string, string | undefined] => [field.name, field.description ?? undefined]),
+            ...(type?.inputFields ?? []).map((field): [string, string | undefined] => [field.name, undefined]),
+        ]);
     };
     const seen: string[] = [];
 
     for (const [index, shape] of shapes.entries()) {
-        const sums = fieldNames(index * 3);
-        const dimensions = fieldNames(index * 3 + 1);
-        const filters = fieldNames(index * 3 + 2);
-        const rowSums = (["rowsRead", "rowsWritten"] as const).filter((name) => sums.has(name));
-        let filter: DurableObjectsDataset["filter"] | undefined;
+        const sums = fieldsOf(index * 3);
+        const dimensions = fieldsOf(index * 3 + 1);
+        const filter = timeFilterOf(fieldsOf(index * 3 + 2));
+        const { present, unstated } = wantedSums(spec, sums);
+        const by = spec.by.find((dimension) => dimensions.has(dimension));
+        const pattern = spec.namespaceDimension;
+        const namespace = pattern === undefined ? undefined : [...dimensions.keys()].find((dimension) => pattern.test(dimension));
 
-        if (filters.has("datetimeHour_geq") && filters.has("datetimeHour_leq")) {
-            filter = "hour";
-        } else if (filters.has("datetime_geq") && filters.has("datetime_leq")) {
-            filter = "instant";
+        if (present.length > 0 && filter !== undefined && by !== undefined) {
+            return { by, field: shape.field, filter, ...(namespace === undefined ? {} : { namespace }), sums: present };
         }
 
-        let by: DurableObjectsDataset["by"] | undefined;
-
-        // A namespace id names one namespace; a script name can be shared across dispatch namespaces.
-        if (dimensions.has("namespaceId")) {
-            by = "namespaceId";
-        } else if (dimensions.has("scriptName")) {
-            by = "scriptName";
-        }
-
-        if (rowSums.length > 0 && filter !== undefined && by !== undefined) {
-            return { by, field: shape.field, filter, sums: rowSums };
-        }
-
-        seen.push(`${shape.field} (sum: ${[...sums].join(", ") || "none"}; dimensions: ${[...dimensions].join(", ") || "none"})`);
+        seen.push(
+            `${shape.field} (sum: ${[...sums.keys()].join(", ") || "none"}; dimensions: ${[...dimensions.keys()].join(", ") || "none"}${unstated.length > 0 ? `; ${unstated.join("; ")}` : ""})`,
+        );
     }
 
     throw new UsageUnavailableError(
-        `no Durable Objects dataset reports rowsRead/rowsWritten with a scriptName or namespaceId dimension and an hour filter; seen: ${seen.join("; ") || "none"}`.slice(
-            0,
-            500,
-        ),
+        `no ${spec.label} dataset reports ${spec.requirement} and an hour filter; seen: ${seen.join("; ") || "none"}`.slice(0, 500),
     );
 };
 
 /**
- * Find the Durable Objects dataset that reports rows read and written, by
- * GraphQL introspection, and remember the answer for the account, for
- * {@link PROBE_TTL_MS}.
- *
- * Storage units (`storageReadUnits`, `storageWriteUnits`) are deliberately not
- * taken as rows. They are 4 KB units of the key-value backend, priced
- * differently. Billing them as `doRowsRead` / `doRowsWritten` would misstate the
- * bill, so a dataset that only has those is reported as unavailable, with the
- * fields it does have.
+ * Find the dataset `spec` describes by GraphQL introspection, and remember the
+ * answer for the account and spec, for {@link PROBE_TTL_MS}.
  *
  * Only what the schema says is remembered: a dataset, or a definitive "none".
  * A refused token or a failed request is not cached. Otherwise a fixed token
@@ -385,15 +466,21 @@ const chooseDataset = async (access: CloudflareAccountAccess, candidates: Readon
  * @throws {UsageUnavailableError} when the schema offers no dataset to meter.
  * @throws {CloudflareTokenError} when the token is refused.
  */
-export const probeDurableObjectsDataset = async (access: CloudflareAccountAccess, now = Date.now()): Promise<DurableObjectsDataset> => {
-    const known = probed.get(access.accountId);
+export const probeDataset = async <TSum extends string, TBy extends string>(
+    access: CloudflareAccountAccess,
+    spec: DatasetSpec<TSum, TBy>,
+    now = Date.now(),
+): Promise<ProbedDataset<TSum, TBy>> => {
+    const cacheKey = `${spec.key}:${access.accountId}`;
+    const known = probed.get(cacheKey);
 
     if (known !== undefined && now - known.at < PROBE_TTL_MS) {
         if (known.outcome instanceof UsageUnavailableError) {
             throw known.outcome;
         }
 
-        return known.outcome;
+        // Stored under this spec's own key, so it is this spec's dataset.
+        return known.outcome as ProbedDataset<TSum, TBy>;
     }
 
     try {
@@ -401,40 +488,83 @@ export const probeDurableObjectsDataset = async (access: CloudflareAccountAccess
         const { t0: accountType } = (await typeFields(access, [account], `fields { name type { ${TYPE_REF} } args { name type { ${TYPE_REF} } } }`)) as {
             t0?: { fields?: IntrospectedField[] } | null;
         };
+        const rank = (name: string): number => {
+            const index = spec.preferred.indexOf(name);
+
+            return index === -1 ? spec.preferred.length : index;
+        };
         const candidates = (accountType?.fields ?? [])
-            .filter((field) => field.name.startsWith("durableObjects"))
-            .toSorted((a, b) => {
-                const rank = (name: string): number => {
-                    const index = PREFERRED_DATASETS.indexOf(name);
-
-                    return index === -1 ? PREFERRED_DATASETS.length : index;
-                };
-
-                return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
-            });
+            .filter((field) => field.name.startsWith(spec.prefix))
+            .toSorted((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
 
         if (candidates.length === 0) {
-            throw new UsageUnavailableError(`the GraphQL account type ${account} has no durableObjects* dataset`);
+            throw new UsageUnavailableError(`the GraphQL account type ${account} has no ${spec.prefix}* dataset`);
         }
 
-        const dataset = await chooseDataset(access, candidates);
+        const dataset = await chooseDataset(access, spec, candidates);
 
-        probed.set(access.accountId, { at: now, outcome: dataset });
+        probed.set(cacheKey, { at: now, outcome: dataset });
 
         return dataset;
     } catch (error) {
         if (error instanceof UsageUnavailableError) {
-            probed.set(access.accountId, { at: now, outcome: error });
+            probed.set(cacheKey, { at: now, outcome: error });
         }
 
         throw error;
     }
 };
 
-interface DurableObjectsGroup {
-    dimensions?: { namespaceId?: string; scriptName?: string };
-    sum?: { rowsRead?: number; rowsWritten?: number };
+/**
+ * Find the Durable Objects dataset that reports rows read and written, by
+ * GraphQL introspection ({@link probeDataset}).
+ *
+ * Storage units (`storageReadUnits`, `storageWriteUnits`) are deliberately not
+ * taken as rows. They are 4 KB units of the key-value backend, priced
+ * differently. Billing them as `doRowsRead` / `doRowsWritten` would misstate the
+ * bill, so a dataset that only has those is reported as unavailable, with the
+ * fields it does have.
+ * @throws {UsageUnavailableError} when the schema offers no dataset to meter.
+ * @throws {CloudflareTokenError} when the token is refused.
+ */
+export const probeDurableObjectsDataset = async (access: CloudflareAccountAccess, now = Date.now()): Promise<DurableObjectsDataset> =>
+    probeDataset(access, DURABLE_OBJECTS_ROWS, now);
+
+/** One row of a probed dataset: its sums and dimensions, by the names the probe found. */
+export interface ProbedGroup {
+    dimensions?: Record<string, string | undefined>;
+    sum?: Record<string, number | undefined>;
 }
+
+/**
+ * The groups of a probed dataset in a closed window (`[sinceMs, untilMs)`),
+ * with its sums and its attribution (and dispatch-namespace) dimension.
+ * @throws {Error} when the result reaches {@link STORAGE_QUERY_LIMIT} rows and may be truncated.
+ */
+export const readProbedGroups = async (
+    access: CloudflareAccountAccess,
+    dataset: ProbedDataset,
+    window: UsageWindow,
+    options: { label: string; operation: string },
+): Promise<ProbedGroup[]> => {
+    const filter =
+        dataset.filter === "hour"
+            ? hourFilter(window, "datetimeHour_geq", "datetimeHour_leq")
+            : `datetime_geq: ${JSON.stringify(graphqlTime(window.sinceMs))}, datetime_leq: ${JSON.stringify(graphqlTime(window.untilMs - 1000))}`;
+    const dimensions = [dataset.by, ...(dataset.namespace === undefined ? [] : [dataset.namespace])].join(" ");
+    const data = await cloudflareGraphql<{ viewer?: { accounts?: { rows?: ProbedGroup[] }[] } }>(
+        access,
+        `query ${options.operation}($accountTag: string!) { viewer { accounts(filter: { accountTag: $accountTag }) { rows: ${dataset.field}(limit: ${String(STORAGE_QUERY_LIMIT)}, filter: { ${filter} }) { sum { ${dataset.sums.join(" ")} } dimensions { ${dimensions} } } } } }`,
+        { accountTag: access.accountId },
+    );
+    const groups = data.viewer?.accounts?.[0]?.rows ?? [];
+
+    if (groups.length >= STORAGE_QUERY_LIMIT) {
+        throw new Error(`${options.label} analytics hit the ${String(STORAGE_QUERY_LIMIT)}-row limit; refusing a truncated count`);
+    }
+
+    return groups;
+};
 
 /** The key of usage no tenant can be named for. It matches no `resourceRef`, so the rollback counts it as unattributed. */
 const unattributed = (what: string): string => `unattributed:${what}`;
@@ -461,8 +591,8 @@ const isTenantNamespace = (namespace: DurableObjectNamespaceRef, dispatchNamespa
  *   a production Worker named alike), since the row cannot be split between them.
  */
 const tenantOf = (
-    group: DurableObjectsGroup,
-    by: DurableObjectsDataset["by"],
+    group: ProbedGroup,
+    by: string,
     namespaces: ReadonlyArray<DurableObjectNamespaceRef>,
     dispatchNamespace: string | undefined,
 ): string | undefined => {
@@ -504,14 +634,44 @@ const tenantOf = (
 };
 
 /**
- * Durable Object rows read and written per Worker script in a closed,
- * hour-aligned window (`[sinceMs, untilMs)`), through the dataset the probe
- * found. Every row is placed through the namespace list ({@link tenantOf}),
- * whichever dimension the dataset has: only namespaces of this reader's tenants
+ * A Durable Objects dataset's usage per Worker script in a closed, hour-aligned
+ * window (`[sinceMs, untilMs)`), each group turned into meters by `toUsage`.
+ * Every row is placed through the namespace list ({@link tenantOf}), whichever
+ * dimension the dataset has: only namespaces of this reader's tenants
  * (`dispatchNamespace` on `cloudflare-wfp`; outside any dispatch namespace on a
  * connected account) are attributed. The platform's own Workers and another
  * environment's are dropped, and what the list cannot place is keyed
  * `unattributed:…`, which the rollback counts and the sweep reports.
+ */
+export const readDurableObjectsByScript = async (
+    access: CloudflareAccountAccess,
+    window: UsageWindow,
+    input: {
+        dataset: ProbedDataset<string, "namespaceId" | "scriptName">;
+        operation: string;
+        toUsage: (sum: Record<string, number | undefined>) => PeriodUsage;
+    },
+    options: { dispatchNamespace?: string } = {},
+): Promise<Map<string, PeriodUsage>> => {
+    const groups = await readProbedGroups(access, input.dataset, window, { label: "Durable Objects", operation: input.operation });
+    const namespaces = await listDurableObjectNamespaces(access);
+    const byScript = new Map<string, PeriodUsage>();
+
+    for (const group of groups) {
+        const script = tenantOf(group, input.dataset.by, namespaces, options.dispatchNamespace);
+
+        if (script !== undefined) {
+            addUsage(byScript, script, input.toUsage(group.sum ?? {}));
+        }
+    }
+
+    return byScript;
+};
+
+/**
+ * Durable Object rows read and written per Worker script in a closed,
+ * hour-aligned window, through the dataset the probe found
+ * ({@link readDurableObjectsByScript} places each row).
  * @throws {UsageUnavailableError} when no dataset can be metered.
  * @throws {CloudflareTokenError} when the token lacks Account Analytics Read.
  */
@@ -519,36 +679,19 @@ export const readDurableObjectUsageByScript = async (
     access: CloudflareAccountAccess,
     window: UsageWindow,
     options: { dispatchNamespace?: string } = {},
-): Promise<Map<string, PeriodUsage>> => {
-    const dataset = await probeDurableObjectsDataset(access);
-    const filter =
-        dataset.filter === "hour"
-            ? hourFilter(window, "datetimeHour_geq", "datetimeHour_leq")
-            : `datetime_geq: ${JSON.stringify(graphqlTime(window.sinceMs))}, datetime_leq: ${JSON.stringify(graphqlTime(window.untilMs - 1000))}`;
-    const data = await cloudflareGraphql<{ viewer?: { accounts?: { rows?: DurableObjectsGroup[] }[] } }>(
+): Promise<Map<string, PeriodUsage>> =>
+    readDurableObjectsByScript(
         access,
-        `query LunoraDurableObjectRows($accountTag: string!) { viewer { accounts(filter: { accountTag: $accountTag }) { rows: ${dataset.field}(limit: ${String(STORAGE_QUERY_LIMIT)}, filter: { ${filter} }) { sum { ${dataset.sums.join(" ")} } dimensions { ${dataset.by} } } } } }`,
-        { accountTag: access.accountId },
+        window,
+        {
+            dataset: await probeDurableObjectsDataset(access),
+            operation: "LunoraDurableObjectRows",
+            toUsage: (sum) => {
+                return { doRowsRead: count(sum["rowsRead"]), doRowsWritten: count(sum["rowsWritten"]) };
+            },
+        },
+        options,
     );
-    const groups = data.viewer?.accounts?.[0]?.rows ?? [];
-
-    if (groups.length >= STORAGE_QUERY_LIMIT) {
-        throw new Error(`Durable Objects analytics hit the ${String(STORAGE_QUERY_LIMIT)}-row limit; refusing a truncated count`);
-    }
-
-    const namespaces = await listDurableObjectNamespaces(access);
-    const byScript = new Map<string, PeriodUsage>();
-
-    for (const group of groups) {
-        const script = tenantOf(group, dataset.by, namespaces, options.dispatchNamespace);
-
-        if (script !== undefined) {
-            addUsage(byScript, script, { doRowsRead: count(group.sum?.rowsRead), doRowsWritten: count(group.sum?.rowsWritten) });
-        }
-    }
-
-    return byScript;
-};
 
 /**
  * Run one read of a usage source, reporting a refused token, or a query

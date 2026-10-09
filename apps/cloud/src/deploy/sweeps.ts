@@ -417,8 +417,18 @@ export interface ReadbackFleet {
     usage?: UsageReadback;
 }
 
-/** The label of a family's unavailable state: what the Usage tab and the log say. */
-const meteringLabel = (family: UsageFamily): string => (family === "requests" ? "request metering" : "storage metering");
+/** The label of each family's unavailable state: what the Usage tab and the log say. */
+const METERING_LABEL: Record<UsageFamily, string> = {
+    d1: "storage metering",
+    durableObjectDuration: "Durable Object duration metering",
+    durableObjectRequests: "Durable Object request metering",
+    durableObjects: "storage metering",
+    requests: "request metering",
+    workersCpu: "CPU metering",
+};
+
+/** The label of a family's unavailable state. */
+const meteringLabel = (family: UsageFamily): string => METERING_LABEL[family];
 
 /** The callbacks of {@link runReadbackUsageSweep}. */
 interface ReadbackSweepOptions {

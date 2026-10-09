@@ -698,6 +698,88 @@ describe(runReadbackUsageSweep, () => {
             ]);
         });
 
+        it("meters CPU time and Durable Object requests and duration as their own families, billed and accrued like rows", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, organizations: [{ _id: "org_a", plan: "pro" }], usageCheckpoints: [] });
+
+            await runReadbackUsageSweep(
+                database,
+                [
+                    wfpFleet({
+                        durableObjectDuration: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doDurationGbS: 400 }, resourceRef: "shop" }]) },
+                        durableObjectRequests: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doRequests: 1_000_000 }, resourceRef: "shop" }]) },
+                        workersCpu: { cadence: "hourly", read: () => Promise.resolve([{ meters: { cpuMs: 30_000 }, resourceRef: "shop" }]) },
+                    }),
+                ],
+                { now, onScopeFailed: () => undefined },
+            );
+
+            const closed = Date.UTC(2026, 5, 15, 10);
+
+            expect(database.tables["usageCheckpoints"]?.map(({ readAtMs, scopeKey }) => [scopeKey, readAtMs])).toStrictEqual([
+                ["default#workersCpu", closed],
+                ["default#durableObjectRequests", closed],
+                ["default#durableObjectDuration", closed],
+            ]);
+            expect(database.tables["platformUsage"]).toStrictEqual(
+                [
+                    ["cpuMs", 30_000],
+                    ["doRequests", 1_000_000],
+                    ["doDurationGbS", 400],
+                ].map(([kind, quantity]): unknown =>
+                    expect.objectContaining({
+                        deploymentId: "dep_shop",
+                        kind,
+                        periodStart: june,
+                        quantity,
+                        windowEnd: closed,
+                        windowStart: closed - 60 * 60 * 1000,
+                    }),
+                ),
+            );
+            expect(database.tables["platformUsage"]?.some((row) => "billable" in row)).toBe(false);
+            expect(database.tables["organizations"]).toStrictEqual([
+                {
+                    _id: "org_a",
+                    plan: "pro",
+                    spendNanoCents:
+                        30_000 * RATE_CARD.cpuMs.nanoCentsPerUnit +
+                        1_000_000 * RATE_CARD.doRequests.nanoCentsPerUnit +
+                        400 * RATE_CARD.doDurationGbS.nanoCentsPerUnit,
+                    spendPeriod: june,
+                },
+            ]);
+        });
+
+        it("shows a compute family that cannot read under its own label, while the row family beside it still advances", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, usageCheckpoints: [] });
+
+            await runReadbackUsageSweep(
+                database,
+                [
+                    wfpFleet({
+                        durableObjects: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doRowsRead: 9 }, resourceRef: "shop" }]) },
+                        workersCpu: {
+                            cadence: "hourly",
+                            read: () => Promise.reject(new UsageUnavailableError("workersInvocationsAdaptive has no dispatch-namespace dimension")),
+                        },
+                    }),
+                ],
+                { now, onScopeFailed: () => undefined },
+            );
+
+            expect(database.tables["usageSourceStatus"]).toStrictEqual([
+                expect.objectContaining({ scopeKey: "default#durableObjects", unattributedQuantity: 0 }),
+                expect.objectContaining({
+                    scopeKey: "default#workersCpu",
+                    unavailableReason: "CPU metering unavailable: workersInvocationsAdaptive has no dispatch-namespace dimension",
+                }),
+            ]);
+            expect(database.tables["usageCheckpoints"]?.map(({ scopeKey }) => scopeKey)).toStrictEqual(["default#durableObjects"]);
+            expect(meteringNotices(database.tables["usageSourceStatus"] as unknown as SourceStatusRow[], [], "default", now)).toStrictEqual([
+                { family: "workersCpu", message: expect.stringContaining("Workers CPU time is not counted") as string, source: "Lunora Cloud" },
+            ]);
+        });
+
         it("reports a refused token (as the drivers translate it) the same way, and clears the state once the source reads again", async () => {
             const database = memoryStore({ deployments: wfpDeployments, usageCheckpoints: [] });
             let refuse = true;
