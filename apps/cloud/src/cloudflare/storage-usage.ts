@@ -705,8 +705,10 @@ export const readDurableObjectsByScript = async (
     },
     options: { dispatchNamespace?: string } = {},
 ): Promise<Map<string, PeriodUsage>> => {
-    const groups = await readProbedGroups(access, input.dataset, window, { label: "Durable Objects", operation: input.operation });
-    const namespaces = await listDurableObjectNamespaces(access);
+    const [groups, namespaces] = await Promise.all([
+        readProbedGroups(access, input.dataset, window, { label: "Durable Objects", operation: input.operation }),
+        listDurableObjectNamespaces(access),
+    ]);
     const byScript = new Map<string, PeriodUsage>();
 
     for (const group of groups) {
