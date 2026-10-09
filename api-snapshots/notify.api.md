@@ -551,11 +551,8 @@ interface NormalizeOptions {
 }
 ```
 
-### `PushContent` (interface)
+### `PushContent` (type)
 
 ```ts
-interface PushContent extends Omit<PushPayload, "to"> {
-    ttl?: number;
-    urgency?: WebPushConfig["urgency"];
-}
+type PushContent = Omit<PushPayload, "to">;
 ```
