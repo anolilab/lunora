@@ -1,3 +1,9 @@
+## @lunora/testing [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.247...@lunora/testing@1.0.0-alpha.248) (2026-10-09)
+
+### Features
+
+* **testing:** record ctx.topics in lunoraTest ([#1051](https://github.com/anolilab/lunora/issues/1051)) ([96f4b7d](https://github.com/anolilab/lunora/commit/96f4b7d6dcf518e8ce699f09805e7b554ee9c81d))
+
 ## @lunora/testing [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.246...@lunora/testing@1.0.0-alpha.247) (2026-10-09)
 
 ### Features

@@ -459,6 +459,12 @@ not admitted with one of its grants: outside an upload request, or when
   state of abandoned uploads accumulate, and they appear in listings of the
   bucket. Add an R2 object lifecycle rule that deletes objects under the prefix
   after a few days, longer than any upload should take.
+- **Per-caller state.** To keep one caller's uploads out of another's reach,
+  pass `stateScope`: a function returning the scope to read each request's
+  state under, ending in `/` (for example `` () => `${caller.get().userId}/` ``).
+  State then lives under `statePrefix` plus the scope, so a PATCH, HEAD or
+  DELETE from another scope finds nothing. `list()` reads only the unscoped
+  root, so scoped uploads do not appear in it.
 - **Removing uploads.** `DELETE` (TUS) or `expiration` aborts an upload in
   progress, with its parts and segments. For a finished upload they drop only
   the state, never the stored file: removing a file is `ctx.storage.delete`.
