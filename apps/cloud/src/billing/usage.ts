@@ -73,6 +73,32 @@ export const isBillableUsage = (row: { billable?: boolean | null }): boolean => 
  */
 export const isBilledTarget = (target: TargetId): boolean => TARGETS[target].placedOn === "cell";
 
+/**
+ * Meters the readback writes but does not bill yet: **alert-only until
+ * verified against a live Cloudflare account.** Their source fields are found
+ * by schema introspection (`src/cloudflare/compute-usage.ts`), and neither the
+ * field names, their units nor the dispatch-namespace attribution have been
+ * compared with a real account. So on every target their rows are written
+ * `billable: false`: they feed usage alerts, anomaly scores, the Usage tab and
+ * the threshold suggestion, and never the spend accrual, admission,
+ * `usage.enforceSpendCaps` or the overage debit.
+ *
+ * Empty this set only after the first live readback has been compared with
+ * Cloudflare's own dashboard for the same hours (Workers for Platforms CPU
+ * time; Durable Objects requests and duration), on the platform cell. Rows
+ * written before then stay display-only; that under-bills, the fail-safe
+ * direction. A tenant's own `usage.ingest` reports are not readback rows and
+ * are not affected.
+ */
+export const UNVERIFIED_METERS: ReadonlySet<UsageMeter> = new Set<UsageMeter>(["cpuMs", "doDurationGbS", "doRequests"]);
+
+/**
+ * Whether a readback row of `meter` for a `target`'s tenant is billed: the
+ * target must be billed ({@link isBilledTarget}) and the meter verified
+ * ({@link UNVERIFIED_METERS}).
+ */
+export const isBilledReadback = (target: TargetId, meter: UsageMeter): boolean => isBilledTarget(target) && !UNVERIFIED_METERS.has(meter);
+
 /** Drop the zero meters — the sparse form the cost model and breakdown take. */
 export const toPeriodUsage = (totals: UsageTotals): PeriodUsage => {
     const usage: PeriodUsage = {};

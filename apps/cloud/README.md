@@ -578,18 +578,24 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
 - **Each window is billed to its own month.** A window that crosses a month
   boundary is split there, so the last hour of a month stays on that month.
   Known gap: the six-hourly overage reconcile reads the current period only,
-  so rows of a closed month written after it closed are never debited as
-  overage: the last readback hour of `requests`, and the last two or so hours
-  of `cpuMs` (an hourly family, read only once an hour has closed for the
-  lag). The spend cap, the summary and the invoice read them; overage prices
-  only `requests` and `cpuMs`, so storage is unaffected. Billable `cpuMs` rows
-  are new with the CPU readback, so a `cloudflare-wfp` organization past its
-  plan's included CPU (`INCLUDED_USAGE`) is now debited CPU overage.
-- **Spend cap.** On `cloudflare-wfp`, storage rows and the compute meters
-  (`cpuMs`, `doRequests`, `doDurationGbS`) are billable like requests:
+  so `requests` rows of a closed month written after it closed (the last
+  readback hour) are never debited as overage. The spend cap, the summary and
+  the invoice read them; overage prices only `requests` and `cpuMs`, so
+  storage is unaffected.
+- **Spend cap.** On `cloudflare-wfp`, storage rows are billable like requests:
   priced by `RATE_CARD`, accrued into `organizations.spendNanoCents` at once
   (admission), and summed by `usage.enforceSpendCaps` every hour. BYO rows stay
   `billable: false`.
+- **Alert-only meters (`UNVERIFIED_METERS`, `src/billing/usage.ts`).** The
+  compute meters (`cpuMs`, `doRequests`, `doDurationGbS`) are written
+  `billable: false` on every target, the platform cell included, until a live
+  readback has been checked against Cloudflare's dashboard: their fields are
+  discovered by introspection and their names, units and namespace attribution
+  are unverified. They feed usage alerts, anomaly scores, the Usage tab and the
+  threshold suggestion; never the admission accrual, `usage.enforceSpendCaps`
+  or the overage debit. Emptying the set is the one switch that bills them,
+  and only rows written after it are billed. A tenant's own `usage.ingest`
+  reports are not readback rows and keep their billing.
 
 **Spend caps** (`src/billing/spend.ts`, `usage.enforceSpendCaps`, plan 365) have
 two thresholds per org. `evaluateSpendCap` prices the period's billable ledger

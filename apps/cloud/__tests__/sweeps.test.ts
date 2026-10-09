@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { overageCreditsOwed } from "../src/billing/overage";
+import { buildOverageReconcileData } from "../src/billing/reconcile";
 import { accrualBreached, RATE_CARD } from "../src/billing/spend";
 import type { ReadbackFleet } from "../src/deploy/sweeps";
 import { runReadbackUsageSweep, teardownPorts, USAGE_SCOPE_CONCURRENCY, usageAttributionOf, usageRollbackPorts } from "../src/deploy/sweeps";
@@ -698,8 +700,8 @@ describe(runReadbackUsageSweep, () => {
             ]);
         });
 
-        it("meters CPU time and Durable Object requests and duration as their own families, billed and accrued like rows", async () => {
-            const database = memoryStore({ deployments: wfpDeployments, organizations: [{ _id: "org_a", plan: "pro" }], usageCheckpoints: [] });
+        it("meters CPU time and Durable Object requests and duration as their own families, alert-only on the platform cell", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, organizations: [{ _id: "org_a", plan: "free" }], usageCheckpoints: [] });
 
             await runReadbackUsageSweep(
                 database,
@@ -707,7 +709,8 @@ describe(runReadbackUsageSweep, () => {
                     wfpFleet({
                         durableObjectDuration: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doDurationGbS: 400 }, resourceRef: "shop" }]) },
                         durableObjectRequests: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doRequests: 1_000_000 }, resourceRef: "shop" }]) },
-                        workersCpu: { cadence: "hourly", read: () => Promise.resolve([{ meters: { cpuMs: 30_000 }, resourceRef: "shop" }]) },
+                        // Far past the free plan's included 3M CPU-ms: billed, this would be overage.
+                        workersCpu: { cadence: "hourly", read: () => Promise.resolve([{ meters: { cpuMs: 900_000_000 }, resourceRef: "shop" }]) },
                     }),
                 ],
                 { now, onScopeFailed: () => undefined },
@@ -720,13 +723,15 @@ describe(runReadbackUsageSweep, () => {
                 ["default#durableObjectRequests", closed],
                 ["default#durableObjectDuration", closed],
             ]);
+            // `UNVERIFIED_METERS`: written display-only on the cell, which bills every verified meter.
             expect(database.tables["platformUsage"]).toStrictEqual(
                 [
-                    ["cpuMs", 30_000],
+                    ["cpuMs", 900_000_000],
                     ["doRequests", 1_000_000],
                     ["doDurationGbS", 400],
                 ].map(([kind, quantity]): unknown =>
                     expect.objectContaining({
+                        billable: false,
                         deploymentId: "dep_shop",
                         kind,
                         periodStart: june,
@@ -736,17 +741,36 @@ describe(runReadbackUsageSweep, () => {
                     }),
                 ),
             );
-            expect(database.tables["platformUsage"]?.some((row) => "billable" in row)).toBe(false);
+            // No admission accrual…
+            expect(database.tables["organizations"]).toStrictEqual([{ _id: "org_a", plan: "free" }]);
+
+            // …and no overage: the reconcile sees no CPU at all.
+            const { inputs } = await buildOverageReconcileData(database, june);
+
+            expect(inputs).toStrictEqual([expect.objectContaining({ organizationId: "org_a", usage: { cpuMs: 0, requests: 0 } })]);
+            expect(overageCreditsOwed("free", inputs[0]?.usage ?? {})).toBe(0);
+        });
+
+        it("still bills a verified meter on the cell beside the alert-only ones", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, organizations: [{ _id: "org_a", plan: "pro" }], usageCheckpoints: [] });
+
+            await runReadbackUsageSweep(
+                database,
+                [
+                    wfpFleet({
+                        durableObjects: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doRowsWritten: 7 }, resourceRef: "shop" }]) },
+                        workersCpu: { cadence: "hourly", read: () => Promise.resolve([{ meters: { cpuMs: 5 }, resourceRef: "shop" }]) },
+                    }),
+                ],
+                { now, onScopeFailed: () => undefined },
+            );
+
+            expect(database.tables["platformUsage"]?.map((row) => [row["kind"], row["billable"]])).toStrictEqual([
+                ["doRowsWritten", undefined],
+                ["cpuMs", false],
+            ]);
             expect(database.tables["organizations"]).toStrictEqual([
-                {
-                    _id: "org_a",
-                    plan: "pro",
-                    spendNanoCents:
-                        30_000 * RATE_CARD.cpuMs.nanoCentsPerUnit +
-                        1_000_000 * RATE_CARD.doRequests.nanoCentsPerUnit +
-                        400 * RATE_CARD.doDurationGbS.nanoCentsPerUnit,
-                    spendPeriod: june,
-                },
+                { _id: "org_a", plan: "pro", spendNanoCents: 7 * RATE_CARD.doRowsWritten.nanoCentsPerUnit, spendPeriod: june },
             ]);
         });
 

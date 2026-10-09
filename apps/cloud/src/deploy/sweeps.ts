@@ -12,7 +12,7 @@
  */
 import type { SpendAccrual } from "../billing/spend";
 import { accruedSpend } from "../billing/spend";
-import { isBilledTarget } from "../billing/usage";
+import { isBilledReadback } from "../billing/usage";
 import type { ControlPlaneStore } from "../d1-store";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
 import { runUsageRollback } from "../metering/rollback";
@@ -353,18 +353,19 @@ export const usageRollbackPorts = async (
     source: UsageSource & { scope: string },
     options: { attribution: ReadonlyMap<string, UsageAttribution>; family: UsageFamily; now: number; target: TargetId },
 ): Promise<UsageRollbackPorts> => {
-    const billable = isBilledTarget(options.target);
-
     return {
         ...(await checkpointPorts(database, { now: options.now, scopeKey: usageScopeKey(source.scope, options.family), target: options.target })),
         cadence: source.cadence,
         now: options.now,
         read: async (window) => source.read(source.scope, window),
         record: async ({ attribution, meter, periodStart, quantity, window }) => {
+            // A tenant on a host its organization owns (its own Cloudflare account):
+            // its usage is on the customer's bill. And a meter not yet verified
+            // against a live account is alert-only (`UNVERIFIED_METERS`). Either
+            // way the row is shown and never billed.
+            const billable = isBilledReadback(options.target, meter);
+
             await database.insert("platformUsage", {
-                // A tenant on a host its organization owns (its own Cloudflare
-                // account): its usage is on the customer's bill, so the row is
-                // shown and never billed.
                 ...(billable ? {} : { billable: false }),
                 createdAt: options.now,
                 deploymentId: attribution.deploymentId,
