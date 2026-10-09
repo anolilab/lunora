@@ -47,6 +47,38 @@ interface TypeError {
 const MISSING_EXPORT = /has no exported member '([^']+)'/;
 
 /**
+ * The first error inside a declaration of this file that `handler` uses, when that
+ * declaration lies outside the handler, or `undefined`. Covers an identifier whose
+ * type is broken at its declaration rather than at its use, which is how a
+ * module-level `const` or an import of a removed export reaches a handler.
+ */
+const errorBehindUse = (handler: Node, errors: Diagnostic[], start: number, end: number): string | undefined => {
+    const file = handler.getSourceFile();
+
+    for (const identifier of handler.getDescendantsOfKind(SyntaxKind.Identifier)) {
+        for (const declaration of identifier.getSymbol()?.getDeclarations() ?? []) {
+            const declared = declaration.getStart();
+
+            if (declaration.getSourceFile() !== file || (declared >= start && declared <= end)) {
+                continue;
+            }
+
+            const cause = errors.find((diagnostic) => {
+                const at = diagnostic.getStart();
+
+                return at !== undefined && at >= declaration.getStart() && at <= declaration.getEnd();
+            });
+
+            if (cause !== undefined) {
+                return messageOf(cause);
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/**
  * The first type error located inside `handler`, or `undefined`. A handler the
  * checker could not type usually has one: an import of an export that no longer
  * exists, an unresolved name, a wrong argument.
@@ -67,7 +99,12 @@ const typeErrorWithin = (handler: Node): TypeError | undefined => {
     });
 
     if (earliest === undefined) {
-        return undefined;
+        // No error inside the handler: the reason may be a declaration it uses, which
+        // is broken elsewhere in the file (a `const` built from an unresolved name, or
+        // an import of a removed export).
+        const behind = errorBehindUse(handler, errors, start, end);
+
+        return behind === undefined ? undefined : { derivative: true, message: behind };
     }
 
     const first = messageOf(earliest);

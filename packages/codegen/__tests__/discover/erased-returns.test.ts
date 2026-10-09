@@ -197,6 +197,18 @@ const UNKNOWN_WITH_UNRELATED_ERROR = `
     export const getOpaque = query({ args: {}, handler: async () => { const unused = missingReference; return opaque; } });
 `;
 
+/**
+ * The error sits in a module-level `const` the handler reads, not in the handler. The
+ * handler's own type is degraded, so the reason has to be found through the declaration.
+ */
+const ERROR_BEHIND_USE = `
+    import { query } from "@lunora/server";
+
+    const viaMissing = missingReference;
+
+    export const getViaMissing = query({ args: {}, handler: async () => viaMissing.value });
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -271,6 +283,15 @@ describe("procedure_return_type_erased", () => {
         const findings = advisoriesFor({ "opaque.ts": UNKNOWN_WITH_UNRELATED_ERROR }).filter((finding) => finding.name === "procedure_return_type_erased");
 
         expect(findings).toHaveLength(0);
+    }, 300_000);
+
+    it("names the error in a declaration the handler uses when the handler itself has none", () => {
+        expect.assertions(2);
+
+        const findings = advisoriesFor({ "behind.ts": ERROR_BEHIND_USE }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ metadata: { exportName: "getViaMissing", filePath: "behind" } });
     }, 300_000);
 
     it("does not report a handler erasure a declared `.output(...)` replaces", () => {
