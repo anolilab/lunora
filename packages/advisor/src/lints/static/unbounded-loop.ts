@@ -38,7 +38,7 @@ const unboundedLoop: Lint = {
     level: "ERROR",
     name: "unbounded_loop",
     remediation:
-        "Give the loop an exit: loop on a real condition (`while (cursor !== null)`), `break` when the work runs out, or cap it with an iteration budget. For recurring work, do one batch per invocation and re-arm with `ctx.scheduler.runAfter(…)` behind a guard that stops when nothing is left.",
+        "Give the loop an exit: loop on a real condition (`while (cursor !== null)`), `break` when the work runs out, or cap it with an iteration budget. An `await` is not an exit: a long-polling `while (true)` worker is rejected unless it can still leave — check `signal.throwIfAborted()` each turn, `break` when the source closes, or stop at a deadline. For recurring work, do one batch per invocation and re-arm with `ctx.scheduler.runAfter(…)` behind a guard that stops when nothing is left.",
     run: (context) => {
         if (context.unboundedLoops === undefined) {
             return [];
