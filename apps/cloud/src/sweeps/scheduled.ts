@@ -53,6 +53,7 @@ import { resolveBoxTelemetryConfig } from "../telemetry/ingest-key";
 import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics";
 import { orgAdminEmails } from "../telemetry/recipients";
 import { runAlertSweep } from "../telemetry/sweep";
+import { runUsageAlertSweep } from "../telemetry/usage-alert-sweep";
 import { runUptimeSweep } from "../uptime/sweep";
 
 /** The Worker's own entry, as far as a scheduled run reaches it. */
@@ -243,6 +244,28 @@ const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
     await deliverFiredAlerts(env, database, deliveries, now);
     // The anomaly → rate-limit action (plan 365 W7): intent only; `sweepEdgeRules` applies it.
     await engageAnomalyRateLimits(database, transitions, now);
+};
+
+/**
+ * Usage-alert sweep: compare each `usage_threshold` rule's month-to-date usage
+ * with its threshold and fire it once per month. Hourly, beside the readback
+ * that fills the ledger it reads.
+ */
+const sweepUsageAlerts = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries, incomplete } = await runUsageAlertSweep(database, { now });
+
+    if (incomplete.length > 0) {
+        // eslint-disable-next-line no-console -- a rule left undecided by a truncated read would otherwise be silent
+        console.error("[usage-alerts] ledger read stopped at the page cap; rules left undecided", JSON.stringify(incomplete));
+    }
+
+    await deliverFiredAlerts(env, database, deliveries, now);
 };
 
 /**
@@ -635,6 +658,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     // BEFORE this tick, so the usage rollback writing this tick's rows alongside
     // it lands in the next bucket rather than racing this one.
     { cron: EVERY_HOUR, run: sweepAnomalies },
+    // Monthly usage thresholds, against the ledger the previous tick's readback filled.
+    { cron: EVERY_HOUR, run: sweepUsageAlerts },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

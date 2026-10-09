@@ -501,16 +501,20 @@ seam (runs at the edge with the account token).
 **Storage metering.** Request counts alone never see a Durable Object alarm
 stuck in a loop: it runs up billions of row reads and writes without serving a
 request. So the hourly readback (`runReadbackUsageSweep`,
-`src/deploy/sweeps.ts`) reads three families per scope, each with its own
+`src/deploy/sweeps.ts`) reads six families per scope, each with its own
 checkpoint (`usageCheckpoints.scopeKey`: the bare scope for requests,
-`{scope}#d1` and `{scope}#durableObjects` for storage). A failing D1 read
-therefore neither blocks nor skips the request window.
+`{scope}#{family}` for the others). A failing D1 read therefore neither blocks
+nor skips the request window, and a compute meter the account's schema does
+not offer leaves the row meters beside it reading.
 
-| Family           | Meters                        | Source                                                                                | Window                        |
-| ---------------- | ----------------------------- | ------------------------------------------------------------------------------------- | ----------------------------- |
-| `requests`       | `requests`                    | the dispatcher's AE dataset (`cloudflare-wfp`), `workersInvocationsAdaptive` (BYO)    | up to now                     |
-| `d1`             | `d1RowsRead`, `d1RowsWritten` | `d1AnalyticsAdaptiveGroups`, one database per aliased field, filtered by `databaseId` | closed hours only, 15 min lag |
-| `durableObjects` | `doRowsRead`, `doRowsWritten` | the `durableObjects*` dataset that introspection finds with `rowsRead`/`rowsWritten`  | closed hours only, 15 min lag |
+| Family                  | Meters                        | Source                                                                                | Window                        |
+| ----------------------- | ----------------------------- | ------------------------------------------------------------------------------------- | ----------------------------- |
+| `requests`              | `requests`                    | the dispatcher's AE dataset (`cloudflare-wfp`), `workersInvocationsAdaptive` (BYO)    | up to now                     |
+| `d1`                    | `d1RowsRead`, `d1RowsWritten` | `d1AnalyticsAdaptiveGroups`, one database per aliased field, filtered by `databaseId` | closed hours only, 15 min lag |
+| `durableObjects`        | `doRowsRead`, `doRowsWritten` | the `durableObjects*` dataset that introspection finds with `rowsRead`/`rowsWritten`  | closed hours only, 15 min lag |
+| `workersCpu`            | `cpuMs`                       | the `workersInvocations*` dataset that introspection finds with CPU time in µs        | closed hours only, 15 min lag |
+| `durableObjectRequests` | `doRequests`                  | the `durableObjects*` dataset that introspection finds with `requests`                | closed hours only, 15 min lag |
+| `durableObjectDuration` | `doDurationGbS`               | the `durableObjects*` dataset whose `duration` the schema describes in GB-seconds     | closed hours only, 15 min lag |
 
 - **Attribution.** A D1 database is a tenant's when its name is one
   `tenantResourceName` produced (`{alias}--{binding}`); the database list
@@ -536,10 +540,35 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
   and caches the answer per account for six hours. Storage units
   (`storageReadUnits`, 4 KB units of the key-value backend) are never priced
   as rows.
+- **Compute meters (`src/cloudflare/compute-usage.ts`).** Each has its own
+  probe, cached per account and meter, and a sum is taken only where its unit
+  is known: `cpuTimeUs` (µs by its name) or a `cpuTime` whose schema
+  description says microseconds, divided by 1,000 into `cpuMs`; a Durable
+  Object `duration` only where its description states GB-seconds. Active or
+  wall time is never converted at an assumed memory size. A field in an
+  unstated unit is unavailable, with its description in the reason. Durable
+  Object requests and duration are placed through the namespace list like
+  rows. CPU rows are placed by script name: on `cloudflare-wfp` the CPU dataset
+  must have a dispatch-namespace dimension (`dispatchNamespaceName` when the
+  schema has it, else the first `dispatchNamespace*`), and only rows of this
+  environment's dispatch namespace count, otherwise CPU is unavailable on the
+  cell. A row matches by the namespace's name or by its id, resolved through
+  the account's dispatch-namespace listing (`GET …/workers/dispatch/namespaces`,
+  cached six hours). When rows carry namespace values that are neither ours
+  nor any namespace the listing knows, and none is ours, the read is
+  unavailable and names the values it saw: dropping them all would read as
+  zero and move the checkpoint past usage that happened. Analytics Engine has
+  no CPU time (a Worker cannot measure another's), so the cell reads CPU from
+  its account's GraphQL like the storage meters. On a connected account, rows
+  of any dispatch namespace are dropped. The dispatcher's and outbound
+  Worker's CPU, which Cloudflare bills with the user Worker's as one chain,
+  belongs to no tenant and is not metered: `cpuMs` under-counts the chain,
+  never over-counts it.
 - **Unavailable is shown, never zero.** When a source cannot read at all — the
   schema has no dataset to meter, the token lacks Account Analytics: Read, or
   Cloudflare rejects the query itself (a 200 with `errors`) — the sweep
-  records `storage metering unavailable: <reason>` in `usageSourceStatus`,
+  records `storage metering unavailable: <reason>` (`CPU metering …`,
+  `Durable Object request metering …` for the compute families) in `usageSourceStatus`,
   logs it, and keeps the checkpoint where it was. A read that fails (a 5xx, a
   429, a result at the 10,000-row limit) is retried next hour; its error and
   since when it has failed are kept too, and the Usage tab shows it once it has
@@ -551,6 +580,15 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
   can be read.
 - **Each window is billed to its own month.** A window that crosses a month
   boundary is split there, so the last hour of a month stays on that month.
+  A part's checkpoint is written before its ledger rows: a failed checkpoint
+  write records nothing, so the retry cannot record the window twice, and a run
+  that dies between the two loses that part (an under-count, like a dropped
+  ledger write). Known gap: the readback holds no lease, so two runs of one
+  (scope, family) that overlap would both read from the same checkpoint and
+  both record the window. Only the hourly tick runs it, and a scheduled
+  invocation is capped well under an hour, so this needs Cloudflare to deliver
+  one tick twice; a lease or a unique ledger key per (scope, family, window,
+  resource, meter) is what would close it.
   Known gap: the six-hourly overage reconcile reads the current period only,
   so `requests` rows of a closed month written after it closed (the last
   readback hour) are never debited as overage. The spend cap, the summary and
@@ -560,6 +598,16 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
   priced by `RATE_CARD`, accrued into `organizations.spendNanoCents` at once
   (admission), and summed by `usage.enforceSpendCaps` every hour. BYO rows stay
   `billable: false`.
+- **Alert-only meters (`UNVERIFIED_METERS`, `src/billing/usage.ts`).** The
+  compute meters (`cpuMs`, `doRequests`, `doDurationGbS`) are written
+  `billable: false` on every target, the platform cell included, until a live
+  readback has been checked against Cloudflare's dashboard: their fields are
+  discovered by introspection and their names, units and namespace attribution
+  are unverified. They feed usage alerts, anomaly scores, the Usage tab and the
+  threshold suggestion; never the admission accrual, `usage.enforceSpendCaps`
+  or the overage debit. Emptying the set is the one switch that bills them,
+  and only rows written after it are billed. A tenant's own `usage.ingest`
+  reports are not readback rows and keep their billing.
 
 **Spend caps** (`src/billing/spend.ts`, `usage.enforceSpendCaps`, plan 365) have
 two thresholds per org. `evaluateSpendCap` prices the period's billable ledger
@@ -792,13 +840,69 @@ write) and every admin-token route stay off the MCP surface.
 
 ### Alerts & anomaly detection (`lunora/alerts.ts`, `src/telemetry/`)
 
-Alert rules fire on four kinds of condition (`alertFamily` in
+Alert rules fire on five kinds of condition (`alertFamily` in
 `src/telemetry/alerts.ts`): a count crossing a threshold (`issue`, `incident`,
 `uptime`), a metric window (`error_rate`, `latency_p95`, `llm_cost`, as a
-threshold or as a deviation from a trailing baseline), an event (`deploy`), and
-an **anomaly score** (`usage_anomaly`, `error_anomaly`, `storage_anomaly`, plan 365 W4). Every
-family is delivered the same way (email, webhook, Slack, PagerDuty) and latches
-in `alertRuleState`, so a sustained breach alerts once and clears on recovery.
+threshold or as a deviation from a trailing baseline), an event (`deploy`), an
+**anomaly score** (`usage_anomaly`, `error_anomaly`, `storage_anomaly`, plan 365 W4),
+and **monthly usage** (`usage_threshold`). Every family is delivered the same
+way (email, webhook, Slack, PagerDuty) and latches in `alertRuleState`, so a
+sustained breach alerts once and clears on recovery.
+
+**Monthly usage alerts** (`src/telemetry/usage-alerts.ts`,
+`src/telemetry/usage-alert-sweep.ts`) answer "tell me when this month's Workers
+requests pass 2M". A `usage_threshold` rule names a meter (`alertRules.meter`),
+a monthly quantity in that meter's unit (`threshold`) and, optionally, a
+project (`alertRules.projectId`). The hourly sweep sums the meter's
+`platformUsage` rows of the current UTC month for the organization, or for the
+project's deployments only, and fires the rule the first sweep that sum
+reaches the threshold. `alertRuleState.firedPeriod` holds the latest month it
+fired for and only moves forward, so each month fires at most once; a new
+month re-arms it, its rows starting from zero. A rule
+created when the month is already past its threshold fires on the next sweep.
+Display-only rows (a connected account's, a box's) count, so the alert works
+for every target; it is about usage, not the invoice. The sweep runs beside the
+readback on the same tick, so with the readback's closed-hour lag an alert
+arrives up to about two hours after the crossing.
+
+A month's rows keep arriving after it ends: its last readback hour is written
+on the 1st, an hourly family reads a closed hour 15 minutes after it closes,
+and a source that failed catches up a day per run. So for the first 48 hours
+of a month the sweep also evaluates the previous one (`PREVIOUS_MONTH_GRACE_MS`),
+oldest first, and alerts it once when its late rows carry it past the
+threshold. Known gap: a source down for more than about a day across the turn
+of the month can land the previous month's rows after the grace hours, and
+that month is then not alerted (the Usage tab shows the outage).
+
+The sweep and `alerts.usageProgress` read one meter's month through the
+`platformUsage` index `by_org_period_kind` (`organizationId`, `periodStart`,
+`kind`), created like every `.global()` index when the control plane's schema
+is applied. A read that stops at the drain's 100-page cap is never summed as
+the whole month: a total already past the threshold still fires (it is a lower
+bound), one below it leaves the rule undecided and is logged
+(`[usage-alerts] ledger read stopped at the page cap`), and the rule list shows
+"at least N … (partial read)".
+
+| Meter           | Label                        | Unit     | Suggestion floor | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
+| --------------- | ---------------------------- | -------- | ---------------- | ---------------- | -------------------------- | ----------------------- |
+| `requests`      | Workers requests             | requests | 1,000,000        | AE readback      | readback of the account    | the box's usage reports |
+| `cpuMs`         | Workers CPU time             | CPU ms   | 10,000,000       | GraphQL readback | readback of the account    | not metered             |
+| `d1RowsRead`    | D1 rows read                 | rows     | 100,000,000      | GraphQL readback | readback of the account    | not metered             |
+| `d1RowsWritten` | D1 rows written              | rows     | 1,000,000        | GraphQL readback | readback of the account    | not metered             |
+| `doRequests`    | Durable Objects requests     | requests | 1,000,000        | GraphQL readback | readback of the account    | not metered             |
+| `doDurationGbS` | Durable Objects duration     | GB-s     | 100,000          | GraphQL readback | readback of the account    | not metered             |
+| `doRowsRead`    | Durable Objects rows read    | rows     | 100,000,000      | GraphQL readback | readback of the account    | not metered             |
+| `doRowsWritten` | Durable Objects rows written | rows     | 1,000,000        | GraphQL readback | readback of the account    | not metered             |
+
+`alerts.suggestUsageThreshold({ organizationId, meter })` answers last full
+month's usage of the meter and a threshold well above it: three times last
+month, rounded to two significant figures, never below the meter's floor. With
+no row of the meter last month it answers `lastMonth: null` and the floor. It
+is organization-wide even when the rule will name a project, because ledger
+compaction folds a closed month per organization and meter, not per
+deployment. The studio's create form pre-fills it (a typed number always wins)
+and shows last month under the field; the rule list shows each usage rule's
+month-to-date against its threshold (`alerts.usageProgress`).
 
 An `email` rule may send to `org:admins` instead of an address: the
 organization's owners and admins, resolved when the alert is sent (members →

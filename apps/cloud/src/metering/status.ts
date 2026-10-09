@@ -51,8 +51,11 @@ export const parseScopeKey = (scopeKey: string): { family: UsageFamily; scope: s
 /** What a family's missing usage means for the organization. */
 const FAMILY_EFFECT: Record<UsageFamily, string> = {
     d1: "D1 rows read and written are not counted",
+    durableObjectDuration: "Durable Object duration is not counted",
+    durableObjectRequests: "Durable Object requests are not counted",
     durableObjects: "Durable Object rows read and written are not counted",
     requests: "requests are not counted",
+    workersCpu: "Workers CPU time is not counted",
 };
 
 /** What is wrong with a source right now, worded for whoever owns the account, or `undefined` when nothing is. */

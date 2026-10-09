@@ -15,6 +15,7 @@ import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
 import type { SourceStatusRow } from "../src/metering/status";
 import { meteringNotices } from "../src/metering/status";
+import type { UsageFamily } from "../src/targets/driver";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -339,7 +340,7 @@ export const spendStatus = query
 
 /** A metering source that cannot read right now, as the Usage tab warns about it. */
 interface MeteringStatusNotice {
-    family: "d1" | "durableObjects" | "requests";
+    family: UsageFamily;
     message: string;
     source: string;
 }

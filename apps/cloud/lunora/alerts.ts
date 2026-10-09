@@ -1,15 +1,19 @@
 import { LunoraError } from "@lunora/server";
 
+import { periodStartOf } from "../src/billing/spend";
 import type { AlertChannel, AlertFamily, AlertTarget, DeployAlertSource, EventRule, SpendAlertSource } from "../src/telemetry/alerts";
 import { alertFamily, fireDeployRules, fireSpendRules, isSafeWebhookUrl, renderTestAlert } from "../src/telemetry/alerts";
 import { MIN_ANOMALY_SAMPLES } from "../src/telemetry/anomaly";
 import { ORG_ADMINS_DESTINATION } from "../src/telemetry/recipients";
+import type { UsageAlertMeter, UsageThresholdSuggestion } from "../src/telemetry/usage-alerts";
+import { isUsageAlertMeter, previousPeriodStart, usageThresholdSuggestion, usageTotal } from "../src/telemetry/usage-alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
-import { alertTarget, anomalyTarget } from "./tables/shared";
+import { collectAll } from "./paginate";
+import { alertTarget, anomalyTarget, usageAlertMeter } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -32,8 +36,10 @@ interface AlertRuleRow {
     destination: string;
     enabled: boolean;
     functionPath?: string;
+    meter?: UsageAlertMeter;
     name: string;
     organizationId: Id<"organizations">;
+    projectId?: Id<"projects">;
     target: RuleTarget;
     threshold: number;
     windowMinutes?: number;
@@ -152,6 +158,43 @@ const assertRuleShape = (
 /** One address, loosely: something@domain.tld with no whitespace — the mailer validates the rest. */
 const EMAIL_ADDRESS = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/u;
 
+/**
+ * A usage rule names a meter the readback writes, a positive quantity, and
+ * optionally a project of the organization; no other family takes either
+ * field, so no row carries a meter nothing reads.
+ */
+const assertUsageRule = async (
+    context: MutationContext,
+    args: { meter?: string; projectId?: Id<"projects">; threshold: number },
+    family: AlertFamily,
+    organizationId: Id<"organizations">,
+): Promise<void> => {
+    if (family !== "usage") {
+        if (args.meter !== undefined || args.projectId !== undefined) {
+            throw new LunoraError("BAD_REQUEST", "meter and projectId apply to usage_threshold rules only");
+        }
+
+        return;
+    }
+
+    if (!isUsageAlertMeter(args.meter)) {
+        throw new LunoraError("BAD_REQUEST", "a usage_threshold rule needs the meter it watches");
+    }
+
+    if (!Number.isFinite(args.threshold)) {
+        throw new LunoraError("BAD_REQUEST", "threshold must be a finite quantity");
+    }
+
+    if (args.projectId !== undefined) {
+        // Table-pinned, so an id of another table, or another organization's project, reads as missing.
+        assertInOrg(await context.db.projects.get(args.projectId), organizationId, "project");
+    }
+};
+
+/** A usage rule's own columns — its meter, and the project it is narrowed to; none for any other family. */
+const usageRuleFields = (args: { meter?: UsageAlertMeter; projectId?: Id<"projects"> }, family: AlertFamily): Record<string, unknown> =>
+    family === "usage" ? { meter: args.meter, ...(args.projectId === undefined ? {} : { projectId: args.projectId }) } : {};
+
 /** Create an alert rule (owners/admins). New rules start enabled. */
 export const createRule = mutation
     .use(rateLimit("api"))
@@ -163,6 +206,8 @@ export const createRule = mutation
         // Metric and anomaly targets: how the window value (or score) is compared to `threshold`. Default `gt`.
         comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
         destination: boundedString(LIMITS.url),
+        // `usage_threshold` only: the meter whose month-to-date usage is compared to `threshold`.
+        meter: v.optional(usageAlertMeter),
         // Metric targets only: optional function-path scope for the window.
         functionPath: v.optional(boundedString(LIMITS.token)),
         // Metric targets only: compare the window value to `threshold` directly
@@ -171,6 +216,8 @@ export const createRule = mutation
         mode: v.optional(v.union(v.literal("threshold"), v.literal("deviation"))),
         name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
+        // `usage_threshold` only: count this project's usage alone. Absent ⇒ the whole organization.
+        projectId: v.optional(v.id("projects")),
         target: alertTarget,
         threshold: v.number(),
         // Metric targets only: rolling window length in minutes (required for them).
@@ -183,6 +230,7 @@ export const createRule = mutation
         const isMetric = family === "metric";
 
         assertRuleShape(args, family);
+        await assertUsageRule(context, args, family, organizationId);
 
         // SSRF guard: the edge `fetch`es a `webhook`/`slack` destination when the
         // alert fires, so both must be an https URL to a public host. `pagerduty`'s
@@ -231,6 +279,7 @@ export const createRule = mutation
                 : {}),
             // An anomaly rule's comparator says which way the score must move.
             ...(family === "anomaly" ? { comparator: args.comparator ?? "gt" } : {}),
+            ...usageRuleFields(args, family),
         });
     });
 
@@ -597,3 +646,83 @@ export const fireSpendAlerts = async (
         { hash: `spend:${source.level}:${String(periodStart)}`, now: context.now, organizationId },
         async (row) => context.db.insert("alerts", row),
     );
+
+/**
+ * What a new usage rule on `meter` should alert at (any member): last full
+ * month's usage of the organization and a threshold well above it
+ * (`suggestUsageThreshold` in `src/telemetry/usage-alerts.ts`), or the meter's
+ * floor when there is no history yet.
+ *
+ * Organization-wide on purpose: ledger compaction folds a closed month's rows
+ * per organization and meter, not per deployment, so a project's share of last
+ * month is not known after it.
+ */
+export const suggestUsageThreshold = query
+    .input({ meter: usageAlertMeter, organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { meter, organizationId } }): Promise<UsageThresholdSuggestion> => {
+        await assertMember(context, organizationId);
+
+        const periodStart = previousPeriodStart(context.now);
+        const rows = await collectAll<{ deploymentId?: null | string; quantity: number }>((cursor) =>
+            context.db.platformUsage.findMany({ cursor, where: { kind: meter, organizationId, periodStart } }),
+        );
+
+        return usageThresholdSuggestion(meter, rows.length === 0 ? null : usageTotal(rows, undefined, () => undefined), periodStart);
+    });
+
+/** One usage rule's month-to-date usage, for the rule list. */
+interface UsageRuleProgress {
+    /** `false` when the month's ledger read stopped at the page cap: `monthToDate` is then a lower bound. */
+    complete: boolean;
+    monthToDate: number;
+    ruleId: Id<"alertRules">;
+}
+
+/**
+ * Each usage rule's month-to-date usage, as its sweep counts it (any member):
+ * every ledger row of the meter this UTC month, billable or display-only,
+ * narrowed to the rule's project when it names one. A read that stopped at the
+ * page cap says so (`complete: false`) rather than passing for the whole month.
+ */
+export const usageProgress = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<UsageRuleProgress[]> => {
+        await assertMember(context, organizationId);
+
+        const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "usage_threshold" } });
+        const usageRules = page.flatMap((rule) => (isUsageAlertMeter(rule.meter) ? [{ ...rule, meter: rule.meter }] : []));
+
+        if (usageRules.length === 0) {
+            return [];
+        }
+
+        const periodStart = periodStartOf(context.now);
+        const meters = [...new Set(usageRules.map((rule) => rule.meter))];
+        const ledger = await Promise.all(
+            meters.map(async (kind) => {
+                let complete = true;
+                const rows = await collectAll<{ deploymentId?: null | string; quantity: number }>(
+                    (cursor) => context.db.platformUsage.findMany({ cursor, where: { kind, organizationId, periodStart } }),
+                    () => {
+                        complete = false;
+                    },
+                );
+
+                return { complete, rows };
+            }),
+        );
+        const deployments = usageRules.some((rule) => rule.projectId != null)
+            ? await collectAll<{ _id: string; projectId: string }>((cursor) => context.db.deployments.findMany({ cursor, where: { organizationId } }))
+            : [];
+        const projectOf = new Map(deployments.map((row) => [row._id, row.projectId]));
+
+        return usageRules.map((rule) => {
+            const read = ledger[meters.indexOf(rule.meter)] ?? { complete: true, rows: [] };
+
+            return {
+                complete: read.complete,
+                monthToDate: usageTotal(read.rows, rule.projectId, (deploymentId) => projectOf.get(deploymentId)),
+                ruleId: rule._id,
+            };
+        });
+    });
