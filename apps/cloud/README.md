@@ -847,16 +847,32 @@ a monthly quantity in that meter's unit (`threshold`) and, optionally, a
 project (`alertRules.projectId`). The hourly sweep sums the meter's
 `platformUsage` rows of the current UTC month for the organization, or for the
 project's deployments only, and fires the rule the first sweep that sum
-reaches the threshold. It is latched for the month (`alertRuleState.firedPeriod`)
-and re-arms on the 1st, when the new month's rows start from zero. A rule
+reaches the threshold. `alertRuleState.firedPeriod` holds the latest month it
+fired for and only moves forward, so each month fires at most once; a new
+month re-arms it, its rows starting from zero. A rule
 created when the month is already past its threshold fires on the next sweep.
 Display-only rows (a connected account's, a box's) count, so the alert works
 for every target; it is about usage, not the invoice. The sweep runs beside the
 readback on the same tick, so with the readback's closed-hour lag an alert
-arrives up to about two hours after the crossing. Known gap: a crossing in the
-last two hours or so of a month is not alerted. Those hours' rows are written
-on the 1st, with the closed month's `periodStart`, and the sweep reads the
-current month only; re-reading the closed month would need a second latch.
+arrives up to about two hours after the crossing.
+
+A month's rows keep arriving after it ends: its last readback hour is written
+on the 1st, an hourly family reads a closed hour 15 minutes after it closes,
+and a source that failed catches up a day per run. So for the first 48 hours
+of a month the sweep also evaluates the previous one (`PREVIOUS_MONTH_GRACE_MS`),
+oldest first, and alerts it once when its late rows carry it past the
+threshold. Known gap: a source down for more than about a day across the turn
+of the month can land the previous month's rows after the grace hours, and
+that month is then not alerted (the Usage tab shows the outage).
+
+The sweep and `alerts.usageProgress` read one meter's month through the
+`platformUsage` index `by_org_period_kind` (`organizationId`, `periodStart`,
+`kind`), created like every `.global()` index when the control plane's schema
+is applied. A read that stops at the drain's 100-page cap is never summed as
+the whole month: a total already past the threshold still fires (it is a lower
+bound), one below it leaves the rule undecided and is logged
+(`[usage-alerts] ledger read stopped at the page cap`), and the rule list shows
+"at least N … (partial read)".
 
 | Meter           | Label                        | Unit     | Suggestion floor | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
 | --------------- | ---------------------------- | -------- | ---------------- | ---------------- | -------------------------- | ----------------------- |

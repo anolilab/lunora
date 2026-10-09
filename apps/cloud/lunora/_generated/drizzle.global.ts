@@ -740,6 +740,7 @@ export const platformUsage = sqliteTable("platformUsage", {
     windowStart: real("windowStart"),
 }, (t) => ({
     by_placement_window: index("by_placement_window").on(t.placementRef, t.windowStart),
+    by_org_period_kind: index("by_org_period_kind").on(t.organizationId, t.periodStart, t.kind),
     by_org: index("by_org").on(t.organizationId),
 }));
 

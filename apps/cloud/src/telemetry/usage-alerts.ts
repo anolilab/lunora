@@ -90,27 +90,56 @@ export const usageTotal = (
 };
 
 /**
- * What a sweep does with one rule this month:
+ * What a sweep does with one rule for one month (`periodStart`):
  *
- * - `fire` — the month-to-date reached the threshold and the rule has not fired this month.
- * - `rearm` — the rule fired in an earlier month; clear the latch, so the state says it is armed.
+ * - `fire` — the month's usage reached the threshold and the rule has fired for no
+ *   month this late (`firedPeriod`, the latest month it fired for, is earlier or unset).
+ * - `rearm` — the rule is still marked firing for an earlier month; clear the
+ *   mark, so the state says it is armed.
  * - `hold` — nothing changes.
+ *
+ * `firedPeriod` only moves forward, so a month fires at most once however many
+ * sweeps re-read it, including the previous month in a new month's grace hours.
  */
 export const usageAlertDecision = (input: {
     firedPeriod: null | number | undefined;
+    firing: boolean;
     monthToDate: number;
     periodStart: number;
     threshold: number;
 }): "fire" | "hold" | "rearm" => {
-    if (input.firedPeriod === input.periodStart) {
-        return "hold";
-    }
+    const earlier = input.firedPeriod == null || input.firedPeriod < input.periodStart;
 
-    if (input.monthToDate >= input.threshold) {
+    if (earlier && input.monthToDate >= input.threshold) {
         return "fire";
     }
 
-    return input.firedPeriod == null ? "hold" : "rearm";
+    return earlier && input.firing ? "rearm" : "hold";
+};
+
+/** The first instant of the UTC month before the one `at` falls in. */
+export const previousPeriodStart = (at: number): number => {
+    const date = new Date(periodStartOf(at));
+
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 1);
+};
+
+/**
+ * How long into a month the sweep also reads the month before. Rows of a
+ * month keep arriving after it ends: the last readback hour is written on the
+ * 1st, an hourly family reads a closed hour 15 minutes after it closes, and a
+ * source that failed catches up a day per hourly run (`MAX_HOURLY_CATCHUP_MS`).
+ * 48 hours cover all three, with a day's outage over the turn of the month to
+ * spare. A source down longer than that over the boundary loses the previous
+ * month's alert; the Usage tab shows the outage.
+ */
+export const PREVIOUS_MONTH_GRACE_MS = 48 * 60 * 60 * 1000;
+
+/** The months a sweep at `now` evaluates, oldest first: the previous one in its grace hours, and the current one. */
+export const evaluatedPeriods = (now: number): number[] => {
+    const current = periodStartOf(now);
+
+    return now - current < PREVIOUS_MONTH_GRACE_MS ? [previousPeriodStart(now), current] : [current];
 };
 
 /** A quantity as a person reads it: grouped thousands, at most two decimals. */
@@ -135,13 +164,6 @@ export const renderUsageAlert = (
             `The rule fires once a month and re-arms on the 1st.`,
         subject: `[Lunora] ${rule.name}: ${label} passed ${threshold} this month`,
     };
-};
-
-/** The first instant of the UTC month before the one `at` falls in. */
-export const previousPeriodStart = (at: number): number => {
-    const date = new Date(periodStartOf(at));
-
-    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 1);
 };
 
 /** What the studio pre-fills a usage rule with. */

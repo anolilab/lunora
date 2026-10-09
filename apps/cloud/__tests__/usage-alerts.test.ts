@@ -1,11 +1,18 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { Doc } from "../lunora/_generated/dataModel.js";
+import type { Doc, IndexName } from "../lunora/_generated/dataModel.js";
 import { createRule, suggestUsageThreshold, usageProgress } from "../lunora/alerts";
 import { alertFamily } from "../src/telemetry/alerts";
 import { runUsageAlertSweep } from "../src/telemetry/usage-alert-sweep";
 import type { UsageAlertMeter } from "../src/telemetry/usage-alerts";
-import { previousPeriodStart, usageAlertDecision, usageThresholdSuggestion, usageTotal } from "../src/telemetry/usage-alerts";
+import {
+    evaluatedPeriods,
+    PREVIOUS_MONTH_GRACE_MS,
+    previousPeriodStart,
+    usageAlertDecision,
+    usageThresholdSuggestion,
+    usageTotal,
+} from "../src/telemetry/usage-alerts";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 import { memoryStore } from "./support/memory-store";
 
@@ -51,14 +58,27 @@ describe("the usage validators", () => {
 });
 
 describe(usageAlertDecision, () => {
+    const MAY = Date.UTC(2026, 4, 1);
+
     it.each([
-        ["fires at the threshold", { firedPeriod: undefined, monthToDate: 100 }, "fire"],
-        ["holds below it", { firedPeriod: null, monthToDate: 99 }, "hold"],
-        ["holds once fired this month, however far past", { firedPeriod: JUNE, monthToDate: 10_000 }, "hold"],
-        ["fires again in a new month once crossed", { firedPeriod: Date.UTC(2026, 4, 1), monthToDate: 100 }, "fire"],
-        ["re-arms in a new month while below", { firedPeriod: Date.UTC(2026, 4, 1), monthToDate: 5 }, "rearm"],
+        ["fires at the threshold", { firedPeriod: undefined, firing: false, monthToDate: 100 }, "fire"],
+        ["holds below it", { firedPeriod: null, firing: false, monthToDate: 99 }, "hold"],
+        ["holds once fired this month, however far past", { firedPeriod: JUNE, firing: true, monthToDate: 10_000 }, "hold"],
+        ["never fires a month once a later month fired", { firedPeriod: JULY, firing: true, monthToDate: 10_000 }, "hold"],
+        ["fires again in a new month once crossed", { firedPeriod: MAY, firing: true, monthToDate: 100 }, "fire"],
+        ["re-arms in a new month while below", { firedPeriod: MAY, firing: true, monthToDate: 5 }, "rearm"],
+        ["has nothing to re-arm once re-armed", { firedPeriod: MAY, firing: false, monthToDate: 5 }, "hold"],
     ] as const)("%s", (_name, input, expected) => {
         expect(usageAlertDecision({ ...input, periodStart: JUNE, threshold: 100 })).toBe(expected);
+    });
+});
+
+describe(evaluatedPeriods, () => {
+    it("reads the previous month for the first 48 hours of a new one, then the current month alone", () => {
+        expect(evaluatedPeriods(JULY)).toStrictEqual([JUNE, JULY]);
+        expect(evaluatedPeriods(JULY + PREVIOUS_MONTH_GRACE_MS - 1)).toStrictEqual([JUNE, JULY]);
+        expect(evaluatedPeriods(JULY + PREVIOUS_MONTH_GRACE_MS)).toStrictEqual([JULY]);
+        expect(PREVIOUS_MONTH_GRACE_MS).toBe(48 * 60 * 60 * 1000);
     });
 });
 
@@ -163,7 +183,8 @@ describe(runUsageAlertSweep, () => {
         const early = Date.UTC(2026, 6, 2, 3);
 
         await expect(runUsageAlertSweep(database, { now: early })).resolves.toMatchObject({ fired: 0 });
-        expect(database.tables["alertRuleState"]).toStrictEqual([expect.objectContaining({ firedPeriod: null, firing: false, lastValue: 1_000_000 })]);
+        // June stays the latest month it fired for: June can never fire again.
+        expect(database.tables["alertRuleState"]).toStrictEqual([expect.objectContaining({ firedPeriod: JUNE, firing: false, lastValue: 1_000_000 })]);
 
         database.tables["platformUsage"]?.push(usage(1_000_000, { periodStart: JULY }));
 
@@ -223,7 +244,7 @@ describe(runUsageAlertSweep, () => {
     it("reads nothing past the rules when no organization has a usage rule", async () => {
         const database = memoryStore({ alertRules: [rule({ target: "usage_anomaly" })], platformUsage: [usage(1e12)] });
 
-        await expect(runUsageAlertSweep(database, { now: MID_JUNE })).resolves.toStrictEqual({ deliveries: [], evaluatedOrgs: 0, fired: 0 });
+        await expect(runUsageAlertSweep(database, { now: MID_JUNE })).resolves.toStrictEqual({ deliveries: [], evaluatedOrgs: 0, fired: 0, incomplete: [] });
     });
 });
 
@@ -334,8 +355,142 @@ describe("usage rule queries", () => {
         );
 
         await expect(usageProgress.handler(ctx, { organizationId: "org_a" } as never)).resolves.toStrictEqual([
-            { monthToDate: 12, ruleId: "rule_org" },
-            { monthToDate: 7, ruleId: "rule_shop" },
+            { complete: true, monthToDate: 12, ruleId: "rule_org" },
+            { complete: true, monthToDate: 7, ruleId: "rule_shop" },
         ]);
+    });
+});
+
+describe("usageProgress over a month too long to read", () => {
+    it("reports a lower bound, marked incomplete, rather than a partial sum passed off as the month", async () => {
+        const { ctx } = makeCtx({ alertRules: [rule({ _id: "rule_org" })], members: [owner("org_a")], platformUsage: [] }, { now: MID_JUNE });
+        let page = 0;
+
+        (ctx.db as unknown as { platformUsage: { findMany: () => Promise<unknown> } }).platformUsage.findMany = () => {
+            page += 1;
+
+            return Promise.resolve({ continueCursor: String(page), isDone: false, page: [{ deploymentId: "dep_shop", quantity: 1 }] });
+        };
+
+        await expect(usageProgress.handler(ctx, { organizationId: "org_a" } as never)).resolves.toStrictEqual([
+            { complete: false, monthToDate: 100, ruleId: "rule_org" },
+        ]);
+    });
+});
+
+describe("a month's usage that lands after the month ends", () => {
+    /** June 30, 23:00 UTC, and the July hours after it. */
+    const LAST_HOUR = Date.UTC(2026, 5, 30, 23);
+    const HOUR = 3_600_000;
+
+    it("alerts June once when its last rows arrive in July's first hours, and never again", async () => {
+        const database = memoryStore({ alertRules: [rule()], platformUsage: [usage(1_900_000)] });
+
+        await expect(runUsageAlertSweep(database, { now: LAST_HOUR })).resolves.toMatchObject({ fired: 0 });
+
+        // The last hours of June, read back after midnight (a catch-up after an outage).
+        database.tables["platformUsage"]?.push(usage(500_000, { createdAt: JULY + 5 * HOUR }));
+
+        let fired = 0;
+
+        for (let hour = 1; hour <= 48; hour += 1) {
+            // eslint-disable-next-line no-await-in-loop -- the sweeps of consecutive hours, in order
+            const result = await runUsageAlertSweep(database, { now: JULY + hour * HOUR });
+
+            fired += result.fired;
+        }
+
+        expect(fired).toBe(1);
+        expect(database.tables["alerts"]).toStrictEqual([
+            expect.objectContaining({
+                body: expect.stringContaining("reached 2,400,000 requests in June 2026") as string,
+                hash: `usage:requests:*:${String(JUNE)}`,
+            }),
+        ]);
+        expect(database.tables["alertRuleState"]).toStrictEqual([expect.objectContaining({ firedPeriod: JUNE })]);
+    });
+
+    it("fires the late June and a crossed July as two alerts, one per month", async () => {
+        const database = memoryStore({
+            alertRules: [rule()],
+            platformUsage: [usage(2_500_000), usage(2_500_000, { periodStart: JULY })],
+        });
+
+        const result = await runUsageAlertSweep(database, { now: JULY + 3 * HOUR });
+
+        expect(result.fired).toBe(2);
+        expect(database.tables["alerts"]?.map((alert) => alert["hash"])).toStrictEqual([
+            `usage:requests:*:${String(JUNE)}`,
+            `usage:requests:*:${String(JULY)}`,
+        ]);
+        expect(database.tables["alertRuleState"]).toStrictEqual([expect.objectContaining({ firedPeriod: JULY, firing: true })]);
+        await expect(runUsageAlertSweep(database, { now: JULY + 4 * HOUR })).resolves.toMatchObject({ fired: 0 });
+    });
+
+    it("does not fire June twice when it fired in June and its last rows arrive in July", async () => {
+        const database = memoryStore({
+            alertRules: [rule()],
+            alertRuleState: [{ _id: "state_1", firedPeriod: JUNE, firing: true, organizationId: "org_a", ruleId: "rule_req" }],
+            platformUsage: [usage(2_100_000), usage(900_000, { createdAt: JULY + HOUR })],
+        });
+
+        for (let hour = 1; hour <= 6; hour += 1) {
+            // eslint-disable-next-line no-await-in-loop -- consecutive hourly sweeps
+            await expect(runUsageAlertSweep(database, { now: JULY + hour * HOUR })).resolves.toMatchObject({ fired: 0 });
+        }
+
+        expect(database.tables["alerts"]).toBeUndefined();
+    });
+
+    it("stops reading June once the grace hours are over", async () => {
+        const database = memoryStore({ alertRules: [rule()], platformUsage: [usage(5_000_000)] });
+
+        await expect(runUsageAlertSweep(database, { now: JULY + PREVIOUS_MONTH_GRACE_MS })).resolves.toMatchObject({ fired: 0 });
+    });
+});
+
+describe("a ledger read that stops at the drain's page cap", () => {
+    /** The memory store, answering `platformUsage` one row per page, as a busy organization's month pages. */
+    const paged = (rows: Record<string, unknown>[]): ReturnType<typeof memoryStore> => {
+        const database = memoryStore({ alertRules: [rule({ threshold: 1000 })], platformUsage: rows });
+        const findMany = database.findMany.bind(database);
+
+        database.findMany = async (table, args) => {
+            const answer = await findMany(table, args);
+
+            if (table !== "platformUsage") {
+                return answer;
+            }
+
+            const offset = Number(args?.cursor ?? 0);
+            const done = offset + 1 >= answer.page.length;
+
+            return { continueCursor: done ? null : String(offset + 1), isDone: done, page: answer.page.slice(offset, offset + 1) };
+        };
+
+        return database;
+    };
+
+    it("leaves a rule below its threshold so far undecided and reported, never 'below'", async () => {
+        // 150 pages of one request: the drain stops at 100.
+        const database = paged(Array.from({ length: 150 }, () => usage(1)));
+
+        await expect(runUsageAlertSweep(database, { now: MID_JUNE })).resolves.toStrictEqual({
+            deliveries: [],
+            evaluatedOrgs: 1,
+            fired: 0,
+            incomplete: [{ organizationId: "org_a", periodStart: JUNE, ruleId: "rule_req" }],
+        });
+        expect(database.tables["alertRuleState"]).toBeUndefined();
+    });
+
+    it("fires on the lower bound once what it did read is past the threshold", async () => {
+        const database = paged(Array.from({ length: 150 }, () => usage(20)));
+
+        await expect(runUsageAlertSweep(database, { now: MID_JUNE })).resolves.toMatchObject({ fired: 1, incomplete: [] });
+    });
+
+    it("reads one meter's month through an index that leads with the organization and the month", () => {
+        expectTypeOf<"by_org_period_kind">().toExtend<IndexName<"platformUsage">>();
     });
 });

@@ -258,7 +258,12 @@ const sweepUsageAlerts = async (env: ControlPlaneEnv): Promise<void> => {
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
-    const { deliveries } = await runUsageAlertSweep(database, { now });
+    const { deliveries, incomplete } = await runUsageAlertSweep(database, { now });
+
+    if (incomplete.length > 0) {
+        // eslint-disable-next-line no-console -- a rule left undecided by a truncated read would otherwise be silent
+        console.error("[usage-alerts] ledger read stopped at the page cap; rules left undecided", JSON.stringify(incomplete));
+    }
 
     await deliverFiredAlerts(env, database, deliveries, now);
 };

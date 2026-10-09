@@ -9,17 +9,18 @@
  * lag (closed hours, 15 minutes), a crossing alerts within about two hours.
  *
  * Reads are bounded by the rules people wrote: only organizations with an
- * enabled usage rule, only the meters those rules name, only the current month,
- * and the deployments only when a rule names a project. Every read drains all
- * pages; a month of a busy organization's ledger is more than one page.
+ * enabled usage rule, only the meters those rules name, only the current month
+ * (and the previous one in a new month's first hours), and the deployments
+ * only when a rule names a project. Every ledger read drains its pages through
+ * the `by_org_period_kind` index, and one that stops at the drain's page cap is
+ * reported (`incomplete`), never summed as if it were the whole month.
  */
-import { periodStartOf } from "../billing/spend";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { AlertChannel, AlertDelivery } from "./alerts";
 import { USAGE_TARGETS } from "./alerts";
 import type { UsageAlertMeter, UsageLedgerRow } from "./usage-alerts";
-import { isUsageAlertMeter, renderUsageAlert, usageAlertDecision, usageTotal } from "./usage-alerts";
+import { evaluatedPeriods, isUsageAlertMeter, PREVIOUS_MONTH_GRACE_MS, renderUsageAlert, usageAlertDecision, usageTotal } from "./usage-alerts";
 
 /** An `alertRules` row as this sweep reads it. `.global()` rows answer SQL NULL for unset columns. */
 interface UsageRuleRow {
@@ -52,6 +53,8 @@ export interface UsageAlertSweepResult {
     /** Organizations with an enabled usage rule, whose usage was read. */
     evaluatedOrgs: number;
     fired: number;
+    /** Rules a month's ledger read stopped short for (the drain's page cap), below the threshold so far: undecided, not "below". */
+    incomplete: { organizationId: string; periodStart: number; ruleId: string }[];
 }
 
 /** Each deployment's project, for the rules that name one. */
@@ -72,34 +75,61 @@ const projectName = async (database: ControlPlaneDatabase, organizationId: strin
     return projects.find((project) => project._id === projectId)?.name ?? undefined;
 };
 
-/** One organization's month: its usage rules' ledger rows, deployments' projects and latches. */
-interface OrganizationMonth {
-    organizationId: string;
-    periodStart: number;
-    projects: ReadonlyMap<string, string>;
-    rowsOf: ReadonlyMap<UsageAlertMeter, UsageLedgerRow[]>;
-    stateOf: ReadonlyMap<string, RuleStateRow>;
+/** One meter's rows of one month, and whether the read reached the end. */
+interface LedgerRead {
+    complete: boolean;
+    rows: UsageLedgerRow[];
 }
 
-/** Read what an organization's usage rules need for this month: only their meters, and the deployments only when a rule names a project. */
-const readMonth = async (
+/** One organization's reads: its usage rules' ledger rows per (meter, month), its deployments' projects, and its latches. */
+interface OrganizationReads {
+    ledger: ReadonlyMap<string, LedgerRead>;
+    organizationId: string;
+    projects: ReadonlyMap<string, string>;
+    stateOf: Map<string, RuleStateRow>;
+}
+
+/** One meter's rows of one month, through the `by_org_period_kind` index, saying whether the drain reached the end. */
+const readLedger = async (
+    database: ControlPlaneDatabase,
+    where: { kind: UsageAlertMeter; organizationId: string; periodStart: number },
+): Promise<LedgerRead> => {
+    let complete = true;
+    const rows = await drainTable<UsageLedgerRow>(database, "platformUsage", { where }, () => {
+        complete = false;
+    });
+
+    return { complete, rows };
+};
+
+const ledgerKey = (meter: UsageAlertMeter, periodStart: number): string => `${meter}@${String(periodStart)}`;
+
+/**
+ * Read what an organization's usage rules need: only their meters, only the
+ * months evaluated (through the `by_org_period_kind` index), and the
+ * deployments only when a rule names a project.
+ */
+const readOrganization = async (
     database: ControlPlaneDatabase,
     organizationId: string,
     rules: ReadonlyArray<UsageRule>,
-    periodStart: number,
-): Promise<OrganizationMonth> => {
-    const meters = [...new Set(rules.map((rule) => rule.meter))];
+    periods: ReadonlyArray<number>,
+): Promise<OrganizationReads> => {
+    const keys = [...new Set(rules.map((rule) => rule.meter))].flatMap((meter) =>
+        periods.map((periodStart) => {
+            return { meter, periodStart };
+        }),
+    );
     const [ledger, projects, states] = await Promise.all([
-        Promise.all(meters.map(async (kind) => drainTable<UsageLedgerRow>(database, "platformUsage", { where: { kind, organizationId, periodStart } }))),
+        Promise.all(keys.map(async ({ meter, periodStart }) => readLedger(database, { kind: meter, organizationId, periodStart }))),
         rules.some((rule) => rule.projectId != null) ? projectsOf(database, organizationId) : Promise.resolve(new Map<string, string>()),
         drainTable<RuleStateRow>(database, "alertRuleState", { where: { organizationId } }),
     ]);
 
     return {
+        ledger: new Map(keys.map((key, index) => [ledgerKey(key.meter, key.periodStart), ledger[index] ?? { complete: true, rows: [] }])),
         organizationId,
-        periodStart,
         projects,
-        rowsOf: new Map(meters.map((meter, index) => [meter, ledger[index] ?? []])),
         stateOf: new Map(states.map((row) => [row.ruleId, row])),
     };
 };
@@ -134,39 +164,103 @@ const fireUsageRule = async (
     return { body: rendered.body, channel: rule.channel, destination: rule.destination, id, subject: rendered.subject };
 };
 
-/** Evaluate one rule against its organization's month: latch it, and fire it when it crossed. */
-const evaluateUsageRule = async (
+/** What evaluating one rule for one month did. */
+type MonthOutcome = { delivery: AlertDelivery } | { incomplete: true } | undefined;
+
+/**
+ * Evaluate one rule for one month: latch it, and fire it when it crossed. A
+ * read that stopped at the page cap is a lower bound: enough to fire on, never
+ * to decide the rule is below its threshold, so that is reported instead.
+ */
+const evaluateMonth = async (
     database: ControlPlaneDatabase,
     rule: UsageRule,
-    month: OrganizationMonth,
-    now: number,
-): Promise<AlertDelivery | undefined> => {
-    const monthToDate = usageTotal(month.rowsOf.get(rule.meter) ?? [], rule.projectId, (deploymentId) => month.projects.get(deploymentId));
-    const state = month.stateOf.get(rule._id);
-    const decision = usageAlertDecision({ firedPeriod: state?.firedPeriod, monthToDate, periodStart: month.periodStart, threshold: rule.threshold });
+    reads: OrganizationReads,
+    month: { now: number; periodStart: number },
+): Promise<MonthOutcome> => {
+    const read = reads.ledger.get(ledgerKey(rule.meter, month.periodStart)) ?? { complete: true, rows: [] };
+    const monthToDate = usageTotal(read.rows, rule.projectId, (deploymentId) => reads.projects.get(deploymentId));
+    const state = reads.stateOf.get(rule._id);
+    const decision = usageAlertDecision({
+        firedPeriod: state?.firedPeriod,
+        firing: state?.firing === true,
+        monthToDate,
+        periodStart: month.periodStart,
+        threshold: rule.threshold,
+    });
+
+    if (decision !== "fire" && !read.complete && monthToDate < rule.threshold) {
+        return { incomplete: true };
+    }
 
     if (decision === "hold") {
         return undefined;
     }
 
     const fires = decision === "fire";
-    const latch = { firedPeriod: fires ? month.periodStart : null, firing: fires, lastEvaluatedAt: now, lastValue: monthToDate, updatedAt: now };
+    const latch = {
+        firedPeriod: fires ? month.periodStart : (state?.firedPeriod ?? null),
+        firing: fires,
+        lastEvaluatedAt: month.now,
+        lastValue: monthToDate,
+        updatedAt: month.now,
+    };
 
-    // The latch first: a crash after it loses one notification, never sends one twice a month.
-    await (state === undefined
-        ? database.insert("alertRuleState", { createdAt: now, organizationId: month.organizationId, ruleId: rule._id, ...latch })
-        : database.patch(state._id, latch, "alertRuleState"));
+    // The latch first: a crash after it loses one notification, never sends one twice for a month.
+    if (state === undefined) {
+        const id = (await database.insert("alertRuleState", {
+            createdAt: month.now,
+            organizationId: reads.organizationId,
+            ruleId: rule._id,
+            ...latch,
+        })) as string;
 
-    return fires ? fireUsageRule(database, rule, { monthToDate, now, periodStart: month.periodStart }) : undefined;
+        reads.stateOf.set(rule._id, { _id: id, ...latch, ruleId: rule._id });
+    } else {
+        await database.patch(state._id, latch, "alertRuleState");
+        reads.stateOf.set(rule._id, { ...state, ...latch });
+    }
+
+    return fires ? { delivery: await fireUsageRule(database, rule, { monthToDate, now: month.now, periodStart: month.periodStart }) } : undefined;
+};
+
+/** Evaluate one organization's usage rules for each evaluated month, oldest first, so a late previous month fires before the latch moves on. */
+const sweepOrganization = async (
+    database: ControlPlaneDatabase,
+    organizationId: string,
+    rules: ReadonlyArray<UsageRule>,
+    options: { now: number; periods: ReadonlyArray<number> },
+): Promise<Pick<UsageAlertSweepResult, "deliveries" | "incomplete">> => {
+    const reads = await readOrganization(database, organizationId, rules, options.periods);
+    const deliveries: AlertDelivery[] = [];
+    const incomplete: UsageAlertSweepResult["incomplete"] = [];
+
+    /* eslint-disable no-await-in-loop -- a rule's months in order: each moves the latch the next reads */
+    for (const rule of rules) {
+        for (const periodStart of options.periods) {
+            const outcome = await evaluateMonth(database, rule, reads, { now: options.now, periodStart });
+
+            if (outcome !== undefined && "delivery" in outcome) {
+                deliveries.push(outcome.delivery);
+            } else if (outcome !== undefined) {
+                incomplete.push({ organizationId, periodStart, ruleId: rule._id });
+            }
+        }
+    }
+    /* eslint-enable no-await-in-loop */
+
+    return { deliveries, incomplete };
 };
 
 /**
- * Evaluate every enabled usage rule against its organization's month-to-date
- * usage and fire the ones that crossed this month. Returns the fired alerts
- * for the edge to deliver.
+ * Evaluate every enabled usage rule against its organization's usage of the
+ * current month, and of the previous one during the new month's first
+ * {@link PREVIOUS_MONTH_GRACE_MS} (its last rows arrive after it ends), and
+ * fire the ones that crossed. Returns the fired alerts for the edge to
+ * deliver, and the rules a truncated read left undecided.
  */
 export const runUsageAlertSweep = async (database: ControlPlaneDatabase, options: { now: number }): Promise<UsageAlertSweepResult> => {
-    const periodStart = periodStartOf(options.now);
+    const periods = evaluatedPeriods(options.now);
     const rulesByOrg = new Map<string, UsageRule[]>();
 
     for (const row of await drainTable<UsageRuleRow>(database, "alertRules")) {
@@ -176,20 +270,15 @@ export const runUsageAlertSweep = async (database: ControlPlaneDatabase, options
     }
 
     const deliveries: AlertDelivery[] = [];
+    const incomplete: UsageAlertSweepResult["incomplete"] = [];
 
-    /* eslint-disable no-await-in-loop -- bounded reads per org with a usage rule, serialized like the other alert sweeps */
     for (const [organizationId, rules] of rulesByOrg) {
-        const month = await readMonth(database, organizationId, rules, periodStart);
+        // eslint-disable-next-line no-await-in-loop -- bounded reads per org with a usage rule, serialized like the other alert sweeps
+        const outcome = await sweepOrganization(database, organizationId, rules, { now: options.now, periods });
 
-        for (const rule of rules) {
-            const delivery = await evaluateUsageRule(database, rule, month, options.now);
-
-            if (delivery !== undefined) {
-                deliveries.push(delivery);
-            }
-        }
+        deliveries.push(...outcome.deliveries);
+        incomplete.push(...outcome.incomplete);
     }
-    /* eslint-enable no-await-in-loop */
 
-    return { deliveries, evaluatedOrgs: rulesByOrg.size, fired: deliveries.length };
+    return { deliveries, evaluatedOrgs: rulesByOrg.size, fired: deliveries.length, incomplete };
 };

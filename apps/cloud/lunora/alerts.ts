@@ -672,6 +672,8 @@ export const suggestUsageThreshold = query
 
 /** One usage rule's month-to-date usage, for the rule list. */
 interface UsageRuleProgress {
+    /** `false` when the month's ledger read stopped at the page cap: `monthToDate` is then a lower bound. */
+    complete: boolean;
     monthToDate: number;
     ruleId: Id<"alertRules">;
 }
@@ -679,7 +681,8 @@ interface UsageRuleProgress {
 /**
  * Each usage rule's month-to-date usage, as its sweep counts it (any member):
  * every ledger row of the meter this UTC month, billable or display-only,
- * narrowed to the rule's project when it names one.
+ * narrowed to the rule's project when it names one. A read that stopped at the
+ * page cap says so (`complete: false`) rather than passing for the whole month.
  */
 export const usageProgress = query
     .input({ organizationId: v.id("organizations") })
@@ -696,11 +699,17 @@ export const usageProgress = query
         const periodStart = periodStartOf(context.now);
         const meters = [...new Set(usageRules.map((rule) => rule.meter))];
         const ledger = await Promise.all(
-            meters.map(async (kind) =>
-                collectAll<{ deploymentId?: null | string; quantity: number }>((cursor) =>
-                    context.db.platformUsage.findMany({ cursor, where: { kind, organizationId, periodStart } }),
-                ),
-            ),
+            meters.map(async (kind) => {
+                let complete = true;
+                const rows = await collectAll<{ deploymentId?: null | string; quantity: number }>(
+                    (cursor) => context.db.platformUsage.findMany({ cursor, where: { kind, organizationId, periodStart } }),
+                    () => {
+                        complete = false;
+                    },
+                );
+
+                return { complete, rows };
+            }),
         );
         const deployments = usageRules.some((rule) => rule.projectId != null)
             ? await collectAll<{ _id: string; projectId: string }>((cursor) => context.db.deployments.findMany({ cursor, where: { organizationId } }))
@@ -708,8 +717,11 @@ export const usageProgress = query
         const projectOf = new Map(deployments.map((row) => [row._id, row.projectId]));
 
         return usageRules.map((rule) => {
+            const read = ledger[meters.indexOf(rule.meter)] ?? { complete: true, rows: [] };
+
             return {
-                monthToDate: usageTotal(ledger[meters.indexOf(rule.meter)] ?? [], rule.projectId, (deploymentId) => projectOf.get(deploymentId)),
+                complete: read.complete,
+                monthToDate: usageTotal(read.rows, rule.projectId, (deploymentId) => projectOf.get(deploymentId)),
                 ruleId: rule._id,
             };
         });

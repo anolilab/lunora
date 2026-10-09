@@ -841,7 +841,7 @@ export interface IndexNamesByTable {
     uptimeState: "by_org" | "by_deployment";
     dashboards: "by_org";
     overageDebits: "by_org_period";
-    platformUsage: "by_placement_window" | "by_org";
+    platformUsage: "by_placement_window" | "by_org_period_kind" | "by_org";
     usageCheckpoints: "by_target_scope";
     usageSourceStatus: "by_source";
     customers: "by_reference" | "by_provider_customer";

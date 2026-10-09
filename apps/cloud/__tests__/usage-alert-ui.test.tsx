@@ -116,5 +116,6 @@ describe("the usage rule list", () => {
         expect(usageProgressLine(1_234_567, 2_000_000)).toBe("1,234,567 this month · 61%");
         expect(usageProgressLine(2_500_000.456, 2_000_000)).toBe("2,500,000.46 this month · 125%");
         expect(usageProgressLine(0, 2_000_000)).toBe("0 this month · 0%");
+        expect(usageProgressLine(1_000_000, 2_000_000, false)).toBe("at least 1,000,000 this month · ≥50% (partial read)");
     });
 });

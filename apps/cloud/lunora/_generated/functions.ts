@@ -1097,7 +1097,7 @@ export interface Caller {
         setRuleEnabled: (args: { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
         silences: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"anomalySilences">; createdAt: number; createdBy: string; endsAt: number; reason: string; startsAt: number; target: "error_anomaly" | "storage_anomaly" | "usage_anomaly" }[]>;
         suggestUsageThreshold: (args: { meter: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten"; organizationId: Id<"organizations"> }) => Promise<import("../../src/telemetry/usage-alerts.js").UsageThresholdSuggestion>;
-        usageProgress: (args: { organizationId: Id<"organizations"> }) => Promise<{ monthToDate: number; ruleId: Id<"alertRules"> }[]>;
+        usageProgress: (args: { organizationId: Id<"organizations"> }) => Promise<{ complete: boolean; monthToDate: number; ruleId: Id<"alertRules"> }[]>;
     };
     audit_log: {
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"auditLog">; action: string; actorUserId: string; createdAt: number; organizationId: Id<"organizations">; target?: string }[]>;

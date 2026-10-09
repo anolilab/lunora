@@ -4,7 +4,7 @@ import { runScheduled } from "../src/sweeps/scheduled";
 import { runUsageAlertSweep } from "../src/telemetry/usage-alert-sweep";
 
 vi.mock(import("../src/telemetry/usage-alert-sweep"), () => {
-    return { runUsageAlertSweep: vi.fn<typeof runUsageAlertSweep>(() => Promise.resolve({ deliveries: [], evaluatedOrgs: 0, fired: 0 })) };
+    return { runUsageAlertSweep: vi.fn<typeof runUsageAlertSweep>(() => Promise.resolve({ deliveries: [], evaluatedOrgs: 0, fired: 0, incomplete: [] })) };
 });
 
 /**

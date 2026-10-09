@@ -20,7 +20,7 @@ export interface ApiTypes {
         setRuleEnabled: FunctionReference<"mutation", { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
         silences: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"anomalySilences">; createdAt: number; createdBy: string; endsAt: number; reason: string; startsAt: number; target: "error_anomaly" | "storage_anomaly" | "usage_anomaly" }[]>;
         suggestUsageThreshold: FunctionReference<"query", { meter: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten"; organizationId: Id<"organizations"> }, import("../../src/telemetry/usage-alerts.js").UsageThresholdSuggestion>;
-        usageProgress: FunctionReference<"query", { organizationId: Id<"organizations"> }, { monthToDate: number; ruleId: Id<"alertRules"> }[]>;
+        usageProgress: FunctionReference<"query", { organizationId: Id<"organizations"> }, { complete: boolean; monthToDate: number; ruleId: Id<"alertRules"> }[]>;
     };
     audit_log: {
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"auditLog">; action: string; actorUserId: string; createdAt: number; organizationId: Id<"organizations">; target?: string }[]>;

@@ -103,7 +103,7 @@ type UsageProgress = ReturnOf<typeof api.alerts.usageProgress>;
  * the number it means; a usage rule reads as its meter and monthly quantity,
  * with this month's usage beneath.
  */
-const RuleCondition = ({ monthToDate, rule }: { monthToDate: number | undefined; rule: AlertRule }): ReactElement => {
+const RuleCondition = ({ progress, rule }: { progress: UsageProgress[number] | undefined; rule: AlertRule }): ReactElement => {
     if (EVENT_TARGETS.has(rule.target)) {
         return <>on {rule.target}</>;
     }
@@ -112,8 +112,10 @@ const RuleCondition = ({ monthToDate, rule }: { monthToDate: number | undefined;
         return (
             <span className="flex flex-col items-end gap-0.5">
                 <span>{usageCondition(rule.meter, rule.threshold)}</span>
-                {monthToDate === undefined ? null : (
-                    <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>{usageProgressLine(monthToDate, rule.threshold)}</span>
+                {progress === undefined ? null : (
+                    <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>
+                        {usageProgressLine(progress.monthToDate, rule.threshold, progress.complete)}
+                    </span>
                 )}
             </span>
         );
@@ -220,7 +222,7 @@ const AlertRulesCard = ({
                                     </span>
                                     {/* The one value shown at size: a rule is its condition. */}
                                     <span className="font-mono text-base whitespace-nowrap tabular-nums">
-                                        <RuleCondition monthToDate={progress?.find((row) => row.ruleId === rule._id)?.monthToDate} rule={rule} />
+                                        <RuleCondition progress={progress?.find((row) => row.ruleId === rule._id)} rule={rule} />
                                     </span>
                                     <StatusBadge tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "on" : "off"}</StatusBadge>
                                     <RowActions>

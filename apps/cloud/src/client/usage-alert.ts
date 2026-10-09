@@ -61,9 +61,13 @@ export const usageCondition = (meter: UsageAlertMeter, threshold: number): strin
     return `${label} ≥ ${formatUsageQuantity(threshold)} ${unit} / month`;
 };
 
-/** A usage rule's month-to-date against its threshold: "1,234,567 this month · 62%". */
-export const usageProgressLine = (monthToDate: number, threshold: number): string => {
+/**
+ * A usage rule's month-to-date against its threshold: "1,234,567 this month · 62%".
+ * A read that stopped short (`complete: false`) is a lower bound, and says so.
+ */
+export const usageProgressLine = (monthToDate: number, threshold: number, complete = true): string => {
     const share = threshold > 0 ? Math.floor((monthToDate / threshold) * 100) : 0;
+    const quantity = formatUsageQuantity(Math.round(monthToDate * 100) / 100);
 
-    return `${formatUsageQuantity(Math.round(monthToDate * 100) / 100)} this month · ${String(share)}%`;
+    return complete ? `${quantity} this month · ${String(share)}%` : `at least ${quantity} this month · ≥${String(share)}% (partial read)`;
 };
