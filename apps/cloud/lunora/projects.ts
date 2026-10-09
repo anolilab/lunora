@@ -3,6 +3,8 @@ import { LunoraError } from "@lunora/server";
 import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import { productionAliasCandidates } from "../src/deploy/production-alias";
+import type { ProjectRuntime } from "../src/project-runtime";
+import { runtimeColumn, storedRuntime } from "../src/project-runtime";
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
 import { constantTimeEqual } from "../src/security/constant-time-equal";
@@ -17,6 +19,9 @@ import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
 import { deployTarget, placementHost } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
+
+/** A project runtime as an argument: `PROJECT_RUNTIMES` in `src/project-runtime.ts`. */
+const projectRuntime = v.union(v.literal("lunora"), v.literal("worker"));
 
 /** Shortest preview password accepted — a gate this weak is theatre below it. */
 const MIN_PREVIEW_PASSWORD_LENGTH = 8;
@@ -36,6 +41,8 @@ interface ProjectRow {
     previewPasswordSalt?: string;
     productionAlias?: null | string;
     rootDirectory?: string;
+    /** `.global()` rows answer SQL NULL for an unset column. */
+    runtime?: "worker" | null;
     slug: string;
     target?: null | string;
     watchPaths?: string[];
@@ -79,6 +86,12 @@ export interface ProjectView {
     productionAlias?: string;
     /** Repo-relative directory builds run in; absent means the repository root. */
     rootDirectory?: string;
+
+    /**
+     * What the project's code is (`src/project-runtime.ts`): a Lunora app, or a
+     * plain Cloudflare Worker. The studio hides what only a Lunora app has.
+     */
+    runtime: ProjectRuntime;
     slug: string;
 
     /**
@@ -103,6 +116,7 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         name: row.name,
         organizationId: row.organizationId,
         previewProtected: Boolean(row.previewPasswordHash),
+        runtime: storedRuntime(row.runtime),
         slug: row.slug,
         // A row from before targets, or a value this build does not know, reads as the default.
         target: storedTarget(row.target) ?? DEFAULT_TARGET,
@@ -211,6 +225,8 @@ export const create = mutation
         githubRepo: v.optional(boundedString(LIMITS.token)),
         name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
+        // What the project's code is; absent is a Lunora app. Changeable later in its build settings.
+        runtime: v.optional(projectRuntime),
         slug: boundedString(LIMITS.id),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"projects">> => {
@@ -226,6 +242,7 @@ export const create = mutation
             githubRepo: arguments_.githubRepo,
             name: arguments_.name,
             organizationId: member.organizationId,
+            ...runtimeColumn(arguments_.runtime),
             slug: arguments_.slug,
         });
 
@@ -322,7 +339,9 @@ export const rename = mutation
  * box re-checks the root directory against the extracted source, where it can
  * also refuse one that does not exist or escapes through a symlink.
  *
- * An empty root directory or an empty watch-path list clears the setting.
+ * An empty root directory or an empty watch-path list clears the setting. The
+ * runtime, when given, decides how the next push builds and deploys — a Lunora
+ * app, or a plain Cloudflare Worker (`src/project-runtime.ts`); absent leaves it.
  * Audited, because it changes what gets deployed on the next push.
  */
 export const updateBuildSettings = mutation
@@ -331,34 +350,49 @@ export const updateBuildSettings = mutation
         id: v.id("projects"),
         organizationId: v.id("organizations"),
         rootDirectory: boundedString(LIMITS.token),
+        // Absent leaves the project's runtime as it is.
+        runtime: v.optional(projectRuntime),
         watchPaths: v.array(boundedString(LIMITS.token)),
     })
-    .mutation(async ({ ctx: context, args: { id, organizationId, rootDirectory, watchPaths } }): Promise<{ rootDirectory: string; watchPaths: string[] }> => {
-        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+    .mutation(
+        async ({
+            ctx: context,
+            args: { id, organizationId, rootDirectory, runtime, watchPaths },
+        }): Promise<{ rootDirectory: string; runtime: ProjectRuntime; watchPaths: string[] }> => {
+            const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "project");
+            await assertRowInOrg(context, id, organizationId, "project");
 
-        let root: string;
-        let patterns: string[];
+            let root: string;
+            let patterns: string[];
 
-        try {
-            root = normalizeRootDirectory(rootDirectory);
-            patterns = normalizeWatchPaths(watchPaths);
-        } catch (error) {
-            throw new LunoraError("BAD_REQUEST", error instanceof Error ? error.message : "invalid build settings");
-        }
+            try {
+                root = normalizeRootDirectory(rootDirectory);
+                patterns = normalizeWatchPaths(watchPaths);
+            } catch (error) {
+                throw new LunoraError("BAD_REQUEST", error instanceof Error ? error.message : "invalid build settings");
+            }
 
-        await context.db.patch(id, { rootDirectory: root === "" ? null : root, watchPaths: patterns.length === 0 ? null : patterns });
-        await context.db.insert("auditLog", {
-            action: "project.build_settings.update",
-            actorUserId: member.userId,
-            createdAt: context.now,
-            organizationId: member.organizationId,
-            target: root === "" ? "/" : root,
-        });
+            const project = (await context.db.get(id)) as null | ProjectRow;
+            const next = runtime ?? storedRuntime(project?.runtime);
 
-        return { rootDirectory: root, watchPaths: patterns };
-    });
+            await context.db.patch(id, {
+                rootDirectory: root === "" ? null : root,
+                // Lunora is stored as absence, like every row that predates the setting.
+                runtime: next === "worker" ? "worker" : null,
+                watchPaths: patterns.length === 0 ? null : patterns,
+            });
+            await context.db.insert("auditLog", {
+                action: "project.build_settings.update",
+                actorUserId: member.userId,
+                createdAt: context.now,
+                organizationId: member.organizationId,
+                target: `${root === "" ? "/" : root} (${next})`,
+            });
+
+            return { rootDirectory: root, runtime: next, watchPaths: patterns };
+        },
+    );
 
 /**
  * Project-scoped tables erased when a project is removed.

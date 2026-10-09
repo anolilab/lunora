@@ -1,5 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
+import type { ProjectRuntime } from "../project-runtime";
+import { WORKER_RUNTIME_TAG } from "../project-runtime";
 import type { AssetsUpload, DeployKind, DeployManifest, TargetId, TenantDeploymentSpec } from "../provision-contract";
 import { TARGETS } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
@@ -30,6 +32,8 @@ export interface ReleaseTarget {
     liveDeploymentId?: string;
     organizationId: string;
     projectId: string;
+    /** What the release is (`deployments.runtime`), so a rollback tags it as it was first deployed. Absent is a Lunora app. */
+    runtime?: ProjectRuntime;
     /** The target the release was converged on (`deployments.target`). */
     target: TargetId;
 }
@@ -100,6 +104,30 @@ export const decodeBundle = (encoded: string): ArrayBuffer | null => {
 };
 
 /**
+ * The Worker's env vars: the manifest's own (a plain Worker's wrangler `vars`),
+ * then the platform's, which win. A var that is also one of the project's
+ * secrets is refused — one env name holds one value, and which one would win
+ * at the provision box is not something to leave to chance.
+ * @throws {LunoraError} `BAD_REQUEST` naming the clash.
+ */
+const workerVariables = (
+    manifestVariables: Readonly<Record<string, string>> | undefined,
+    tenantSecrets: Readonly<Record<string, string>>,
+    telemetry: DeployTelemetry | undefined,
+): Record<string, string> => {
+    const clash = Object.keys(manifestVariables ?? {}).filter((name) => Object.hasOwn(tenantSecrets, name));
+
+    if (clash.length > 0) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `${clash.join(", ")} ${clash.length === 1 ? "is" : "are"} both a wrangler var and a secret of this project; remove one`,
+        );
+    }
+
+    return { ...manifestVariables, ...(telemetry ? { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } : {}) };
+};
+
+/**
  * Assemble the {@link TenantDeploymentSpec} for one release: pure assembly, with
  * every telemetry-conditional field in one place.
  */
@@ -114,10 +142,14 @@ const buildDeploymentSpec = (input: {
     manifest: DeployManifest;
     organizationId: string;
     projectId: string; // gitleaks:allow -- a field declaration; the scanner matches the Cypress project-id shape
+    runtime: ProjectRuntime;
     telemetry: DeployTelemetry | undefined;
     tenantSecrets: Record<string, string>;
 }): TenantDeploymentSpec => {
     const { telemetry } = input;
+    // The vars ride in the spec's own `vars`, never inside the manifest a driver reads bindings from.
+    const { vars: manifestVariables, ...manifest } = input.manifest;
+    const variables = workerVariables(manifestVariables, input.tenantSecrets, telemetry);
 
     return {
         alias: input.alias,
@@ -127,10 +159,11 @@ const buildDeploymentSpec = (input: {
         ...(input.cronSpecs && input.cronSpecs.length > 0 ? { crons: input.cronSpecs } : {}),
         deploymentId: input.deploymentId,
         kind: input.kind,
-        manifest: input.manifest,
+        manifest,
         secrets: { ...input.tenantSecrets, LUNORA_ADMIN_TOKEN: input.adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
-        tags: [`org:${input.organizationId}`, `project:${input.projectId}`, `env:${input.kind}`],
-        ...(telemetry ? { vars: { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } } : {}),
+        // The tail worker sees a script's tags and nothing else about it: this one is how it keeps a plain Worker's console lines.
+        tags: [`org:${input.organizationId}`, `project:${input.projectId}`, `env:${input.kind}`, ...(input.runtime === "worker" ? [WORKER_RUNTIME_TAG] : [])],
+        ...(Object.keys(variables).length > 0 ? { vars: variables } : {}),
     };
 };
 
@@ -157,6 +190,8 @@ export interface ReleaseSpecInput {
     manifest: DeployManifest;
     organizationId: string;
     projectId: string; // secret-scanner:allow -- domain field name
+    /** What the release is; absent is a Lunora app. */
+    runtime?: ProjectRuntime;
 }
 
 /**
@@ -182,6 +217,7 @@ export const resolveReleaseSpec = async (input: ReleaseSpecInput, deps: ReleaseD
         manifest: input.manifest,
         organizationId,
         projectId, // secret-scanner:allow -- domain field name
+        runtime: input.runtime ?? "lunora",
         telemetry: await resolveTelemetrySafely(deps, { key, organizationId }),
         tenantSecrets,
     });
@@ -280,6 +316,7 @@ export const reprovision = async (
             manifest: release.manifest,
             organizationId: target.organizationId,
             projectId: target.projectId, // secret-scanner:allow -- domain field name
+            ...(target.runtime === undefined ? {} : { runtime: target.runtime }),
         },
         deps,
     );
