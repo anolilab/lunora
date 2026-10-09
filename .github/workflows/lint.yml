@@ -496,6 +496,24 @@
                   "file_or_dir": "."
                   "strict": true
 
+    "lint-workflows":
+        "name": "Lint (github workflows)"
+        "if": "needs.files-changed.outputs.yaml_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "jactionlint"
+              "uses": "jdx/jactionlint@2462f925040c2aa1c88714dc85bc12d869cc4998" # v2.0.2
+
     # Cheap repo-consistency guards nothing else covers, sharing one install. Their
     # own job rather than more postinstall gates: a failing postinstall turns every
     # CI job red in its setup step, with the cause invisible in the job that reports it.
@@ -605,6 +623,7 @@
                 "node-capabilities-docs",
                 "batch-cap",
                 "yaml-lint",
+                "lint-workflows",
                 "dependency-manifests",
                 "generated-files",
             ]

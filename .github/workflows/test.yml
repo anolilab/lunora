@@ -112,6 +112,8 @@
             #
             # Before the build, not after: a mismatch is a matrix bug, and there is no
             # reason to spend twenty minutes compiling to find out.
+            # The node -e script is JavaScript, its `${}` is not shell.
+            # jactionlint ignore=SC2016
             - "name": "Report FTS5 coverage for this leg"
               "shell": "bash"
               "run": |
@@ -259,12 +261,12 @@
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
                   if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
                     echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     exit 1
                   fi
                   if [ "$count" != "${{ strategy.job-total }}" ]; then
                     echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
                     exit 1
                   fi
@@ -418,6 +420,8 @@
                       __tests__/global-mysql.integration.test.ts \
                       --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
 
+            # The node -e script is JavaScript, its `${}` is not shell.
+            # jactionlint ignore=SC2016
             - "name": "Assert the suites executed their cases"
               "run": |
                   node -e '
