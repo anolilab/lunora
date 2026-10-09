@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.371](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.370...@lunora/cli@1.0.0-alpha.371) (2026-10-09)
+
+### Features
+
+* **cli:** lunora cloudflare alerts for runaway-bill protection ([#1079](https://github.com/anolilab/lunora/issues/1079)) ([ff26fa0](https://github.com/anolilab/lunora/commit/ff26fa02f80865a11d956adaf6c26c5b55e23742))
+
 ## @lunora/cli [1.0.0-alpha.370](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.369...@lunora/cli@1.0.0-alpha.370) (2026-10-09)
 
 
