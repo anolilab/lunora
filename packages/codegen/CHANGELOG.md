@@ -1,3 +1,10 @@
+## @lunora/codegen [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.284...@lunora/codegen@1.0.0-alpha.285) (2026-10-09)
+
+### Bug Fixes
+
+* **advisor:** action_without_error_handling recognizes guard helpers and allSettled fan-outs ([#1083](https://github.com/anolilab/lunora/issues/1083)) ([bcc3408](https://github.com/anolilab/lunora/commit/bcc3408ea1d0f8b0b64a35de626ce22782f13563))
+* **codegen:** report a handler whose return type is unknown because of a type error ([#1084](https://github.com/anolilab/lunora/issues/1084)) ([a9eac12](https://github.com/anolilab/lunora/commit/a9eac122e35f034d32158606b7d119e628782727))
+
 ## @lunora/codegen [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.283...@lunora/codegen@1.0.0-alpha.284) (2026-10-09)
 
 
