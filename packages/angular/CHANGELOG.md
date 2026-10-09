@@ -1,3 +1,10 @@
+## @lunora/angular [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.177...@lunora/angular@1.0.0-alpha.178) (2026-10-09)
+
+
+### Dependencies
+
+* **@visulima/storage-client:** 1.0.8 → 1.0.9
+
 ## @lunora/angular [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.176...@lunora/angular@1.0.0-alpha.177) (2026-10-08)
 
 

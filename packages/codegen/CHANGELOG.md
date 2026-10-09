@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.286...@lunora/codegen@1.0.0-alpha.287) (2026-10-09)
+
+### Bug Fixes
+
+* **codegen:** read platformAdmin through an imported admin builder ([52b4e21](https://github.com/anolilab/lunora/commit/52b4e216addd7b887853fb93d81c6433d045e22e))
+
 ## @lunora/codegen [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.285...@lunora/codegen@1.0.0-alpha.286) (2026-10-09)
 
 ### Features
