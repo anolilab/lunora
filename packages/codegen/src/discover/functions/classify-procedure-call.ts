@@ -2,8 +2,8 @@ import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-mo
 import { Node } from "ts-morph";
 
 import { unwrapExpression } from "../ast";
-import { chainUsesWrappedCall, walkBuilderChain } from "../builder-chain";
-import { resolveCalleeKind } from "../callee";
+import { builderChainSteps, walkBuilderChain } from "../builder-chain";
+import { isServerImport, resolveCalleeKind } from "../callee";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
@@ -113,8 +113,15 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
  * `platformAdmin` import from `@lunora/server` used as a `.use(...)` step, matched
  * by its import origin and not by the name of the variable that holds the chain.
  */
-const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> =>
-    chainUsesWrappedCall(receiver, "use", "platformAdmin") ? { adminOnly: true } : {};
+const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> => {
+    const usesPlatformAdmin = builderChainSteps(receiver).some((step) => {
+        const argument = step.name === "use" ? step.call.getArguments()[0] : undefined;
+
+        return argument !== undefined && Node.isCallExpression(argument) && isServerImport(argument.getExpression(), "platformAdmin");
+    });
+
+    return usesPlatformAdmin ? { adminOnly: true } : {};
+};
 
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {

@@ -271,7 +271,10 @@ const discoverOwnerFieldWrites = (
 
     return withCallerVisibility(writes, functions).map((row) => {
         const callers = callSiteCallers(row.scope);
-        const adminOnly = callers.length > 0 && callers.every((exportName) => adminByKey.get(`${row.file}:${exportName}`) === true);
+        // A helper that untracked code also reaches is not fully attributed: its named callers
+        // are not the whole story, so it cannot be treated as admin-only.
+        const fullyAttributed = !(row.scope.kind === "helper" && row.scope.untracked === true);
+        const adminOnly = fullyAttributed && callers.length > 0 && callers.every((exportName) => adminByKey.get(`${row.file}:${exportName}`) === true);
 
         return adminOnly ? { ...row, adminOnly: true as const } : row;
     });

@@ -188,6 +188,18 @@ describe("classifyProcedureCall", () => {
         ).toStrictEqual({ adminOnly: true, kind: "mutation", receiver: expect.anything(), visibility: "public" });
     });
 
+    // A local function called `platformAdmin` is not the server's: the marker is the import.
+    it("does not mark admin-only from a locally defined platformAdmin", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `const platformAdmin = (check: () => boolean) => check;\nexport const setCredits = mutation.use(platformAdmin(() => true)).mutation(async () => null);`,
+                `import { mutation } from "@lunora/server";`,
+            ),
+        ).not.toHaveProperty("adminOnly");
+    });
+
     it("does not mark admin-only from a variable named adminMutation without the platformAdmin step", () => {
         expect.assertions(1);
 

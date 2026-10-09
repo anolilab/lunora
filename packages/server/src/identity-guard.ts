@@ -5,13 +5,14 @@
  *
  * ```ts
  * export const assertOwnOrganizationId = defineIdentityGuard((user: SessionUser, organizationId: string | undefined) => {
- *     if (organizationId && organizationId !== user.activeOrganization?.id) {
+ *     if (organizationId === undefined || organizationId !== user.activeOrganization?.id) {
  *         throw new LunoraError("FORBIDDEN", "Not a member of that organization");
  *     }
  * });
  * ```
  *
- * The function is returned unchanged, so the declaration costs nothing at runtime.
+ * The function is returned unchanged, so the declaration costs nothing at runtime. An
+ * asynchronous guard must be awaited at its call site, or the advisor does not count it.
  * The guarantee is the function's own: it must throw whenever the value is not
  * the caller's identity. The advisor trusts the declaration, not the body.
  */

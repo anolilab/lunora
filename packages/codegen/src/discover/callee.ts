@@ -147,4 +147,22 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
     return undefined;
 };
 
-export { calleeName, resolveCalleeKind, resolvesToImportedName };
+/**
+ * Whether `callee` is the export `exportName` of a Lunora server module, by its import: an
+ * identifier bound by `import { exportName } from "@lunora/server"` (or an alias of it). A local
+ * function with the same name is not one, so it proves nothing about the procedure it guards.
+ */
+const isServerImport = (callee: Node, exportName: string): boolean => {
+    if (!TsNode.isIdentifier(callee)) {
+        return false;
+    }
+
+    return (callee.getSymbol()?.getDeclarations() ?? []).some(
+        (declaration) =>
+            TsNode.isImportSpecifier(declaration) &&
+            declaration.getName() === exportName &&
+            isServerSurfaceModule(declaration.getImportDeclaration().getModuleSpecifierValue()),
+    );
+};
+
+export { calleeName, isServerImport, resolveCalleeKind, resolvesToImportedName };

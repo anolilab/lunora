@@ -4,7 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { singleHopInitializer } from "../../argument-taint";
 import { bindingKeyName, isConstDeclaration, memberAccessOf, unwrapExpression } from "../ast";
 import { declarationOf } from "../attribution";
-import { resolvesToImportedName } from "../callee";
+import { isServerImport } from "../callee";
 import { contextSurfacePathOf } from "../context-root";
 
 /** The name every handler spells its argument object with (`({ args }) => …`, `({ args: { x } }) => …`). */
@@ -173,7 +173,7 @@ const isDeclaredIdentityGuard = (callee: TsNode): boolean => {
 
     const initializer = unwrapExpression(declaration.getInitializer());
 
-    return Node.isCallExpression(initializer) && resolvesToImportedName(initializer.getExpression(), "defineIdentityGuard");
+    return Node.isCallExpression(initializer) && isServerImport(initializer.getExpression(), "defineIdentityGuard");
 };
 
 /**
@@ -259,7 +259,10 @@ const provenBefore = (handler: TsNode, position: number): Set<string> => {
     }
 
     for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        if (call.getEnd() <= position && runsUnconditionally(call, handler)) {
+        // A guard counts only when awaited: an unawaited guard may still be running, or may
+        // reject after the write has happened. Sync guards that are not awaited are reported
+        // rather than trusted, which is the safe direction.
+        if (call.getEnd() <= position && Node.isAwaitExpression(call.getParent()) && runsUnconditionally(call, handler)) {
             for (const field of assertedFields(call)) {
                 proven.add(field);
             }

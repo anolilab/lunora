@@ -37,7 +37,7 @@ describe("owner-field writes: guards and admin builders", () => {
         expect.assertions(1);
 
         const found = discover(
-            `${handler(`  assertOwnOrganizationId(ctx.user, args.organizationId);
+            `${handler(`  await assertOwnOrganizationId(ctx.user, args.organizationId);
   await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
 ${DECLARED_GUARD}`,
         );
@@ -46,6 +46,33 @@ ${DECLARED_GUARD}`,
     });
 
     // A function that merely has an `assert` name proves nothing: only a declared guard counts.
+    // A declared guard that is not awaited may still be running when the write happens.
+    it("does not mark a write guarded by a declared guard that is not awaited", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `${handler(`  assertOwnOrganizationId(ctx.user, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+${DECLARED_GUARD}`,
+        );
+
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+    });
+
+    // A `defineIdentityGuard` defined in this file, not imported from the server, is not a declaration.
+    it("does not mark a write guarded by a locally defined identity-guard look-alike", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `${handler(`  await assertOwnOrganizationId(ctx.user, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+const defineIdentityGuard = <Guard extends (...args: never[]) => void>(guard: Guard): Guard => guard;
+export const assertOwnOrganizationId = defineIdentityGuard((user: unknown, organizationId: unknown): void => undefined);`,
+        );
+
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+    });
+
     it("does not mark a write guarded by an undeclared assert-named helper", () => {
         expect.assertions(1);
 
