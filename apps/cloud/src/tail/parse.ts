@@ -40,8 +40,15 @@ const LUNORA_MARKER = '"source":"lunora"';
 /** Longest plain console line kept — `logs.ingestInternal` truncates past the same. */
 const MAX_PLAIN_MESSAGE_CHARS = 4096;
 
-/** Plain console lines kept per trace item: one request's output, not a flood that would fail the whole batch at ingest. */
-const MAX_PLAIN_LINES_PER_ITEM = 200;
+/**
+ * Plain console lines kept per script per flush (one `tail()` delivery). Past
+ * it, the rest are counted into one marker line ({@link droppedMarker}) — a
+ * chatty plain Worker is bounded here, and per organization at ingest.
+ */
+export const MAX_PLAIN_LINES_PER_SCRIPT = 400;
+
+/** Lines per batch the control plane ingests in one call — `MAX_BATCH` in `lunora/logs.ts`, which refuses a larger one. */
+export const MAX_INGEST_LINES = 500;
 
 /** Valid `ctx.log` severities; an unrecognized level folds to `log` (the default tier). */
 const LEVELS = new Set<LogLevel>(["debug", "error", "fatal", "info", "log", "trace", "warn"]);
@@ -162,31 +169,46 @@ export const parsePlainLog = (log: TailLog): TailLogLine | null => {
 };
 
 /**
- * Decode one tail `TraceItem`'s console logs: every lunora `type:"log"` line
- * and, for a script tagged as a plain Worker, every other console line too
- * (at most {@link MAX_PLAIN_LINES_PER_ITEM} of those per item).
+ * One tail `TraceItem`'s console logs, decoded: every lunora `type:"log"` line
+ * and, for a script tagged as a plain Worker, at most `allowance` of its other
+ * console lines — the rest counted in `dropped`.
  */
-export const parseTraceItem = (item: TailTraceItem): TailLogLine[] => {
+const decodeTraceItem = (item: TailTraceItem, allowance: number): { dropped: number; lines: TailLogLine[]; plain: number } => {
     const plainWorker = item.scriptTags?.includes(WORKER_RUNTIME_TAG) === true;
     const lines: TailLogLine[] = [];
     let plain = 0;
+    let dropped = 0;
 
     for (const log of item.logs ?? []) {
         const line = parseLogMessage(log.message);
+        const fallback = line === null && plainWorker ? parsePlainLog(log) : null;
 
-        if (line) {
+        if (line !== null) {
             lines.push(line);
-        } else if (plainWorker && plain < MAX_PLAIN_LINES_PER_ITEM) {
-            const kept = parsePlainLog(log);
-
-            if (kept) {
-                plain += 1;
-                lines.push(kept);
-            }
+        } else if (fallback !== null && plain < allowance) {
+            plain += 1;
+            lines.push(fallback);
+        } else if (fallback !== null) {
+            dropped += 1;
         }
     }
 
-    return lines;
+    return { dropped, lines, plain };
+};
+
+/**
+ * Decode every lunora `type:"log"` line out of one tail `TraceItem` and, for a
+ * script tagged as a plain Worker, its other console lines too (at most
+ * {@link MAX_PLAIN_LINES_PER_SCRIPT}; {@link groupTailEvents} holds a whole flush to that).
+ */
+export const parseTraceItem = (item: TailTraceItem): TailLogLine[] => decodeTraceItem(item, MAX_PLAIN_LINES_PER_SCRIPT).lines;
+
+/** The line that says how many console lines a flush dropped, so a gap in the Logs tab is never silent. */
+const droppedMarker = (dropped: number): TailLogLine => {
+    return {
+        level: "warn",
+        message: `${String(dropped)} console line(s) dropped from one log flush: Lunora Cloud keeps at most ${String(MAX_PLAIN_LINES_PER_SCRIPT)} plain console lines per Worker per flush`,
+    };
 };
 
 /** One script's decoded lines, ready for `POST /v1/logs/tail`. */
@@ -197,11 +219,15 @@ export interface TailBatch {
 
 /**
  * Group a whole tail event array into per-script batches, dropping items with no
- * script name or no lunora log lines. The producer POSTs these to the control
- * plane, which resolves each `scriptName` → org.
+ * script name and scripts with no line to keep. A plain Worker keeps at most
+ * {@link MAX_PLAIN_LINES_PER_SCRIPT} console lines per flush, plus a line
+ * counting the rest; each script's lines are split into batches of at most
+ * {@link MAX_INGEST_LINES}, so one script may send several. The producer POSTs
+ * these to the control plane, which resolves each `scriptName` → org and ingests
+ * each batch on its own.
  */
 export const groupTailEvents = (events: TailTraceItem[]): TailBatch[] => {
-    const byScript = new Map<string, TailLogLine[]>();
+    const byScript = new Map<string, { dropped: number; lines: TailLogLine[]; plain: number }>();
 
     for (const item of events) {
         const { scriptName } = item;
@@ -210,22 +236,21 @@ export const groupTailEvents = (events: TailTraceItem[]): TailBatch[] => {
             continue;
         }
 
-        const lines = parseTraceItem(item);
+        const entry = byScript.get(scriptName) ?? { dropped: 0, lines: [], plain: 0 };
+        const decoded = decodeTraceItem(item, MAX_PLAIN_LINES_PER_SCRIPT - entry.plain);
 
-        if (lines.length === 0) {
-            continue;
-        }
-
-        const existing = byScript.get(scriptName);
-
-        if (existing) {
-            existing.push(...lines);
-        } else {
-            byScript.set(scriptName, lines);
-        }
+        byScript.set(scriptName, { dropped: entry.dropped + decoded.dropped, lines: [...entry.lines, ...decoded.lines], plain: entry.plain + decoded.plain });
     }
 
-    return [...byScript.entries()].map(([scriptName, lines]) => {
-        return { lines, scriptName };
+    // Chunked to what one ingest call takes: a larger batch is refused whole.
+    return [...byScript.entries()].flatMap(([scriptName, { dropped, lines }]) => {
+        const all = dropped > 0 ? [...lines, droppedMarker(dropped)] : lines;
+        const batches: TailBatch[] = [];
+
+        for (let index = 0; index < all.length; index += MAX_INGEST_LINES) {
+            batches.push({ lines: all.slice(index, index + MAX_INGEST_LINES), scriptName });
+        }
+
+        return batches;
     });
 };

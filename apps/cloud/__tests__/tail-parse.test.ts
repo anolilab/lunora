@@ -159,14 +159,30 @@ describe("plain Cloudflare Worker console lines", () => {
         expect(parsePlainLog({ level: "log", message: ["y".repeat(10_000)] })?.message).toHaveLength(4096);
     });
 
-    it("keeps at most 200 plain lines from one trace item", () => {
-        expect.assertions(1);
+    it("bounds a script's plain lines per flush, counts the rest in one line, and splits what it keeps into ingestible batches", () => {
+        expect.assertions(4);
 
+        // Three requests of 250 console lines each, from one plain Worker: 750 in one flush.
         const logs = Array.from({ length: 250 }, (_, index) => {
             return { level: "log", message: [`line ${String(index)}`] };
         });
+        const batches = groupTailEvents([item([WORKER_RUNTIME_TAG], logs), item([WORKER_RUNTIME_TAG], logs), item([WORKER_RUNTIME_TAG], logs)]);
+        const lines = batches.flatMap((batch) => batch.lines);
 
-        expect(parseTraceItem(item([WORKER_RUNTIME_TAG], logs))).toHaveLength(200);
+        expect(batches.map((batch) => [batch.scriptName, batch.lines.length])).toStrictEqual([["acme", 401]]);
+        expect(lines.at(-1)).toStrictEqual({
+            level: "warn",
+            message: "350 console line(s) dropped from one log flush: Lunora Cloud keeps at most 400 plain console lines per Worker per flush",
+        });
+
+        // ctx.log lines are not plain lines: they never spend the budget, and a script with many still splits at the ingest's cap.
+        const structured = Array.from({ length: 600 }, () => {
+            return { message: [logEvent({ level: "info", message: "s" })] };
+        });
+        const split = groupTailEvents([item(["org:o"], structured)]);
+
+        expect(split.map((batch) => batch.lines.length)).toStrictEqual([500, 100]);
+        expect(split.every((batch) => batch.scriptName === "acme")).toBe(true);
     });
 
     it("groups a plain Worker's lines under its script for the ingest", () => {
