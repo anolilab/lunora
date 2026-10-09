@@ -225,6 +225,7 @@ describe("deployments.create", () => {
         const { ctx, ops } = makeCtx({
             aliasOwnership: [],
             deployments: [],
+            halts: [],
             members: [owner("org_1")],
             projects: [{ _id: "proj_1", organizationId: "org_1", slug: "web", ...project }],
         });

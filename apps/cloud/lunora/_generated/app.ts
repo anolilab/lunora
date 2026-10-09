@@ -402,6 +402,7 @@ class AppBuilder<Env extends object> {
             ["githubInstallations", { mode: { kind: "global" } }],
             ["rateLimits", { mode: { kind: "root" } }],
             ["deployments", { mode: { kind: "global" } }],
+            ["halts", { mode: { kind: "global" } }],
             ["aliasOwnership", { mode: { kind: "global" } }],
             ["deployKeys", { mode: { kind: "global" } }],
             ["githubDeliveries", { mode: { kind: "global" } }],

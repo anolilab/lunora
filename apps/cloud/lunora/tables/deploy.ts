@@ -120,6 +120,49 @@ export const deployTables = {
         // the whole table and filtering after — see its note on page starvation.
         .index("by_status", ["status"]),
 
+    // Emergency stop: one row per deployment alias the organization asked to
+    // halt — by hand (`halts.haltOrganization`, or support over
+    // `POST /v1/halts`) or through a suspension (`haltOnSuspension`). The row is
+    // the intent and its progress; the every-minute halt sweep
+    // (`src/deploy/halt.ts`) converges the alias's Worker onto a generated stub
+    // that keeps every Durable Object class and runs none of the tenant's code,
+    // and back onto its live release on resume. While a project has a row,
+    // deploys, rollbacks and git-build releases of it are refused.
+    halts: defineTable({
+        alias: v.string(),
+        // Retries of a failed converge since the last success, and when the next may run (backoff).
+        attempts: v.optional(v.number()),
+        // A converge claimed the row at this time; another tick leaves it alone until the lease expires.
+        convergingAt: v.optional(v.number()),
+        createdAt: v.number(),
+        // The live release the stub replaced — what a resume converges back onto.
+        deploymentId: v.optional(v.string()),
+        // When the stub last converged; absent until the first does.
+        haltedAt: v.optional(v.number()),
+        // Who asked: a member's user id, `support`, or `system:halt-on-suspension`.
+        haltedBy: v.string(),
+        kind: deploymentKind,
+        // Why the last converge failed. Kept until one succeeds.
+        lastError: v.optional(v.string()),
+        nextAttemptAt: v.optional(v.number()),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        // What the stub answers with: `manual`, `support`, or the suspension's reason.
+        reason: v.string(),
+        // `manual` halts are only ever lifted by a person; `suspension` halts follow the suspension.
+        source: v.union(v.literal("manual"), v.literal("suspension")),
+        // `halting` until the stub is on the Worker, `halted` once it is, `resuming` once a resume is asked for.
+        state: v.union(v.literal("halting"), v.literal("halted"), v.literal("resuming")),
+        // When the last stub converge STARTED: a release that converged after it may sit on top of the stub.
+        stubStartedAt: v.optional(v.number()),
+        target: deployTarget,
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_alias", ["alias"], { unique: true })
+        .index("by_org", ["organizationId"])
+        .index("by_project", ["projectId"]),
+
     // One-row-per-alias ownership ledger. An alias (the tenant's stable script
     // label and script name) seeds per-project D1/R2 resource names and names the
     // project's Worker, so it MUST belong to exactly one project.

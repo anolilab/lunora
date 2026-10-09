@@ -80,6 +80,11 @@ export const platformTables = {
         // that re-entered past the depth cap. Absent ⇒ `terminate` (508). Set by
         // owners/admins through `edge.setRecursionPolicy`.
         recursionPolicy: v.optional(v.union(v.literal("terminate"), v.literal("allow"))),
+        // Emergency stop on suspension: whether a `spend-cap` or `overage`
+        // suspension also halts the organization's projects (`src/deploy/halt.ts`),
+        // stopping code that is already running. Absent ⇒ on; owners turn it off
+        // through `halts.setHaltOnSuspension`. Never applies to `dunning`.
+        haltOnSuspension: v.optional(v.boolean()),
     })
         .global()
         .index("by_slug", ["slug"], { unique: true }),

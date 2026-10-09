@@ -49,6 +49,7 @@ const PURGED_TABLES = [
     "deployKeys",
     "edgeRules",
     "githubInstallations",
+    "halts",
     "incidents",
     "invitations",
     "issues",

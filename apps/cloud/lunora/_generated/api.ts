@@ -89,6 +89,12 @@ export interface ApiTypes {
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
         unclaim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
     };
+    halts: {
+        haltOrganization: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, import("../../src/deploy/halt.js").HaltRequestResult>;
+        resumeOrganization: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, { resumed: string[]; }>;
+        setHaltOnSuspension: FunctionReference<"mutation", { enabled: boolean; organizationId: Id<"organizations"> }, null>;
+        status: FunctionReference<"query", { organizationId: Id<"organizations"> }, { autoHalted: boolean; haltable: number; haltOnSuspension: boolean; halts: { alias: string; attempts: number; haltedAt?: number; haltedBy: string; kind: string; lastError?: string; projectId: string; reason: string; requestedAt: number; source: "manual" | "suspension"; state: "halted" | "halting" | "resuming" }[]; suspendedReason?: string; unsupported: { alias: string; reason: string; }[] }>;
+    };
     incidents: {
         investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
@@ -251,6 +257,10 @@ export interface InternalApiTypes {
     github_installations: {
         record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations">>;
         remove: FunctionReference<"mutation", { installationId: number }, void>;
+    };
+    halts: {
+        aliasHalted: FunctionReference<"query", { alias: string }, boolean>;
+        operatorHalt: FunctionReference<"mutation", { action: "halt" | "resume"; organizationId: Id<"organizations"> }, import("../../src/deploy/halt.js").HaltRequestResult | { resumed: string[]; }>;
     };
     hostd_releases: {
         envelope: FunctionReference<"query", { releaseId: unknown }, string | null>;

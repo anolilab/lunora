@@ -39,6 +39,7 @@ import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, withContext } from "./routes/shared";
 import {
     handleCellRegisterRoute,
+    handleHaltRoute,
     handlePreviewAuthRoute,
     handleTenantCustomDomainRoute,
     handleTenantPlanRoute,
@@ -799,6 +800,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleTenantRecursionRoute, method: "POST", path: "/v1/tenants/recursion", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
+        // Support's emergency stop and resume of an organization's projects (RUNBOOK "Emergency stop").
+        { handler: handleHaltRoute, method: "POST", path: "/v1/halts", spec: { auth: "adminToken" } },
         // The build queue: claimed by the Worker's own `scheduled()`, run by each build's runner alarm — both in-process.
         { handler: handleBuildDispatchRoute, method: "POST", path: "/v1/builds/dispatch", spec: { auth: "adminToken" } },
         { handler: handleBuildRunRoute, method: "POST", path: "/v1/builds/run", spec: { auth: "adminToken" } },

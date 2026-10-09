@@ -39,6 +39,7 @@ export const organizations = sqliteTable("organizations", {
     creditsAccountId: text("creditsAccountId"),
     deletionRequestedAt: real("deletionRequestedAt"),
     recursionPolicy: text("recursionPolicy", { mode: "json" }).$type<"terminate" | "allow">(),
+    haltOnSuspension: integer("haltOnSuspension", { mode: "boolean" }),
 }, (t) => ({
     by_slug: uniqueIndex("by_slug").on(t.slug),
 }));
@@ -162,6 +163,33 @@ export const deployments = sqliteTable("deployments", {
     by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
     by_kind: index("by_kind").on(t.kind),
     by_placement: index("by_placement").on(t.placementRef),
+}));
+
+export const halts = sqliteTable("halts", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    alias: text("alias").notNull(),
+    attempts: real("attempts"),
+    convergingAt: real("convergingAt"),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId"),
+    haltedAt: real("haltedAt"),
+    haltedBy: text("haltedBy").notNull(),
+    kind: text("kind", { mode: "json" }).$type<"production" | "preview" | "dev">().notNull(),
+    lastError: text("lastError"),
+    nextAttemptAt: real("nextAttemptAt"),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    reason: text("reason").notNull(),
+    source: text("source", { mode: "json" }).$type<"manual" | "suspension">().notNull(),
+    state: text("state", { mode: "json" }).$type<"halting" | "halted" | "resuming">().notNull(),
+    stubStartedAt: real("stubStartedAt"),
+    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_project: index("by_project").on(t.projectId),
+    by_org: index("by_org").on(t.organizationId),
+    by_alias: uniqueIndex("by_alias").on(t.alias),
 }));
 
 export const aliasOwnership = sqliteTable("aliasOwnership", {
