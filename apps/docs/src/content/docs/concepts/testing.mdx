@@ -218,9 +218,10 @@ deferred to a follow-up; exercise those over a running worker instead.
 Several are **not** stubs. `ctx.scheduler` is a working fake with a virtual clock —
 `t.scheduler.list()` / `advance(ms)` / `runPending()` / `failures()` drive it, so
 scheduled work is testable here (see
-[`@lunora/testing`](/docs/packages/testing)). `ctx.queues` and `ctx.notify` /
-`ctx.push` record what a handler sends once you pass `lunoraTest(schema, { queues:
-["jobs"], notify })`; read it back with `t.queues.sent("jobs")` and
+[`@lunora/testing`](/docs/packages/testing)). `ctx.queues`, `ctx.topics` and
+`ctx.notify` / `ctx.push` record what a handler sends once you pass
+`lunoraTest(schema, { queues: ["jobs"], topics: ["signups"], notify })`; read it
+back with `t.queues.sent("jobs")`, `t.topics.published("signups")` and
 `t.notify.sent("push")`. An action's `ctx.fetch` is the stub only when you do
 not supply one: pass `lunoraTest(schema, { fetch })` to inject your own.
 
