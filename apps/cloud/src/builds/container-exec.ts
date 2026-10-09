@@ -50,13 +50,16 @@ const toExecution = (payload: Record<string, unknown> & { bundle: string; bundle
 /** Field caps for an advisory record: it comes from a box that ran tenant code, so nothing in it is trusted. */
 const ADVISORY_FIELD_LIMITS = { cacheKey: 600, detail: 2000, file: 512, name: 64, remediation: 1000, title: 200 } as const;
 
+/** Longest build-log line stored — the box caps its own output lines to the same. */
+const MAX_LOG_LINE_CHARS = 8000;
+
 /** Detector names are snake_case identifiers; anything else is not a record this plane knows. */
 const ADVISORY_NAME = /^[a-z][a-z0-9_]*$/u;
 
 /**
  * An `{"advisory"}` record as a {@link BuildAdvisory}, or `undefined` when it is
  * malformed. Every string is required and truncated to its cap, the line must be
- * a positive integer, and the level is always `WARN` — the scan never fails a build.
+ * a positive integer, and the level is `INFO` or else `WARN` — the scan never fails a build.
  */
 const toAdvisory = (value: unknown): BuildAdvisory | undefined => {
     if (!isRecord(value)) {
@@ -85,7 +88,7 @@ const toAdvisory = (value: unknown): BuildAdvisory | undefined => {
         cacheKey: fields.cacheKey ?? "",
         detail: fields.detail ?? "",
         file: fields.file ?? "",
-        level: "WARN",
+        level: value["level"] === "INFO" ? "INFO" : "WARN",
         line: line as number,
         ...(location === "bundle" || location === "source" ? { location } : {}),
         name: fields.name ?? "",
@@ -135,7 +138,8 @@ const consumeBuildLine = async (
     }
 
     if (typeof payload["line"] === "string") {
-        await onLine(payload["line"]);
+        // Bounded here too: the box ran tenant code, and `buildLogs` rows are not.
+        await onLine(payload["line"].slice(0, MAX_LOG_LINE_CHARS));
     }
 
     const advisory = "advisory" in payload ? toAdvisory(payload["advisory"]) : undefined;

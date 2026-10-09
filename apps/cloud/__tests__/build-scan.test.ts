@@ -18,6 +18,8 @@ import { describe, expect, it } from "vitest";
 interface RawFinding {
     binding?: string;
     column: number;
+    delayMs?: number;
+    level?: "INFO" | "WARN";
     line: number;
     loopKind?: string;
     name: string;
@@ -45,6 +47,9 @@ describe("unbounded_loop", () => {
         ["do { … } while (true)", "do {\n    await ctx.storage.put('k', 1);\n} while (true);"],
         ["a parenthesised while ((true))", "while ((true)) {\n    await ctx.storage.put('k', 1);\n}"],
         ["a minified while (!0)", "while (!0) { ctx.n++; }"],
+        ["while (1)", "while (1) { await ctx.storage.put('k', 1); }"],
+        ["while (2)", "while (2) { await ctx.storage.put('k', 1); }"],
+        ["do { … } while (1)", "do { await ctx.storage.put('k', 1); } while (1);"],
         ["a loop whose only return is in a nested callback", "const stop = () => {\n    return;\n};\nwhile (true) {\n    void stop;\n}"],
         ["a continue to the loop itself", "while (true) { continue; }"],
         ["a labeled continue to the loop itself", "spin: while (true) { continue spin; }"],
@@ -87,9 +92,11 @@ describe("unbounded_loop", () => {
     it("names the loop form in the finding", () => {
         expect.assertions(1);
 
-        const kinds = analyzeSource(inFunction("while (true) {}\nfor (;;) {}\ndo {} while (true);")).map((finding) => finding.loopKind);
+        const kinds = analyzeSource(inFunction("while (true) {}\nfor (;;) {}\ndo {} while (true);\nwhile (1) {}\nwhile (!0) {}")).map(
+            (finding) => finding.loopKind,
+        );
 
-        expect(kinds).toStrictEqual(["while (true)", "for (;;)", "do … while (true)"]);
+        expect(kinds).toStrictEqual(["while (true)", "for (;;)", "do … while (true)", "while (1)", "while (true)"]);
     });
 
     it.each([
@@ -107,6 +114,7 @@ describe("unbounded_loop", () => {
         ["an optional abort-signal check", "while (true) { signal?.throwIfAborted(); }"],
         ["a return inside a try", "while (true) { try { return; } finally { void 0; } }"],
         ["a condition that may become false", "let left = 10;\nwhile (left > 0) {\n    left -= 1;\n}"],
+        ["a loop that never runs", "while (0) { await ctx.storage.put('k', 1); }"],
     ])("does not report a loop left by %s", (_label, body) => {
         expect.assertions(1);
 
@@ -249,6 +257,61 @@ var BuildRunnerDO = class extends DurableObject {
     });
 });
 
+describe("alarm_always_rearms coverage and levels", () => {
+    it.each([
+        [
+            "an `alarm = async () => {}` class field",
+            "export class Room {\n  alarm = async () => {\n    await this.ctx.storage.setAlarm(Date.now());\n  };\n}\n",
+        ],
+        ["an expression-bodied `alarm` field", "export class Room {\n  alarm = () => this.ctx.storage.setAlarm(Date.now());\n}\n"],
+        ["a destructured `storage`", inAlarm("const { storage } = this.ctx;\nawait storage.setAlarm(Date.now());")],
+        ["a `deleteAlarm()` that comes BEFORE the re-arm", inAlarm("await this.ctx.storage.deleteAlarm();\nawait this.ctx.storage.setAlarm(Date.now());")],
+        ["a `deleteAlarm()` on a different storage", inAlarm("await this.ctx.storage.setAlarm(Date.now());\nawait this.other.storage.deleteAlarm();")],
+    ])("reports %s", (_label, code) => {
+        expect.assertions(1);
+
+        expect(names(code)).toStrictEqual(["alarm_always_rearms"]);
+    });
+
+    it.each([
+        ["re-arm, then cancel once done", inAlarm("await this.ctx.storage.setAlarm(Date.now() + 1000);\nif (args.done) await this.ctx.storage.deleteAlarm();")],
+        [
+            "re-arm, then cancel through a destructured storage",
+            inAlarm("const { storage } = this.ctx;\nawait storage.setAlarm(Date.now());\nif (args.done) await storage.deleteAlarm();"),
+        ],
+    ])("does not report %s — `deleteAlarm()` is a way to stop", (_label, code) => {
+        expect.assertions(1);
+
+        expect(names(code)).toStrictEqual([]);
+    });
+
+    it.each([
+        ["Date.now()", "Date.now()", "WARN", 0],
+        ["a second ahead", "Date.now() + 1000", "WARN", 1000],
+        ["just under a minute", "Date.now() + 59_999", "WARN", 59_999],
+        ["the delay first", "1000 + Date.now()", "WARN", 1000],
+        ["a minute ahead", "Date.now() + 60_000", "INFO", 60_000],
+        ["an hour ahead, as a minifier writes it", "Date.now() + 36e5", "INFO", 3_600_000],
+        ["an hour ahead in a Date", "new Date(Date.now() + 60 * 60 * 1000)", "INFO", 3_600_000],
+        ["a delay the scan cannot read", "Date.now() + this.interval", "WARN", undefined],
+        ["an absolute timestamp", "this.nextRun", "WARN", undefined],
+    ])("classifies a re-arm to %s", (_label, time, level, delayMs) => {
+        expect.assertions(1);
+
+        const [finding] = analyzeSource(inAlarm(`await this.ctx.storage.setAlarm(${time});`));
+
+        expect({ delayMs: finding?.delayMs, level: finding?.level }).toStrictEqual({ delayMs, level });
+    });
+
+    it("reads an ordinary hourly job as a note, not a warning", () => {
+        expect.assertions(1);
+
+        expect(
+            analyzeSource("export class Room {\n  async alarm() {\n    await this.flush();\n    await this.ctx.storage.setAlarm(Date.now() + 36e5);\n  }\n}\n"),
+        ).toMatchObject([{ delayMs: 3_600_000, level: "INFO", name: "alarm_always_rearms" }]);
+    });
+});
+
 /** A release manifest where `SELF` produces to `jobs`, which this Worker also consumes. */
 const SELF_FEEDING = {
     bindings: [
@@ -266,6 +329,11 @@ describe("queue_self_resend", () => {
             "a class queue() through this.env",
             "export class Consumer {\n  async queue(batch) {\n    await this.env.SELF.send(batch.messages[0].body);\n  }\n}\n",
         ],
+        // The body of a loop over the batch's own messages runs for every message of every batch.
+        ["a send per message of the batch", "export default { async queue(batch, env) { for (const m of batch.messages) { await env.SELF.send(m.body); } } };"],
+        ["a destructured env", "export default { async queue(batch, { SELF }) { await SELF.send({}); } };"],
+        ["a destructured, renamed env binding", "export default { async queue(batch, { SELF: again }) { await again.send({}); } };"],
+        ["an expression-bodied handler", "export default { queue: (batch, env) => env.SELF.send({}) };"],
     ])("reports %s re-sending to its own queue", (_label, code) => {
         expect.assertions(1);
 
@@ -274,12 +342,20 @@ describe("queue_self_resend", () => {
 
     it.each([
         [
-            "a send per message inside a loop",
-            "export default { async queue(batch, env) { for (const m of batch.messages) { await env.SELF.send(m.body); } } };",
+            "a send in a loop over something other than the batch's messages",
+            "export default { async queue(batch, env) { for (const m of env.pending) { await env.SELF.send(m); } } };",
+        ],
+        [
+            "a send in a callback over the messages, which the scan does not follow",
+            "export default { async queue(batch, env) { batch.messages.forEach((m) => env.SELF.send(m.body)); } };",
+        ],
+        [
+            "a send behind a condition inside the per-message loop",
+            "export default { async queue(batch, env) { for (const m of batch.messages) { if (m.attempts < 3) await env.SELF.send(m.body); } } };",
         ],
         ["a send behind a condition", "export default { async queue(batch, env) { if (batch.messages.length > 1) await env.SELF.send({}); } };"],
         ["a send to another queue", "export default { async queue(batch, env) { await env.OTHER.send({}); } };"],
-        ["a destructured env, which the scan cannot follow", "export default { async queue(batch, { SELF }) { await SELF.send({}); } };"],
+        ["a send to another queue through a destructured env", "export default { async queue(batch, { OTHER }) { await OTHER.send({}); } };"],
     ])("does not report %s", (_label, code) => {
         expect.assertions(1);
 

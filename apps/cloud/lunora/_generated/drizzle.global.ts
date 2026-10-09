@@ -242,7 +242,7 @@ export const githubDeliveries = sqliteTable("githubDeliveries", {
 export const builds = sqliteTable("builds", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
-    advisories: text("advisories", { mode: "json" }).$type<Array<{ cacheKey: string; detail: string; file: string; level: "WARN"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>>(),
+    advisories: text("advisories", { mode: "json" }).$type<Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>>(),
     branch: text("branch").notNull(),
     bundleHash: text("bundleHash"),
     commitSha: text("commitSha").notNull(),

@@ -69,21 +69,49 @@ lets the dashboard tail a build live, which is what `buildLogs` is for.
    green.
 
 7. **Scan the bundle** (`scan.mjs`), over the exact bytes hashed in step 5 and
-   with the release's manifest in hand. It looks for code that can run without
-   end and bill storage operations on every pass — `unbounded_loop`,
-   `alarm_always_rearms`, `queue_self_resend` (the rules are in the apps/cloud
-   README, _Build scan_) — and drops every finding the sourcemap places under
-   `node_modules`, in generated output or outside the repository. It only
-   warns: each finding is an `{"advisory"}` record plus a `warning: …` line, and
-   a scan that cannot run — an unparsable bundle, over 32 MiB, a sourcemap over
-   64 MiB, more than the free heap can hold, past its 10-second budget — is a
-   single `warning: build scan skipped: <reason>` and the build carries on. The
-   parse is synchronous, so its time is bounded by the size cap; every walk after
-   it checks the deadline. Memory is checked before the parse, never discovered:
-   a real 4 MiB bundle with its 7.5 MiB map peaked between 128 and 160 MiB of
-   heap, so the scan budgets 48 heap bytes per bundle byte and skips when that
-   is more than the heap has left — running this process out of heap would end
-   the stream with no release, which fails the build.
+   with the release's manifest in hand — see _The bundle scan_ below. It only
+   warns, and a scan that cannot run is a single
+   `warning: build scan skipped: <reason>`; the build carries on.
+
+### The bundle scan
+
+Code that, once started, can run without end and bill storage operations on
+every pass. Each finding is one `{"advisory"}` record plus a log line —
+`warning: …` for `WARN`, `note: …` for `INFO`, so the Studio's Warnings tab
+(which matches "warn") picks up only the former.
+
+| Advisory              | Level                                                                                                                      | Reported when                                                                                                                                                                                                                                                                                                                                                                                                                                         | Not covered                                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `unbounded_loop`      | `WARN`                                                                                                                     | `while`/`do … while` on `true`, a non-zero number (`while (1)`) or `!0`, or `for (;;)`/`for (; true;)`, with no statically reachable exit: no `break` bound to it, no jump to a label outside it, no `return`/`throw`/`yield` in its own function, no `signal.throwIfAborted()`. An `await` is not an exit.                                                                                                                                           | A condition that is not a literal (`while (running)`), however it is set.                                                                                                                                                                  |
+| `alarm_always_rearms` | `WARN` when the re-arm is `Date.now()`, under a minute ahead, or a delay the scan cannot read; `INFO` at a minute or more. | A class's `alarm() {}` or `alarm = () => {}` field calls `<x>.storage.setAlarm(…)` (or a destructured `storage.setAlarm(…)`) at a position that runs on every call — not in a branch, loop body, `case`, `catch`, ternary arm, the far side of `&&`/`\|\|`/`??`, an optional chain, a nested callback, or after an earlier statement that may leave — not kept, not followed by a `throw`, and not followed by a `deleteAlarm()` on the same storage. | Delays read only as `Date.now() + <constant>` (optionally in `new Date(…)`); a storage held under any other name; minified code where the bundler renames `storage`, `setAlarm` or `deleteAlarm` (esbuild does not rename properties).     |
+| `queue_self_resend`   | `WARN`                                                                                                                     | A hand-written `queue(batch, env)` handler (object method, arrow or class method via `this.env`; `env` named or destructured) `send`s/`sendBatch`es, unconditionally or once per message in `for (const m of batch.messages)`, to a producer the release manifest maps to a queue this Worker consumes.                                                                                                                                               | Lunora `defineQueue` consumers (dispatched through generated and runtime code, not a hand-written `queue()`); sends inside `batch.messages.forEach(…)` or a helper function; minified code that renames `messages`, `send` or `sendBatch`. |
+
+**Noise control.** Every candidate is attributed through the bundle's sourcemap
+(wrangler writes `index.js.map` beside the module in `--outdir` mode) and
+dropped when its source is under `node_modules`, in generated output
+(`.wrangler`, `.lunora`) or outside the repository — the repository rather than
+the root directory, so a monorepo's own workspace packages are still scanned.
+Without a usable sourcemap, esbuild's `// <path>` region comments name each
+statement's input (the line reported is then the bundle's); without either, a
+finding is kept against the bundle itself.
+
+**Limits.** At most 50 findings per build, of which at most 10 placed only by
+bundle line; whichever cap applies is named in a `warning: build scan: …` line.
+A reported path is capped at 512 characters, and its `cacheKey` carries a digest
+of the full path, so two long paths never collapse into one finding. The scan
+skips itself, with the reason, on an unparsable bundle, one over 32 MiB, or past
+its 10-second budget — checked during the parse (per token) and every walk,
+including the ancestor walks jump resolution makes. Memory is guarded, never
+discovered: the scan estimates its heap up front (48 bytes per bundle byte,
+against a 256 MiB reserve that covers V8's young generation, which
+`heap_size_limit` includes) and also watches the free heap during the parse and
+walks, stopping at the reserve — dense code costs more than any estimate
+(`var a = 1;` lines measured ~80 bytes per byte), and running this process out of
+heap would end the stream with no release, failing the build. A sourcemap that
+is not a regular file, over 64 MiB, more than the remaining heap holds (budgeted
+at 4× its size; measured ~1.3×), not JSON, or named by a malformed
+`sourceMappingURL` is not used: the scan goes on with bundle-line attribution
+and says so.
 
 ### The parser, and why it is vendored
 
@@ -114,9 +142,10 @@ arbitrary code execution by design. The container is the boundary.
   string, so a branch or commit value cannot inject a command.
 - Caps on everything tenant-controlled: source size, log line length, exec
   output, and a wall-clock kill on both install and build. The bundle scan
-  caps the bundle, the sourcemap and its own time, reads only `<module>.map`
-  (or a `sourceMappingURL` that resolves beside the module), never reads a file
-  a sourcemap names, and reports only repo-relative paths.
+  caps the bundle, the sourcemap, its heap and its own time, reads only a
+  regular-file `<module>.map` (or a `sourceMappingURL` that resolves beside the
+  module), never reads a file a sourcemap names, and reports only repo-relative
+  paths, capped.
 - Start it with egress restricted to the package registry —
   `enableInternet: false` plus `allowedHosts` on the `defineContainer` side.
 

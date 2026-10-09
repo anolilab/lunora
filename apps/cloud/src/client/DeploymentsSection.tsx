@@ -586,7 +586,9 @@ export const DeploymentsSection = ({
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
-            <BuildAdvisoriesCard advisories={activeBuild?.advisories} />
+            {activeBuild && activeBuild.advisoryWarnings + activeBuild.advisoryNotes > 0 ? (
+                <BuildAdvisoriesCard buildId={activeBuild._id} organizationId={organizationId} />
+            ) : null}
             {buildSettings}
             {targetSettings}
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />

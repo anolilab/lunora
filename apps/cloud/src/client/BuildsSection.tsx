@@ -86,9 +86,14 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                                             <span className="shrink-0 font-mono text-sm">{build.commitSha.slice(0, 10)}</span>
                                             <span className="text-muted-foreground truncate font-mono text-xs">{build.branch}</span>
                                             <StatusBadge tone={BUILD_TONE[build.status]}>{build.status}</StatusBadge>
-                                            {build.advisories?.length ? (
+                                            {build.advisoryWarnings > 0 ? (
                                                 <StatusBadge tone="warning">
-                                                    {build.advisories.length} {build.advisories.length === 1 ? "warning" : "warnings"}
+                                                    {build.advisoryWarnings} {build.advisoryWarnings === 1 ? "warning" : "warnings"}
+                                                </StatusBadge>
+                                            ) : null}
+                                            {build.advisoryNotes > 0 ? (
+                                                <StatusBadge>
+                                                    {build.advisoryNotes} {build.advisoryNotes === 1 ? "note" : "notes"}
                                                 </StatusBadge>
                                             ) : null}
                                             {build.skipReason === undefined ? null : (
@@ -120,7 +125,7 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                 </CardContent>
             </Card>
 
-            {openBuildId ? <BuildAdvisoriesCard advisories={builds?.find((build) => build._id === openBuildId)?.advisories} /> : null}
+            {openBuildId ? <BuildAdvisoriesCard buildId={openBuildId} organizationId={organizationId} /> : null}
 
             {openBuildId ? (
                 <Card>

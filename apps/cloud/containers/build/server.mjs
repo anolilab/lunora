@@ -39,7 +39,7 @@ import { readRelease, releaseFailure } from "./release.mjs";
 // Imported here, at start-up, never lazily: `/srv` is writable by the user
 // tenant builds run as, so a module first loaded after a build ran could be one
 // that build replaced.
-import { DEFAULT_SCAN_LIMITS, scanBundle, scanFailure } from "./scan.mjs";
+import { scanBundle, scanFailure } from "./scan.mjs";
 import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory, workspacePackages } from "./workspace.mjs";
 
 /** Where the deploy path expects the entry module. The provision box defaults `mainModule` to this. */
@@ -211,7 +211,7 @@ const collectBundle = async (projectDirectory) => {
 /**
  * Scan the built module and report what it finds as warnings: one
  * `{"advisory"}` record per finding, for the control plane to store, and one
- * `warning: …` line, for the build log. Never throws and never fails the build
+ * `warning: …` line (`note: …` for an INFO finding), for the build log. Never throws and never fails the build
  * — a scan that cannot run says so in a single warning line and the build goes
  * on. The findings never ride on the release record.
  * @param {(payload: unknown) => void} emit The NDJSON writer.
@@ -219,27 +219,32 @@ const collectBundle = async (projectDirectory) => {
  * @returns {Promise<void>} Resolves once everything is written.
  */
 const reportAdvisories = async (emit, input) => {
-    emit({ line: "scanning the Worker bundle for code that can run without end" });
+    // Capped like every other line: an advisory's fields come from tenant output.
+    const log = (line) => {
+        emit({ line: line.slice(0, MAX_LOG_LINE_CHARS) });
+    };
+
+    log("scanning the Worker bundle for code that can run without end");
 
     let result;
 
     try {
         result = await scanBundle(input);
     } catch (error) {
-        emit({ line: `warning: build scan skipped: ${scanFailure(error)}` });
+        log(`warning: build scan skipped: ${scanFailure(error)}`);
 
         return;
     }
 
     for (const advisory of result.advisories) {
         emit({ advisory });
-        emit({ line: `warning: ${advisory.title} — ${advisory.detail}` });
+        // `note:` for INFO, so the Studio's Warnings tab (which matches "warn")
+        // shows only the findings that warn.
+        log(`${advisory.level === "INFO" ? "note" : "warning"}: ${advisory.title} — ${advisory.detail}`);
     }
 
-    if (result.omitted > 0) {
-        emit({
-            line: `warning: build scan: ${String(result.omitted)} more findings not shown (at most ${String(DEFAULT_SCAN_LIMITS.maxFindings)} are reported per build)`,
-        });
+    for (const note of result.notes) {
+        log(`warning: build scan: ${note}`);
     }
 };
 

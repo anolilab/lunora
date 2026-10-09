@@ -51,8 +51,9 @@ export interface BuildExecution {
 /**
  * One finding of the build box's bundle scan (`containers/build/scan.mjs`): code
  * in the built Worker that can run without end — an alarm that always re-arms, a
- * loop with no exit, a queue consumer feeding its own queue. A warning only;
- * it never changes a build's outcome.
+ * loop with no exit, a queue consumer feeding its own queue. `WARN` for what
+ * looks like a runaway, `INFO` for a periodic job that runs forever by design
+ * (an alarm re-armed a minute or more ahead). Never changes a build's outcome.
  */
 export interface BuildAdvisory {
     /** Stable per finding — the detector, file and line — so a re-delivery is not stored twice. */
@@ -60,7 +61,7 @@ export interface BuildAdvisory {
     detail: string;
     /** Repo-relative file the finding is in. */
     file: string;
-    level: "WARN";
+    level: "INFO" | "WARN";
     line: number;
     /** `source` when a sourcemap placed it in the original file; `bundle` when the line is the built module's. */
     location?: "bundle" | "source";
