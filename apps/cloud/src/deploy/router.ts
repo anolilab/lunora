@@ -476,16 +476,17 @@ const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Pr
             continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- bounded per-flush script set; sequential keeps the resolver simple
-        const resolved = await context.runQuery<{ organizationId: string } | null>(internal.logs.orgForScript, { scriptName: batch.scriptName });
-
-        if (!resolved) {
-            continue;
-        }
-
-        scripts += 1;
-
         try {
+            // Resolving the script belongs inside the try too: a failed lookup costs only this batch.
+            // eslint-disable-next-line no-await-in-loop -- bounded per-flush script set; sequential keeps the resolver simple
+            const resolved = await context.runQuery<{ organizationId: string } | null>(internal.logs.orgForScript, { scriptName: batch.scriptName });
+
+            if (!resolved) {
+                continue;
+            }
+
+            scripts += 1;
+
             // eslint-disable-next-line no-await-in-loop -- see above
             const result = await context.runMutation<{ ingested: number }>(internal.logs.ingestInternal, {
                 lines: batch.lines,
