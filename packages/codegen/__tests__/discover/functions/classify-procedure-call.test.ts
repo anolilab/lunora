@@ -212,6 +212,42 @@ describe("classifyProcedureCall", () => {
         ).toMatchObject({ adminOnly: true });
     });
 
+    // Typed `@lunora/server`, so classification takes the `__lunoraProcedure` brand path neore uses.
+    const LUNORA_SERVER_TYPES = `export interface Builder { __lunoraProcedure: true; use(middleware: unknown): Builder; mutation(handler: unknown): { __lunoraProcedure: true }; }
+export declare const mutation: Builder;
+export declare const platformAdmin: (check: unknown) => unknown;
+export declare const logger: () => unknown;`;
+
+    // neore's shape: the admin builder lives in lib/crpc.ts and procedures import it.
+    it("marks admin-only a procedure built on an admin builder imported from another module", () => {
+        expect.assertions(1);
+
+        project.createSourceFile("node_modules/@lunora/server/index.d.ts", LUNORA_SERVER_TYPES, { overwrite: true });
+        project.createSourceFile(
+            "lib/crpc.ts",
+            `import { mutation, platformAdmin } from "@lunora/server";\nexport const adminMutation = mutation.use(platformAdmin(() => true));`,
+            { overwrite: true },
+        );
+
+        expect(classify(`import { adminMutation } from "./lib/crpc";\nexport const setCredits = adminMutation.mutation(async () => null);`, "")).toMatchObject({
+            adminOnly: true,
+        });
+    });
+
+    it("does not mark admin-only a procedure built on a builder imported from another module without platformAdmin", () => {
+        expect.assertions(2);
+
+        project.createSourceFile("node_modules/@lunora/server/index.d.ts", LUNORA_SERVER_TYPES, { overwrite: true });
+        project.createSourceFile("lib/crpc.ts", `import { mutation, logger } from "@lunora/server";\nexport const plainMutation = mutation.use(logger());`, {
+            overwrite: true,
+        });
+
+        const classified = classify(`import { plainMutation } from "./lib/crpc";\nexport const setCredits = plainMutation.mutation(async () => null);`, "");
+
+        expect(classified).toMatchObject({ kind: "mutation" });
+        expect(classified).not.toHaveProperty("adminOnly");
+    });
+
     it("does not mark admin-only a procedure built on a local const without the platformAdmin step", () => {
         expect.assertions(1);
 

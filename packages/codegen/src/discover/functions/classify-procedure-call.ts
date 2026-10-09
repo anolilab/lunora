@@ -110,7 +110,7 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
 
 /**
  * Whether a chain carries a `.use(platformAdmin(...))` step. Follows a local
- * `const` ONE hop, as {@link resolveBuilderRootKind} does, so the common shape
+ * `const` (or an imported one) ONE hop, as {@link resolveBuilderRootKind} does, so the common shape
  * `const adminMutation = mutation.use(platformAdmin(...))` marks every procedure
  * built on it. Bounded to one hop so a `const a = b; const b = a;` cycle ends.
  */
@@ -123,7 +123,10 @@ const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
         return false;
     }
 
-    const declaration = builderChainRoot(receiver)?.getSymbol()?.getValueDeclaration();
+    // An imported builder (`import { adminMutation } from "../lib/crpc"`) is an alias: follow it to the
+    // declaration in the module that defines it. Without this, a builder shared across modules never marks.
+    const symbol = builderChainRoot(receiver)?.getSymbol();
+    const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
     const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
     return initializer !== undefined && usesPlatformAdmin(initializer, true);
