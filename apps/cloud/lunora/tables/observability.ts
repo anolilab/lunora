@@ -255,7 +255,8 @@ export const observabilityTables = {
         // line, it is one thing that happened. Event: `spend` (the org's soft cap
         // was reached, or its hard cap suspended it) — its threshold is the org's
         // `spendWarnMinor` / cap, not the rule's. Anomaly: `usage_anomaly` /
-        // `error_anomaly` threshold the hourly anomaly score (`anomalyBaselines`).
+        // `error_anomaly` / `storage_anomaly` threshold the hourly anomaly score
+        // (`anomalyBaselines`).
         target: alertTarget,
         // Count-crossing: fire when the source's count first reaches this value.
         // Metric-window: the value the window metric is compared against.
@@ -323,9 +324,10 @@ export const observabilityTables = {
 
     // Rolling anomaly baselines (plan 365 W4) — one row per (organization, signal),
     // the EWMA mean/variance the hourly anomaly sweep (`src/telemetry/anomaly-sweep.ts`)
-    // scores each completed hour against. Two signals, so at most two rows per org,
-    // and only for orgs with an anomaly rule. `last*` is the latest scored bucket:
-    // the derived score the `usage_anomaly`/`error_anomaly` rules threshold.
+    // scores each completed hour against. Three signals, so at most three rows per
+    // org, and only for orgs with an anomaly rule. `last*` is the latest scored
+    // bucket: the derived score the `usage_anomaly`/`error_anomaly`/`storage_anomaly`
+    // rules threshold.
     anomalyBaselines: defineTable({
         createdAt: v.number(),
         // Start (epoch ms) of the last hourly bucket folded in — the idempotency key.
@@ -334,13 +336,13 @@ export const observabilityTables = {
         lastMean: v.number(),
         // The bucket's score, in standard deviations from that mean.
         lastScore: v.number(),
-        // The bucket's measured value (requests, or error spans).
+        // The bucket's measured value (requests, error spans, or storage row cost in nano-cents).
         lastValue: v.number(),
         mean: v.number(),
         organizationId: v.id("organizations"),
         // Buckets folded in (capped); the baseline scores nothing until it has a day of them.
         samples: v.number(),
-        signal: v.union(v.literal("requests"), v.literal("errors")),
+        signal: v.union(v.literal("requests"), v.literal("errors"), v.literal("storage")),
         updatedAt: v.number(),
         variance: v.number(),
     })

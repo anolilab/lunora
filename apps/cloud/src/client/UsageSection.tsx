@@ -74,6 +74,38 @@ const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
     );
 };
 
+/** The family a metering notice is about, as the Usage tab names it. */
+const FAMILY_LABEL = { d1: "D1 rows", durableObjects: "Durable Object rows", requests: "Requests" } as const;
+
+/**
+ * The metering sources that cannot read right now (`usage.meteringStatus`). A
+ * source that cannot read records why instead of reporting zero, so the figures
+ * above are known to be missing that family rather than shown as complete.
+ */
+const MeteringNotices = ({ organizationId }: { organizationId: OrgId }): null | ReactElement => {
+    const notices = useQuery(api.usage.meteringStatus, { organizationId });
+
+    if (notices === undefined || notices.length === 0) {
+        return null;
+    }
+
+    return (
+        <ul className="border-border m-0 flex list-none flex-col gap-2 border-t p-0 pt-4">
+            {notices.map((notice) => (
+                <li className="flex flex-col gap-0.5" key={`${notice.source}:${notice.family}`}>
+                    <span className="flex items-baseline gap-2">
+                        <StatusBadge tone="warning">Not metered</StatusBadge>
+                        <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>
+                            {FAMILY_LABEL[notice.family]} · {notice.source}
+                        </span>
+                    </span>
+                    <span className="text-muted-foreground font-mono text-[11px]">{notice.message}</span>
+                </li>
+            ))}
+        </ul>
+    );
+};
+
 const LEVEL_TONE = { breach: "danger", ok: "success", warn: "warning" } as const;
 
 const LEVEL_LABEL = { breach: "Over cap — suspended", ok: "Under limits", warn: "Past warning" } as const;
@@ -341,6 +373,8 @@ export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnO
                     {series && series.length > 0 ? <UsageBars series={series} /> : null}
 
                     <CostByProduct totals={summary} />
+
+                    <MeteringNotices organizationId={organizationId} />
 
                     <SpendLimits organizationId={organizationId} />
                 </div>

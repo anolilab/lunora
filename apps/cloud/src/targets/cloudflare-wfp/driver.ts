@@ -14,12 +14,15 @@ import { tenantSender } from "../../backup/tenant-transport";
 import { createHttpCloudflareApi } from "../../cloudflare/api";
 import type { HostList } from "../../cloudflare/host-list";
 import { createHttpHostList } from "../../cloudflare/host-list";
+import { readD1UsageByAlias, readDurableObjectUsageByScript, unavailableOnRefusal } from "../../cloudflare/storage-usage";
 import type { ControlPlaneStore } from "../../d1-store";
 import { edgeBlockModeOf } from "../../domains/edge-block-mode";
 import { BINDING_SUPPORT } from "../../provision-contract";
-import type { ProgressLine, TargetDriver, TargetFleet, UsageRow } from "../driver";
+import type { ProgressLine, TargetDriver, TargetFleet, UsageReadback, UsageRow, UsageSource } from "../driver";
 import type { ProvisionBox } from "../provision-box/client";
 import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "../provision-box/client";
+import type { StorageReaders } from "../storage-sources";
+import { storageSources } from "../storage-sources";
 import type { AnalyticsUsageReader } from "./analytics";
 import { createHttpAnalyticsReader } from "./analytics";
 import type { SaasZone } from "./certificates";
@@ -110,14 +113,53 @@ export interface CloudflareWfpFleetPorts {
     edge?: TargetFleet["edge"];
     /** The SaaS zone this cell issues custom-domain certificates in; absent → nothing to refresh or release. */
     saasZone?: SaasZone;
+    /** Storage row counts of the cell's account, keyed by alias (D1) or script (Durable Objects); absent without account credentials. */
+    storage?: StorageReaders;
     /** The suspended-hostnames WAF list (`LUNORA_SUSPENDED_HOSTS_LIST_ID`, Enterprise-only); absent → custom-hostname removal only. */
     suspendedHostList?: HostList;
     /** The Analytics-Engine request-count reader; absent without account credentials. */
     usage?: AnalyticsUsageReader;
 }
 
+/**
+ * The cell's usage readback: one scope, the cell, whose account holds every
+ * tenant. Request counts come from the dispatcher's Analytics Engine dataset;
+ * D1 and Durable Object rows from the account's GraphQL datasets.
+ */
+const cellUsage = (cell: string, usage: AnalyticsUsageReader | undefined, storage: StorageReaders | undefined): UsageReadback => {
+    // This cell's account is the only source; another cell's scope is another control plane's.
+    const serves = (scope: string): boolean => scope === cell;
+    const requests: UsageSource | undefined =
+        usage === undefined
+            ? undefined
+            : {
+                  cadence: "continuous",
+                  read: async (scope, window) => {
+                      if (!serves(scope)) {
+                          return [];
+                      }
+
+                      // The dispatcher's `index1` is the script name, which is the resource handle.
+                      const rows = await unavailableOnRefusal(async () => usage.readRequestUsage(window.sinceMs, window.untilMs));
+
+                      return rows.map((row): UsageRow => {
+                          return { meters: { requests: row.requests }, resourceRef: row.scriptName };
+                      });
+                  },
+              };
+
+    return {
+        scopes: () => Promise.resolve([cell]),
+        sources: {
+            ...(requests === undefined ? {} : { requests }),
+            // A tenant's resources and its Worker are all named for its alias, which is its resource handle here.
+            ...(storage === undefined ? {} : storageSources(storage, { resourceRef: (name) => name, serves })),
+        },
+    };
+};
+
 export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): TargetFleet => {
-    const { appDomain, cell, deleteHostnames, dispatcher, edge, saasZone, suspendedHostList, usage } = ports;
+    const { appDomain, cell, deleteHostnames, dispatcher, edge, saasZone, storage, suspendedHostList, usage } = ports;
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
 
     return {
@@ -148,26 +190,7 @@ export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): Target
                       scope: saasZone.zoneId,
                   },
               }),
-        ...(usage
-            ? {
-                  usage: {
-                      read: async (scope: string, sinceMs: number): Promise<UsageRow[]> => {
-                          // This cell's dataset is the only source; another cell's scope is another control plane's.
-                          if (scope !== cell) {
-                              return [];
-                          }
-
-                          // The dispatcher's `index1` is the script name, which is the resource handle.
-                          const rows = await usage.readRequestUsage(sinceMs);
-
-                          return rows.map((row) => {
-                              return { requests: row.requests, resourceRef: row.scriptName };
-                          });
-                      },
-                      scopes: () => Promise.resolve([cell]),
-                  },
-              }
-            : {}),
+        ...(usage === undefined && storage === undefined ? {} : { usage: cellUsage(cell, usage, storage) }),
     };
 };
 
@@ -265,7 +288,17 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
         ...(apiToken && zoneId ? { edge: createEdgeProtection({ credentials: { apiToken }, zoneId }) } : {}),
         ...(saasZone === undefined ? {} : { saasZone }),
         ...(accountId && apiToken
-            ? { usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }) }
+            ? {
+                  storage: {
+                      d1: async (window) => unavailableOnRefusal(async () => readD1UsageByAlias({ accountId, apiToken }, window)),
+                      // Only this environment's tenants: the dispatch namespace its dispatcher routes.
+                      durableObjects: async (window) =>
+                          unavailableOnRefusal(async () =>
+                              readDurableObjectUsageByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                          ),
+                  },
+                  usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }),
+              }
             : {}),
     });
 };

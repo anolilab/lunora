@@ -1,7 +1,7 @@
 /**
  * Anomaly scoring (plan 365 W4, D5/D6): an online z-score of one hourly signal
  * against the organization's own rolling baseline, emitted as a derived score
- * that `usage_anomaly` / `error_anomaly` rules threshold.
+ * that `usage_anomaly` / `error_anomaly` / `storage_anomaly` rules threshold.
  *
  * The shape every system in the plan's prior art converged on (vmanomaly,
  * OpenSearch RCF): detection produces a **score**, and ordinary threshold
@@ -17,9 +17,9 @@
  *   (organization, signal), so its cardinality is bounded by construction.
  * - **Score** — `(value − mean) / σ`, computed against the baseline BEFORE the
  *   bucket is folded in, so a spike cannot drag its own baseline up and mask
- *   itself. σ is floored at the Poisson spread `√mean`: both signals are counts,
- *   and a nearly-flat history would otherwise turn a handful of extra requests
- *   into a forty-sigma event.
+ *   itself. σ is floored at the Poisson spread of the signal's counts
+ *   (`√(mean · unit)`, {@link POISSON_UNIT}): a nearly-flat history would
+ *   otherwise turn a handful of extra requests into a forty-sigma event.
  * - **Minimum activity floor** — {@link MIN_ANOMALY_VOLUME}, platform-defined and
  *   not configurable (Vercel's choice, for Vercel's reason): when neither the
  *   bucket nor its baseline reaches the floor, the score is 0, so low-volume
@@ -32,14 +32,34 @@
  * than modelling the cycle; an hour-of-week baseline is the upgrade if the
  * false-positive rate says so.
  */
+import { RATE_CARD } from "../billing/spend";
 import type { AlertChannel, AlertDelivery, AnomalyTarget, Comparator, MetricRulePorts } from "./alerts";
 import { compareMetric, transitionFor } from "./alerts";
 
-/** The signal an anomaly target scores. */
-export type AnomalySignal = "errors" | "requests";
+/**
+ * The signal an anomaly target scores.
+ *
+ * - `requests` and `errors` are counts.
+ * - `storage` is the hour's D1 and Durable Object row operations, priced at the
+ *   rate card in nano-cents ({@link STORAGE_METERS}). Priced, not a raw row
+ *   count, because a written row costs a thousand times a read one: summing rows
+ *   would let a read-heavy normal hide a write runaway that costs far more.
+ */
+export type AnomalySignal = "errors" | "requests" | "storage";
 
 /** Which signal each anomaly target scores. */
-export const ANOMALY_SIGNAL: Record<AnomalyTarget, AnomalySignal> = { error_anomaly: "errors", usage_anomaly: "requests" };
+export const ANOMALY_SIGNAL: Record<AnomalyTarget, AnomalySignal> = { error_anomaly: "errors", storage_anomaly: "storage", usage_anomaly: "requests" };
+
+/** The ledger meters the `storage` signal prices — the row operations a storage runaway runs up without a single request. */
+export const STORAGE_METERS = ["d1RowsRead", "d1RowsWritten", "doRowsRead", "doRowsWritten"] as const;
+
+/**
+ * The value one counted event adds to a signal: 1 for counts, and for `storage`
+ * the dearest storage row operation (a written row, in nano-cents). That makes
+ * `√(mean · unit)` the Poisson spread of the signal's counts, or an upper bound
+ * of it for `storage`.
+ */
+export const POISSON_UNIT: Record<AnomalySignal, number> = { errors: 1, requests: 1, storage: RATE_CARD.doRowsWritten.nanoCentsPerUnit };
 
 /** One bucket — the readback ledger is filled hourly, so a finer bucket would mostly score empty hours. */
 export const ANOMALY_BUCKET_MS = 60 * 60 * 1000;
@@ -55,7 +75,12 @@ export const MIN_ANOMALY_SAMPLES = 24;
  * fire. Not configurable, by design: a noisy low-volume detector is the failure
  * that gets every anomaly rule disabled.
  */
-export const MIN_ANOMALY_VOLUME: Record<AnomalySignal, number> = { errors: 25, requests: 1000 };
+export const MIN_ANOMALY_VOLUME: Record<AnomalySignal, number> = {
+    errors: 25,
+    requests: 1000,
+    // One cent an hour, in nano-cents: ten thousand written rows, or ten million read.
+    storage: 1_000_000_000,
+};
 
 /** Scores are clamped to this magnitude, so a stored score is always finite and comparable. */
 export const MAX_ANOMALY_SCORE = 1000;
@@ -92,7 +117,8 @@ export const anomalyScore = (signal: AnomalySignal, baseline: AnomalyBaseline | 
         return 0;
     }
 
-    const sigma = Math.max(Math.sqrt(Math.max(baseline.variance, 0)), Math.sqrt(Math.max(baseline.mean, 0)), 1);
+    const unit = POISSON_UNIT[signal];
+    const sigma = Math.max(Math.sqrt(Math.max(baseline.variance, 0)), Math.sqrt(Math.max(baseline.mean, 0) * unit), unit);
     const score = (value - baseline.mean) / sigma;
 
     return Math.min(Math.max(score, -MAX_ANOMALY_SCORE), MAX_ANOMALY_SCORE);
@@ -166,18 +192,25 @@ export interface AnomalyTransition {
 }
 
 /** Human label per target, for the notification. */
-const ANOMALY_LABEL: Record<AnomalyTarget, string> = { error_anomaly: "Errors", usage_anomaly: "Requests" };
+const ANOMALY_LABEL: Record<AnomalyTarget, string> = { error_anomaly: "Errors", storage_anomaly: "Storage row cost", usage_anomaly: "Requests" };
 
 const formatCount = (value: number): string => Math.round(value).toLocaleString("en-US");
+
+/** Nano-cents as dollars, with enough places that an hour's cost of a fraction of a cent is not `$0.00`. */
+const formatNanoCentsAsDollars = (value: number): string => `$${(value / 100_000_000_000).toFixed(4)}`;
+
+/** A reading's value in its signal's unit: a count, or (`storage`) dollars. */
+const formatReading = (signal: AnomalySignal, value: number): string => (signal === "storage" ? formatNanoCentsAsDollars(value) : formatCount(value));
 
 /** Render a fired anomaly alert: the score, and the value against what was normal. */
 export const renderAnomalyAlert = (rule: Pick<AnomalyRule, "name" | "target">, reading: AnomalyReading): { body: string; subject: string } => {
     const label = ANOMALY_LABEL[rule.target];
+    const signal = ANOMALY_SIGNAL[rule.target];
     const direction = reading.score >= 0 ? "above" : "below";
 
     return {
         body:
-            `${label} in the last hour on Lunora Cloud: ${formatCount(reading.value)}, against a usual ${formatCount(reading.mean)} — ` +
+            `${label} in the last hour on Lunora Cloud: ${formatReading(signal, reading.value)}, against a usual ${formatReading(signal, reading.mean)} — ` +
             `${Math.abs(reading.score).toFixed(1)} standard deviations ${direction} the rolling baseline.`,
         subject: `[Lunora] ${rule.name}: ${label.toLowerCase()} anomaly (${reading.score >= 0 ? "+" : ""}${reading.score.toFixed(1)}σ)`,
     };

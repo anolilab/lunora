@@ -13,6 +13,8 @@ import {
 } from "../src/billing/spend";
 import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
+import type { SourceStatusRow } from "../src/metering/status";
+import { meteringNotices } from "../src/metering/status";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -333,6 +335,38 @@ export const spendStatus = query
         });
 
         return { ...decision, periodStart, warnCustomized: organization.spendWarnMinor != null };
+    });
+
+/** A metering source that cannot read right now, as the Usage tab warns about it. */
+interface MeteringStatusNotice {
+    family: "d1" | "durableObjects" | "requests";
+    message: string;
+    source: string;
+}
+
+/**
+ * The metering sources that cannot read right now, for the org's Usage tab
+ * (any member): the platform's own in the org's cell, and the org's connected
+ * accounts. A source
+ * that cannot read records its reason instead of reporting zero (the readback
+ * sweep, `src/deploy/sweeps.ts`), so a usage figure that is missing a family is
+ * never shown as complete.
+ */
+export const meteringStatus = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<MeteringStatusNotice[]> => {
+        const member = await assertMember(context, organizationId);
+        const organization = (await context.db.get(member.organizationId)) as null | { cellId: Id<"cells"> };
+        const [statuses, accounts, cell] = await Promise.all([
+            collectAll<SourceStatusRow>((cursor) => context.db.usageSourceStatus.findMany({ cursor })),
+            collectAll<{ _id: string; label: string }>((cursor) =>
+                context.db.cloudflareAccounts.findMany({ cursor, where: { organizationId: member.organizationId } }),
+            ),
+            organization === null ? null : (context.db.get(organization.cellId) as Promise<null | { name: string }>),
+        ]);
+
+        // The platform's own source is shown for the organization's cell only: its name is the `cloudflare-wfp` scope.
+        return meteringNotices(statuses, accounts, cell?.name, context.now);
     });
 
 /** Shortest elapsed span a projection extrapolates from, so the first minutes of a month do not project a runaway. */

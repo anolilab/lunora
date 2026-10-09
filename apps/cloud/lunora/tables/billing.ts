@@ -48,20 +48,27 @@ export const billingTables = {
         // compacts it only with its own host's rows. Absent on platform-metered rows.
         placementRef: v.optional(placementHost),
         quantity: v.number(),
-        // The report window a box row counts (epoch ms) — with `placementRef`,
+        // When the usage happened (epoch ms): the window a box report counts, or
+        // the window the usage readback read. The anomaly sweep scores an hour by
+        // the usage whose window overlaps it, apportioned, never by `createdAt`.
+        // Absent on rows a tenant self-reports (`usage.ingest`), which are scored
+        // by `createdAt`. For a box row, `windowStart` with `placementRef` is also
         // the key that makes a replayed report a no-op instead of a double count.
+        windowEnd: v.optional(v.number()),
         windowStart: v.optional(v.number()),
     })
         .global()
         .index("by_org", ["organizationId"])
         .index("by_placement_window", ["placementRef", "windowStart"]),
 
-    // Metering readback checkpoints (§4), one per (target, scope): the epoch-ms
-    // boundary a `metering: "readback"` target's source has been folded into
-    // `platformUsage` through. The rollback reads `timestamp > readAtMs` and
-    // advances it after, so repeated runs never double-count. A scope is one
-    // independent source (`TargetFleet.usage.scopes()`): the cell's name for
+    // Metering readback checkpoints (§4), one per (target, scope, family): the
+    // epoch-ms boundary a `metering: "readback"` target's source has been folded
+    // into `platformUsage` through. The rollback reads the window after
+    // `readAtMs` and advances it after, so repeated runs never double-count. A
+    // scope is one account (`TargetFleet.usage.scopes()`): the cell's name for
     // `cloudflare-wfp`, a connected account's row id for `cloudflare-workers`.
+    // `scopeKey` is the bare scope for request counts, and `{scope}#{family}`
+    // for the storage families (`usageScopeKey`), so each keeps its own window.
     usageCheckpoints: defineTable({
         readAtMs: v.number(),
         scopeKey: v.string(),
@@ -70,6 +77,32 @@ export const billingTables = {
     })
         .global()
         .index("by_target_scope", ["target", "scopeKey"], { unique: true }),
+
+    // What the last readback run of one (target, scope key) found (§4), keyed
+    // like `usageCheckpoints` but kept apart from it, so recording a status can
+    // never create or move a checkpoint. `unavailableReason` says why a source
+    // cannot read ("storage metering unavailable: …") until it reads again; the
+    // Usage tab shows it (`usage.meteringStatus`) instead of a silent zero.
+    // `unattributedQuantity` is the volume the last run read for resources no
+    // deployment matches (the platform's own Workers excluded), so dropped
+    // usage stays visible to the operator.
+    usageSourceStatus: defineTable({
+        // Since when the source's reads have failed in a row (a 5xx, a 429, a
+        // refused truncated result), and the last error — shown once it persists.
+        failingSince: v.optional(v.number()),
+        // A span the checkpoint asked for that is older than Cloudflare keeps:
+        // skipped, so what was lost is recorded rather than silent.
+        gapNote: v.optional(v.string()),
+        gapRecordedAt: v.optional(v.number()),
+        lastError: v.optional(v.string()),
+        scopeKey: v.string(),
+        target: deployTarget,
+        unattributedQuantity: v.optional(v.number()),
+        unavailableReason: v.optional(v.string()),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_source", ["target", "scopeKey"], { unique: true }),
 
     // ── @lunora/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-

@@ -126,9 +126,9 @@ export interface AnalyticsUsageRow {
     scriptName: string;
 }
 
-/** Port: read aggregated request usage since `sinceMs` from the metering source. */
+/** Port: read aggregated request usage in `(sinceMs, untilMs]` from the metering source. */
 export interface AnalyticsUsageReader {
-    readRequestUsage: (sinceMs: number) => Promise<AnalyticsUsageRow[]>;
+    readRequestUsage: (sinceMs: number, untilMs: number) => Promise<AnalyticsUsageRow[]>;
 }
 
 interface AnalyticsReaderOptions {
@@ -163,11 +163,11 @@ interface AnalyticsReaderOptions {
  */
 export const createHttpAnalyticsReader = (options: AnalyticsReaderOptions): AnalyticsUsageReader => {
     const sql = createRestAnalyticsSql(options);
-    const query = `SELECT index1 AS scriptName, COUNT(*) AS requests FROM ${analyticsEngineTable(options.dataset)} WHERE timestamp > $since GROUP BY scriptName`;
+    const query = `SELECT index1 AS scriptName, COUNT(*) AS requests FROM ${analyticsEngineTable(options.dataset)} WHERE timestamp > $since AND timestamp <= $until GROUP BY scriptName`;
 
     return {
-        readRequestUsage: async (sinceMs) => {
-            const result = await sql.query(query, { since: isoSeconds(sinceMs / 1000) });
+        readRequestUsage: async (sinceMs, untilMs) => {
+            const result = await sql.query(query, { since: isoSeconds(sinceMs / 1000), until: isoSeconds(untilMs / 1000) });
 
             return result.rows.map((row) => {
                 return {

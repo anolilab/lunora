@@ -15,7 +15,8 @@ export const plan = v.union(v.literal("free"), v.literal("pro"), v.literal("ente
  * Honest about its origin: these are Cloudflare's billing dimensions, because
  * `cloudflare-wfp` is the target whose costs the platform pays and rebills.
  * `requests` is the one every target produces (the usage rollback writes it
- * through each driver's readback); the rest are what a WfP tenant consumes on
+ * through each driver's readback); the Cloudflare readbacks also write the D1
+ * and Durable Object row meters; the rest are what a WfP tenant consumes on
  * the platform's account. A target billed some other way (plan 458: per box)
  * adds its own meter rather than reinterpreting these.
  *
@@ -79,10 +80,11 @@ export const alertTarget = v.union(
     v.literal("spend"),
     v.literal("usage_anomaly"),
     v.literal("error_anomaly"),
+    v.literal("storage_anomaly"),
 );
 
 /** An anomaly target — the subset of {@link alertTarget} a silence can name. */
-export const anomalyTarget = v.union(v.literal("usage_anomaly"), v.literal("error_anomaly"));
+export const anomalyTarget = v.union(v.literal("usage_anomaly"), v.literal("error_anomaly"), v.literal("storage_anomaly"));
 
 export const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer"));
 

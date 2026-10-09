@@ -49,7 +49,11 @@ export interface CloudflareRequest {
 export interface CloudflareAnswer<T> {
     /** `result_info.cursors.after` of a cursor-paginated listing (account lists); absent on the last page. */
     cursorAfter?: string;
+    /** `result_info.per_page` of a page-numbered listing, when the envelope carries it. */
+    perPage?: number;
     result: T | undefined;
+    /** `result_info.total_count` of a page-numbered listing, when the envelope carries it. */
+    totalCount?: number;
     /** `result_info.total_pages` of a paginated listing; 1 when the envelope carries none. */
     totalPages: number;
 }
@@ -57,7 +61,7 @@ export interface CloudflareAnswer<T> {
 interface Envelope {
     errors?: { code?: number; message?: string }[];
     result?: unknown;
-    result_info?: { cursors?: { after?: unknown }; total_pages?: number };
+    result_info?: { cursors?: { after?: unknown }; per_page?: unknown; total_count?: unknown; total_pages?: number };
     success?: boolean;
 }
 
@@ -107,9 +111,13 @@ export const cloudflareFetch = (credentials: CloudflareCredentials): CloudflareF
         }
 
         const after = envelope?.result_info?.cursors?.after;
+        const perPage = envelope?.result_info?.per_page;
+        const totalCount = envelope?.result_info?.total_count;
 
         return {
             ...(typeof after === "string" && after !== "" ? { cursorAfter: after } : {}),
+            ...(typeof perPage === "number" && Number.isInteger(perPage) && perPage > 0 ? { perPage } : {}),
+            ...(typeof totalCount === "number" && Number.isInteger(totalCount) && totalCount >= 0 ? { totalCount } : {}),
             result: envelope?.result as T | undefined,
             totalPages: envelope?.result_info?.total_pages ?? 1,
         };
