@@ -4,6 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { singleHopInitializer } from "../../argument-taint";
 import { bindingKeyName, isConstDeclaration, memberAccessOf, unwrapExpression } from "../ast";
 import { declarationOf } from "../attribution";
+import { resolvesToImportedName } from "../callee";
 import { contextSurfacePathOf } from "../context-root";
 
 /** The name every handler spells its argument object with (`({ args }) => …`, `({ args: { x } }) => …`). */
@@ -151,25 +152,38 @@ const provenFields = (condition: TsNode): string[] => {
     return fields;
 };
 
-/** The name a call is made by: `assertOwned(…)` or `auth.assertOwned(…)`. */
-const calleeName = (call: CallExpression): string | undefined => {
-    const callee = unwrapExpression(call.getExpression()) ?? call.getExpression();
+/**
+ * Whether `callee` is a guard declared with `defineIdentityGuard` from `@lunora/server`:
+ * `export const assertOwnOrganizationId = defineIdentityGuard(…)`, followed through an
+ * import to the file that declares it. The declaration is the marker, not the name.
+ */
+const isDeclaredIdentityGuard = (callee: TsNode): boolean => {
+    const unwrapped = unwrapExpression(callee) ?? callee;
 
-    if (Node.isIdentifier(callee)) {
-        return callee.getText();
+    if (!Node.isIdentifier(unwrapped)) {
+        return false;
     }
 
-    return Node.isPropertyAccessExpression(callee) ? callee.getName() : undefined;
+    const symbol = unwrapped.getSymbol();
+    const declaration = symbol?.getAliasedSymbol()?.getValueDeclaration() ?? symbol?.getValueDeclaration();
+
+    if (!Node.isVariableDeclaration(declaration)) {
+        return false;
+    }
+
+    const initializer = unwrapExpression(declaration.getInitializer());
+
+    return Node.isCallExpression(initializer) && resolvesToImportedName(initializer.getExpression(), "defineIdentityGuard");
 };
 
 /**
- * The fields an `assert*(…)` call proves: a call named `assert…` given an `args`
- * field and, as another argument, the identity. `assertOwnOrganizationId(ctx.user,
- * organizationId)` is the shape. A helper whose name does not say `assert` proves
- * nothing here, so only the name-convention form is recognised.
+ * The fields a call to a declared identity guard proves: an `args` field and, as
+ * another argument, the identity. `assertOwnOrganizationId(ctx.user, organizationId)`
+ * is the shape. Only a guard declared with `defineIdentityGuard` counts; a helper
+ * that merely has an `assert` name does not.
  */
 const assertedFields = (call: CallExpression): string[] => {
-    if (!calleeName(call)?.startsWith("assert")) {
+    if (!isDeclaredIdentityGuard(call.getExpression())) {
         return [];
     }
 

@@ -48,6 +48,7 @@ export type { StorageServeAuthorizer, StorageServeAuthzContext } from "./http-st
 export { serveStorageObject } from "./http-storage";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
 export { defineIdentity } from "./identity";
+export { default as defineIdentityGuard } from "./identity-guard";
 export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
 export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
@@ -60,6 +61,8 @@ export type { ModuleConfig, ModuleDefinition } from "./module";
 export { defineModule } from "./module";
 export type { MutatorDefinition, RegisteredMutator } from "./mutators";
 export { defineMutator } from "./mutators";
+export type { PlatformAdminCheck } from "./platform-admin";
+export { platformAdmin } from "./platform-admin";
 export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin";
 export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";
@@ -124,6 +127,7 @@ export type {
     ActionCtx,
     AggregateIndexDefinition,
     AggregateOp,
+    AnyApi,
     ArgsValidator,
     AuthState,
     CachePurge,
@@ -250,6 +254,7 @@ export type {
     Workflows,
     WorkflowStatusResult,
 } from "./types";
+export { anyApi } from "./types";
 export type { RegisteredWhisperAuthorizer, WhisperAuthorizeHandler } from "./whisper";
 export { onWhisper } from "./whisper";
 // `LunoraError` is the ONE canonical error class, owned by `@lunora/errors` and

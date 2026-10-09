@@ -13,8 +13,14 @@ import type { AdvisorCallSiteScope } from "./call-site-scope";
  * finds nothing there. Structurally identical to `OwnerFieldWriteIR`.
  */
 export interface AdvisorOwnerFieldWrite {
+    /**
+     * Every procedure that reaches the write carries `.use(platformAdmin(...))`: the
+     * caller is a platform admin by design, not an arbitrary user.
+     */
+    adminOnly?: true;
     /** The identity column being written from `args` (e.g. `userId`). */
     field: string;
+
     /** Source file relative to the lunora dir, no extension. */
     file: string;
 

@@ -50,6 +50,27 @@ describe("owner_field_from_args_not_auth", () => {
         expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })).toHaveLength(0);
     });
 
+    // A platform-admin procedure: only an admin can reach it, so the write is a breadcrumb at INFO.
+    it("reports a platform-admin write at INFO, not ERROR", () => {
+        expect.assertions(2);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            {
+                scope: { kind: "export", name: "setCredits" },
+                field: "userId",
+                file: "billing",
+                line: 9,
+                method: "patch",
+                adminOnly: true,
+                visibility: "public",
+            },
+        ];
+        const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ level: "INFO", facing: "INTERNAL" });
+    });
+
     it("still reports a public write that is not owner-scoped", () => {
         expect.assertions(2);
 
