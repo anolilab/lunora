@@ -232,7 +232,8 @@ List the export names of your `lunora/queues.ts` queues in the `queues` option
 and mutations and actions get a recording `ctx.queues`. Sends go through
 `@lunora/queue`'s own validation, so a batch over 100 messages, a delay past
 12 hours, or a queue name you did not list rejects as it would in production.
-Nothing is consumed — assert on what was enqueued:
+Bodies are recorded as structured clones, the way the default `v8` content type
+serializes them. Nothing is consumed — assert on what was enqueued:
 
 ```ts
 const t = lunoraTest(schema, { queues: ["jobs"] });
@@ -250,10 +251,16 @@ throws stays recorded even though the mutation's writes roll back.
 Pass your `lunora/notify.ts` default export as the `notify` option and every
 context gets `ctx.notify` and its `ctx.push` alias. They are built by
 `@lunora/notify`'s own `createNotify`, so `register` / `list` / `unregister` /
-`broadcast` behave as in production, with two differences: deliveries are
-recorded (each reports accepted) instead of reaching a push service, and
-subscriptions live in an in-memory store owned by the harness — the
-definition's `store` is never called.
+`broadcast` behave as in production. Channels are wired exactly when production
+wires them: each factory is called with the `env` option, and a channel whose
+factory returns `undefined` is refused; a push to a device whose transport
+(`webPush` / `fcm`) resolved to nothing fails, as it does in production.
+
+The differences: deliveries are recorded and report accepted instead of
+reaching a push service — so there is no send-time DNS re-check, retry or
+circuit breaker — and subscriptions live in an in-memory store owned by the
+harness, so the definition's `store` is never called. For Web Push,
+`payload.to` is the JSON-stringified subscription, keys included.
 
 ```ts
 import notify from "../lunora/notify";
@@ -267,9 +274,9 @@ await alice.action(notifyShipped, { title: "Shipped" });
 expect(t.notify.sent("push")).toEqual([{ channel: "push", payload: expect.objectContaining({ title: "Shipped", to: "alice-phone" }) }]);
 ```
 
-A channel the definition does not declare (`chat`, `inApp`, `webhook`) is
-refused, as in production. Without the option, touching `ctx.notify` or
-`ctx.push` throws, naming it.
+Without the option, touching `ctx.notify` or `ctx.push` throws naming it, and
+so does `t.notify.sent()` — a handler that swallows the error cannot make "no
+notification was sent" pass by accident. `queues` behaves the same way.
 
 ### Scheduler
 

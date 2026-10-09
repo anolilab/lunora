@@ -3,11 +3,16 @@
  * contexts. Each declared queue gets a recording producer binding, wrapped in
  * `@lunora/queue`'s own `createQueues` — so the batch cap, the delay ceiling and
  * the reserved-key check reject in a test exactly as they do in production, and
- * an undeclared name rejects naming the declared ones.
+ * an undeclared name rejects naming the declared ones. Bodies are recorded as
+ * structured clones, the way the default `v8` content type serializes them, so
+ * a handler mutating a body after sending it does not rewrite the record and a
+ * body that cannot cross the wire (a function) rejects.
  */
 import { LunoraError } from "@lunora/errors";
 import type { MessageSendRequestLike, QueueBindingLike, Queues, QueueSendBatchOptions, QueueSendOptions } from "@lunora/queue";
 import { createQueues } from "@lunora/queue";
+
+import { stubProxy, unavailable } from "./context-fakes";
 
 /** One message a handler enqueued through `ctx.queues.<name>`. */
 interface SentQueueMessage {
@@ -31,31 +36,41 @@ interface FakeQueueControls {
     sent: (queue?: string) => SentQueueMessage[];
 }
 
-const createFakeQueues = (names: ReadonlyArray<string>): { controls: FakeQueueControls; queues: Queues } => {
+/** `ctx.queues`: codegen adds it to mutation and action contexts when `lunora/queues.ts` declares queues. */
+interface QueueSurface {
+    queues: Queues;
+}
+
+const OPTION = "queues: [...]";
+
+const createRecordingQueues = (names: ReadonlyArray<string>): { controls: FakeQueueControls; surfaces: QueueSurface } => {
     const declared = new Set(names);
     const messages: SentQueueMessage[] = [];
 
-    const record = (queue: string, body: unknown, options: QueueSendOptions | undefined): void => {
-        messages.push({
-            body,
+    const snapshot = (queue: string, body: unknown, options: QueueSendOptions | undefined): SentQueueMessage => {
+        return {
+            body: structuredClone(body),
             ...(options?.contentType === undefined ? {} : { contentType: options.contentType }),
             ...(options?.delaySeconds === undefined ? {} : { delaySeconds: options.delaySeconds }),
             queue,
-        });
+        };
     };
 
     const bindingFor = (queue: string): QueueBindingLike => {
         return {
             send: (body: unknown, options?: QueueSendOptions): Promise<void> => {
-                record(queue, body, options);
+                messages.push(snapshot(queue, body, options));
 
                 return Promise.resolve();
             },
             sendBatch: (batch: Iterable<MessageSendRequestLike>, options?: QueueSendBatchOptions): Promise<void> => {
-                // A message's own delay wins over the batch's, as on Cloudflare.
-                for (const message of batch) {
-                    record(queue, message.body, { contentType: message.contentType, delaySeconds: message.delaySeconds ?? options?.delaySeconds });
-                }
+                // A message's own delay wins over the batch's, as on Cloudflare. Snapshot
+                // the whole batch before recording any, so an unclonable body records none.
+                const sent = [...batch].map((message) =>
+                    snapshot(queue, message.body, { contentType: message.contentType, delaySeconds: message.delaySeconds ?? options?.delaySeconds }),
+                );
+
+                messages.push(...sent);
 
                 return Promise.resolve();
             },
@@ -74,18 +89,31 @@ const createFakeQueues = (names: ReadonlyArray<string>): { controls: FakeQueueCo
             }
 
             if (!declared.has(queue)) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `harness.queues.sent("${queue}"): no such queue — declared: ${declared.size === 0 ? "(none; pass lunoraTest(schema, { queues: [...] }))" : [...declared].join(", ")}`,
-                );
+                throw new LunoraError("INTERNAL", `harness.queues.sent("${queue}"): no such queue — declared: ${[...declared].join(", ") || "(none)"}`);
             }
 
             return messages.filter((message) => message.queue === queue);
         },
     };
 
-    return { controls, queues };
+    return { controls, surfaces: { queues } };
 };
 
-export type { FakeQueueControls, SentQueueMessage };
+/**
+ * The recording `ctx.queues` for `names`; without the option, a stub that throws
+ * naming it — and a `sent()` that throws too, so a handler swallowing the stub's
+ * error cannot make "nothing was enqueued" pass vacuously.
+ */
+const createFakeQueues = (names: ReadonlyArray<string> | undefined): { controls: FakeQueueControls; surfaces: QueueSurface } => {
+    if (names !== undefined) {
+        return createRecordingQueues(names);
+    }
+
+    return {
+        controls: { clear: () => unavailable("queues", OPTION), sent: () => unavailable("queues", OPTION) },
+        surfaces: { queues: stubProxy("queues", OPTION) as Queues },
+    };
+};
+
+export type { FakeQueueControls, QueueSurface, SentQueueMessage };
 export { createFakeQueues };

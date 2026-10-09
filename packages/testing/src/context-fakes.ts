@@ -9,13 +9,16 @@ import type { LogFields, LunoraLogger, LunoraMetrics, LunoraTracer, SpanHandle }
 import { evaluationAttributes } from "./evaluation-telemetry";
 
 /**
- * Build a value that throws a clear "not available in v1" error (or `hint`,
- * for a surface an option enables) the moment a handler touches the stubbed
- * surface — but not at context construction, so functions that never reach for
- * it still run.
+ * Throw the clear error for a stubbed surface: "not available in v1", or — for a
+ * surface a `lunoraTest` option enables — the option to pass.
  */
-const unavailable = (surface: string, hint?: string): never => {
-    throw new LunoraError("INTERNAL", hint ?? `ctx.${surface} is not available in the in-memory @lunora/testing harness (v1)`);
+const unavailable = (surface: string, option?: string): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        option === undefined
+            ? `ctx.${surface} is not available in the in-memory @lunora/testing harness (v1)`
+            : `ctx.${surface} is not enabled in the @lunora/testing harness — pass lunoraTest(schema, { ${option} })`,
+    );
 };
 
 /** Keys read off any value by `await` and by vitest's printer and matchers — never a service name. */
@@ -52,14 +55,16 @@ const servicesContext = (fakes: Readonly<Record<string, object>> | undefined): R
     );
 
 /**
- * The proxy target MUST be a function so the `apply` trap fires when the
- * stub is called directly (e.g. `ctx.fetch(url)`). A plain `{}` target is
+ * A stub that throws {@link unavailable}'s error the moment a handler touches
+ * it — but not at context construction, so functions that never reach for it
+ * still run. The proxy target MUST be a function so the `apply` trap fires when
+ * the stub is called directly (e.g. `ctx.fetch(url)`). A plain `{}` target is
  * not callable and throws "not a function" before our trap can run.
  */
-const stubProxy = (surface: string, hint?: string): unknown =>
-    new Proxy((..._args: unknown[]): never => unavailable(surface, hint), {
-        apply: () => unavailable(surface, hint),
-        get: () => unavailable(surface, hint),
+const stubProxy = (surface: string, option?: string): unknown =>
+    new Proxy((..._args: unknown[]): never => unavailable(surface, option), {
+        apply: () => unavailable(surface, option),
+        get: () => unavailable(surface, option),
     });
 
 /** What a handler attached to the dispatch's span (`ctx.span`) during a harness run. */
@@ -198,4 +203,4 @@ const noopLog: LunoraLogger = {
 };
 
 export type { RecordedWideEvent };
-export { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy };
+export { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy, unavailable };

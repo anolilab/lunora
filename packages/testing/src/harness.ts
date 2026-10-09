@@ -1,6 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { LunoraNotify, LunoraPush, NotifyDefinition } from "@lunora/notify";
-import type { Queues } from "@lunora/queue";
+import type { NotifyDefinition } from "@lunora/notify";
 import type {
     ActionCtx,
     ArgsValidator,
@@ -19,9 +18,9 @@ import { createInProcessRuntime, registeredFunctionKind, resolveInProcessIdentit
 
 import type { RecordedWideEvent } from "./context-fakes";
 import { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy } from "./context-fakes";
-import type { FakeNotifyControls } from "./fake-notify";
+import type { FakeNotifyControls, NotifySurfaces } from "./fake-notify";
 import { createFakeNotify } from "./fake-notify";
-import type { FakeQueueControls } from "./fake-queues";
+import type { FakeQueueControls, QueueSurface } from "./fake-queues";
 import { createFakeQueues } from "./fake-queues";
 import { createFakeScheduler } from "./fake-scheduler";
 import { createSqlExec } from "./node-sqlite";
@@ -157,10 +156,14 @@ interface LunoraTestOptions {
      * The app's `lunora/notify.ts` default export. Enables `ctx.notify` and its
      * `ctx.push` alias on every context, built by `@lunora/notify`'s own
      * `createNotify` — so register / list / unregister / broadcast behave as in
-     * production — but with deliveries recorded instead of sent (each reports
-     * accepted) and subscriptions kept in an in-memory store, never the
-     * definition's `store`. Assert on deliveries with `harness.notify.sent()`.
-     * Left unset, touching `ctx.notify` / `ctx.push` throws, naming this option.
+     * production, and channels are wired exactly when production wires them
+     * (each factory is called with `options.env`; a push target for a transport
+     * that resolved to nothing fails). Differences: deliveries are recorded and
+     * report accepted instead of reaching a service (no send-time DNS re-check,
+     * retry or circuit breaker), and subscriptions live in an in-memory store —
+     * the definition's `store` is never called. Assert on deliveries with
+     * `harness.notify.sent()`. Left unset, touching `ctx.notify` / `ctx.push` —
+     * or calling `harness.notify.sent()` — throws, naming this option.
      * @example
      * ```ts
      * import notify from "../lunora/notify";
@@ -189,7 +192,9 @@ interface LunoraTestOptions {
      * contexts, behind `@lunora/queue`'s own validation (batch cap, delay
      * ceiling), so a send the platform would refuse rejects here too. A name not
      * listed rejects on use, as an undeclared queue does in production. Assert
-     * on sends with `harness.queues.sent(name)`.
+     * on sends with `harness.queues.sent(name)`. Left unset, touching
+     * `ctx.queues` — or calling `harness.queues.sent()` — throws, naming this
+     * option.
      * @example
      * ```ts
      * const t = lunoraTest(schema, { queues: ["jobs"] });
@@ -238,7 +243,7 @@ interface TestHarness {
     /**
      * What handlers delivered through `ctx.notify` / `ctx.push` (enabled by
      * `options.notify`): `sent(channel?)` in send order, `clear()` to reset.
-     * Shared with any `withIdentity` view.
+     * Both throw when the option was not passed. Shared with any `withIdentity` view.
      */
     notify: FakeNotifyControls;
     /** Run a registered `query` (or an inline `async (context) => …`) against the harness. */
@@ -251,7 +256,8 @@ interface TestHarness {
      * What handlers enqueued through `ctx.queues` (declared by `options.queues`):
      * `sent(name?)` in send order, `clear()` to reset. Sends are not
      * transactional in production, so one made by a mutation that then threw is
-     * recorded too. Shared with any `withIdentity` view.
+     * recorded too. Both throw when the option was not passed. Shared with any
+     * `withIdentity` view.
      */
     queues: FakeQueueControls;
 
@@ -329,32 +335,8 @@ interface TestHarness {
 
 type RunRegisteredFunction = typeof runRegisteredFunction;
 
-/** `ctx.notify` / `ctx.push`: not on the base contexts — codegen adds them to every context when `lunora/notify.ts` exists. */
-interface NotifySurfaces {
-    notify: LunoraNotify;
-    push: LunoraPush;
-}
-
-/** `ctx.queues`: codegen adds it to mutation and action contexts when `lunora/queues.ts` declares queues. */
-interface QueueSurface {
-    queues: Queues;
-}
-
-const NOTIFY_HINT = "ctx.notify / ctx.push need the app's notify definition — pass lunoraTest(schema, { notify }) with the lunora/notify.ts default export";
-
-/** The recording `ctx.notify` / `ctx.push` when `options.notify` is set; otherwise stubs that throw naming the option. */
-const notifyFor = (options: LunoraTestOptions | undefined): { controls: FakeNotifyControls; surfaces: NotifySurfaces } => {
-    if (options?.notify === undefined) {
-        return {
-            controls: { clear: () => undefined, sent: () => [] },
-            surfaces: { notify: stubProxy("notify", NOTIFY_HINT) as LunoraNotify, push: stubProxy("push", NOTIFY_HINT) as LunoraPush },
-        };
-    }
-
-    const { controls, notify, push } = createFakeNotify(options.notify, options.env ?? {}, { log: noopLog, metrics: noopMetrics });
-
-    return { controls, surfaces: { notify, push } };
-};
+/** The app-specific surfaces codegen adds to a mutation context (and an action's) on top of `MutationCtx`. */
+type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface;
 
 /**
  * Build the `subscribe` method for a harness view. Extracted to keep
@@ -670,8 +652,8 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     const dispatchSpan = createRecordingSpan();
     // Recorders shared by every view, like the scheduler: what one identity's
     // handler sends is visible from any `withIdentity` scope.
-    const { controls: queueControls, queues } = createFakeQueues(options?.queues ?? []);
-    const { controls: notifyControls, surfaces: notifySurfaces } = notifyFor(options);
+    const { controls: queueControls, surfaces: queueSurfaces } = createFakeQueues(options?.queues);
+    const { controls: notifyControls, surfaces: notifySurfaces } = createFakeNotify(options?.notify, options?.env ?? {});
 
     /** Guard for the lazily-wired scheduler references: fail loudly if a sweep runs before harness construction completed. */
     const requireReference = <T>(value: T | undefined, name: string): T => {
@@ -738,8 +720,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             vectors: stubProxy("vectors") as QueryCtx["vectors"],
         };
 
-        const mutationContext: MutationCtx & NotifySurfaces & QueueSurface = {
+        const mutationContext: HarnessMutationContext = {
             ...notifySurfaces,
+            ...queueSurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -756,7 +739,6 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             runQuery: ((reference: never, args: never) =>
                 // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runQuery, after construction completes
                 runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
-            queues,
             scheduler,
             secrets: stubProxy("secrets") as MutationCtx["secrets"],
             storage: stubProxy("storage") as MutationCtx["storage"],
@@ -777,12 +759,13 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // Backs `harness.run` only — `query`/`mutation`/`action` dispatch (both the
         // registered-procedure and inline-callback forms) stays on the guarded
         // `queryContext`/`mutationContext`/`actionContext` above.
-        const rawMutationContext: MutationCtx & NotifySurfaces & QueueSurface = { ...mutationContext, db: rawDatabase };
+        const rawMutationContext: HarnessMutationContext = { ...mutationContext, db: rawDatabase };
 
         // `services` is not on the base ActionCtx: codegen adds it to the app's own
         // action context when `lunora.config` declares services.
         const actionContext: ActionCtx & NotifySurfaces & QueueSurface & { services: Record<string, object> } = {
             ...notifySurfaces,
+            ...queueSurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -815,7 +798,6 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             runQuery: ((reference: never, args: never) =>
                 // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runQuery, after construction completes
                 runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
-            queues,
             scheduler,
             secrets: stubProxy("secrets") as ActionCtx["secrets"],
             services: servicesContext(options?.services),

@@ -214,7 +214,7 @@ interface LunoraTestOptions {
 ### `NotifyChannel` (type)
 
 ```ts
-type NotifyChannel = "chat" | "inapp" | "push" | "webhook";
+type NotifyChannel = Extract<ChannelType, "chat" | "inapp" | "push" | "webhook">;
 ```
 
 ### `ProducedOutput` (interface)

@@ -46,6 +46,39 @@ const sendToUndeclared = mutation.input({}).mutation(async ({ ctx }) => {
     await (ctx as unknown as { queues: Queues<"typo"> }).queues.typo.send({});
 });
 
+const sendBatchOf = mutation.input({ count: v.number() }).mutation(async ({ args, ctx }) => {
+    await (ctx as unknown as WithQueues).queues.jobs.sendBatch(
+        Array.from({ length: args.count }, (_, index) => {
+            return { body: { index } };
+        }),
+    );
+});
+
+const sendReservedKey = mutation.input({}).mutation(async ({ ctx }) => {
+    await (ctx as unknown as WithQueues).queues.jobs.send({ "$lunora.requeued$": true });
+});
+
+/** Mutates the body after sending it — production has already serialized it by then. */
+const sendThenMutate = mutation.input({}).mutation(async ({ ctx }) => {
+    const body = { status: "queued" };
+
+    await (ctx as unknown as WithQueues).queues.jobs.send(body);
+    body.status = "changed";
+});
+
+const sendFunction = mutation.input({}).mutation(async ({ ctx }) => {
+    await (ctx as unknown as WithQueues).queues.jobs.send({ callback: () => undefined });
+});
+
+/** Swallows a failing send, the way "a notification must not fail the order" code does. */
+const enqueueBestEffort = mutation.input({}).mutation(async ({ ctx }) => {
+    try {
+        await (ctx as unknown as WithQueues).queues.jobs.send({});
+    } catch {
+        // best effort
+    }
+});
+
 const delayTooLong = mutation.input({}).mutation(async ({ ctx }) => {
     await (ctx as unknown as WithQueues).queues.jobs.send({}, { delaySeconds: 50_000 });
 });
@@ -66,7 +99,23 @@ const listDevices = query.input({}).query(async ({ ctx }) => (ctx as unknown as 
 
 const postToChat = action.input({ text: v.string() }).action(async ({ args, ctx }) => (ctx as unknown as WithNotify).notify.chat({ text: args.text }));
 
+const pushToDevice = action
+    .input({ id: v.string() })
+    .action(async ({ args, ctx }) => (ctx as unknown as WithNotify).push.send(args.id, { body: "hi", title: "hi" }));
+
+/** Swallows a failing push, the way "a notification must not fail the order" code does. */
+const notifyBestEffort = mutation.input({}).mutation(async ({ ctx }) => {
+    try {
+        await (ctx as unknown as WithNotify).push.list();
+    } catch {
+        // best effort
+    }
+});
+
 const notifyDefinition = defineNotify({ fcm: { accessToken: "test", projectId: "test" } });
+
+/** Web Push only: a structural stand-in config, never used to send — the harness records instead. */
+const webPushOnly = defineNotify({ webPush: { privateKey: "k", publicKey: "k", subject: "mailto:ops@example.test" } as never });
 
 const harnesses = trackHarnesses();
 
@@ -122,7 +171,7 @@ describe("recording ctx.queues", () => {
     });
 
     it("throws on sent() for an undeclared queue, and clear() forgets what was sent", async () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const t = start({ queues: ["jobs"] });
 
@@ -133,7 +182,43 @@ describe("recording ctx.queues", () => {
         t.queues.clear();
 
         expect(t.queues.sent()).toStrictEqual([]);
-        expect(start().queues.sent()).toStrictEqual([]);
+    });
+
+    it("rejects a batch over the 100-message cap and a body carrying the reserved key", async () => {
+        expect.assertions(4);
+
+        const t = start({ queues: ["jobs"] });
+
+        await expect(t.mutation(sendBatchOf, { count: 101 })).rejects.toThrow(/exceeds 100 \(got 101\)/u);
+        await expect(t.mutation(sendReservedKey, {})).rejects.toThrow(/reserved key/u);
+        expect(t.queues.sent()).toStrictEqual([]);
+
+        await t.mutation(sendBatchOf, { count: 100 });
+
+        expect(t.queues.sent("jobs")).toHaveLength(100);
+    });
+
+    it("records the body as sent, not as later mutated, and rejects one that cannot be serialized", async () => {
+        expect.assertions(3);
+
+        const t = start({ queues: ["jobs"] });
+
+        await t.mutation(sendThenMutate, {});
+
+        expect(t.queues.sent("jobs")).toStrictEqual([{ body: { status: "queued" }, queue: "jobs" }]);
+
+        await expect(t.mutation(sendFunction, {})).rejects.toThrow(/could not be cloned/u);
+        expect(t.queues.sent("jobs")).toHaveLength(1);
+    });
+
+    it("without the option, ctx.queues and sent() both throw naming it — so a swallowed send cannot pass vacuously", async () => {
+        expect.assertions(3);
+
+        const t = start();
+
+        await expect(t.mutation(placeOrder, { item: "lamp" })).rejects.toThrow(/ctx\.queues is not enabled .* \{ queues: \[\.\.\.\] \}/u);
+        await expect(t.mutation(enqueueBestEffort, {})).resolves.toBeUndefined();
+        expect(() => t.queues.sent()).toThrow(/pass lunoraTest\(schema, \{ queues: \[\.\.\.\] \}\)/u);
     });
 
     it("shares the record with a withIdentity view", async () => {
@@ -192,6 +277,39 @@ describe("recording ctx.notify / ctx.push", () => {
         expect(t.notify.sent("push")).toStrictEqual([]);
     });
 
+    it("wires a channel only when its factory resolves against options.env, as production does", async () => {
+        expect.assertions(2);
+
+        const definition = defineNotify({
+            chat: (env) => (env.SLACK_TOKEN === undefined ? undefined : {}),
+            fcm: { accessToken: "test", projectId: "test" },
+        });
+
+        await expect(start({ notify: definition }).action(postToChat, { text: "hi" })).rejects.toThrow(/"chat" channel is not configured/u);
+
+        const t = start({ env: { SLACK_TOKEN: "xoxb" }, notify: definition });
+
+        await t.action(postToChat, { text: "hi" });
+
+        expect(t.notify.sent("chat")).toHaveLength(1);
+    });
+
+    it("fails a push to a transport the definition did not configure instead of recording it", async () => {
+        expect.assertions(4);
+
+        const t = start({ notify: webPushOnly });
+        const id = await t.mutation(registerDevice, { token: "fcm-token" });
+        const result = await t.action(notifyUser, { title: "Shipped" });
+
+        expect(result).toStrictEqual(expect.objectContaining({ failed: 1, sent: 0 }));
+        expect(result.outcomes).toStrictEqual([expect.objectContaining({ error: expect.stringContaining("no `fcm` channel is configured") })]);
+        // A single send resolves a failed receipt, as production's does.
+        await expect(t.action(pushToDevice, { id })).resolves.toStrictEqual(
+            expect.objectContaining({ errorMessages: [expect.stringContaining("no `fcm` channel is configured")], successful: false }),
+        );
+        expect(t.notify.sent()).toStrictEqual([]);
+    });
+
     it("never calls the definition's store", async () => {
         expect.assertions(1);
 
@@ -207,10 +325,14 @@ describe("recording ctx.notify / ctx.push", () => {
         await expect(t.mutation(registerDevice, { token: "phone" })).resolves.toStrictEqual(expect.any(String));
     });
 
-    it("throws naming the option when no notify definition was passed", async () => {
-        expect.assertions(1);
+    it("without the option, ctx.push and sent() both throw naming it — so a swallowed send cannot pass vacuously", async () => {
+        expect.assertions(3);
 
-        await expect(start().mutation(registerDevice, { token: "phone" })).rejects.toThrow(/pass lunoraTest\(schema, \{ notify \}\)/u);
+        const t = start();
+
+        await expect(t.mutation(registerDevice, { token: "phone" })).rejects.toThrow(/ctx\.push is not enabled .* \{ notify \}/u);
+        await expect(t.mutation(notifyBestEffort, {})).resolves.toBeUndefined();
+        expect(() => t.notify.sent()).toThrow(/pass lunoraTest\(schema, \{ notify \}\)/u);
     });
 
     it("does not share subscriptions between harnesses built from the same definition", async () => {
