@@ -219,7 +219,73 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         });
 
         expect(result.created).toHaveLength(1);
-        expect(result.errors).toStrictEqual([expect.objectContaining({ code: 400, id: existing.id, index: 0 })]);
+        expect(result.errors).toStrictEqual([expect.objectContaining({ code: 409, id: existing.id, index: 0 })]);
+    });
+
+    it("createBatch reports a repeated id inside the batch at its index and starts only the first", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
+        const result = await host.bindings.double.createBatch({
+            instances: [
+                { id: "dup", params: { value: 1 } },
+                { id: "dup", params: { value: 2 } },
+            ],
+        });
+
+        expect(result.created).toHaveLength(1);
+        expect(result.errors).toStrictEqual([expect.objectContaining({ code: 409, id: "dup", index: 1 })]);
+    });
+
+    it("createBatch takes 1 to 100 instances in either form", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
+
+        await expect(host.bindings.double.createBatch({ instances: [] })).rejects.toThrow("takes 1 to 100 instances, got 0");
+        await expect(host.bindings.double.createBatch({ count: 0 })).rejects.toThrow("takes 1 to 100 instances, got 0");
+        await expect(host.bindings.double.createBatch({ count: 101 })).rejects.toThrow("takes 1 to 100 instances, got 101");
+    });
+
+    it("createBatch removes a run whose alias could not be saved, so the entry is an error and a retry starts one run", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const store = freshStore();
+        const realSave = store.save.bind(store);
+        let failed = false;
+
+        store.save = async (row) => {
+            if (!failed && row.definitionId === "@lunora/platform-node:alias") {
+                failed = true;
+
+                throw new Error("alias write failed");
+            }
+
+            return realSave(row);
+        };
+
+        const host = createNodeWorkflowHost({ store, workflows: { double } });
+        const first = await host.bindings.double.createBatch({ instances: [{ id: "retry-me", params: { value: 2 } }] });
+
+        expect(first.created).toHaveLength(0);
+        expect(first.errors).toStrictEqual([expect.objectContaining({ code: 500, id: "retry-me", index: 0 })]);
+
+        const retry = await host.bindings.double.createBatch({ instances: [{ id: "retry-me", params: { value: 2 } }] });
+
+        expect(retry.errors).toStrictEqual([]);
+        expect(retry.created).toHaveLength(1);
     });
 
     it("createBatch({ count }) starts count instances that share their params", async () => {
