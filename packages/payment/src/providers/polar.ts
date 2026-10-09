@@ -11,6 +11,7 @@
 import type { Polar } from "@polar-sh/sdk";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
+import { LunoraPaymentError } from "../errors";
 import { asRecord, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, moneyFromMinor, zeroMoney } from "../money";
 import type {
@@ -78,6 +79,18 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = makeNotSupported("polar (merchant-of-record)");
 
+/**
+ * The one Polar update a patch maps to: a seat count, a plan change, or nothing. The caller reads the
+ * subscription instead of sending an empty update.
+ */
+const polarSubscriptionUpdate = (patch: SubscriptionPatch): { productId: string } | { seats: number } => {
+    if (patch.quantity !== undefined) {
+        return { seats: patch.quantity };
+    }
+
+    return { productId: patch.priceId ?? "" };
+};
+
 type PolarRefundReason = Parameters<Polar["refunds"]["create"]>[0]["reason"];
 
 /** `RefundCreate.reason` is a CLOSED enum — a free-form reason fails the SDK's validation outright. */
@@ -110,7 +123,8 @@ const subscriptionFromPolar = (input: unknown): Subscription => {
         id: readString(subscription, "id") ?? "",
         priceId: readString(subscription, "productId") ?? "",
         provider: "polar",
-        quantity: 1,
+        // `seats` is set only on seat-based subscriptions; anything else is a single unit.
+        quantity: readNumber(subscription, "seats") ?? 1,
         referenceId: referenceFromMetadata(subscription) ?? "",
         // Fail closed: an unrecognized Polar status is treated as non-entitling `past_due`.
         state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(subscription, "status") ?? ""] ?? "past_due",
@@ -235,6 +249,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 currentPeriodStart: readEpochMs(object, "current_period_start"),
                 customerId: readString(object, "customer_id"),
                 priceId: readString(object, "product_id"),
+                // Same reading as `subscriptionFromPolar`: a non-seat subscription carries `seats: null`, so
+                // the stored quantity stands rather than being reset to 1 on every webhook.
+                quantity: readNumber(object, "seats"),
                 referenceId: referenceFromMetadata(object),
                 subscriptionId: readString(object, "id"),
                 type,
@@ -428,12 +445,38 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
-            const subscription = await client.subscriptions.update({
-                id: subscriptionId,
-                subscriptionUpdate: patch.priceId ? { productId: patch.priceId } : {},
-            });
+            // Polar's plan change (`productId`) and seat change (`seats`) are separate update variants,
+            // so one call cannot carry both. Refuse the combined patch rather than drop one half.
+            if (patch.priceId !== undefined && patch.quantity !== undefined) {
+                return notSupported("changing the plan and the quantity in one update; apply them as two updates");
+            }
 
-            return subscriptionFromPolar(subscription);
+            if (patch.quantity !== undefined && (!Number.isSafeInteger(patch.quantity) || patch.quantity < 0)) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `updateSubscription(): \`quantity\` must be a non-negative safe integer (got ${String(patch.quantity)})`,
+                );
+            }
+
+            // Nothing to change: read the subscription rather than send an empty update.
+            if (patch.priceId === undefined && patch.quantity === undefined) {
+                return subscriptionFromPolar(await client.subscriptions.get({ id: subscriptionId }));
+            }
+
+            const subscription = subscriptionFromPolar(
+                await client.subscriptions.update({ id: subscriptionId, subscriptionUpdate: polarSubscriptionUpdate(patch) }),
+            );
+
+            // Confirm the seat count landed: a non-seat subscription answers `seats: null`, which would
+            // otherwise read back as one unit and look like success.
+            if (patch.quantity !== undefined && subscription.quantity !== patch.quantity) {
+                throw new LunoraPaymentError(
+                    "PROVIDER_ERROR",
+                    `polar did not apply the seat count ${String(patch.quantity)} to subscription ${subscriptionId}`,
+                );
+            }
+
+            return subscription;
         },
     };
 };

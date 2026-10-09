@@ -1,3 +1,9 @@
+## @lunora/payment [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.188...@lunora/payment@1.0.0-alpha.189) (2026-10-09)
+
+### Bug Fixes
+
+* **payment:** apply creem seat changes instead of dropping them ([#1057](https://github.com/anolilab/lunora/issues/1057)) ([536bb1a](https://github.com/anolilab/lunora/commit/536bb1aa1284c782e60cccf67166216bd19ec02d))
+
 ## @lunora/payment [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.187...@lunora/payment@1.0.0-alpha.188) (2026-10-08)
 
 
