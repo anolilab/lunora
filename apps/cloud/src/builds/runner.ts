@@ -17,7 +17,12 @@ export interface ClaimedBuild {
     projectId: string; // secret-scanner:allow -- domain field name
     /** Repo-relative directory the build runs in; absent means the repository root. */
     rootDirectory?: string;
+    /** How the box builds it (`src/project-runtime.ts`); absent is a Lunora app. */
+    runtime?: "worker";
 }
+
+/** Where in the source a build runs, and what it builds there — the build's half of {@link ClaimedBuild} the box reads. */
+export type BuildPlace = Pick<ClaimedBuild, "rootDirectory" | "runtime">;
 
 /**
  * What a build produced: everything the deploy path needs to release it, as the
@@ -48,6 +53,32 @@ export interface BuildExecution {
     workspacePackages?: string[];
 }
 
+/**
+ * One finding of the build box's bundle scan (`containers/build/scan.mjs`): code
+ * in the built Worker that can run without end — an alarm that always re-arms, a
+ * loop with no exit, a queue consumer feeding its own queue. `WARN` for what
+ * looks like a runaway, `INFO` for a periodic job that runs forever by design
+ * (an alarm re-armed a minute or more ahead). Never changes a build's outcome.
+ */
+export interface BuildAdvisory {
+    /** Stable per finding — the detector, file and line — so a re-delivery is not stored twice. */
+    cacheKey: string;
+    detail: string;
+    /** Repo-relative file the finding is in. */
+    file: string;
+    level: "INFO" | "WARN";
+    line: number;
+    /** `source` when a sourcemap placed it in the original file; `bundle` when the line is the built module's. */
+    location?: "bundle" | "source";
+    /** `unbounded_loop` | `alarm_always_rearms` | `queue_self_resend`. */
+    name: string;
+    remediation: string;
+    title: string;
+}
+
+/** At most this many advisories are kept per build — the box reports no more than this either. */
+export const MAX_BUILD_ADVISORIES = 50;
+
 /** What the release port reports: the deployment it recorded, and how it ended. */
 export interface BuildRelease {
     deploymentId: string;
@@ -67,12 +98,24 @@ export interface BuildRunnerPorts {
     appendLog: (buildId: string, level: "error" | "info", line: string) => Promise<void>;
     /** Mark the build successful with its bundle hash, linking the deployment it fed and recording its workspace packages when there are some. */
     complete: (buildId: string, bundleHash: string, deploymentId?: string, workspacePackages?: string[]) => Promise<void>;
-    /** Run the build over the fetched source in `rootDirectory`, streaming output via `onLine`. 🌐 in production. */
-    execute: (source: ArrayBuffer, rootDirectory: string | undefined, onLine: (line: string) => Promise<void>) => Promise<BuildExecution>;
+    /** Run the build over the fetched source in its root directory, as its runtime builds, streaming output via `onLine` and scan findings via `onAdvisory`. 🌐 in production. */
+    execute: (
+        source: ArrayBuffer,
+        place: BuildPlace,
+        onLine: (line: string) => Promise<void>,
+        onAdvisory: (advisory: BuildAdvisory) => Promise<void>,
+    ) => Promise<BuildExecution>;
     /** Mark the build failed. */
     fail: (buildId: string, error: string) => Promise<void>;
     /** Fetch the repo tarball at the build's commit (GitHub App token). 🌐 in production. */
     fetchSource: (build: ClaimedBuild) => Promise<ArrayBuffer>;
+
+    /**
+     * Store one bundle-scan finding on the build (lease-checked upstream). Optional,
+     * and every call is swallowed: a warning that could not be stored must never
+     * change the outcome of the build it warns about.
+     */
+    recordAdvisory?: (buildId: string, advisory: BuildAdvisory) => Promise<void>;
 
     /**
      * Build → deploy handoff (GAPS.md A3): feed the build into the same release
@@ -100,9 +143,10 @@ export interface BuildRunnerPorts {
      * A build that re-releases an earlier build of the same commit (`builds.recordPush`):
      * that build's deployment and its stored release as an execution, or
      * `execution: null` once the release was pruned (the build then runs from
-     * source). `null` — or the port absent — for a build that reuses nothing.
+     * source), plus the earlier build's scan findings — the same bundle, so the
+     * same warnings. `null` — or the port absent — for a build that reuses nothing.
      */
-    storedRelease?: (build: ClaimedBuild) => Promise<null | { deploymentId: string; execution: BuildExecution | null }>;
+    storedRelease?: (build: ClaimedBuild) => Promise<null | { advisories?: BuildAdvisory[]; deploymentId: string; execution: BuildExecution | null }>;
 }
 
 /**
@@ -201,6 +245,18 @@ const reportReleaseFailure = async (ports: BuildRunnerPorts, build: ClaimedBuild
     await report(ports, build, "failure", `Build succeeded but the release failed: ${message}`, targetUrl);
 };
 
+/**
+ * Store a scan finding, swallowing anything the store throws — `try`/`catch`
+ * for the same reason as {@link report}: a synchronous throw must not escape.
+ */
+const recordAdvisory = async (ports: BuildRunnerPorts, build: ClaimedBuild, advisory: BuildAdvisory): Promise<void> => {
+    try {
+        await ports.recordAdvisory?.(build.buildId, advisory);
+    } catch {
+        // Best-effort by design — see `recordAdvisory` on the ports.
+    }
+};
+
 export type BuildOutcome = { bundleHash: string; deploymentId?: string; status: "successful" } | { error: string; status: "failed" };
 
 /** Fail the build with `error`'s message: logged, recorded, and reported unless the platform itself is unconfigured. */
@@ -236,6 +292,12 @@ export const executeBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts)
                 `${build.commitSha} is already built: re-releasing deployment ${stored.deploymentId}'s stored release`,
             );
 
+            // The bundle is the earlier build's, so its scan findings are too.
+            for (const advisory of (stored.advisories ?? []).slice(0, MAX_BUILD_ADVISORIES)) {
+                // eslint-disable-next-line no-await-in-loop -- a handful of rows, written in order
+                await recordAdvisory(ports, build, advisory);
+            }
+
             return { execution: stored.execution };
         }
 
@@ -252,7 +314,17 @@ export const executeBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts)
 
         await ports.appendLog(build.buildId, "info", "running build");
 
-        return { execution: await ports.execute(source, build.rootDirectory, (line) => ports.appendLog(build.buildId, "info", line)) };
+        return {
+            execution: await ports.execute(
+                source,
+                {
+                    ...(build.rootDirectory === undefined ? {} : { rootDirectory: build.rootDirectory }),
+                    ...(build.runtime === undefined ? {} : { runtime: build.runtime }),
+                },
+                (line) => ports.appendLog(build.buildId, "info", line),
+                (advisory) => recordAdvisory(ports, build, advisory),
+            ),
+        };
     } catch (error) {
         return { outcome: await failBuild(build, error, ports) };
     }

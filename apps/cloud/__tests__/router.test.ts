@@ -168,7 +168,7 @@ describe("pOST /v1/logs/tail", () => {
         );
 
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toStrictEqual({ ingested: 2, scripts: 1 });
+        await expect(response.json()).resolves.toStrictEqual({ failed: 0, ingested: 2, scripts: 1 });
         expect(runQuery).toHaveBeenCalledTimes(1);
         expect(runMutation).toHaveBeenCalledTimes(1);
     });
@@ -184,8 +184,37 @@ describe("pOST /v1/logs/tail", () => {
         );
 
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toStrictEqual({ ingested: 0, scripts: 0 });
+        await expect(response.json()).resolves.toStrictEqual({ failed: 0, ingested: 0, scripts: 0 });
         expect(runMutation).not.toHaveBeenCalled();
+    });
+
+    it("ingests every other batch when one script's ingest throws — another org's lines are never lost with it", async () => {
+        const router = createDeployRouter();
+        const runQuery = vi.fn<ActionPort>().mockImplementation(async (_reference, args) => {
+            return { organizationId: (args as { scriptName: string }).scriptName === "chatty" ? "org_a" : "org_b" };
+        });
+        const runMutation = vi.fn<ActionPort>().mockImplementation(async (_reference, args) => {
+            if ((args as { scriptName: string }).scriptName === "chatty") {
+                throw new Error("batch too large (max 500 lines)");
+            }
+
+            return { ingested: (args as { lines: unknown[] }).lines.length };
+        });
+        const response = await router.fetch(
+            tailPost(
+                {
+                    batches: [
+                        { lines: [{ level: "log", message: "x" }], scriptName: "chatty" },
+                        { lines: [{ level: "info", message: "kept" }], scriptName: "quiet" },
+                    ],
+                },
+                "tail-secret",
+            ),
+            env(makeCtx({ runMutation, runQuery })),
+        );
+
+        await expect(response.json()).resolves.toStrictEqual({ failed: 1, ingested: 1, scripts: 2 });
+        expect(runMutation).toHaveBeenCalledTimes(2);
     });
 });
 

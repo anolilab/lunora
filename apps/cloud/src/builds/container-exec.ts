@@ -10,7 +10,8 @@
 import { LunoraError } from "@lunora/server";
 
 import readNdjson from "../lib/read-ndjson";
-import type { BuildExecution } from "./runner";
+import type { BuildAdvisory, BuildExecution, BuildPlace } from "./runner";
+import { MAX_BUILD_ADVISORIES } from "./runner";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -46,15 +47,71 @@ const toExecution = (payload: Record<string, unknown> & { bundle: string; bundle
     };
 };
 
+/** Field caps for an advisory record: it comes from a box that ran tenant code, so nothing in it is trusted. */
+const ADVISORY_FIELD_LIMITS = { cacheKey: 600, detail: 2000, file: 512, name: 64, remediation: 1000, title: 200 } as const;
+
+/** Longest build-log line stored — the box caps its own output lines to the same. */
+const MAX_LOG_LINE_CHARS = 8000;
+
+/** Detector names are snake_case identifiers; anything else is not a record this plane knows. */
+const ADVISORY_NAME = /^[a-z][a-z0-9_]*$/u;
+
+/**
+ * An `{"advisory"}` record as a {@link BuildAdvisory}, or `undefined` when it is
+ * malformed. Every string is required and truncated to its cap, the line must be
+ * a positive integer, and the level is `INFO` or else `WARN` — the scan never fails a build.
+ */
+const toAdvisory = (value: unknown): BuildAdvisory | undefined => {
+    if (!isRecord(value)) {
+        return undefined;
+    }
+
+    const fields: Partial<Record<keyof typeof ADVISORY_FIELD_LIMITS, string>> = {};
+
+    for (const [key, limit] of Object.entries(ADVISORY_FIELD_LIMITS) as [keyof typeof ADVISORY_FIELD_LIMITS, number][]) {
+        const field = value[key];
+
+        if (typeof field !== "string" || field === "") {
+            return undefined;
+        }
+
+        fields[key] = field.slice(0, limit);
+    }
+
+    const { line, location } = value;
+
+    if (!Number.isInteger(line) || (line as number) < 1 || !ADVISORY_NAME.test(fields.name ?? "")) {
+        return undefined;
+    }
+
+    return {
+        cacheKey: fields.cacheKey ?? "",
+        detail: fields.detail ?? "",
+        file: fields.file ?? "",
+        level: value["level"] === "INFO" ? "INFO" : "WARN",
+        line: line as number,
+        ...(location === "bundle" || location === "source" ? { location } : {}),
+        name: fields.name ?? "",
+        remediation: fields.remediation ?? "",
+        title: fields.title ?? "",
+    };
+};
+
 /**
  * One line of the build box's NDJSON.
  *
  * `error` and the release (`bundle` + `bundleHash` + the rest) are terminal;
- * `line` is progress. Split out from the reader below so the stream plumbing
- * and the protocol stay separately readable — together they were one function
- * nobody would want to change.
+ * `line` is progress and `advisory` a bundle-scan finding, handed to
+ * `onAdvisory` (a malformed one is dropped: it is a warning, not the build's
+ * problem). Split out from the reader below so the stream plumbing and the
+ * protocol stay separately readable — together they were one function nobody
+ * would want to change.
  */
-const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<void>): Promise<BuildExecution | undefined> => {
+const consumeBuildLine = async (
+    line: string,
+    onLine: (line: string) => Promise<void>,
+    onAdvisory: (advisory: BuildAdvisory) => Promise<void>,
+): Promise<BuildExecution | undefined> => {
     let payload: unknown;
 
     try {
@@ -81,7 +138,14 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
     }
 
     if (typeof payload["line"] === "string") {
-        await onLine(payload["line"]);
+        // Bounded here too: the box ran tenant code, and `buildLogs` rows are not.
+        await onLine(payload["line"].slice(0, MAX_LOG_LINE_CHARS));
+    }
+
+    const advisory = "advisory" in payload ? toAdvisory(payload["advisory"]) : undefined;
+
+    if (advisory !== undefined) {
+        await onAdvisory(advisory);
     }
 
     return undefined;
@@ -93,7 +157,8 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
  * The container answers `200` as soon as it starts, then writes one JSON object
  * per line: `{"line"}` while the build runs, and a final release
  * (`{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?,"workspacePackages"?}`) or
- * `{"error"}`. Streaming rather than a buffered reply is what puts a build's
+ * `{"error"}`, with an `{"advisory"}` record per bundle-scan finding before the
+ * release (at most {@link MAX_BUILD_ADVISORIES} are forwarded). Streaming rather than a buffered reply is what puts a build's
  * output in `buildLogs` while it is still running — the live tail the Studio's
  * Builds tab is built around — and it sidesteps the exec contract's 1MB
  * response cap, which a real build log passes easily.
@@ -101,13 +166,18 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
 export const executeInContainer = async (
     handle: { fetch: (path: string, init?: RequestInit) => Promise<Response> },
     source: ArrayBuffer,
-    rootDirectory: string | undefined,
+    place: BuildPlace | undefined,
     onLine: (line: string) => Promise<void>,
+    onAdvisory: (advisory: BuildAdvisory) => Promise<void> = async () => {},
 ): Promise<BuildExecution> => {
-    // A query parameter rather than a header: a directory name is not
+    // Query parameters rather than headers: a directory name is not
     // guaranteed to be header-safe ASCII, and URLSearchParams encodes anything.
-    // The build box re-validates it; nothing here is trusted over there.
-    const path = rootDirectory ? `/__lunora/build?${new URLSearchParams({ rootDirectory }).toString()}` : "/__lunora/build";
+    // The build box re-validates both; nothing here is trusted over there.
+    const query = new URLSearchParams({
+        ...(place?.rootDirectory ? { rootDirectory: place.rootDirectory } : {}),
+        ...(place?.runtime === undefined ? {} : { runtime: place.runtime }),
+    }).toString();
+    const path = query === "" ? "/__lunora/build" : `/__lunora/build?${query}`;
     const response = await handle.fetch(path, { body: source, method: "POST" });
 
     if (!response.ok || response.body === null) {
@@ -115,9 +185,17 @@ export const executeInContainer = async (
     }
 
     let execution: BuildExecution | undefined;
+    let advisories = 0;
+    const forward = async (advisory: BuildAdvisory): Promise<void> => {
+        advisories += 1;
+
+        if (advisories <= MAX_BUILD_ADVISORIES) {
+            await onAdvisory(advisory);
+        }
+    };
 
     await readNdjson(response.body, async (line) => {
-        execution = (await consumeBuildLine(line, onLine)) ?? execution;
+        execution = (await consumeBuildLine(line, onLine, forward)) ?? execution;
     });
 
     if (execution === undefined) {

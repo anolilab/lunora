@@ -10,6 +10,7 @@ import { runTenantBackupSweep } from "../src/backup/tenant-sweep";
 import type { TenantBackupBucket, TenantSend } from "../src/backup/tenant-transport";
 import { captureTenantSnapshot, IMPORT_BATCH_BYTES, restoreTenantSnapshot } from "../src/backup/tenant-transport";
 import { createDeployRouter } from "../src/deploy/router";
+import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import type { DispatchNamespaceLike } from "../src/targets/cloudflare-wfp/dispatch";
 import { dispatchTenantSender } from "../src/targets/cloudflare-wfp/dispatch";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
@@ -214,6 +215,31 @@ describe(runTenantBackupSweep, () => {
 
         expect(everything).not.toContain(TOKEN);
         expect(everything).not.toContain("private@example.com");
+    });
+
+    it("never snapshots a plain Cloudflare Worker, which serves no admin export", async () => {
+        const { database, inserted } = recordingDb({
+            deployments: [deployment("dep_a", "p_a", "org_1", { runtime: "worker" }), deployment("dep_b", "p_b")],
+            organizations: [{ _id: "org_1", plan: "pro" }],
+            projects: [{ _id: "p_a" }, { _id: "p_b" }],
+            tenantBackups: [],
+        });
+        const asked: string[] = [];
+        const send: TenantSend = () => Promise.resolve(new Response(SECRET_ROW));
+
+        await runTenantBackupSweep({
+            bucket: memoryBucket().bucket,
+            database,
+            now: NOW,
+            senderFor: (row) => {
+                asked.push(row.projectId);
+
+                return Promise.resolve(send);
+            },
+        });
+
+        expect(asked).toStrictEqual(["p_b"]);
+        expect(inserted.map((entry) => entry.document["projectId"])).toStrictEqual(["p_b"]);
     });
 
     it("keeps a thrown tenant error from aborting the rest of the tick", async () => {
@@ -725,6 +751,20 @@ describe("tenant backup mutations", () => {
         const { ctx } = makeCtx({ deployments: [live], members: [member], projects: [project], tenantBackups: [] }, { userId: "usr_2" });
 
         await expect(beginBackup.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("refuses a backup of a plain Cloudflare Worker, saying why", async () => {
+        const { ctx } = makeCtx({
+            deployments: [deployment("dep_a", "p_a", "org_1", { runtime: "worker" })],
+            members: [owner("org_1")],
+            projects: [project],
+            tenantBackups: [],
+        });
+
+        await expect(beginBackup.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)).rejects.toMatchObject({
+            code: "CONFLICT",
+            message: PLAIN_WORKER_NO_ADMIN,
+        });
     });
 
     it("refuses a backup while another operation on the project is running", async () => {

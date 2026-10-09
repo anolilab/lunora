@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { groupTailEvents, parseLogMessage, parseTraceItem } from "../src/tail/parse";
+import { WORKER_RUNTIME_TAG } from "../src/project-runtime";
+import { groupTailEvents, parseLogMessage, parsePlainLog, parseTraceItem } from "../src/tail/parse";
 
 /** Serialize a framework `type:"log"` console event the way `emitLogEvent` does. */
 const logEvent = (fields: Record<string, unknown>): string => JSON.stringify({ source: "lunora", type: "log", ...fields });
@@ -104,5 +105,91 @@ describe(groupTailEvents, () => {
         expect.assertions(1);
 
         expect(groupTailEvents([{ logs: [{ message: ["noise"] }], scriptName: "app-v1" }])).toStrictEqual([]);
+    });
+});
+
+describe("plain Cloudflare Worker console lines", () => {
+    const item = (tags: null | string[] | undefined, logs: { level?: unknown; message?: unknown; timestamp?: unknown }[]) => {
+        return { logs, scriptName: "acme", scriptTags: tags };
+    };
+
+    it("keeps every console line of a script tagged as a plain Worker, shaped like a ctx.log line", () => {
+        expect.assertions(1);
+
+        const lines = parseTraceItem(
+            item(
+                ["org:o", WORKER_RUNTIME_TAG],
+                [
+                    { level: "log", message: ["user", 42, { ok: true }], timestamp: 1700 },
+                    { level: "warn", message: ["slow upstream"], timestamp: 1701 },
+                    { level: "error", message: ["boom"], timestamp: 1702 },
+                ],
+            ),
+        );
+
+        expect(lines).toStrictEqual([
+            { createdAt: 1700, level: "log", message: 'user 42 {"ok":true}' },
+            { createdAt: 1701, level: "warn", message: "slow upstream" },
+            { createdAt: 1702, level: "error", message: "boom" },
+        ]);
+    });
+
+    it("drops ordinary console lines of a Lunora app, as before", () => {
+        expect.assertions(2);
+
+        const logs = [{ level: "log", message: ["plain"], timestamp: 1 }, { message: [logEvent({ level: "info", message: "structured" })] }];
+
+        expect(parseTraceItem(item(["org:o"], logs)).map((line) => line.message)).toStrictEqual(["structured"]);
+        expect(parseTraceItem(item(undefined, logs)).map((line) => line.message)).toStrictEqual(["structured"]);
+    });
+
+    it("still decodes a ctx.log event a plain Worker happens to emit, as one", () => {
+        expect.assertions(1);
+
+        const lines = parseTraceItem(item([WORKER_RUNTIME_TAG], [{ level: "log", message: [logEvent({ function: "f", level: "warn", message: "m" })] }]));
+
+        expect(lines).toStrictEqual([expect.objectContaining({ functionPath: "f", level: "warn", message: "m" })]);
+    });
+
+    it("folds an unknown level to log, skips an empty line and caps a long one", () => {
+        expect.assertions(3);
+
+        expect(parsePlainLog({ level: "verbose", message: ["x"] })).toStrictEqual({ level: "log", message: "x" });
+        expect(parsePlainLog({ level: "log", message: [""] })).toBeNull();
+        expect(parsePlainLog({ level: "log", message: ["y".repeat(10_000)] })?.message).toHaveLength(4096);
+    });
+
+    it("bounds a script's plain lines per flush, counts the rest in one line, and splits what it keeps into ingestible batches", () => {
+        expect.assertions(4);
+
+        // Three requests of 250 console lines each, from one plain Worker: 750 in one flush.
+        const logs = Array.from({ length: 250 }, (_, index) => {
+            return { level: "log", message: [`line ${String(index)}`] };
+        });
+        const batches = groupTailEvents([item([WORKER_RUNTIME_TAG], logs), item([WORKER_RUNTIME_TAG], logs), item([WORKER_RUNTIME_TAG], logs)]);
+        const lines = batches.flatMap((batch) => batch.lines);
+
+        expect(batches.map((batch) => [batch.scriptName, batch.lines.length])).toStrictEqual([["acme", 401]]);
+        expect(lines.at(-1)).toStrictEqual({
+            level: "warn",
+            message: "350 console line(s) dropped from one log flush: Lunora Cloud keeps at most 400 plain console lines per Worker per flush",
+        });
+
+        // ctx.log lines are not plain lines: they never spend the budget, and a script with many still splits at the ingest's cap.
+        const structured = Array.from({ length: 600 }, () => {
+            return { message: [logEvent({ level: "info", message: "s" })] };
+        });
+        const split = groupTailEvents([item(["org:o"], structured)]);
+
+        expect(split.map((batch) => batch.lines.length)).toStrictEqual([500, 100]);
+        expect(split.every((batch) => batch.scriptName === "acme")).toBe(true);
+    });
+
+    it("groups a plain Worker's lines under its script for the ingest", () => {
+        expect.assertions(1);
+
+        expect(groupTailEvents([item([WORKER_RUNTIME_TAG], [{ level: "info", message: ["hi"], timestamp: 5 }])])).toStrictEqual([
+            { lines: [{ createdAt: 5, level: "info", message: "hi" }], scriptName: "acme" },
+        ]);
     });
 });

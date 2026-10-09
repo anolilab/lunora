@@ -12,8 +12,8 @@
  * project that holds a lockfile, never above the repo — where dependencies are
  * installed.
  */
-import { access, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { access, lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 /** A path with a `node_modules` segment: an installed copy, never a workspace package. */
 const IN_NODE_MODULES = /(?:^|[\\/])node_modules(?:[\\/]|$)/u;
@@ -167,20 +167,20 @@ const findWorkspaceRoot = async (project, repo) => {
 };
 
 /**
- * The project's own installed `lunora` binary: the nearest
- * `node_modules/.bin/lunora` from the project up to the workspace root. In a
- * pnpm workspace it sits in the app's own `node_modules`; hoisting managers
- * put it at the root.
+ * A project's own installed binary: the nearest `node_modules/.bin/<name>` from
+ * the project up to the workspace root. In a pnpm workspace it sits in the
+ * app's own `node_modules`; hoisting managers put it at the root.
  *
  * Deliberately NOT `pnpm exec` / `npm exec` / `yarn run`, which resolve a
  * missing binary from the registry — see the build box README.
+ * @param {string} name The binary's name.
  * @param {string} project Real path of the project directory.
  * @param {string} workspaceRoot Real path of the workspace root.
- * @returns {Promise<string>} Absolute path to the binary.
+ * @returns {Promise<string | undefined>} Absolute path to the binary, or `undefined` when none is installed.
  */
-const resolveLunoraBin = async (project, workspaceRoot) => {
+const findBin = async (name, project, workspaceRoot) => {
     for (let directory = project; isInside(workspaceRoot, directory); directory = dirname(directory)) {
-        const binary = join(directory, "node_modules", ".bin", "lunora");
+        const binary = join(directory, "node_modules", ".bin", name);
 
         try {
             // eslint-disable-next-line no-await-in-loop -- nearest first
@@ -196,10 +196,88 @@ const resolveLunoraBin = async (project, workspaceRoot) => {
         }
     }
 
+    return undefined;
+};
+
+/** The config files wrangler reads, in the order it looks for them. */
+const WRANGLER_CONFIG_FILES = ["wrangler.json", "wrangler.jsonc", "wrangler.toml"];
+
+/**
+ * The project's own wrangler config: the first of {@link WRANGLER_CONFIG_FILES}
+ * that is a regular file in the project directory itself. Never searched for
+ * upward, the way wrangler would — above the project is another project, or
+ * outside the repository.
+ * @param {string} project Real path of the project directory.
+ * @returns {Promise<string | undefined>} Absolute path to the config, or `undefined`.
+ */
+const findWranglerConfig = async (project) => {
+    for (const name of WRANGLER_CONFIG_FILES) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- in wrangler's own order
+            const info = await lstat(join(project, name));
+
+            if (info.isFile()) {
+                return join(project, name);
+            }
+        } catch {
+            // Try the next name.
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The project's own installed `lunora` binary ({@link findBin}).
+ *
+ * A project that has none but does have a wrangler config is most likely a
+ * plain Cloudflare Worker whose project setting still says Lunora; the error
+ * says so, rather than suggesting a dependency it should not add.
+ * @param {string} project Real path of the project directory.
+ * @param {string} workspaceRoot Real path of the workspace root.
+ * @returns {Promise<string>} Absolute path to the binary.
+ */
+const resolveLunoraBin = async (project, workspaceRoot) => {
+    const binary = await findBin("lunora", project, workspaceRoot);
+
+    if (binary !== undefined) {
+        return binary;
+    }
+
+    const wranglerConfig = await findWranglerConfig(project);
+
+    if (wranglerConfig !== undefined) {
+        throw new BuildError(
+            `node_modules/.bin/lunora is missing after install, but the project has a ${basename(wranglerConfig)}. ` +
+                "If this is a plain Cloudflare Worker, set the project's runtime to Cloudflare Worker in its Build settings and push again; " +
+                "if it is a Lunora app, add the Lunora CLI to its dependencies (`lunorash` or `@lunora/cli`).",
+        );
+    }
+
     throw new BuildError(
         "node_modules/.bin/lunora is missing after install — add the Lunora CLI to the project's dependencies " +
             "(`lunorash` or `@lunora/cli`). Yarn PnP projects are not supported by the build box.",
     );
+};
+
+/**
+ * The project's own installed `wrangler` binary ({@link findBin}), for a
+ * `runtime: "worker"` build — the version its lockfile pinned, never a registry copy.
+ * @param {string} project Real path of the project directory.
+ * @param {string} workspaceRoot Real path of the workspace root.
+ * @returns {Promise<string>} Absolute path to the binary.
+ */
+const resolveWranglerBin = async (project, workspaceRoot) => {
+    const binary = await findBin("wrangler", project, workspaceRoot);
+
+    if (binary === undefined) {
+        throw new BuildError(
+            "node_modules/.bin/wrangler is missing after install — add wrangler to the project's devDependencies; " +
+                "the build box builds a Worker with the wrangler its lockfile pins and never fetches one. Yarn PnP projects are not supported.",
+        );
+    }
+
+    return binary;
 };
 
 /** Must match `MAX_WORKSPACE_PACKAGES` in `lunora/builds.ts`. */
@@ -294,4 +372,15 @@ const workspacePackages = async (project, workspaceRoot, repo) => {
     return found.toSorted();
 };
 
-export { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory, workspacePackages };
+export {
+    BuildError,
+    findWorkspaceRoot,
+    findWranglerConfig,
+    isInside,
+    resolveLunoraBin,
+    resolveProjectDirectory,
+    resolveWranglerBin,
+    validateRootDirectory,
+    workspacePackages,
+    WRANGLER_CONFIG_FILES,
+};

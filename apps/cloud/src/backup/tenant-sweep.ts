@@ -52,6 +52,8 @@ export interface BackupTargetRow {
     projectId: string;
     /** The deployment's handle on its target; absent on rows that predate it (the script name serves). */
     resourceRef?: string;
+    /** `worker` for a plain Cloudflare Worker, which has no admin export to snapshot; absent (or SQL NULL) is a Lunora app. */
+    runtime?: null | string;
     scriptName: string;
     status: string;
     /** Absent on rows that predate targets (`cloudflare-wfp`). */
@@ -237,7 +239,8 @@ export const runTenantBackupSweep = async (deps: TenantBackupSweepDeps): Promise
 
     for (const row of deployments) {
         // `!= null`: D1 answers SQL NULL, never `undefined`, for an unset optional column.
-        if (row.kind === "production" && row.alias != null && (targets.get(row.projectId)?.createdAt ?? -1) < row.createdAt) {
+        // A plain Worker serves no admin export: its "snapshot" would be whatever its own routes answer.
+        if (row.kind === "production" && row.alias != null && row.runtime !== "worker" && (targets.get(row.projectId)?.createdAt ?? -1) < row.createdAt) {
             targets.set(row.projectId, row as BackupTargetRow & { alias: string });
         }
     }

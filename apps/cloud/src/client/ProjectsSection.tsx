@@ -10,11 +10,14 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Input } from "@/components/ui/input";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { ProjectRuntime } from "../project-runtime";
+import { DEFAULT_RUNTIME } from "../project-runtime";
 import { DEFAULT_TARGET } from "../provision-contract";
 import { DeploymentsSection } from "./DeploymentsSection";
 import type { GitProvider } from "./ImportProjectDialog";
 import { ImportProjectDialog } from "./ImportProjectDialog";
 import { OnboardingChecklist } from "./OnboardingChecklist";
+import { RuntimeField } from "./RuntimeField";
 import { interactiveRowClassName } from "./section-styles";
 import { Field, FieldForm, FormError, RowList } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
@@ -73,7 +76,7 @@ const gitProviderOf = (repo: string | undefined): "github" | "gitlab" | undefine
 };
 
 /** A blank new-project draft — the initial value and what a successful create resets to. */
-const EMPTY_DRAFT = { framework: "", name: "", slug: "" };
+const EMPTY_DRAFT: { framework: string; name: string; runtime: ProjectRuntime; slug: string } = { framework: "", name: "", runtime: DEFAULT_RUNTIME, slug: "" };
 
 export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionProps): ReactElement => {
     const projects = usePreloadedQuery(preloaded) ?? [];
@@ -124,6 +127,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                 projectId={activeProject}
                 projectName={project?.name ?? "Project"}
                 rootDirectory={project?.rootDirectory}
+                runtime={project?.runtime ?? DEFAULT_RUNTIME}
                 target={project?.target ?? DEFAULT_TARGET}
                 watchPaths={project?.watchPaths}
                 workspacePackages={project?.workspacePackages}
@@ -255,6 +259,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                                             framework: draft.framework.trim() || undefined,
                                             name: draft.name,
                                             organizationId,
+                                            runtime: draft.runtime,
                                             slug: effectiveSlug,
                                         });
                                         setDraft(EMPTY_DRAFT);
@@ -290,6 +295,15 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                                     value={draft.slug}
                                 />
                             </Field>
+                            <RuntimeField
+                                id="project-runtime"
+                                onChange={(runtime) => {
+                                    setDraft((current) => {
+                                        return { ...current, runtime };
+                                    });
+                                }}
+                                value={draft.runtime}
+                            />
                             <Field htmlFor="project-framework" label="Framework">
                                 <Input
                                     id="project-framework"

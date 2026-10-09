@@ -6,6 +6,7 @@ import type { BuildExecution } from "../src/builds/runner";
 import { createDeployPacer } from "../src/deploy/pacing";
 import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
+import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { TargetDriver } from "../src/targets/driver";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { fakeDriver } from "./support/memory-driver";
@@ -236,6 +237,26 @@ describe(releaseBuild, () => {
         expect(logs).toContain("info:release: live https://from-wrangler.lunora.app");
         expect(logs.at(-1)).toBe("info:release: done (live)");
         expect(keys).toStrictEqual({ minted: [{ buildId: "bld_1", kind: "production", projectId: "prj_1" }], revoked: 1 });
+    });
+
+    it("releases a plain Worker's build as one: runtime recorded, no ShardDO floor", async () => {
+        const specs: TenantDeploymentSpec[] = [];
+        const { created, ports } = harness({
+            provisioner: {
+                ...okProvisioner,
+                deploy: (spec) => {
+                    specs.push(spec);
+
+                    return okProvisioner.deploy(spec);
+                },
+            },
+            target: { ...pushTarget, runtime: "worker" },
+        });
+
+        await releaseBuild(build, { ...execution, manifest: { bindings: [] } }, ports);
+
+        expect(created[0]).toMatchObject({ runtime: "worker" });
+        expect(specs[0]?.manifest.bindings).toStrictEqual([]);
     });
 
     it("writes a target's converge progress into the build log", async () => {

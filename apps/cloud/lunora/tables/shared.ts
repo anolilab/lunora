@@ -95,6 +95,13 @@ export const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.lite
 export const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"), v.literal("cloudflare-workers"));
 
 /**
+ * A project runtime that is not the default: `PROJECT_RUNTIMES` in
+ * `src/project-runtime.ts` minus `lunora`, which is stored as absence so every
+ * row that predates the setting already reads as a Lunora app.
+ */
+export const storedProjectRuntime = v.literal("worker");
+
+/**
  * A placement's host (`projects.placementRef`, `src/targets/placement.ts`
  * `PLACEMENT_HOSTS`): a row of the table its target's `placedOn` implies — a box
  * the organization enrolled, or a Cloudflare account it connected. One column

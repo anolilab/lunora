@@ -3,7 +3,10 @@ import { LunoraError } from "@lunora/server";
 import type { BuildDecision, PushChanges } from "../src/builds/paths";
 import { decideBuild, MAX_CHANGED_FILES } from "../src/builds/paths";
 import type { BuildReleaseTarget } from "../src/builds/release";
-import { isUnconfiguredInfrastructure } from "../src/builds/runner";
+import type { BuildAdvisory } from "../src/builds/runner";
+import { isUnconfiguredInfrastructure, MAX_BUILD_ADVISORIES } from "../src/builds/runner";
+import type { ProjectRuntime } from "../src/project-runtime";
+import { runtimeColumn, storedRuntime } from "../src/project-runtime";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
@@ -25,6 +28,7 @@ type BuildStatus = "building" | "failed" | "pending" | "skipped" | "successful";
 
 interface BuildRow {
     _id: Id<"builds">;
+    advisories?: BuildAdvisory[];
     branch: string;
     bundleHash?: string;
     commitSha: string;
@@ -39,6 +43,8 @@ interface BuildRow {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    /** `.global()` rows answer SQL NULL for an unset column; absent is a Lunora app. */
+    runtime?: "worker" | null;
     skipReason?: string;
     status: BuildStatus;
     trigger?: BuildTrigger;
@@ -96,7 +102,7 @@ export const DELIVERY_TTL_MS = 4 * 24 * 60 * 60 * 1000;
 /** Expired delivery ids deleted per recorded push, so the table stays bounded without a sweep of its own. */
 const DELIVERY_PRUNE_BATCH = 20;
 
-type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string };
+type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string; runtime?: "worker" };
 
 /**
  * Why a production push of an already-built commit must NOT re-release it, or
@@ -156,14 +162,14 @@ const planBuild = (push: {
 
 /**
  * The newest successful build of a push's dedup key — (commit, root
- * directory, trigger, fork-ness) — and the deployment it fed, if it recorded
+ * directory, runtime, trigger, fork-ness) — and the deployment it fed, if it recorded
  * one. Newest first: once a commit was re-released, its newest build names the
  * newest deployment.
  */
 const priorBuild = async (
     context: MutationContext,
     projectId: Id<"projects">,
-    key: { commitSha: string; fromFork: boolean | undefined; rootDirectory: string | undefined; trigger: BuildTrigger },
+    key: { commitSha: string; fromFork: boolean | undefined; rootDirectory: string | undefined; runtime: ProjectRuntime; trigger: BuildTrigger },
 ): Promise<undefined | { build: BuildRow; deployment: null | { status: string } }> => {
     const { page } = await context.db.builds.findMany({ where: { commitSha: key.commitSha, projectId } }); // secret-scanner:allow -- domain field name
     const build = page
@@ -173,6 +179,8 @@ const priorBuild = async (
                 candidate.status === "successful" &&
                 candidate.bundleHash &&
                 candidate.rootDirectory === key.rootDirectory &&
+                // A Lunora bundle and a plain Worker's bundle of one commit are different releases.
+                storedRuntime(candidate.runtime) === key.runtime &&
                 candidate.trigger === key.trigger &&
                 (candidate.fromFork === true) === (key.fromFork === true),
         );
@@ -294,7 +302,8 @@ export const recordPush = internalMutation
             }
 
             const { rootDirectory, watchPaths } = project;
-            const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, trigger });
+            const runtime = storedRuntime(project.runtime);
+            const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, runtime, trigger });
 
             if (prior && (prior.build.fromFork === true || (prior.deployment !== null && SERVING_STATUSES.has(prior.deployment.status)))) {
                 return { buildId: prior.build._id, reused: true };
@@ -324,6 +333,7 @@ export const recordPush = internalMutation
                 ...(pullRequest === undefined ? {} : { pullRequest }),
                 ...(reusesBuildId === undefined ? {} : { reusesBuildId }),
                 ...(rootDirectory === undefined ? {} : { rootDirectory }),
+                ...runtimeColumn(runtime),
                 trigger,
                 updatedAt: now,
             };
@@ -408,6 +418,7 @@ export const claimNext = internalMutation.input({ runnerId: v.string() }).mutati
         commitSha: next.commitSha,
         projectId: next.projectId, // secret-scanner:allow -- domain field name
         ...(next.rootDirectory === undefined ? {} : { rootDirectory: next.rootDirectory }),
+        ...runtimeColumn(storedRuntime(next.runtime)),
     };
 });
 
@@ -430,6 +441,39 @@ export const appendLog = internalMutation
         const build = assertLease(await context.db.get(buildId), runnerId);
 
         await context.db.insert("buildLogs", { buildId, createdAt: context.now, level, line, organizationId: build.organizationId });
+    });
+
+/**
+ * Store one bundle-scan finding on a claimed build (runner-only, lease-checked,
+ * like {@link appendLog}). Idempotent by `cacheKey`, and capped at
+ * {@link MAX_BUILD_ADVISORIES}: past it a finding is dropped, never an error —
+ * it is a warning, and the build it warns about must go on. SYSTEM only.
+ */
+export const recordAdvisory = internalMutation
+    .input({
+        advisory: v.object({
+            cacheKey: boundedString(600),
+            detail: boundedString(2000),
+            file: boundedString(512),
+            level: v.union(v.literal("WARN"), v.literal("INFO")),
+            line: v.number(),
+            location: v.optional(v.union(v.literal("bundle"), v.literal("source"))),
+            name: boundedString(LIMITS.id),
+            remediation: boundedString(1000),
+            title: boundedString(200),
+        }),
+        buildId: v.id("builds"),
+        runnerId: v.string(),
+    })
+    .mutation(async ({ ctx: context, args: { advisory, buildId, runnerId } }): Promise<void> => {
+        const build = assertLease(await context.db.get(buildId), runnerId);
+        const recorded = build.advisories ?? [];
+
+        if (recorded.length >= MAX_BUILD_ADVISORIES || recorded.some((entry) => entry.cacheKey === advisory.cacheKey)) {
+            return;
+        }
+
+        await context.db.patch(buildId, { advisories: [...recorded, advisory] });
     });
 
 /** Beyond this many workspace packages the set is not stored, and pushes build without the path check. */
@@ -600,12 +644,14 @@ export const releaseTarget = internalQuery
             projectId: build.projectId, // secret-scanner:allow -- domain field name
             projectSlug: project.slug,
             ...(build.pullRequest === undefined ? {} : { pullRequest: build.pullRequest }),
+            ...runtimeColumn(storedRuntime(build.runtime)),
             ...(build.trigger === undefined ? {} : { trigger: build.trigger }),
         };
     });
 
-/** The stored release a build re-releases: the earlier build's deployment, its bundle hash and its crons. */
+/** The stored release a build re-releases: the earlier build's deployment, its bundle hash, its crons and its scan findings. */
 export interface ReusableRelease {
+    advisories?: BuildAdvisory[];
     bundleHash: string;
     cronSpecs?: string[];
     deploymentId: string;
@@ -615,7 +661,8 @@ export interface ReusableRelease {
  * What a build that re-releases an earlier one (`reusesBuildId`, set by
  * {@link recordPush}) re-releases: that build's deployment — whose payload the
  * runner reads from `RELEASES` — its bundle hash, and the crons the deployment
- * ran with. `null` for a build that reuses nothing, or whose earlier build is
+ * ran with, and the earlier build's scan findings — the same bundle, the same
+ * warnings. `null` for a build that reuses nothing, or whose earlier build is
  * gone or not this project's; the runner then builds from source. SYSTEM only.
  */
 export const reusableRelease = internalQuery
@@ -640,21 +687,48 @@ export const reusableRelease = internalQuery
         }
 
         return {
+            ...(earlier.advisories === undefined || earlier.advisories.length === 0 ? {} : { advisories: earlier.advisories }),
             bundleHash: earlier.bundleHash,
             ...(deployment.cronSpecs == null ? {} : { cronSpecs: deployment.cronSpecs }),
             deploymentId: earlier.deploymentId,
         };
     });
 
+/** A build as the list shows it: its scan findings counted, not carried — `advisories` loads them per build. */
+export type BuildListRow = Omit<BuildRow, "advisories"> & { advisoryNotes: number; advisoryWarnings: number };
+
 /** A project's builds, newest first (members). */
 export const listByProject = query
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
-    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<BuildRow[]> => {
+    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<BuildListRow[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.builds.findMany({ where: { organizationId, projectId } }); // secret-scanner:allow -- domain field name
 
-        return page.toSorted((a, b) => b.createdAt - a.createdAt);
+        return (page as BuildRow[])
+            .toSorted((a, b) => b.createdAt - a.createdAt)
+            .map(({ advisories = [], ...build }) => {
+                return {
+                    ...build,
+                    advisoryNotes: advisories.filter((advisory) => advisory.level === "INFO").length,
+                    advisoryWarnings: advisories.filter((advisory) => advisory.level !== "INFO").length,
+                };
+            });
+    });
+
+/** One build's bundle-scan findings, warnings first (members). */
+export const advisories = query
+    .input({ buildId: v.id("builds"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { buildId, organizationId } }): Promise<BuildAdvisory[]> => {
+        await assertMember(context, organizationId);
+
+        const build = (await context.db.get(buildId)) as BuildRow | null;
+
+        if (build?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "build not found in this organization");
+        }
+
+        return (build.advisories ?? []).toSorted((a, b) => Number(a.level === "INFO") - Number(b.level === "INFO"));
     });
 
 /**

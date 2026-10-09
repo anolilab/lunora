@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
 import { AsyncList } from "./AsyncList";
+import { BuildAdvisoriesCard } from "./BuildAdvisoriesCard";
 import { formatDateTime } from "./format";
 import { Field, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
@@ -85,6 +86,16 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                                             <span className="shrink-0 font-mono text-sm">{build.commitSha.slice(0, 10)}</span>
                                             <span className="text-muted-foreground truncate font-mono text-xs">{build.branch}</span>
                                             <StatusBadge tone={BUILD_TONE[build.status]}>{build.status}</StatusBadge>
+                                            {build.advisoryWarnings > 0 ? (
+                                                <StatusBadge tone="warning">
+                                                    {build.advisoryWarnings} {build.advisoryWarnings === 1 ? "warning" : "warnings"}
+                                                </StatusBadge>
+                                            ) : null}
+                                            {build.advisoryNotes > 0 ? (
+                                                <StatusBadge>
+                                                    {build.advisoryNotes} {build.advisoryNotes === 1 ? "note" : "notes"}
+                                                </StatusBadge>
+                                            ) : null}
                                             {build.skipReason === undefined ? null : (
                                                 <span className="text-muted-foreground truncate text-xs" title={build.skipReason}>
                                                     {build.skipReason}
@@ -113,6 +124,8 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                     ) : null}
                 </CardContent>
             </Card>
+
+            {openBuildId ? <BuildAdvisoriesCard buildId={openBuildId} organizationId={organizationId} /> : null}
 
             {openBuildId ? (
                 <Card>

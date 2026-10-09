@@ -10,11 +10,11 @@ the release into the deploy core — is code in `src/builds/`; see **Wiring**.
 
 ## The contract
 
-| Route                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /__lunora/build` | Body **is** the gzipped repo tarball; optional `?rootDirectory=apps/web` for a monorepo project. Responds NDJSON: `{"line"}` per output line as it happens, then the release `{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?,"workspacePackages"?}` (`workspacePackages`: the repo-relative workspace packages the app imports, for the path filter) or `{"error"}`. |
-| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                                                                                                                                                                                                                                                               |
-| `GET /__lunora/health` | Readiness probe.                                                                                                                                                                                                                                                                                                                                                                             |
+| Route                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /__lunora/build` | Body **is** the gzipped repo tarball; optional `?rootDirectory=apps/web` for a monorepo project and `?runtime=worker` for a plain Cloudflare Worker project (absent or `lunora` builds a Lunora app; anything else is a `400`). Responds NDJSON: `{"line"}` per output line as it happens; one `{"advisory":{"name","level":"WARN","title","detail","file","line","location","cacheKey","remediation"}}` per bundle-scan finding (each also logged as a `warning: …` line), before the release; then the release `{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?,"workspacePackages"?}` (`workspacePackages`: the repo-relative workspace packages the app imports, for the path filter) or `{"error"}`. Advisories never ride on the release. |
+| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `GET /__lunora/health` | Readiness probe.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 **Why a build route and not just exec.** `BuildRunnerPorts.execute` receives the
 source as an `ArrayBuffer` in the Worker, and exec has nowhere to put it — it
@@ -68,6 +68,175 @@ lets the dashboard tail a build live, which is what `buildLogs` is for.
    so and naming the upgrade — a build that can never be released never reads
    green.
 
+7. **Scan the bundle** (`scan.mjs`), over the exact bytes hashed in step 5 and
+   with the release's manifest in hand — see _The bundle scan_ below. It only
+   warns, and a scan that cannot run is a single
+   `warning: build scan skipped: <reason>`; the build carries on.
+
+### The Cloudflare Worker runtime (`?runtime=worker`)
+
+A project whose `runtime` setting is `worker` is a plain Cloudflare Worker: a
+`wrangler.json`, `wrangler.jsonc` or `wrangler.toml` and its own pinned
+`wrangler`, no Lunora CLI. Steps 1–3 and 7 are the same; 4–6 become
+(`worker.mjs`):
+
+4. **Find the config** in the root directory itself — never searched for
+   upward, as wrangler would — and **resolve `node_modules/.bin/wrangler`**
+   the way `.bin/lunora` is resolved: the lockfile's version or a clear
+   error, never a registry fetch. A project depending on
+   `@cloudflare/vite-plugin` is refused: its deployable output comes from
+   `vite build`, which this path does not run (custom build steps belong in
+   wrangler's own `build.command`, which `wrangler deploy` runs).
+5. **Read the resolved config with the tenant's wrangler**
+   (`unstable_readConfig` / `experimental_readRawConfig`), in a child process
+   started with `node --input-type=module --eval` so the program is never a
+   file a build could replace. TOML and JSON alike; `main` absolute; only the
+   keys the file declares; the top-level environment (a git build has no
+   `--env`). The JSON it writes is translated **here**, with the vendored
+   `buildBindingManifest` and `collectAssets` — the exact code
+   `lunora cloud deploy --out` runs — into the same release body, plus
+   `manifest.vars`. Refused, by name: a non-string var (Cloudflare would bind
+   it as JSON; Lunora Cloud deploys vars as plain text), an assets binding not
+   named `ASSETS` (the provision box always binds assets as `ASSETS`; a config
+   that names no binding gets `ASSETS` added), no `main`, `no_bundle`, any
+   Durable Object migration step but `new_sqlite_classes` (a rename or
+   transfer would end with the old data deleted; `new_classes` is KV-backed,
+   and Lunora Cloud runs SQLite-backed classes), and any queue-consumer
+   setting or `http_pull` consumer (nothing the platform attaches applies them).
+   The static files themselves are collected after step 6 — the dry run runs
+   the config's `build.command`, whose output they may be — and an assets
+   directory that is missing then, or that leads (or holds a symlink that
+   leads) outside the repository, is refused.
+6. **Bundle behind the entry shim.** `wrangler deploy <shim> --config <config>
+--dry-run --outdir <dir>`, with `WRANGLER_SEND_METRICS=false`,
+   `WRANGLER_HIDE_BANNER=true` (the banner is what runs the update check),
+   wrangler's log beside the repo and every `CLOUDFLARE_*` variable removed.
+   The out-dir, the logs and the resolved config live in `<workspace>.worker/`,
+   beside the extracted repo. The shim is written to the project's
+   `.wrangler/lunora-cloud/` instead — created fresh, refused when `.wrangler`
+   is a symlink — because esbuild names every input relative to the project
+   in the bundle, so an entry under the build's random workspace name would
+   give the same commit a different bundle hash on every build; `.wrangler` is
+   also a directory the scan already treats as generated. Two builds of one
+   commit produce the same bundle. Then the single module is collected (`rules` /
+   `find_additional_modules` / split chunks produce several and are refused)
+   and the release written to the same file step 6 of a Lunora build reads.
+
+**The entry shim** (`shim-runtime.mjs`, bundled into the Worker). A Worker in a
+Workers for Platforms dispatch namespace (`cloudflare-wfp`) gets no
+`triggers.crons` and cannot be a queue consumer, so the control plane delivers
+both over HTTP — `POST /_lunora/scheduled` and `POST /_lunora/queue`, the
+contract `@lunora/runtime`'s `tenant-fanout-routes.ts` serves. A plain Worker
+serves neither: without the shim its crons would never fire and the platform
+consumer would acknowledge — and lose — its queue messages. The generated entry
+is
+
+```js
+import * as worker from "<main>";
+import { wrapEntry } from "./shim-runtime.mjs";
+
+export * from "<main>";
+export default wrapEntry(worker.default, { "--job-queue": "jobs" });
+```
+
+so every class the Worker exports (Durable Objects, Workflows, named
+entrypoints) is still an export of the bundle, and `wrapEntry`:
+
+- answers the two routes only with the deployment's admin bearer
+  (`env.LUNORA_ADMIN_TOKEN`, set on every deployment), compared in constant
+  time and checked before the method or the body — `403 ADMIN_FORBIDDEN`
+  otherwise, the runtime's envelope and body caps throughout;
+- runs `scheduled(controller, env, ctx)` for a tick, and `queue(batch, env,
+ctx)` for a batch, with a `MessageBatch`-shaped object whose `ack()` /
+  `retry()` / `ackAll()` / `retryAll()` follow Cloudflare's semantics — an
+  explicit per-message call wins, a returning handler acknowledges the rest, a
+  throwing one retries everything not acknowledged explicitly — answered as
+  `{"retry":[ids]}`;
+- maps the project's queue name (`{alias}--{producer binding}`) back to the
+  Worker's own (`jobs`) — on a forwarded batch and on a native one alike (a
+  native batch is the real one behind a proxy, so its `ack()` / `retry()` reach
+  Cloudflare) — so `batch.queue` reads
+  what the Worker's config says;
+- passes every other request to the Worker's `fetch()` — on the Worker's own
+  object, so `this` and prototype methods (a framework app instance) behave as
+  before — and keeps its other handlers. A `WorkerEntrypoint` class default
+  becomes a subclass that, once the Worker's constructor has run, replaces each
+  instance's `fetch` / `queue` with routing wrappers — so a handler declared as
+  a class field, which would shadow a subclass method, is routed too. A service-worker script (no default
+  export) fails at upload with a message saying so.
+
+The shim is applied on every target: the box does not know the target, and a
+build is reused across a target change. Where crons and consumers are native
+(`cloudflare-workers`, `celld-vps`) the platform never calls the two routes, and
+the wrapper hands Cloudflare's own `scheduled` / `queue` events to the Worker —
+a queue batch under the Worker's own queue name, as above.
+
+**The vendored translation.** `vendor/release-manifest.mjs` is an esbuild bundle
+of `buildBindingManifest` (`packages/config`) and `collectAssets`
+(`packages/cli`), with the third-party code `collectAssets` pulls in
+(`@visulima/fs`, `@visulima/path`) and their licences in
+`vendor/release-manifest.LICENSES`. `apps/cloud/scripts/vendor-release-manifest.ts`
+writes both; `__tests__/build-box-worker-vendor.test.ts` re-bundles in memory
+and fails while the committed copy differs, so a change to either source is:
+run the script, commit both files.
+
+### The bundle scan
+
+Code that, once started, can run without end and bill storage operations on
+every pass. Each finding is one `{"advisory"}` record plus a log line —
+`warning: …` for `WARN`, `note: …` for `INFO`, so the Studio's Warnings tab
+(which matches "warn") picks up only the former.
+
+| Advisory              | Level                                                                                                                      | Reported when                                                                                                                                                                                                                                                                                                                                                                                                                                         | Not covered                                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `unbounded_loop`      | `WARN`                                                                                                                     | `while`/`do … while` on `true`, a non-zero number (`while (1)`) or `!0`, or `for (;;)`/`for (; true;)`, with no statically reachable exit: no `break` bound to it, no jump to a label outside it, no `return`/`throw`/`yield` in its own function, no `signal.throwIfAborted()`. An `await` is not an exit.                                                                                                                                           | A condition that is not a literal (`while (running)`), however it is set.                                                                                                                                                                  |
+| `alarm_always_rearms` | `WARN` when the re-arm is `Date.now()`, under a minute ahead, or a delay the scan cannot read; `INFO` at a minute or more. | A class's `alarm() {}` or `alarm = () => {}` field calls `<x>.storage.setAlarm(…)` (or a destructured `storage.setAlarm(…)`) at a position that runs on every call — not in a branch, loop body, `case`, `catch`, ternary arm, the far side of `&&`/`\|\|`/`??`, an optional chain, a nested callback, or after an earlier statement that may leave — not kept, not followed by a `throw`, and not followed by a `deleteAlarm()` on the same storage. | Delays read only as `Date.now() + <constant>` (optionally in `new Date(…)`); a storage held under any other name; minified code where the bundler renames `storage`, `setAlarm` or `deleteAlarm` (esbuild does not rename properties).     |
+| `queue_self_resend`   | `WARN`                                                                                                                     | A hand-written `queue(batch, env)` handler (object method, arrow or class method via `this.env`; `env` named or destructured) `send`s/`sendBatch`es, unconditionally or once per message in `for (const m of batch.messages)`, to a producer the release manifest maps to a queue this Worker consumes.                                                                                                                                               | Lunora `defineQueue` consumers (dispatched through generated and runtime code, not a hand-written `queue()`); sends inside `batch.messages.forEach(…)` or a helper function; minified code that renames `messages`, `send` or `sendBatch`. |
+
+**Noise control.** Every candidate is attributed through the bundle's sourcemap
+(wrangler writes `index.js.map` beside the module in `--outdir` mode) and
+dropped when its source is under `node_modules`, in generated output
+(`.wrangler`, `.lunora`) or outside the repository — the repository rather than
+the root directory, so a monorepo's own workspace packages are still scanned.
+Without a usable sourcemap, esbuild's `// <path>` region comments name each
+statement's input (the line reported is then the bundle's); without either, a
+finding is kept against the bundle itself.
+
+**Limits.** At most 50 findings per build, of which at most 10 placed only by
+bundle line; whichever cap applies is named in a `warning: build scan: …` line.
+A reported path is capped at 512 characters, and its `cacheKey` carries a digest
+of the full path, so two long paths never collapse into one finding. The scan
+skips itself, with the reason, on an unparsable bundle, one over 32 MiB, or past
+its 10-second budget — checked during the parse (per token) and every walk,
+including the ancestor walks jump resolution makes. Memory is guarded, never
+discovered: the scan estimates its heap up front (48 bytes per bundle byte,
+against a 256 MiB reserve that covers V8's young generation, which
+`heap_size_limit` includes) and also watches the free heap during the parse and
+walks, stopping at the reserve — dense code costs more than any estimate
+(`var a = 1;` lines measured ~80 bytes per byte), and running this process out of
+heap would end the stream with no release, failing the build. A sourcemap that
+is not a regular file, over 64 MiB, more than the remaining heap holds (budgeted
+at 4× its size; measured ~1.3×), not JSON, or named by a malformed
+`sourceMappingURL` is not used: the scan goes on with bundle-line attribution
+and says so.
+
+### The parser, and why it is vendored
+
+The scan needs a JavaScript parser, and this image installs nothing. So
+`vendor/acorn.mjs` is the catalog-pinned `acorn` release's own prebuilt ESM
+file (zero dependencies, MIT; the licence is beside it), copied verbatim and
+`COPY`'d like the rest — no build step and no registry access at image build,
+consistent with how the box already ships plain `.mjs` files. Its version lives
+in the `node` catalog (`acorn`, exact-pinned) as an apps/cloud devDependency;
+`__tests__/build-scan-vendor.test.ts` fails until the vendored bytes match the
+installed release, so a bump is: change the catalog, `pnpm install`, copy
+`node_modules/acorn/dist/acorn.mjs` and `LICENSE` over. The same test checks
+that every module `server.mjs` imports is one the Dockerfile copies.
+
+`server.mjs` imports the scanner statically, at start-up: `/srv` is writable by
+the `node` user builds run as, so a module first loaded after a build ran could
+be one that build replaced.
+
 ## Security posture
 
 It runs **untrusted tenant code**: a `postinstall` and a build script are both
@@ -79,11 +248,20 @@ arbitrary code execution by design. The container is the boundary.
 - `spawn(..., { shell: false })` everywhere: arguments never become a shell
   string, so a branch or commit value cannot inject a command.
 - Caps on everything tenant-controlled: source size, log line length, exec
-  output, and a wall-clock kill on both install and build.
+  output, and a wall-clock kill on both install and build. The bundle scan
+  caps the bundle, the sourcemap, its heap and its own time, reads only a
+  regular-file `<module>.map` (or a `sourceMappingURL` that resolves beside the
+  module), never reads a file a sourcemap names, and reports only repo-relative
+  paths, capped.
 - Start it with egress restricted to the package registry —
   `enableInternet: false` plus `allowedHosts` on the `defineContainer` side.
 
 ## Smoke test
+
+`__tests__/build-box-worker.test.ts` drives `?runtime=worker` end to end against
+a stand-in wrangler, and `__tests__/build-box-worker-wrangler.test.ts` runs the
+real, repo-pinned wrangler (TOML config, shim bundle, both routes) with no
+network.
 
 The automated half of the contract (exec, routing, the pre-install guards) is
 `apps/cloud/__tests__/build-container.test.ts` and needs no network. The
@@ -98,7 +276,9 @@ git archive --format=tar.gz --prefix=repo/ HEAD > /tmp/src.tgz
 curl -sN -X POST localhost:8080/__lunora/build --data-binary @/tmp/src.tgz
 ```
 
-Expect NDJSON log lines, then a final `{"bundle":"…","bundleHash":"…"}`.
+Expect NDJSON log lines (any `{"advisory"}` records among them), then a final
+`{"bundle":"…","bundleHash":"…"}`. `__tests__/build-container-scan.test.ts`
+drives the whole route, scan included, against a stand-in CLI with no registry.
 
 ## Wiring
 

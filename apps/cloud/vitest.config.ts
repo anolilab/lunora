@@ -37,6 +37,8 @@ const nodeProject: TestProjectInlineConfiguration = {
             // `BoxSessionDO` extends the workerd-only `cloudflare:workers` `DurableObject`;
             // under node it is a minimal stub, so the session's logic tests with fakes.
             "cloudflare:workers": fileURLToPath(new URL("__tests__/__stubs__/cloudflare-workers.ts", import.meta.url)),
+            // tsconfig's `@/*` path, for the studio components a test renders (vite.config.ts resolves it for the app).
+            "@": fileURLToPath(new URL("src", import.meta.url)),
         },
     },
     test: { environment: "node", exclude: [...configDefaults.exclude, "__tests__/workerd/**"], name: "node" },

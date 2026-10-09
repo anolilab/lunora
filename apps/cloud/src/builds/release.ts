@@ -35,6 +35,8 @@ export interface BuildReleaseTarget {
     projectSlug: string;
     /** The pull request number, on `pull_request` builds that recorded one. */
     pullRequest?: number;
+    /** What the build built (`src/project-runtime.ts`), snapshotted on its row; absent is a Lunora app. */
+    runtime?: "worker";
     /** What recorded the build. Absent on rows that predate it, which release as previews. */
     trigger?: "pull_request" | "push";
 }
@@ -187,6 +189,7 @@ export const releaseBuild = async (build: ClaimedBuild, execution: BuildExecutio
                 kind,
                 manifest: execution.manifest,
                 projectId: target.projectId, // secret-scanner:allow -- domain field name
+                runtime: target.runtime ?? "lunora",
                 scriptName,
             },
             { key: minted.key, organizationId: target.organizationId },

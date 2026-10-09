@@ -1562,6 +1562,75 @@
         "x-lunora-function-kind": "mutation"
       }
     },
+    "/_lunora/rpc#builds:advisories": {
+      "post": {
+        "description": "Invoke the `query` `builds:advisories` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "builds:advisories",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "buildId": {
+                        "description": "Id<\"builds\">",
+                        "type": "string",
+                        "x-lunora-table": "builds"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "buildId",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "builds:advisories",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: builds:advisories",
+        "tags": [
+          "builds"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#builds:listByProject": {
       "post": {
         "description": "Invoke the `query` `builds:listByProject` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2882,7 +2951,15 @@
                         "items": {},
                         "type": "array"
                       },
+                      "allowDeleteClasses": {
+                        "items": {},
+                        "type": "array"
+                      },
                       "deployKey": {},
+                      "durableObjectClasses": {
+                        "items": {},
+                        "type": "array"
+                      },
                       "kind": {
                         "anyOf": [
                           {
@@ -2908,6 +2985,10 @@
                         "description": "Id<\"projects\">",
                         "type": "string",
                         "x-lunora-table": "projects"
+                      },
+                      "runtime": {
+                        "const": "worker",
+                        "type": "string"
                       },
                       "runtimeVersion": {},
                       "scriptName": {}
@@ -6285,6 +6366,18 @@
                         "type": "string",
                         "x-lunora-table": "organizations"
                       },
+                      "runtime": {
+                        "anyOf": [
+                          {
+                            "const": "lunora",
+                            "type": "string"
+                          },
+                          {
+                            "const": "worker",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "slug": {}
                     },
                     "required": [
@@ -6734,6 +6827,18 @@
                         "x-lunora-table": "organizations"
                       },
                       "rootDirectory": {},
+                      "runtime": {
+                        "anyOf": [
+                          {
+                            "const": "lunora",
+                            "type": "string"
+                          },
+                          {
+                            "const": "worker",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "watchPaths": {
                         "items": {},
                         "type": "array"

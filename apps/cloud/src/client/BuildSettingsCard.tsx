@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { api } from "../../lunora/_generated/api.js";
 import type { RecordedWorkspacePackages } from "../builds/paths";
 import { normalizeRootDirectory, normalizeWatchPaths, watchPathsPreview } from "../builds/paths";
+import type { ProjectRuntime } from "../project-runtime";
+import { RuntimeField } from "./RuntimeField";
 import { Field, FormError } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
@@ -28,23 +30,27 @@ const validate = (rootDirectory: string, watchPaths: string): null | string => {
 };
 
 /**
- * Monorepo build settings: which directory of the repository is this project,
- * and which paths a push has to touch before it rebuilds.
+ * Build settings: what the project's code is (a Lunora app or a plain
+ * Cloudflare Worker), and for a monorepo which directory of the repository is
+ * this project and which paths a push has to touch before it rebuilds.
  */
 export const BuildSettingsCard = ({
     organizationId,
     projectId,
     rootDirectory = "",
+    runtime = "lunora",
     watchPaths = NO_WATCH_PATHS,
     workspacePackages,
 }: {
     organizationId: OrgId;
     projectId: ProjectId;
     rootDirectory?: string;
+    runtime?: ProjectRuntime;
     watchPaths?: string[];
     workspacePackages?: RecordedWorkspacePackages;
 }): ReactElement => {
     const update = useMutation(api.projects.updateBuildSettings);
+    const [kind, setKind] = useState(runtime);
     const [root, setRoot] = useState(rootDirectory);
     const [paths, setPaths] = useState(() => watchPaths.join("\n"));
     const [error, setError] = useState<null | string>(null);
@@ -58,7 +64,7 @@ export const BuildSettingsCard = ({
         setError(null);
 
         try {
-            await update.mutate({ id: projectId, organizationId, rootDirectory: root, watchPaths: paths.split("\n") });
+            await update.mutate({ id: projectId, organizationId, rootDirectory: root, runtime: kind, watchPaths: paths.split("\n") });
         } catch (error_: unknown) {
             setError(error_ instanceof Error ? error_.message : "could not save build settings");
         }
@@ -69,11 +75,20 @@ export const BuildSettingsCard = ({
             <CardHeader>
                 <CardTitle>Build settings</CardTitle>
                 <CardDescription>
-                    For a monorepo: dependencies install at the nearest lockfile above the root directory, and <code>lunora build</code> runs inside it.
+                    For a monorepo: dependencies install at the nearest lockfile above the root directory, and{" "}
+                    {kind === "worker" ? <code>wrangler deploy --dry-run</code> : <code>lunora build</code>} runs inside it. A runtime change applies from the
+                    next push.
                 </CardDescription>
             </CardHeader>
             <CardContent>
                 <form action={save} className="flex flex-col gap-3">
+                    <RuntimeField id="build-runtime" onChange={setKind} value={kind} />
+                    {kind === runtime ? null : (
+                        <p className="text-warning text-xs" role="status">
+                            A release of the other runtime is refused while one of this runtime is live: it would drop that Worker&apos;s Durable Object data.
+                            Switch before the first deploy, or deploy the other runtime as a new project.
+                        </p>
+                    )}
                     <Field htmlFor="build-root-directory" label="Root directory">
                         <Input
                             aria-describedby="build-settings-problem"

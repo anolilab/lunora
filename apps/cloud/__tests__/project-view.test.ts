@@ -46,6 +46,7 @@ describe(toProjectView, () => {
             name: "Web",
             organizationId: "org_1",
             previewProtected: true,
+            runtime: "lunora",
             slug: "web",
             target: "cloudflare-wfp",
         });

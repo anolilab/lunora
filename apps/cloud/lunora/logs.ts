@@ -1,5 +1,7 @@
+import { createDbStore, RateLimiter } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
+import { admitTailLines, TAIL_LOG_LIMITS } from "../src/tail/ingest-budget";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -227,9 +229,12 @@ export const ingestInternal = internalMutation
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_BATCH)} lines)`);
         }
 
-        await insertLines(context, organizationId, scriptName, lines);
+        // Within the organization's ceiling, or dropped with a notice line saying so (`src/tail/ingest-budget.ts`).
+        const admitted = await admitTailLines(lines, new RateLimiter({ config: TAIL_LOG_LIMITS, store: createDbStore({ db: context.db }) }), organizationId);
 
-        return { ingested: lines.length };
+        await insertLines(context, organizationId, scriptName, [...admitted]);
+
+        return { ingested: admitted.length };
     });
 
 /**
