@@ -162,6 +162,53 @@ const RECURSIVE_ROUTE_OUTPUT = `
         });
 `;
 
+/**
+ * A handler whose type the checker could not resolve because it contains an error:
+ * here an unresolved name, the same failure as an import of an export that a later
+ * release removed (#1072). The return type falls back to `unknown`; the report must
+ * say why, not stay silent.
+ */
+const UNRESOLVED_REFERENCE = `
+    import { query } from "@lunora/server";
+
+    export const getMissing = query({ args: {}, handler: async () => missingReference });
+`;
+
+/**
+ * A handler whose returned object carries a field the checker could not type. The
+ * object is not `any` as a whole, so it takes the degraded-type fallback, not the
+ * `any` branch, and must be reported the same way.
+ */
+const UNRESOLVED_OBJECT_FIELD = `
+    import { query } from "@lunora/server";
+
+    export const getWrapped = query({ args: {}, handler: async () => { const x = missingRef; return { a: x.b }; } });
+`;
+
+/**
+ * A handler that returns `unknown` on purpose, with an unrelated error inside it. The
+ * `unknown` is the handler's own type, not the result of the error, so nothing is erased.
+ */
+const UNKNOWN_WITH_UNRELATED_ERROR = `
+    import { query } from "@lunora/server";
+
+    declare const opaque: unknown;
+
+    export const getOpaque = query({ args: {}, handler: async () => { const unused = missingReference; return opaque; } });
+`;
+
+/**
+ * The error sits in a module-level `const` the handler reads, not in the handler. The
+ * handler's own type is degraded, so the reason has to be found through the declaration.
+ */
+const ERROR_BEHIND_USE = `
+    import { query } from "@lunora/server";
+
+    const viaMissing = missingReference;
+
+    export const getViaMissing = query({ args: {}, handler: async () => viaMissing.value });
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -208,6 +255,43 @@ describe("procedure_return_type_erased", () => {
             level: "WARN",
             metadata: { exportName: "getTree", filePath: "trees", rendered: "Tree" },
         });
+    }, 300_000);
+
+    it("names the type error that left a handler's return type unknown", () => {
+        expect.assertions(2);
+
+        const findings = advisoriesFor({ "missing.ts": UNRESOLVED_REFERENCE }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            metadata: { exportName: "getMissing", filePath: "missing" },
+        });
+    }, 300_000);
+
+    it("names the type error behind an object whose field the checker could not type", () => {
+        expect.assertions(2);
+
+        const findings = advisoriesFor({ "wrapped.ts": UNRESOLVED_OBJECT_FIELD }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ metadata: { exportName: "getWrapped", filePath: "wrapped" } });
+    }, 300_000);
+
+    it("does not report a handler whose own `unknown` return is unrelated to an error inside it", () => {
+        expect.assertions(1);
+
+        const findings = advisoriesFor({ "opaque.ts": UNKNOWN_WITH_UNRELATED_ERROR }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(0);
+    }, 300_000);
+
+    it("names the error in a declaration the handler uses when the handler itself has none", () => {
+        expect.assertions(2);
+
+        const findings = advisoriesFor({ "behind.ts": ERROR_BEHIND_USE }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ metadata: { exportName: "getViaMissing", filePath: "behind" } });
     }, 300_000);
 
     it("does not report a handler erasure a declared `.output(...)` replaces", () => {
