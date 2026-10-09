@@ -1,5 +1,5 @@
 /**
- * `lunora ai gateway` — provision a Cloudflare AI Gateway and wire the Worker to it.
+ * `lunora cloudflare ai-gateway` — provision a Cloudflare AI Gateway and wire the Worker to it.
  *
  * `ctx.ai.model("<provider>/<model>")` routes through AI Gateway over the
  * Workers `env.AI` binding. Which gateway is read from `LUNORA_AI_GATEWAY_ID`
@@ -19,13 +19,10 @@ import { writeFileSync } from "node:fs";
 
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
-import { capErrorBody } from "../../../../../shared/cap-error-body";
-import { nonEmpty, resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
-import type { CommandHandler } from "../../util/command";
-import { defineHandler } from "../../util/command";
-import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
-import type { Logger } from "../../util/logger";
-import type { AiOptions } from "./index";
+import { capErrorBody } from "../../../../../../shared/cap-error-body";
+import { nonEmpty, resolveCloudflareCredentials } from "../../../util/cloudflare-credentials";
+import { EXIT_CODE, exitCodeForStatus } from "../../../util/exit-code";
+import type { Logger } from "../../../util/logger";
 import { AI_GATEWAY_ACCOUNT_ID_VAR, AI_GATEWAY_ID_VAR } from "./variables";
 
 const API_BASE = "https://api.cloudflare.com/client/v4/accounts";
@@ -63,7 +60,6 @@ interface AiCommandOptions {
     logger: Logger;
     /** Collect request/response logs in the gateway. Defaults to `true`. */
     logs?: boolean;
-    subcommand: string | undefined;
 }
 
 /** The `--format json` payload. */
@@ -180,7 +176,7 @@ const ensureGateway = async (
     // the create call: the API reference does not pin the status an unknown id
     // answers with, and a create failure carries the more useful error anyway.
     if (existing.status === 401 || existing.status === 403) {
-        return fail(logger, exitCodeForStatus(existing.status), `ai gateway: could not read AI Gateway "${gatewayId}" (${describeFailure(existing)})`);
+        return fail(logger, exitCodeForStatus(existing.status), `ai-gateway: could not read AI Gateway "${gatewayId}" (${describeFailure(existing)})`);
     }
 
     // The create endpoint requires these six fields; caching and rate limiting
@@ -198,7 +194,7 @@ const ensureGateway = async (
     });
 
     if (!created.ok) {
-        return fail(logger, exitCodeForStatus(created.status), `ai gateway: could not create AI Gateway "${gatewayId}" (${describeFailure(created)})`);
+        return fail(logger, exitCodeForStatus(created.status), `ai-gateway: could not create AI Gateway "${gatewayId}" (${describeFailure(created)})`);
     }
 
     return { action: "created", collectLogs };
@@ -221,26 +217,26 @@ const resolveProject = (options: AiCommandOptions): AiCommandResult | GatewayPro
     const wranglerPath = findWranglerFile(options.cwd);
 
     if (wranglerPath === undefined) {
-        return fail(logger, EXIT_CODE.NOT_FOUND, "ai gateway: no wrangler.jsonc found — run `lunora init` (or `lunora dev`) first.");
+        return fail(logger, EXIT_CODE.NOT_FOUND, "ai-gateway: no wrangler.jsonc found — run `lunora init` (or `lunora dev`) first.");
     }
 
     const { parsed, text } = readWranglerJsonc<WranglerAiShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return fail(logger, EXIT_CODE.USAGE, `ai gateway: could not parse ${wranglerPath} as JSONC.`);
+        return fail(logger, EXIT_CODE.USAGE, `ai-gateway: could not parse ${wranglerPath} as JSONC.`);
     }
 
     const gatewayId = nonEmpty(options.id) ?? nonEmpty(parsed.name);
 
     if (gatewayId === undefined) {
-        return fail(logger, EXIT_CODE.USAGE, "ai gateway: no gateway id — pass --id <id>, or set `name` in wrangler.jsonc.");
+        return fail(logger, EXIT_CODE.USAGE, "ai-gateway: no gateway id — pass --id <id>, or set `name` in wrangler.jsonc.");
     }
 
     if (gatewayId.length > MAX_GATEWAY_ID_LENGTH) {
         return fail(
             logger,
             EXIT_CODE.USAGE,
-            `ai gateway: gateway id "${gatewayId}" is longer than ${String(MAX_GATEWAY_ID_LENGTH)} characters — pass a shorter --id.`,
+            `ai-gateway: gateway id "${gatewayId}" is longer than ${String(MAX_GATEWAY_ID_LENGTH)} characters — pass a shorter --id.`,
         );
     }
 
@@ -251,21 +247,21 @@ const onOff = (value: boolean): string => (value ? "on" : "off");
 
 /** Log what a `--dry-run` would do, including a prerequisite the real run would stop on. */
 const reportDryRun = (logger: Logger, data: AiGatewayData): AiCommandResult => {
-    logger.info(`ai gateway (dry run): would create or reuse AI Gateway "${data.gatewayId}" (log collection ${onOff(data.collectLogs)}).`);
+    logger.info(`ai-gateway (dry run): would create or reuse AI Gateway "${data.gatewayId}" (log collection ${onOff(data.collectLogs)}).`);
     logger.info(
         data.varsWritten.length === 0
-            ? `ai gateway (dry run): ${data.wranglerPath} vars are already up to date.`
-            : `ai gateway (dry run): would write ${data.varsWritten.join(", ")} into ${data.wranglerPath} vars.`,
+            ? `ai-gateway (dry run): ${data.wranglerPath} vars are already up to date.`
+            : `ai-gateway (dry run): would write ${data.varsWritten.join(", ")} into ${data.wranglerPath} vars.`,
     );
 
     if (data.accountId === undefined) {
-        logger.warn("ai gateway (dry run): no CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc) — a real run will stop there.");
+        logger.warn("ai-gateway (dry run): no CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc) — a real run will stop there.");
     }
 
     return { code: 0, data };
 };
 
-const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult> => {
+const runAiGatewayCommand = async (options: AiCommandOptions): Promise<AiCommandResult> => {
     const { logger } = options;
     const project = resolveProject(options);
 
@@ -294,7 +290,7 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
             accountId === undefined ? "CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc)" : undefined,
         ].filter((entry) => entry !== undefined);
 
-        return fail(logger, EXIT_CODE.AUTH, `ai gateway: missing ${missing.join(" and ")}.`);
+        return fail(logger, EXIT_CODE.AUTH, `ai-gateway: missing ${missing.join(" and ")}.`);
     }
 
     const outcome = await ensureGateway(logger, options.fetch ?? globalThis.fetch.bind(globalThis), accountId, token, gatewayId, collectLogs);
@@ -304,18 +300,18 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
     }
 
     if (outcome.action === "created") {
-        logger.success(`ai gateway: created AI Gateway "${gatewayId}" (log collection ${onOff(outcome.collectLogs)}).`);
+        logger.success(`ai-gateway: created AI Gateway "${gatewayId}" (log collection ${onOff(outcome.collectLogs)}).`);
     } else {
         logger.info(
-            `ai gateway: AI Gateway "${gatewayId}" already exists — reusing it (log collection ${onOff(outcome.collectLogs)}; change it in the dashboard).`,
+            `ai-gateway: AI Gateway "${gatewayId}" already exists — reusing it (log collection ${onOff(outcome.collectLogs)}; change it in the dashboard).`,
         );
     }
 
     if (written.changed.length > 0) {
         writeFileSync(wranglerPath, written.text, "utf8");
-        logger.success(`ai gateway: wrote ${written.changed.join(", ")} into ${wranglerPath} vars.`);
+        logger.success(`ai-gateway: wrote ${written.changed.join(", ")} into ${wranglerPath} vars.`);
     } else {
-        logger.info(`ai gateway: ${wranglerPath} vars are already up to date.`);
+        logger.info(`ai-gateway: ${wranglerPath} vars are already up to date.`);
     }
 
     printNextSteps(logger, gatewayId);
@@ -326,26 +322,5 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
     };
 };
 
-/** Route one `lunora ai <subcommand>` invocation. `gateway` is the only one today. */
-const runAiCommand = async (options: AiCommandOptions): Promise<AiCommandResult> => {
-    if (options.subcommand !== "gateway") {
-        return fail(options.logger, EXIT_CODE.USAGE, `ai: unknown subcommand "${options.subcommand ?? ""}" — expected: gateway. Example: lunora ai gateway`);
-    }
-
-    return runAiGateway(options);
-};
-
-/** `lunora ai <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AiOptions> = defineHandler<AiOptions, AiGatewayData>(({ argument, cwd, logger, options }) =>
-    runAiCommand({
-        cwd,
-        dryRun: options.dryRun === true,
-        id: options.id,
-        logger,
-        logs: options.logs,
-        subcommand: argument[0],
-    }),
-);
-
 export type { AiCommandOptions, AiCommandResult, AiGatewayData };
-export { execute, runAiCommand };
+export { runAiGatewayCommand };

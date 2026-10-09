@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runBackupCommand } from "../../src/commands/backup/handler";
-import { runContainersCommand } from "../../src/commands/containers/handler";
+import { runContainersCommand } from "../../src/commands/cloudflare/containers/handler";
+import { runDeploymentsCommand } from "../../src/commands/cloudflare/deployments/handler";
 import { runExportCommand } from "../../src/commands/data-transfer";
-import { runDeploymentsCommand } from "../../src/commands/deployments/handler";
 import type { EnvCommandData } from "../../src/commands/env/handler";
 import { execute as envExecute } from "../../src/commands/env/handler";
 import type { EnvOptions } from "../../src/commands/env/index";

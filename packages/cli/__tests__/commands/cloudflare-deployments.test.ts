@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { runDeploymentsCommand } from "../../src/commands/deployments/handler";
+import { runDeploymentsCommand } from "../../src/commands/cloudflare/deployments/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -33,7 +33,7 @@ const npmProjectCwd = (): string => {
     return dir;
 };
 
-describe("lunora deployments", () => {
+describe("lunora cloudflare deployments", () => {
     it("list spawns `wrangler deployments list` and forwards --format json/--env", async () => {
         expect.assertions(3);
 

@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AiGatewayData } from "../../src/commands/ai/handler";
-import { execute, runAiCommand } from "../../src/commands/ai/handler";
-import type { AiOptions } from "../../src/commands/ai/index";
+import type { AiGatewayData } from "../../src/commands/cloudflare/ai-gateway/handler";
+import { runAiGatewayCommand } from "../../src/commands/cloudflare/ai-gateway/handler";
+import { execute } from "../../src/commands/cloudflare/handler";
+import type { CloudflareOptions } from "../../src/commands/cloudflare/index";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { runExecute } from "../helpers/execute";
@@ -68,7 +69,7 @@ const readVariables = (dir: string): Record<string, unknown> =>
 
 let workdir: string;
 
-describe("lunora ai gateway", () => {
+describe("lunora cloudflare ai-gateway", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cli-ai-"));
         writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER, "utf8");
@@ -83,7 +84,7 @@ describe("lunora ai gateway", () => {
 
         const { calls, fetch } = fakeFetch(404);
         const { lines, logger } = recordingLogger();
-        const result = await runAiCommand({ cwd: workdir, environment: ENVIRONMENT, fetch, logger, subcommand: "gateway" });
+        const result = await runAiGatewayCommand({ cwd: workdir, environment: ENVIRONMENT, fetch, logger });
 
         expect(result.code).toBe(0);
         expect(calls.map((call) => `${call.method} ${call.url}`)).toStrictEqual([
@@ -111,14 +112,13 @@ describe("lunora ai gateway", () => {
         expect.assertions(4);
 
         const { calls, fetch } = fakeFetch(200, { collect_logs: false, id: "shared" });
-        const result = await runAiCommand({
+        const result = await runAiGatewayCommand({
             cwd: workdir,
             environment: ENVIRONMENT,
             fetch,
             id: "shared",
             logger: recordingLogger().logger,
             logs: false,
-            subcommand: "gateway",
         });
 
         expect(result.code).toBe(0);
@@ -132,7 +132,7 @@ describe("lunora ai gateway", () => {
 
         const { calls, fetch } = fakeFetch(404);
 
-        await runAiCommand({ cwd: workdir, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, logs: false, subcommand: "gateway" });
+        await runAiGatewayCommand({ cwd: workdir, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, logs: false });
 
         expect((calls[1]?.body as { collect_logs: boolean }).collect_logs).toBe(false);
     });
@@ -142,7 +142,7 @@ describe("lunora ai gateway", () => {
 
         const { calls, fetch } = fakeFetch(404);
         const { lines, logger } = recordingLogger();
-        const result = await runAiCommand({ cwd: workdir, dryRun: true, environment: {}, fetch, logger, subcommand: "gateway" });
+        const result = await runAiGatewayCommand({ cwd: workdir, dryRun: true, environment: {}, fetch, logger });
 
         expect(result.code).toBe(0);
         // The account id a real run needs is missing, so the plan says so up front.
@@ -158,12 +158,11 @@ describe("lunora ai gateway", () => {
         writeFileSync(join(workdir, "wrangler.jsonc"), `{ "account_id": "from-config", "name": "demo-app" }`, "utf8");
 
         const { calls, fetch } = fakeFetch(404);
-        const result = await runAiCommand({
+        const result = await runAiGatewayCommand({
             cwd: workdir,
             environment: { CLOUDFLARE_API_TOKEN: "tok" },
             fetch,
             logger: recordingLogger().logger,
-            subcommand: "gateway",
         });
 
         expect(result.code).toBe(0);
@@ -174,7 +173,7 @@ describe("lunora ai gateway", () => {
         expect.assertions(3);
 
         const { calls, fetch } = fakeFetch(404);
-        const result = await runAiCommand({ cwd: workdir, environment: {}, fetch, logger: recordingLogger().logger, subcommand: "gateway" });
+        const result = await runAiGatewayCommand({ cwd: workdir, environment: {}, fetch, logger: recordingLogger().logger });
 
         expect(result.code).toBe(EXIT_CODE.AUTH);
         expect(result.error).toContain("CLOUDFLARE_API_TOKEN");
@@ -185,19 +184,25 @@ describe("lunora ai gateway", () => {
         expect.assertions(3);
 
         const { fetch } = fakeFetch(403);
-        const result = await runAiCommand({ cwd: workdir, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, subcommand: "gateway" });
+        const result = await runAiGatewayCommand({ cwd: workdir, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger });
 
         expect(result.code).toBe(EXIT_CODE.PERMISSION);
         expect(result.error).toContain("403");
         expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(WRANGLER);
     });
 
-    it("rejects an unknown subcommand as bad usage", async () => {
-        expect.assertions(1);
+    it("rejects a stray argument as bad usage, without touching the config", async () => {
+        expect.assertions(2);
 
-        const result = await runAiCommand({ cwd: workdir, logger: recordingLogger().logger, subcommand: "nope" });
+        const outcome = await runExecute<CloudflareOptions>(execute, {
+            argument: ["ai-gateway", "gateway"],
+            commandName: "cloudflare",
+            cwd: workdir,
+            options: {},
+        });
 
-        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(outcome.code).toBe(EXIT_CODE.USAGE);
+        expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(WRANGLER);
     });
 
     it("fails when there is no wrangler config", async () => {
@@ -205,7 +210,7 @@ describe("lunora ai gateway", () => {
 
         rmSync(join(workdir, "wrangler.jsonc"));
 
-        const result = await runAiCommand({ cwd: workdir, logger: recordingLogger().logger, subcommand: "gateway" });
+        const result = await runAiGatewayCommand({ cwd: workdir, logger: recordingLogger().logger });
 
         expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
     });
@@ -213,9 +218,9 @@ describe("lunora ai gateway", () => {
     it("emits the --format json envelope from execute (dry run)", async () => {
         expect.assertions(3);
 
-        const outcome = await runExecute<AiOptions, AiGatewayData>(execute, {
-            argument: ["gateway"],
-            commandName: "ai",
+        const outcome = await runExecute<CloudflareOptions, AiGatewayData>(execute, {
+            argument: ["ai-gateway"],
+            commandName: "cloudflare",
             cwd: workdir,
             options: { dryRun: true, format: "json" },
         });

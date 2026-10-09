@@ -250,11 +250,11 @@ the failure is one line instead of a wrangler stack trace. Images must target
 **`linux/amd64`**.
 
 To split image build/push from the Worker deploy (e.g. across CI jobs), use the
-`lunora containers` wrappers:
+`lunora cloudflare containers` wrappers:
 
 ```bash
-lunora containers build ./containers/transcoder --tag transcoder:v1 --push
-lunora containers images list
+lunora cloudflare containers build ./containers/transcoder --tag transcoder:v1 --push
+lunora cloudflare containers images list
 ```
 
 Container egress is billed separately from Workers. See [Limits](/docs/limits).

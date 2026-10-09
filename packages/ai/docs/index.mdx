@@ -82,8 +82,8 @@ paid depends on the provider, and is set up once in the Cloudflare dashboard:
   in the gateway's Secrets Store, not in the app.
 
 Calls go to the gateway named by `LUNORA_AI_GATEWAY_ID`, or to the account's
-auto-created `default` gateway when it is unset. `lunora ai gateway` creates a
-gateway for the app and writes that var for you. Each call carries its function
+auto-created `default` gateway when it is unset. `lunora cloudflare ai-gateway`
+creates a gateway for the app and writes that var for you. Each call carries its function
 path and trace id as gateway metadata, so the gateway's logs attribute spend to
 the function that made it.
 

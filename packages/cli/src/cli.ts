@@ -6,15 +6,12 @@ import versionCommand from "@visulima/cerebro/command/version";
 
 import { addCommand } from "./commands/add";
 import { advisorCommand } from "./commands/advisor";
-import { aiCommand } from "./commands/ai";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
 import { cloudflareCommand } from "./commands/cloudflare";
 import { codegenCommand } from "./commands/codegen";
-import { containersCommand } from "./commands/containers";
 import { deployCommand } from "./commands/deploy";
-import { deploymentsCommand } from "./commands/deployments";
 import { devCommand } from "./commands/dev";
 import documentationCommand from "./commands/docs";
 import { doctorCommand } from "./commands/doctor";
@@ -57,11 +54,8 @@ const COMMANDS = [
     "codegen",
     "build",
     "deploy",
-    "containers",
-    "ai",
     "prepare",
     "link",
-    "deployments",
     "cloudflare",
     "logs",
     "run",
@@ -99,11 +93,8 @@ const CLI_COMMANDS = [
     advisorCommand,
     buildCommand,
     deployCommand,
-    containersCommand,
-    aiCommand,
     prepareCommand,
     linkCommand,
-    deploymentsCommand,
     cloudflareCommand,
     logsCommand,
     runCommand,
@@ -256,12 +247,111 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 /** cerebro's unknown-command error wording — `Command "x" not found`. */
 const UNKNOWN_COMMAND = /Command "(?<name>[^"]+)" not found/u;
 
+/** A command that moved: where it went, and an old subcommand word the new one no longer takes. */
+interface MovedCommand {
+    absorbs?: string;
+    to: string;
+}
+
+/**
+ * Commands that moved, keyed by their old first word. Consulted only once
+ * cerebro has refused the name (or for `lunora help <name>`), so an old
+ * spelling is an error that says where the command went — never an alias that
+ * runs it. `absorbs`: `ai gateway` became one tool, `ai-gateway`.
+ */
+const MOVED_COMMANDS: Readonly<Record<string, MovedCommand>> = {
+    ai: { absorbs: "gateway", to: "cloudflare ai-gateway" },
+    alerts: { to: "cloudflare alerts" },
+    containers: { to: "cloudflare containers" },
+    deployments: { to: "cloudflare deployments" },
+};
+
+/**
+ * The options of `lunora cloudflare` that take a value, so the word after one
+ * is read as that value and not as a positional (`--id gateway`).
+ */
+const VALUE_FLAGS: ReadonlySet<string> = new Set(
+    (cloudflareCommand.options ?? []).filter((option) => option.type !== Boolean).map((option) => `--${option.name}`),
+);
+
+/** Arguments a POSIX shell passes through unchanged when left unquoted. */
+const SHELL_SAFE = /^[\w@%+=:,./-]+$/u;
+
+/**
+ * Quote `value` for a POSIX shell so a printed command pastes back as the same
+ * argv: anything beyond a conservative safe set is single-quoted, with an
+ * embedded `'` written as `'\''`. Without it, `--message 'bad deploy'` came
+ * back as `--message bad deploy` — a live rollback with a truncated message.
+ */
+const shellQuote = (value: string): string => (SHELL_SAFE.test(value) ? value : `'${value.replaceAll("'", String.raw`'\''`)}'`);
+
+/** `list` without its first `value`. */
+const withoutFirst = (list: ReadonlyArray<string>, value: string): string[] => {
+    const index = list.indexOf(value);
+
+    return index === -1 ? [...list] : [...list.slice(0, index), ...list.slice(index + 1)];
+};
+
+/** The index of the first positional `value` in `argv` — not a flag, and not a value-taking flag's value. */
+const positionalIndex = (argv: ReadonlyArray<string>, value: string): number =>
+    argv.findIndex((token, index) => token === value && (index === 0 || !VALUE_FLAGS.has(argv[index - 1] ?? "")));
+
+/**
+ * The moved command a typed word names, exactly or as a typo of it. A typo
+ * resolves with the same distance rule as "did you mean", against the real
+ * commands too, so a word nearer a real command is left to that suggestion.
+ */
+const movedCommandFor = (typed: string): string | undefined => {
+    const match = closestMatch(typed, [...COMMANDS, ...Object.keys(MOVED_COMMANDS)]);
+
+    return match !== undefined && Object.hasOwn(MOVED_COMMANDS, match) ? match : undefined;
+};
+
+/**
+ * The "moved to" message when the command word `typed` is (or is a typo of) a
+ * moved command, or `undefined`. `argv` is everything after `typed`; the
+ * suggested command keeps all of it, shell-quoted, so it re-runs as printed
+ * (cerebro's error carries only the positionals, so the argv is read instead).
+ * `runInstead` replaces that suggestion — `lunora help <moved>` points at the
+ * group's help rather than at a run.
+ */
+const movedCommandMessage = (typed: string, argv: ReadonlyArray<string>, runInstead?: string): string | undefined => {
+    const name = movedCommandFor(typed);
+    const moved = name === undefined ? undefined : MOVED_COMMANDS[name];
+
+    if (name === undefined || moved === undefined) {
+        return undefined;
+    }
+
+    const typo = typed === name ? "" : `\`lunora ${typed}\` is not a command. `;
+    let rest = [...argv];
+
+    if (moved.absorbs !== undefined) {
+        const index = positionalIndex(rest, moved.absorbs);
+
+        // Without the old subcommand there is nothing to translate: bare
+        // `lunora ai` was a usage error, and the tool it would map to creates a
+        // gateway and edits wrangler.jsonc — not something to hand over ready to run.
+        if (index === -1 && runInstead === undefined) {
+            return `${typo}\`lunora ${name}\` had one subcommand, \`${moved.absorbs}\`; it moved to \`lunora ${moved.to}\`.`;
+        }
+
+        rest = index === -1 ? rest : [...rest.slice(0, index), ...rest.slice(index + 1)];
+    }
+
+    const old = moved.absorbs === undefined ? name : `${name} ${moved.absorbs}`;
+    const run = runInstead ?? ["lunora", moved.to, ...rest.map((argument) => shellQuote(argument))].join(" ");
+
+    return `${typo}\`lunora ${old}\` moved to \`lunora ${moved.to}\`. Run: ${run}`;
+};
+
 /**
  * Log a failed `cli.run` and resolve the exit code it should carry. For an
- * unknown command, upgrade cerebro's bare "not found" into a "did you mean …?"
- * suggestion plus a help/docs pointer; any other error is logged verbatim.
+ * unknown command, say where a moved command went, or else upgrade cerebro's
+ * bare "not found" into a "did you mean …?" suggestion plus a help/docs
+ * pointer; any other error is logged verbatim.
  */
-const reportRunError = (error: unknown): number => {
+const reportRunError = (error: unknown, argv: ReadonlyArray<string>): number => {
     const logger = createLogger();
     const message = error instanceof Error ? error.message : String(error);
     const unknown = UNKNOWN_COMMAND.exec(message);
@@ -280,6 +370,15 @@ const reportRunError = (error: unknown): number => {
     }
 
     const name = unknown.groups.name ?? "";
+    const typed = name.split(" ")[0] ?? "";
+    const moved = movedCommandMessage(typed, withoutFirst(argv, typed));
+
+    if (moved !== undefined) {
+        logger.error(moved);
+
+        return EXIT_CODE.USAGE;
+    }
+
     const suggestion = closestMatch(name, COMMANDS);
 
     logger.error(`Unknown command "${name}".${suggestion === undefined ? "" : ` Did you mean "${suggestion}"?`}`);
@@ -332,10 +431,22 @@ const runCli = async (options: RunCliOptions = {}): Promise<number> => {
         setCommandLogger(asCommandLogger(options.logger));
     }
 
+    const argv = options.argv ?? process.argv.slice(2);
+
     try {
+        // cerebro's `help` answers an unknown name with "not found" and exit 0,
+        // so `lunora help containers` would tell nobody where it went.
+        const helpMoved = argv[0] === "help" && argv[1] !== undefined ? movedCommandMessage(argv[1], argv.slice(2), "lunora help cloudflare") : undefined;
+
+        if (helpMoved !== undefined) {
+            createLogger().error(helpMoved);
+
+            return EXIT_CODE.USAGE;
+        }
+
         await cli.run({ shouldExitProcess: false });
     } catch (error: unknown) {
-        return reportRunError(error);
+        return reportRunError(error, argv);
     } finally {
         setCommandLogger(undefined);
     }

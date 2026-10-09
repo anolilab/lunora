@@ -1,14 +1,11 @@
-import type { CommandHandler } from "../../util/command";
-import { defineHandler } from "../../util/command";
-import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
-import type { DockerProbe } from "../../util/docker";
-import { isDockerAvailable } from "../../util/docker";
-import { EXIT_CODE } from "../../util/exit-code";
-import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import type { SpawnDescriptor, Spawner } from "../../util/spawn";
-import { defaultSpawner } from "../../util/spawn";
-import type { ContainersOptions } from "./index";
+import { detectPackageManager, execArgsFor } from "../../../util/detect-package-manager";
+import type { DockerProbe } from "../../../util/docker";
+import { isDockerAvailable } from "../../../util/docker";
+import { EXIT_CODE } from "../../../util/exit-code";
+import type { Logger } from "../../../util/logger";
+import type { OutputFormat } from "../../../util/output-format";
+import type { SpawnDescriptor, Spawner } from "../../../util/spawn";
+import { defaultSpawner } from "../../../util/spawn";
 
 /**
  * The `wrangler containers` subcommands we forward. Image management (`build`,
@@ -59,7 +56,7 @@ interface ContainersCommandResult {
 }
 
 /**
- * Forward a `lunora containers …` invocation to `wrangler containers …`,
+ * Forward a `lunora cloudflare containers …` invocation to `wrangler containers …`,
  * preserving positional arguments and mapping the curated options. Build/push
  * get a Docker preflight so the failure is a one-line directive instead of a
  * wrangler stack trace.
@@ -67,7 +64,7 @@ interface ContainersCommandResult {
 const runContainersCommand = async (options: ContainersCommandOptions): Promise<ContainersCommandResult> => {
     const [subcommand, ...rest] = options.argument;
     if (subcommand === undefined || !SUBCOMMANDS.has(subcommand)) {
-        const message = `lunora containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: lunora containers build ./containers/app --tag app:v1 --push`;
+        const message = `lunora cloudflare containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: lunora cloudflare containers build ./containers/app --tag app:v1 --push`;
 
         options.logger.error(message);
 
@@ -138,25 +135,5 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
     return { code: result.code, delegated: json, descriptor };
 };
 
-/** `lunora containers` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<ContainersOptions> = defineHandler<ContainersOptions>(async ({ argument, cwd, format, logger, options }) => {
-    const result = await runContainersCommand({
-        argument,
-        cwd,
-        env: options.env,
-        format,
-        logger,
-        push: options.push === true,
-        tag: options.tag,
-    });
-
-    // Both markers travel, and both matter in `--format json`. Dropping
-    // `delegated` appended a second envelope after wrangler's own document, so
-    // the stdout of a forwarded read was two JSON documents concatenated and
-    // parsed as neither. Dropping `error` left a refusal's envelope carrying an
-    // exit code with nothing saying why.
-    return { code: result.code, delegated: result.delegated, error: result.error };
-});
-
 export type { ContainersCommandOptions, ContainersCommandResult };
-export { execute, runContainersCommand };
+export { runContainersCommand };

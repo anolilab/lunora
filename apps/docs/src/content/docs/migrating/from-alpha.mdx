@@ -152,6 +152,35 @@ table (offering the tables declared in `lunora/schema.ts`); non-interactively
 lunora migrate create backfill_read_by --table messages
 ```
 
+### `@lunora/cli`: Cloudflare-only commands moved under `lunora cloudflare`
+
+Lunora deploys to Cloudflare, celld and Node, and three commands only ever
+drove Cloudflare. They now live in the `lunora cloudflare` group, keep their
+subcommands and flags, and refuse on a celld or Node project (the target comes
+from `--target`, then `target` in `lunora.config.*`, then Cloudflare):
+
+| Before                                 | After                                             |
+| -------------------------------------- | ------------------------------------------------- |
+| `lunora containers <subcommand> …`     | `lunora cloudflare containers <subcommand> …`     |
+| `lunora deployments <subcommand> …`    | `lunora cloudflare deployments <subcommand> …`    |
+| `lunora ai gateway [--id] [--no-logs]` | `lunora cloudflare ai-gateway [--id] [--no-logs]` |
+
+The old names are not aliases. They exit `2` without running anything and print
+the command to use instead, with the rest of your arguments carried over:
+
+```text
+`lunora containers` moved to `lunora cloudflare containers`. Run: lunora cloudflare containers images list
+```
+
+`lunora cloudflare` on its own lists the tools.
+
+`lunora logs` also resolves its target from `lunora.config.*` now. It read only
+`--target`, so a celld project that omitted the flag ran `wrangler tail`; it now
+refuses, since celld and Node have no log tail.
+
+**Migration:** replace the old command names in scripts and CI jobs as in the
+table above.
+
 ### `@lunora/payment`: store tables moved to `payment_*`
 
 The payment store now reads and writes the tables of `paymentExtension`, which

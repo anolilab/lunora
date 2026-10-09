@@ -739,7 +739,7 @@ describe("runDoctor", () => {
 
             expect(result.findings.find((finding) => finding.code === "ai-binding-missing")?.level).toBe("warn");
             expect(result.findings.find((finding) => finding.code === "ai-gateway-default")?.level).toBe("info");
-            expect(result.findings.find((finding) => finding.code === "ai-gateway-default")?.fix).toContain("lunora ai gateway");
+            expect(result.findings.find((finding) => finding.code === "ai-gateway-default")?.fix).toContain("lunora cloudflare ai-gateway");
         });
 
         it("is quiet once the binding and gateway id are configured", async () => {

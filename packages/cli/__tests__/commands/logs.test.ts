@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runLogsCommand } from "../../src/commands/logs/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -98,5 +99,53 @@ describe("lunora logs", () => {
         const args = calls[0]?.descriptor.args ?? [];
 
         expect(args).toContain("--temporary");
+    });
+
+    it.each([
+        ["celld", "celld"],
+        ["node", "node"],
+    ])("never runs wrangler for a project whose lunora.config targets %s", async (target, id) => {
+        expect.assertions(3);
+
+        const cwd = npmProjectCwd();
+
+        writeFileSync(join(cwd, "lunora.config.ts"), `export default { target: "${target}" };\n`, "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runLogsCommand({ cwd, logger, spawner });
+
+        expect(calls).toHaveLength(0);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(result.error).toBe(`logs: deploy target "${id}" has no log tail`);
+    });
+
+    it("lets --target override the project's lunora.config target", async () => {
+        expect.assertions(2);
+
+        const cwd = npmProjectCwd();
+
+        writeFileSync(join(cwd, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        await runLogsCommand({ cwd, logger, spawner, target: "cloudflare" });
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.descriptor.args).toStrictEqual(["--", "wrangler", "tail"]);
+    });
+
+    it("refuses an unknown --target", async () => {
+        expect.assertions(2);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runLogsCommand({ cwd: npmProjectCwd(), logger, spawner, target: "aws" });
+
+        expect(calls).toHaveLength(0);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 });

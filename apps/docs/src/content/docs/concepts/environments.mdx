@@ -25,7 +25,7 @@ lunora deploy --env production
 ```
 
 `--env` is understood by every command that talks to a deployed worker:
-`deploy`, `logs`, `deployments`, `env push`, `containers`.
+`deploy`, `logs`, `env push`, `cloudflare deployments`, `cloudflare containers`.
 
 Each environment gets its **own bindings and its own secrets**. Cloudflare
 secrets are per-environment and **non-inheritable**, so a secret set on the
@@ -101,13 +101,13 @@ lunora verify       # codegen dry-run + tsc --noEmit
 
 ## Moving traffic between versions
 
-`lunora deployments` wraps `wrangler versions` and `wrangler rollback`:
+`lunora cloudflare deployments` wraps `wrangler versions` and `wrangler rollback`:
 
 ```bash
-lunora deployments list                       # the 10 most recent
-lunora deployments inspect <version-id>       # what a version contains
-lunora deployments rollback --yes             # back to the previous version
-lunora deployments promote <version-id> --yes # send 100% of traffic to a version
+lunora cloudflare deployments list                       # the 10 most recent
+lunora cloudflare deployments inspect <version-id>       # what a version contains
+lunora cloudflare deployments rollback --yes             # back to the previous version
+lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic to a version
 ```
 
 `rollback` and `promote` change live traffic, so both require `--yes`.
