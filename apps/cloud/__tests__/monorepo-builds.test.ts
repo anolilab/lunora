@@ -399,6 +399,14 @@ describe("builds.complete workspace packages", () => {
 
         expect(projectPatch(ops)).toBeUndefined();
     });
+
+    it("records nothing from a build of the runtime the project has since left", async () => {
+        const { ctx, ops } = makeCtx(world(project({ runtime: "worker" }), [claimed()]));
+
+        await complete.handler(ctx, args);
+
+        expect(projectPatch(ops)).toBeUndefined();
+    });
 });
 
 describe("projects.updateBuildSettings", () => {
@@ -423,6 +431,19 @@ describe("projects.updateBuildSettings", () => {
         await updateBuildSettings.handler(ctx, { id: "prj_1" as never, organizationId: ORG as never, rootDirectory: ".", watchPaths: [] });
 
         expect(ops.find((op) => op.kind === "patch")).toMatchObject({ patch: { rootDirectory: null, watchPaths: null } });
+    });
+
+    it("forgets the recorded workspace packages when the runtime changes, and only then", async () => {
+        const recorded = { builtAt: 1, paths: ["packages/ui"], rootDirectory: "apps/web" };
+        const switched = makeCtx(world(project({ rootDirectory: "apps/web", workspacePackages: recorded })));
+        const kept = makeCtx(world(project({ rootDirectory: "apps/web", workspacePackages: recorded })));
+        const settings = { id: "prj_1" as never, organizationId: ORG as never, rootDirectory: "apps/web", watchPaths: [] };
+
+        await updateBuildSettings.handler(switched.ctx, { ...settings, runtime: "worker" });
+        await updateBuildSettings.handler(kept.ctx, settings);
+
+        expect(switched.ops.find((op) => op.kind === "patch")).toMatchObject({ patch: { runtime: "worker", workspacePackages: null } });
+        expect(kept.ops.find((op) => op.kind === "patch")?.patch).not.toHaveProperty("workspacePackages");
     });
 
     it.each([["../etc"], ["/abs"], [String.raw`apps\web`]])("refuses the root directory %j as BAD_REQUEST", async (rootDirectory) => {

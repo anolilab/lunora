@@ -130,16 +130,43 @@ export interface TailTraceItem {
     scriptTags?: null | string[];
 }
 
-/** One console argument as text: a string as written, anything else as its JSON. */
-const argumentText = (value: unknown): string => {
+/** Thrown out of {@link argumentText}'s replacer once a value outgrows its budget. */
+class OverBudgetError extends Error {}
+
+/**
+ * One console argument as text, at most `budget` characters: a string as
+ * written, anything else as its JSON. Bounded while it is built — a string is
+ * cut before it is copied, and serialising stops as soon as the JSON would
+ * outgrow the budget — so a Worker logging a huge value cannot exhaust the
+ * tail worker's memory on a line that is cut to a few KiB anyway.
+ */
+const argumentText = (value: unknown, budget: number): string => {
     if (typeof value === "string") {
-        return value;
+        return value.slice(0, budget);
     }
 
+    let size = 0;
+
     try {
-        return JSON.stringify(value) ?? String(value);
-    } catch {
-        return String(value);
+        const json = JSON.stringify(value, (key, child: unknown) => {
+            size += key.length + (typeof child === "string" ? child.length : 8);
+
+            if (size > budget) {
+                throw new OverBudgetError("over budget");
+            }
+
+            return child;
+        });
+
+        return (json ?? String(value)).slice(0, budget);
+    } catch (error) {
+        if (!(error instanceof OverBudgetError)) {
+            return String(value).slice(0, budget);
+        }
+
+        const kind = Array.isArray(value) ? "array" : typeof value;
+
+        return `[${kind} over ${String(budget)} characters]`;
     }
 };
 
@@ -151,11 +178,22 @@ const argumentText = (value: unknown): string => {
  */
 export const parsePlainLog = (log: TailLog): TailLogLine | null => {
     const parts = Array.isArray(log.message) ? log.message : [log.message];
-    const message = parts
-        .filter((part) => part !== undefined)
-        .map((part) => argumentText(part))
-        .join(" ")
-        .slice(0, MAX_PLAIN_MESSAGE_CHARS);
+    let message = "";
+
+    for (const part of parts) {
+        if (part === undefined) {
+            continue;
+        }
+
+        const separator = message === "" ? "" : " ";
+        const remaining = MAX_PLAIN_MESSAGE_CHARS - message.length - separator.length;
+
+        if (remaining <= 0) {
+            break;
+        }
+
+        message += separator + argumentText(part, remaining);
+    }
 
     if (message.trim() === "") {
         return null;
@@ -169,9 +207,10 @@ export const parsePlainLog = (log: TailLog): TailLogLine | null => {
 };
 
 /**
- * One tail `TraceItem`'s console logs, decoded: every lunora `type:"log"` line
- * and, for a script tagged as a plain Worker, at most `allowance` of its other
- * console lines — the rest counted in `dropped`.
+ * One tail `TraceItem`'s console logs, decoded: a Lunora app's lunora
+ * `type:"log"` lines, or — for a script tagged as a plain Worker — at most
+ * `allowance` of its console lines, every one decoded as plain text, the rest
+ * counted in `dropped`.
  */
 const decodeTraceItem = (item: TailTraceItem, allowance: number): { dropped: number; lines: TailLogLine[]; plain: number } => {
     const plainWorker = item.scriptTags?.includes(WORKER_RUNTIME_TAG) === true;
@@ -180,8 +219,11 @@ const decodeTraceItem = (item: TailTraceItem, allowance: number): { dropped: num
     let dropped = 0;
 
     for (const log of item.logs ?? []) {
-        const line = parseLogMessage(log.message);
-        const fallback = line === null && plainWorker ? parsePlainLog(log) : null;
+        // A plain Worker has no Lunora runtime, so none of its lines is a lunora
+        // log line: decoding one that merely looks like one would let it skip the
+        // plain-line allowance and supply structured fields.
+        const line = plainWorker ? null : parseLogMessage(log.message);
+        const fallback = plainWorker ? parsePlainLog(log) : null;
 
         if (line !== null) {
             lines.push(line);
@@ -197,8 +239,8 @@ const decodeTraceItem = (item: TailTraceItem, allowance: number): { dropped: num
 };
 
 /**
- * Decode every lunora `type:"log"` line out of one tail `TraceItem` and, for a
- * script tagged as a plain Worker, its other console lines too (at most
+ * Decode one tail `TraceItem`: a Lunora app's lunora `type:"log"` lines, or a
+ * plain Worker's console lines as plain text (at most
  * {@link MAX_PLAIN_LINES_PER_SCRIPT}; {@link groupTailEvents} holds a whole flush to that).
  */
 export const parseTraceItem = (item: TailTraceItem): TailLogLine[] => decodeTraceItem(item, MAX_PLAIN_LINES_PER_SCRIPT).lines;

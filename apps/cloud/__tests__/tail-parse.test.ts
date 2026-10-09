@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { WORKER_RUNTIME_TAG } from "../src/project-runtime";
 import { groupTailEvents, parseLogMessage, parsePlainLog, parseTraceItem } from "../src/tail/parse";
@@ -143,12 +143,45 @@ describe("plain Cloudflare Worker console lines", () => {
         expect(parseTraceItem(item(undefined, logs)).map((line) => line.message)).toStrictEqual(["structured"]);
     });
 
-    it("still decodes a ctx.log event a plain Worker happens to emit, as one", () => {
+    it("reads a lunora-shaped line from a plain Worker as plain text, with no structured fields", () => {
+        expect.assertions(2);
+
+        const event = logEvent({ function: "f", level: "warn", message: "m" });
+        const [line] = parseTraceItem(item([WORKER_RUNTIME_TAG], [{ level: "log", message: [event] }]));
+
+        expect(line).toStrictEqual({ level: "log", message: event });
+        expect(line).not.toHaveProperty("functionPath");
+    });
+
+    it("counts a plain Worker's lunora-shaped lines against its plain-line allowance", () => {
         expect.assertions(1);
 
-        const lines = parseTraceItem(item([WORKER_RUNTIME_TAG], [{ level: "log", message: [logEvent({ function: "f", level: "warn", message: "m" })] }]));
+        const logs = Array.from({ length: 450 }, () => {
+            return { level: "log", message: [logEvent({ level: "info", message: "spoof" })] };
+        });
+        const lines = groupTailEvents([item([WORKER_RUNTIME_TAG], logs)]).flatMap((batch) => batch.lines);
 
-        expect(lines).toStrictEqual([expect.objectContaining({ functionPath: "f", level: "warn", message: "m" })]);
+        expect(lines).toHaveLength(401);
+    });
+
+    it("bounds each argument while formatting it, so a huge logged value is never serialised whole", () => {
+        expect.assertions(4);
+
+        const huge = {
+            rows: Array.from({ length: 50_000 }, (_, index) => {
+                return { index, text: "x".repeat(20) };
+            }),
+        };
+        const stringify = vi.spyOn(JSON, "stringify");
+        const line = parsePlainLog({ level: "log", message: ["dump", huge] });
+        const produced = stringify.mock.results.map((result) => (typeof result.value === "string" ? result.value.length : 0));
+
+        stringify.mockRestore();
+
+        expect(line?.message).toBe("dump [object over 4091 characters]");
+        expect(produced.every((length) => length <= 4096)).toBe(true);
+        expect(parsePlainLog({ level: "log", message: ["a".repeat(3000), "b".repeat(3000)] })?.message).toHaveLength(4096);
+        expect(parsePlainLog({ level: "log", message: [{ ok: true }] })?.message).toBe('{"ok":true}');
     });
 
     it("folds an unknown level to log, skips an empty line and caps a long one", () => {

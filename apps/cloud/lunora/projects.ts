@@ -381,6 +381,9 @@ export const updateBuildSettings = mutation
                 // Lunora is stored as absence, like every row that predates the setting.
                 runtime: next === "worker" ? "worker" : null,
                 watchPaths: patterns.length === 0 ? null : patterns,
+                // The packages a build depends on were walked for the previous runtime:
+                // forget them, so every push builds until a build of this runtime records its own.
+                ...(next === storedRuntime(project?.runtime) ? {} : { workspacePackages: null }),
             });
             await context.db.insert("auditLog", {
                 action: "project.build_settings.update",
