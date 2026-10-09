@@ -116,6 +116,7 @@ const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall
                     id: "sub_1",
                     metadata: { referenceId: "user_1" },
                     productId: update.productId ?? "prod_pro",
+                    seats: (update as { seats?: number }).seats ?? null,
                     status: "active",
                 };
             },
@@ -401,19 +402,39 @@ describe("polar adapter", () => {
         expect(subscription.priceId).toBe("prod_enterprise");
     });
 
-    it("sends an empty subscriptionUpdate when the patch carries no priceId (quantity is not forwarded, degenerate case)", async () => {
-        expect.assertions(1);
+    it("sets the seat count on a seat-based subscription and reflects it on the result", async () => {
+        expect.assertions(3);
 
         const calls: RecordedCall[] = [];
         const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
 
-        // Polar's updateSubscription only ever reads patch.priceId — a quantity-only patch (no priceId)
-        // is pinned as today's actual behaviour: an empty subscriptionUpdate, not a thrown error.
-        await adapter.updateSubscription("sub_1", { quantity: 5 });
+        const subscription = await adapter.updateSubscription("sub_1", { quantity: 5 });
 
         const call = calls.find((entry) => entry.name === "sub.update");
 
-        expect((call?.args[0] as { subscriptionUpdate?: Record<string, unknown> }).subscriptionUpdate).toEqual({});
+        expect(call?.args[0]).toStrictEqual({ id: "sub_1", subscriptionUpdate: { seats: 5 } });
+        expect(subscription.quantity).toBe(5);
+        expect(subscription.priceId).toBe("prod_pro");
+    });
+
+    it("reads a non-seat subscription as quantity 1", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        const subscription = await adapter.getSubscriptionStatus("sub_1");
+
+        expect(subscription.quantity).toBe(1);
+    });
+
+    it("refuses a plan change and a seat change in one patch, since they are separate Polar updates", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        await expect(adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", quantity: 5 })).rejects.toThrow("does not support");
+        expect(calls.some((entry) => entry.name === "sub.update")).toBe(false);
     });
 
     it("refunds the full order total (no amount given), reading it from orders.get", async () => {
