@@ -2,6 +2,7 @@ import { readLinkedProject, resolveDeployDriver } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -24,7 +25,7 @@ interface LogsCommandOptions {
     spawner?: Spawner;
     /** Filter by invocation status: `ok`, `error`, or `canceled` (forwarded as `--status`). */
     status?: string;
-    /** Deploy target whose tail command to run. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
+    /** Explicit deploy target (`--target`); otherwise `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
 
     /**
@@ -64,7 +65,20 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
     // Default the environment from the `.lunora/project.json` link when the
     // caller didn't pass `--env`, so a linked checkout tails the right env.
     const env = options.env ?? readLinkedProject(cwd)?.env;
-    const driver = resolveDeployDriver(options.target);
+    // Through the canonical resolver, so a project that declares its target in
+    // `lunora.config.*` is tailed on that host: resolving the flag alone sent a
+    // celld project to `wrangler tail` whenever `--target` was omitted.
+    const resolved = resolveTargetOrError(cwd, options.target);
+
+    if (resolved.target === undefined) {
+        const message = `logs: ${resolved.error ?? "no deploy target"}`;
+
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: message };
+    }
+
+    const driver = resolveDeployDriver(resolved.target);
 
     const tail = driver.toolchain?.tail;
 

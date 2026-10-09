@@ -1415,6 +1415,10 @@ lunora logs my-worker --format json --status error
 lunora logs --search "auth" --env staging
 ```
 
+The host comes from `--target`, then `target` in `lunora.config.*`, then
+Cloudflare. celld and Node have no log tail, so on such a project `logs` refuses
+instead of running `wrangler tail`.
+
 ## Writing Lunora functions by hand
 
 Queries, mutations, and actions are plain TypeScript files under `lunora/`.
