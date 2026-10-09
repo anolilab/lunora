@@ -237,8 +237,21 @@ const updated = await ctx.payments.adapter.updateSubscription(subscriptionId, { 
 ```
 
 `proration-charge-immediately` means the plan takes effect at once and the prorated
-difference is billed right away (Creem also supports `proration-none`). See
-[Managing subscriptions](https://docs.creem.io/features/subscriptions/managing).
+difference is billed right away. Pass `proration` to choose otherwise: `"next-invoice"`
+defers the difference to the next invoice, `"none"` bills nothing for it.
+See [Managing subscriptions](https://docs.creem.io/features/subscriptions/managing).
+
+### Seat changes
+
+A `quantity` patch sets the units on the subscription item for its current product,
+so a per-seat subscription's seat count changes in Creem rather than being ignored:
+
+```ts
+const updated = await ctx.payments.adapter.updateSubscription(subscriptionId, { quantity: 5 });
+```
+
+A patch that sets both `priceId` and `quantity` is refused: Creem has no single call
+for both, so apply them as two updates.
 
 ### Resume
 
