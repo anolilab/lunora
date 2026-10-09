@@ -1,3 +1,12 @@
+## @lunora/auth [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.200...@lunora/auth@1.0.0-alpha.201) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.331
+* **@visulima/disposable-email-domains:** 1.1.14 → 1.1.19
+* **@visulima/email-verifier:** 1.0.30 → 1.0.36
+
 ## @lunora/auth [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.199...@lunora/auth@1.0.0-alpha.200) (2026-10-08)
 
 
