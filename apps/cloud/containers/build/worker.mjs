@@ -184,13 +184,23 @@ const assertContainedTree = async (directory, repo) => {
             throw new BuildError(`the assets directory holds more than ${String(MAX_ASSET_ENTRIES)} entries; Lunora Cloud deploys at most 20000 files`);
         }
 
-        for (const entry of entries) {
-            const path = join(entry.parentPath, entry.name);
-            // eslint-disable-next-line no-await-in-loop -- see above
-            const next = entry.isSymbolicLink() ? await containedTarget(path, repo) : path;
-            // eslint-disable-next-line no-await-in-loop -- see above
-            const info = entry.isSymbolicLink() ? await lstat(next) : entry;
+        // One directory's links resolve independently; any that leaves the repo rejects the whole walk.
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const resolved = await Promise.all(
+            entries.map(async (entry) => {
+                const path = join(entry.parentPath, entry.name);
 
+                if (!entry.isSymbolicLink()) {
+                    return { info: entry, next: path };
+                }
+
+                const next = await containedTarget(path, repo);
+
+                return { info: await lstat(next), next };
+            }),
+        );
+
+        for (const { info, next } of resolved) {
             if (info.isDirectory() && !walked.has(next)) {
                 walked.add(next);
                 queue.push(next);
