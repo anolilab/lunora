@@ -32,15 +32,12 @@ import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
 import { edgeBudget } from "../edge/protection";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
-import type { CronTarget, CronTick } from "../fanout/cron";
-import { fanOutCron } from "../fanout/cron";
-import type { LiveDeploymentRow } from "../fanout/live";
 import { readLiveDeployments, resourceRefOf } from "../fanout/live";
+import { runTenantCrons } from "../fanout/tenant-crons";
 import { deliverAlert } from "../mail/notify";
 import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { boxDnsFromEnv } from "../targets/celld-vps/dns";
-import type { TargetFleet } from "../targets/driver";
 import { storeRowReader } from "../targets/placement";
 import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
@@ -67,32 +64,6 @@ const EVERY_HOUR = "0 */1 * * *";
 // The 6-hourly expression `crons.interval({ hours: 6 })` compiles to — the
 // bucket the overage reconciliation rides (paces Creem credits API calls).
 const EVERY_SIX_HOURS = "0 */6 * * *";
-
-/**
- * Live deployments that declare cron expressions, shaped for the cron fan-out.
- * The stored admin token is sealed at rest (§7), so it is decrypted in-process
- * here with the master key before it becomes the tenant Bearer.
- */
-const readCronTargets = async (env: ControlPlaneEnv, live: ReadonlyArray<LiveDeploymentRow>): Promise<CronTarget[]> => {
-    const resolved = await Promise.all(
-        live.map(async (row) => {
-            return {
-                adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY),
-                cronSpecs: row.cronSpecs,
-                scriptName: resourceRefOf(row),
-            };
-        }),
-    );
-    const targets: CronTarget[] = [];
-
-    for (const row of resolved) {
-        if (row.adminToken && Array.isArray(row.cronSpecs) && row.cronSpecs.length > 0) {
-            targets.push({ adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName });
-        }
-    }
-
-    return targets;
-};
 
 /**
  * Reclaim what the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1): each
@@ -664,37 +635,21 @@ const drainBuildQueue = async (env: ControlPlaneEnv, context: ExecutionContextLi
     }
 };
 
-type TenantDispatch = NonNullable<TargetFleet["dispatch"]>;
-
-/** Tick one tenant's cron over its driver's in-network path, gated by its admin token. */
-const dispatchCronTick = async (dispatch: TenantDispatch, tick: CronTick): Promise<boolean> => {
-    const send = dispatch({ adminToken: tick.adminToken, resourceRef: tick.scriptName });
-    const response = await send("/_lunora/scheduled", JSON.stringify({ cron: tick.cron }), "application/json");
-
-    return response.ok;
-};
-
 /** Tick every due tenant cron of every `fanout: "dispatcher"` target, over its fleet's in-network `dispatch`. */
 const fanOutTenantCrons = async (env: ControlPlaneEnv): Promise<void> => {
     const fleets = registeredFleets(env, { fanout: "dispatcher" }).flatMap(({ dispatch, id }) => (dispatch ? [{ dispatch, target: id }] : []));
 
-    if (fleets.length === 0) {
+    if (fleets.length === 0 || !env.DB) {
         return;
     }
 
-    const live = await readLiveDeployments(env);
-    const now = new Date();
-
-    await Promise.all(
-        fleets.map(async ({ dispatch, target }) => {
-            const targets = await readCronTargets(
-                env,
-                live.filter((row) => storedTarget(row.target) === target),
-            );
-
-            await fanOutCron({ dispatch: (tick) => dispatchCronTick(dispatch, tick), now, targets });
-        }),
-    );
+    await runTenantCrons({
+        fleets,
+        live: await readLiveDeployments(env),
+        now: new Date(),
+        secretEncryptionKey: env.SECRET_ENCRYPTION_KEY,
+        store: controlPlaneDatabase(env.DB as D1DatabaseLike),
+    });
 };
 
 /**

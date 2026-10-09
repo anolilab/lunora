@@ -538,6 +538,16 @@ through `routeForHostname`. Answers are cached per script and per hostname for
 60 s, so a suspension, a breach or an alias or hostname changing owners reaches
 every dispatcher isolate within that window. The isolates cannot be told sooner.
 
+**Crons and queues.** On `cloudflare-wfp` the control plane ticks a tenant's
+crons and delivers its platform queue batches itself, straight to the tenant
+and past the dispatcher. Both apply the same admission test
+(`servingDeployments` in `src/fanout/live.ts`), so a suspended or over-cap org's
+crons do not tick, and its queue batches are held: every message is retried
+with Cloudflare's longest delay (12 h) rather than acked, so a suspension loses
+nothing until the queue's `max_retries` runs out. Code already running inside
+the tenant — a Durable Object alarm that keeps re-arming itself — is not
+stopped by any of this.
+
 **Edge block.** A cell can also enforce a suspension in front of the Worker, so
 an attack on a suspended tenant stops costing a billed request each time. The
 hourly sweep calls `TargetFleet.edgeBlock`, which only `cloudflare-wfp` has. A

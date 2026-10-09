@@ -7,7 +7,11 @@
  * in-network `dispatch`. Per the tenant's reply (or a delivery failure) it
  * retries only the failed messages.
  */
+import type { D1DatabaseLike } from "@lunora/d1";
+
 import type { ControlPlaneEnv } from "../control-plane-env";
+import type { ControlPlaneStore } from "../d1-store";
+import { controlPlaneDatabase } from "../d1-store";
 import { resolveAdminToken } from "../deploy/admin-token";
 import type { TargetId } from "../provision-contract";
 import { storedTarget } from "../provision-contract";
@@ -15,15 +19,24 @@ import readJson from "../read-json";
 import type { TargetFleet } from "../targets/driver";
 import { registeredFleets } from "../targets/registry";
 import type { LiveDeploymentRow } from "./live";
-import { readLiveDeployments, resourceRefOf } from "./live";
+import { readLiveDeployments, resourceRefOf, servingDeployments } from "./live";
 import type { QueueRouteCandidate } from "./queue";
 import { routeQueue } from "./queue";
 
 type TenantDispatch = NonNullable<TargetFleet["dispatch"]>;
 
+/**
+ * How long a batch for a suspended organization waits before it is offered
+ * again: Cloudflare's longest retry delay (12 h). Retried rather than acked so a
+ * suspension loses nothing, and delayed so it does not spin the queue — but
+ * every redelivery still counts against the queue's `max_retries`, after which
+ * Cloudflare moves the message to its dead-letter queue, or drops it if none.
+ */
+const SUSPENDED_RETRY_DELAY_SECONDS = 43_200;
+
 /** A queue batch the platform consumer drains (Cloudflare `MessageBatch`, minimally typed). */
 export interface QueueBatchLike {
-    messages: ReadonlyArray<{ ack: () => void; body: unknown; id: string; retry: () => void }>;
+    messages: ReadonlyArray<{ ack: () => void; body: unknown; id: string; retry: (options?: { delaySeconds?: number }) => void }>;
     queue: string;
 }
 
@@ -58,38 +71,49 @@ const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken
     return retry.filter((id): id is string => typeof id === "string");
 };
 
-/** The live deployment that owns a per-project queue, with its admin token decrypted in-process. */
-const readQueueTarget = async (
-    environment: ControlPlaneEnv,
-    queue: string,
-    dispatches: ReadonlyMap<TargetId, TenantDispatch>,
-): Promise<undefined | { adminToken: string; dispatch: TenantDispatch; resourceRef: string }> => {
-    const live = await readLiveDeployments(environment);
+/** What {@link deliverQueueBatch} needs: the in-network paths, the live deployments, and the store their organizations are read from. */
+export interface QueueDeliveryPorts {
+    dispatches: ReadonlyMap<TargetId, TenantDispatch>;
+    live: ReadonlyArray<LiveDeploymentRow>;
+    now: number;
+    secretEncryptionKey?: string;
+    /** Absent without the control-plane D1 — then there are no live deployments to route to either. */
+    store?: ControlPlaneStore;
+}
+
+type QueueTarget = { adminToken: string; dispatch: TenantDispatch; kind: "deliver"; resourceRef: string } | { kind: "suspended" } | undefined;
+
+/** The live deployment that owns a per-project queue, with its admin token decrypted in-process — or `suspended` when its organization may not run. */
+const readQueueTarget = async (queue: string, ports: QueueDeliveryPorts): Promise<QueueTarget> => {
     const target = routeQueue(
         queue,
-        live.filter((row): row is LiveDeploymentRow & QueueRouteCandidate => row.alias !== undefined),
+        ports.live.filter((row): row is LiveDeploymentRow & QueueRouteCandidate => row.alias !== undefined),
     );
     const rowTarget = target ? storedTarget(target.target) : undefined;
-    const dispatch = rowTarget === undefined ? undefined : dispatches.get(rowTarget);
+    const dispatch = rowTarget === undefined ? undefined : ports.dispatches.get(rowTarget);
 
     if (!target || !dispatch) {
         return undefined;
     }
 
-    const adminToken = await resolveAdminToken(target, environment.SECRET_ENCRYPTION_KEY);
+    // This path dispatches to the tenant directly, past the dispatcher's
+    // admission check, so suspension has to be enforced here as well.
+    const serving = ports.store === undefined ? [] : await servingDeployments(ports.store, [target], ports.now);
 
-    return adminToken ? { adminToken, dispatch, resourceRef: resourceRefOf(target) } : undefined;
+    if (serving.length === 0) {
+        return { kind: "suspended" };
+    }
+
+    const adminToken = await resolveAdminToken(target, ports.secretEncryptionKey);
+
+    return adminToken ? { adminToken, dispatch, kind: "deliver", resourceRef: resourceRefOf(target) } : undefined;
 };
 
-/** Drain one batch: route it to its tenant, then ack or retry each message. */
-export const handleQueueBatch = async (batch: QueueBatchLike, environment: ControlPlaneEnv): Promise<void> => {
-    const dispatches = new Map(
-        registeredFleets(environment, { fanout: "dispatcher" }).flatMap((fleet) => (fleet.dispatch ? [[fleet.id, fleet.dispatch] as const] : [])),
-    );
-
+/** Route one batch to its tenant, then ack or retry each message. */
+export const deliverQueueBatch = async (batch: QueueBatchLike, ports: QueueDeliveryPorts): Promise<void> => {
     // No dispatcher target has an in-network path bound here: nothing can
     // deliver, so the whole batch waits for one.
-    if (dispatches.size === 0) {
+    if (ports.dispatches.size === 0) {
         batch.messages.forEach((message) => {
             message.retry();
         });
@@ -97,7 +121,15 @@ export const handleQueueBatch = async (batch: QueueBatchLike, environment: Contr
         return;
     }
 
-    const target = await readQueueTarget(environment, batch.queue, dispatches);
+    const target = await readQueueTarget(batch.queue, ports);
+
+    if (target?.kind === "suspended") {
+        batch.messages.forEach((message) => {
+            message.retry({ delaySeconds: SUSPENDED_RETRY_DELAY_SECONDS });
+        });
+
+        return;
+    }
 
     // No live release (or token) owns this queue: acked, since retrying an
     // undeliverable message would only loop until it hits the retry limit.
@@ -118,4 +150,19 @@ export const handleQueueBatch = async (batch: QueueBatchLike, environment: Contr
             message.ack();
         }
     }
+};
+
+/** Drain one batch: route it to its tenant, then ack or retry each message. */
+export const handleQueueBatch = async (batch: QueueBatchLike, environment: ControlPlaneEnv): Promise<void> => {
+    const dispatches = new Map(
+        registeredFleets(environment, { fanout: "dispatcher" }).flatMap((fleet) => (fleet.dispatch ? [[fleet.id, fleet.dispatch] as const] : [])),
+    );
+
+    await deliverQueueBatch(batch, {
+        dispatches,
+        live: await readLiveDeployments(environment),
+        now: Date.now(),
+        secretEncryptionKey: environment.SECRET_ENCRYPTION_KEY,
+        ...(environment.DB ? { store: controlPlaneDatabase(environment.DB as D1DatabaseLike) } : {}),
+    });
 };
