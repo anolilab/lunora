@@ -62,13 +62,14 @@ describe("lunora cloudflare", () => {
     const wranglerCalls = (): string[] => spawned.map((descriptor) => descriptor.args.join(" ").replace(/^-- /u, ""));
 
     describe("help", () => {
-        it("lists every tool when run without one, and exits 0", async () => {
-            expect.assertions(2);
+        it("lists every tool with its arguments when run without one, and exits 0", async () => {
+            expect.assertions(3);
 
             const { code, output } = await cli(["cloudflare"]);
 
             expect(code).toBe(0);
             expect(CLOUDFLARE_TOOLS.filter((tool) => !output.includes(`  ${tool.name}  `)).map((tool) => tool.name)).toStrictEqual([]);
+            expect(output).toContain("lunora cloudflare containers <build|push|images|list|info|delete> [args…]");
         });
 
         it.each([
@@ -126,6 +127,21 @@ describe("lunora cloudflare", () => {
             expect(code).toBe(0);
             expect(wranglerCalls()).toStrictEqual(["wrangler deployments list --json"]);
             expect(stdout).toBe("");
+        });
+
+        it("hands analyze's report to the --format json envelope", async () => {
+            expect.assertions(2);
+
+            const { code, document } = await runExecute<CloudflareOptions, { totalFiles: number }>(execute, {
+                argument: ["analyze"],
+                commandName: "cloudflare",
+                cwd,
+                options: { format: "json" },
+            });
+
+            expect(code).toBe(0);
+            // The mocked dry-run writes nothing, so the report covers an empty outdir.
+            expect(document?.data?.totalFiles).toBe(0);
         });
 
         it("refuses an unknown deployments subcommand without spawning", async () => {

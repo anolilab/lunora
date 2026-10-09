@@ -43,6 +43,10 @@ const printTools = (logger: Logger): CommandResult<never> => {
 
     for (const tool of CLOUDFLARE_TOOLS) {
         logger.info(`  ${tool.name.padEnd(width)}  ${tool.summary}`);
+
+        if (tool.usage !== "") {
+            logger.info(`  ${" ".repeat(width)}  lunora cloudflare ${tool.name} ${tool.usage}`);
+        }
     }
 
     logger.info("Run `lunora cloudflare --help` for every tool's arguments and options.");

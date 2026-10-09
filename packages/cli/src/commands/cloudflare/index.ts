@@ -32,7 +32,7 @@ const CLOUDFLARE_TOOLS: ReadonlyArray<CloudflareTool> = [
     {
         name: "deployments",
         summary: "deployment history; roll back or promote Worker versions",
-        usage: "<list | inspect <version-id> | rollback [version-id] | promote <version-id>>",
+        usage: "list | inspect <version-id> | rollback [version-id] | promote <version-id>",
     },
 ];
 
