@@ -68,7 +68,7 @@
     },
     "dependencies": {
         "@cfworker/json-schema": "catalog:mcp",
-        "@lunora/client": "1.0.0-alpha.191",
+        "@lunora/client": "1.0.0-alpha.193",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/shard-engine": "1.0.0-alpha.119",
         "@modelcontextprotocol/sdk": "catalog:mcp"

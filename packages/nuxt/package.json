@@ -65,7 +65,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.191",
+        "@lunora/client": "1.0.0-alpha.193",
         "@lunora/runtime": "1.0.0-alpha.187",
         "@nuxt/kit": "catalog:frontend"
     },

@@ -64,7 +64,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.192",
+        "@lunora/client": "1.0.0-alpha.193",
         "@lunora/ratelimit": "1.0.0-alpha.121",
         "@visulima/storage-client": "catalog:storage"
     },
