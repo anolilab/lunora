@@ -139,6 +139,42 @@ describe(runUsageRollback, () => {
         expect(checkpoint).toBe(NOW);
     });
 
+    it("records nothing when the checkpoint write fails, so its retry cannot record the window twice", async () => {
+        const recorded: UsageRecord[] = [];
+        let checkpoint: number | undefined;
+        let failCheckpoint = true;
+        const run = async (): Promise<unknown> =>
+            runUsageRollback(
+                ports({
+                    getCheckpoint: () => Promise.resolve(checkpoint),
+                    read: () => Promise.resolve([{ meters: { requests: 5 }, resourceRef: "ok-v1" }]),
+                    record: (record) => {
+                        recorded.push(record);
+
+                        return Promise.resolve();
+                    },
+                    resolveResource: () => attribution("org_ok", "dep_ok"),
+                    setCheckpoint: (ms) => {
+                        if (failCheckpoint) {
+                            return Promise.reject(new Error("d1 write failed"));
+                        }
+
+                        checkpoint = ms;
+
+                        return Promise.resolve();
+                    },
+                }),
+            );
+
+        await expect(run()).rejects.toThrow("d1 write failed");
+        expect(recorded).toStrictEqual([]);
+
+        failCheckpoint = false;
+        await run();
+
+        expect(recorded.map((record) => record.quantity)).toStrictEqual([5]);
+    });
+
     it("propagates a read failure without advancing the checkpoint", async () => {
         let advanced = false;
 

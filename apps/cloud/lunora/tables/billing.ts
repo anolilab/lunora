@@ -59,6 +59,10 @@ export const billingTables = {
     })
         .global()
         .index("by_org", ["organizationId"])
+        // The month-to-date reads of one meter (usage alerts, `alerts.usageProgress`)
+        // and one period (`usage.summary`): without it each scanned the
+        // organization's whole history.
+        .index("by_org_period_kind", ["organizationId", "periodStart", "kind"])
         .index("by_placement_window", ["placementRef", "windowStart"]),
 
     // Metering readback checkpoints (§4), one per (target, scope, family): the

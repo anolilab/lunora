@@ -75,7 +75,14 @@ const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
 };
 
 /** The family a metering notice is about, as the Usage tab names it. */
-const FAMILY_LABEL = { d1: "D1 rows", durableObjects: "Durable Object rows", requests: "Requests" } as const;
+const FAMILY_LABEL = {
+    d1: "D1 rows",
+    durableObjectDuration: "Durable Object duration",
+    durableObjectRequests: "Durable Object requests",
+    durableObjects: "Durable Object rows",
+    requests: "Requests",
+    workersCpu: "Workers CPU time",
+} as const;
 
 /**
  * The metering sources that cannot read right now (`usage.meteringStatus`). A

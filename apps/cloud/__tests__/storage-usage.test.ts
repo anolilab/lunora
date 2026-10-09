@@ -19,49 +19,8 @@ import { cloudflareWfpFleetFromEnv, createCloudflareWfpFleet } from "../src/targ
 import { cloudflareWorkersFleetFromEnv, createCloudflareWorkersFleet } from "../src/targets/cloudflare-workers/driver";
 import type { UsageWindow } from "../src/targets/driver";
 import { resourceRefOf } from "../src/targets/placement";
-
-const ACCOUNT = "a".repeat(32);
-const TOKEN = "cf-token-that-must-never-leak-0123456789";
-const HOUR = 60 * 60 * 1000;
-/** A closed, hour-aligned window: 09:00–11:00 on 15 June. */
-const WINDOW = { sinceMs: Date.UTC(2026, 5, 15, 9), untilMs: Date.UTC(2026, 5, 15, 11) };
-
-interface GraphqlRequest {
-    query: string;
-    variables: Record<string, unknown>;
-}
-
-/** A fake Cloudflare API: REST listings by path, and every GraphQL request handed to `graphql`. */
-const fakeCloudflare = (options: {
-    graphql: (request: GraphqlRequest) => { data?: unknown; errors?: { message: string }[]; status?: number };
-    rest?: Record<string, (page: number, perPage: number) => { result: unknown[]; resultInfo?: Record<string, number> } | { status: number }>;
-}) =>
-    vi.fn<typeof fetch>(async (input, init) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
-        const path = url.pathname.replace("/client/v4", "");
-
-        if (path === "/graphql") {
-            const answer = options.graphql(JSON.parse(init?.body as string) as GraphqlRequest);
-
-            return Response.json({ data: answer.data ?? null, errors: answer.errors ?? null }, { status: answer.status ?? 200 });
-        }
-
-        const listing = options.rest?.[path];
-
-        if (listing === undefined) {
-            return Response.json({ errors: [{ message: "not found" }], success: false }, { status: 404 });
-        }
-
-        const answer = listing(Number(url.searchParams.get("page") ?? "1"), Number(url.searchParams.get("per_page") ?? "20"));
-
-        return "status" in answer
-            ? Response.json({ errors: [{ message: "Authentication error" }], success: false }, { status: answer.status })
-            : Response.json({ result: answer.result, ...(answer.resultInfo === undefined ? {} : { result_info: answer.resultInfo }), success: true });
-    });
-
-const access = (fetch: typeof globalThis.fetch) => {
-    return { accountId: ACCOUNT, apiToken: TOKEN, fetch };
-};
+import type { GraphqlRequest } from "./support/cloudflare-api-fake";
+import { access, ACCOUNT, fakeCloudflare, fakeGraphql, HOUR, HOURLY_FILTER, namespace, NAMESPACES, TOKEN, WINDOW } from "./support/cloudflare-api-fake";
 
 describe(readD1UsageByAlias, () => {
     it("reads every tenant database's closed hours, attributed to its alias by name, across listing pages", async () => {
@@ -236,98 +195,6 @@ describe(readD1UsageByAlias, () => {
     });
 });
 
-/** One `durableObjects*` dataset of the fake schema. */
-interface DatasetShape {
-    dimensions: string[];
-    filter: string[];
-    sum: string[];
-}
-
-const named = (name: string) => {
-    return { kind: "OBJECT", name, ofType: null };
-};
-
-/**
- * A GraphQL schema as introspection describes it: `Query.viewer: Viewer!`,
- * `Viewer.accounts: [Account]`, and on `Account` one field per dataset.
- */
-const schemaTypes = (datasets: Record<string, DatasetShape>): Record<string, unknown> => {
-    const types: Record<string, unknown> = {
-        Account: {
-            fields: [
-                {
-                    args: [{ name: "filter", type: named("D1Filter") }],
-                    name: "d1AnalyticsAdaptiveGroups",
-                    type: { kind: "LIST", name: null, ofType: named("D1Group") },
-                },
-                ...Object.keys(datasets).map((name) => {
-                    return {
-                        args: [
-                            { name: "limit", type: { kind: "NON_NULL", name: null, ofType: { kind: "SCALAR", name: "uint64", ofType: null } } },
-                            { name: "filter", type: named(`${name}Filter`) },
-                        ],
-                        name,
-                        type: { kind: "LIST", name: null, ofType: { kind: "NON_NULL", name: null, ofType: named(`${name}Group`) } },
-                    };
-                }),
-            ],
-        },
-        Viewer: { fields: [{ name: "accounts", type: { kind: "LIST", name: null, ofType: named("Account") } }] },
-    };
-
-    for (const [name, shape] of Object.entries(datasets)) {
-        types[`${name}Group`] = {
-            fields: [
-                { name: "sum", type: named(`${name}Sum`) },
-                { name: "dimensions", type: named(`${name}Dimensions`) },
-            ],
-        };
-        types[`${name}Sum`] = {
-            fields: shape.sum.map((field) => {
-                return { name: field };
-            }),
-            inputFields: null,
-        };
-        types[`${name}Dimensions`] = {
-            fields: shape.dimensions.map((field) => {
-                return { name: field };
-            }),
-            inputFields: null,
-        };
-        types[`${name}Filter`] = {
-            fields: null,
-            inputFields: shape.filter.map((field) => {
-                return { name: field };
-            }),
-        };
-    }
-
-    return types;
-};
-
-/** A fake GraphQL API: introspection over `datasets`, and `rows` for the data query. */
-const fakeGraphql =
-    (datasets: Record<string, DatasetShape>, rows: unknown[] = [], seen: string[] = []) =>
-    ({ query }: GraphqlRequest) => {
-        seen.push(query);
-
-        if (query.includes("__schema")) {
-            return { data: { __schema: { queryType: { fields: [{ name: "viewer", type: { kind: "NON_NULL", name: null, ofType: named("Viewer") } }] } } } };
-        }
-
-        if (query.includes("__type")) {
-            const types = schemaTypes(datasets);
-
-            return {
-                data: Object.fromEntries([...query.matchAll(/(t\d+): __type\(name: "(\w+)"\)/gu)].map(([, alias, name]) => [alias, types[name ?? ""] ?? null])),
-            };
-        }
-
-        return { data: { viewer: { accounts: [{ rows }] } } };
-    };
-
-const HOURLY_FILTER = ["datetimeHour_geq", "datetimeHour_leq", "scriptName"];
-
 describe(probeDurableObjectsDataset, () => {
     afterEach(() => {
         resetDurableObjectsProbe();
@@ -429,14 +296,6 @@ describe(probeDurableObjectsDataset, () => {
         await expect(probeDurableObjectsDataset(access(fetch))).resolves.toMatchObject({ by: "scriptName", sums: ["rowsRead"] });
     });
 });
-
-/** The Durable Object namespace listing of the account. */
-const NAMESPACES = `/accounts/${ACCOUNT}/workers/durable_objects/namespaces`;
-
-/** A namespace as the listing reports it; `dispatchNamespace` only for a Workers-for-Platforms user script's. */
-const namespace = (id: string, script: string, dispatchNamespace?: string) => {
-    return { class: "ShardDO", id, name: `${script}_ShardDO`, script, ...(dispatchNamespace === undefined ? {} : { dispatch_namespace: dispatchNamespace }) };
-};
 
 describe(readDurableObjectUsageByScript, () => {
     afterEach(() => {
@@ -595,8 +454,16 @@ describe("the readback fleets' storage families", () => {
     it("are wired from the cell's account credentials on cloudflare-wfp, and absent without them", () => {
         const configured = cloudflareWfpFleetFromEnv({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: TOKEN, LUNORA_CELL: "eu-1" });
 
-        expect(Object.keys(configured.usage?.sources ?? {}).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["d1", "durableObjects", "requests"]);
+        expect(Object.keys(configured.usage?.sources ?? {}).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "d1",
+            "durableObjectDuration",
+            "durableObjectRequests",
+            "durableObjects",
+            "requests",
+            "workersCpu",
+        ]);
         expect(configured.usage?.sources.d1?.cadence).toBe("hourly");
+        expect(configured.usage?.sources.workersCpu?.cadence).toBe("hourly");
         expect(cloudflareWfpFleetFromEnv({ LUNORA_CELL: "eu-1" }).usage).toBeUndefined();
     });
 
@@ -649,8 +516,11 @@ describe("the readback fleets' storage families", () => {
     it("are wired for every connected account on cloudflare-workers", () => {
         expect(Object.keys(cloudflareWorkersFleetFromEnv({}).usage?.sources ?? {}).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             "d1",
+            "durableObjectDuration",
+            "durableObjectRequests",
             "durableObjects",
             "requests",
+            "workersCpu",
         ]);
     });
 
