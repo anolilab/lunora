@@ -513,6 +513,7 @@ export interface Doc_alertRules {
     destination: string;
     enabled: boolean;
     functionPath?: string;
+    lastTestedAt?: number;
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
@@ -1499,6 +1500,7 @@ export interface Insert_alertRules {
     destination: string;
     enabled: boolean;
     functionPath?: string;
+    lastTestedAt?: number;
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;

@@ -568,6 +568,7 @@ export const alertRules = sqliteTable("alertRules", {
     destination: text("destination").notNull(),
     enabled: integer("enabled", { mode: "boolean" }).notNull(),
     functionPath: text("functionPath"),
+    lastTestedAt: real("lastTestedAt"),
     mode: text("mode", { mode: "json" }).$type<"threshold" | "deviation">(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),

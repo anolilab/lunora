@@ -193,3 +193,22 @@ export const ensureAuth = async (env: AuthEnv, requestOrigin: string): Promise<L
  * without going through `fetch`.
  */
 export const currentAuth = (): LunoraAuth | null => auth;
+
+/**
+ * Look up users' email addresses in the auth plane, for alerts that go to an
+ * organization's owners and admins (`ORG_ADMINS_DESTINATION`). Works outside a
+ * request too — the alert drain runs on a cron — by bootstrapping the instance
+ * the way the build runner does, so the auth plane's own model names apply.
+ */
+export const authUserEmails =
+    (env: AuthEnv) =>
+    async (userIds: ReadonlyArray<string>): Promise<string[]> => {
+        const origin = typeof env["LUNORA_ORIGIN_URL"] === "string" ? env["LUNORA_ORIGIN_URL"] : (env.AUTH_URL ?? "https://control-plane.internal");
+        const instance = await ensureAuth(env, new URL(origin).origin);
+        const context = await instance.$context;
+        const users = await Promise.all(
+            userIds.map(async (id) => context.adapter.findOne<{ email?: string }>({ model: "user", where: [{ field: "id", value: id }] })),
+        );
+
+        return users.flatMap((user) => (typeof user?.email === "string" ? [user.email] : []));
+    };

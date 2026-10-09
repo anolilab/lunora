@@ -19,6 +19,7 @@ import { encryptSecret } from "../secrets/crypto";
 import { constantTimeEqual } from "../security/constant-time-equal";
 import type { OtlpTracePayload } from "../telemetry/otlp";
 import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
+import { ORG_ADMINS_DESTINATION } from "../telemetry/recipients";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken } from "./admin-token";
@@ -28,6 +29,7 @@ import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
+import { handleAlertTestRoute } from "./routes/alerts";
 import { handleBoxConnectRoute, handleBoxDiagnoseRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
 import { handleCloudflareAccountConnectRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
@@ -539,8 +541,12 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
         await store.archiveSpans(observations, body.organizationId ?? "").catch(() => undefined);
 
         // Deliver any alerts the ingest fired (best-effort), then stamp them delivered.
-        if (result.alerts.length > 0) {
-            await Promise.all(result.alerts.map((alert) => deliverAlert(environment, alert).catch(() => undefined)));
+        // An "owners & admins" alert is left `firing` for the drain, which can read
+        // the members and the auth plane its addresses come from.
+        const inline = result.alerts.filter((alert) => !(alert.channel === "email" && alert.destination === ORG_ADMINS_DESTINATION));
+
+        if (inline.length > 0) {
+            await Promise.all(inline.map((alert) => deliverAlert(environment, alert).catch(() => undefined)));
             // Alerts have already gone out, so a failure here must not fail the
             // ingest — but it must not be invisible either: unmarked alerts are
             // re-delivered on the next sweep, and `markDelivered` is now rate-limited
@@ -549,13 +555,13 @@ const handleTelemetryRoute = async (request: Request, environment: RouterEnv): P
             await context
                 .runMutation(api.alerts.markDelivered, {
                     deployKey: body.deployKey,
-                    ids: result.alerts.map((alert) => alert.id),
+                    ids: inline.map((alert) => alert.id),
                     organizationId: body.organizationId,
                 })
                 .catch((error: unknown) => {
                     // eslint-disable-next-line no-console -- delivered-but-unmarked alerts will re-fire; surface it
                     console.error("[alerts] markDelivered failed; alerts may be re-delivered", {
-                        count: result.alerts.length,
+                        count: inline.length,
                         error: error instanceof Error ? error.message : String(error),
                         organizationId: body.organizationId,
                     });
@@ -748,6 +754,13 @@ export const createDeployRouter = (): HttpRouterLike => {
         // session — dashboard callers; the delegated mutation `assertMember`s.
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
         { handler: handleSessionRollbackRoute, method: "POST", path: "/v1/rollback", spec: { auth: "session" } },
+        // `alerts.prepareTestAlert` asserts owner/admin; the route sends through the rule's channel.
+        {
+            handler: async (request, environment) => handleAlertTestRoute(request, environment),
+            method: "POST",
+            path: "/v1/alerts/test",
+            spec: { auth: "session" },
+        },
         { handler: handleEjectRoute, method: "POST", path: "/v1/eject", spec: { auth: "deployKey" } },
         // Tenant data backups (docs/RESTORE.md); the `internal.tenant_backups.*` mutations assert owner/admin.
         { handler: handleBackupNowRoute, method: "POST", path: "/v1/backups", spec: { auth: "session" } },
