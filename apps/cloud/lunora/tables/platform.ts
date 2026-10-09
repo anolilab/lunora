@@ -60,11 +60,12 @@ export const platformTables = {
         // sweep recomputes both from the ledger, which stays the authority.
         spendNanoCents: v.optional(v.number()),
         spendPeriod: v.optional(v.number()),
-        // Set by the spend-cap or dunning enforcement crons (or support); the
-        // dispatcher serves 503 for a suspended org's tenants.
+        // Set by the spend-cap, dunning or overage enforcement (or support);
+        // the dispatcher serves 503 for a suspended org's tenants, and their
+        // crons and platform queue batches are held.
         suspendedAt: v.optional(v.number()),
         // Which mechanism suspended the org ("spend-cap" | "dunning" |
-        // "support"); each cron only lifts its own suspensions.
+        // "overage" | "support"); each one only lifts its own suspensions.
         suspendedReason: v.optional(v.string()),
         // Dunning (GAPS.md C2): when payment failure was first observed; the
         // grace window measures from here.
