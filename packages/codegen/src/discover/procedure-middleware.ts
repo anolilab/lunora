@@ -468,14 +468,28 @@ const hasEnclosingTry = (call: TsNode): boolean => {
  * is the shape. The call must sit under the combinator's own argument.
  */
 const isAllSettledFanout = (call: CallExpression): boolean => {
-    for (let ancestor = call.getParent(); ancestor !== undefined; ancestor = ancestor.getParent()) {
-        if (Node.isCallExpression(ancestor) && ancestor.getExpression().getText() === "Promise.allSettled") {
+    let current: TsNode | undefined = call.getParent();
+
+    while (current !== undefined) {
+        if (Node.isCallExpression(current) && current.getExpression().getText() === "Promise.allSettled") {
             return true;
         }
 
-        if (Node.isFunctionDeclaration(ancestor) || Node.isMethodDeclaration(ancestor)) {
-            return false;
+        if (FUNCTION_BOUNDARY_KINDS.has(current.getKind())) {
+            // A callback is part of the fan-out only when it runs synchronously
+            // inside the iteration (`items.map(...)`). A deferred one (`setTimeout`,
+            // an event listener) can settle after `allSettled` has returned, so the
+            // walk stops there.
+            current = syncIterationCallToResumeFrom(current);
+
+            if (current === undefined) {
+                return false;
+            }
+
+            continue;
         }
+
+        current = current.getParent();
     }
 
     return false;
@@ -513,16 +527,26 @@ const isGuardHelperArgument = (call: CallExpression): boolean => {
         return false;
     }
 
-    const parameters = new Set(helper.getParameters().map((parameter) => parameter.getName()));
+    // The callback is bound to the helper parameter at its own argument position,
+    // and only that parameter counts. Naming some other parameter would take an
+    // unrelated function's try block for the guard.
+    const position = helperCall.getArguments().indexOf(callback);
+    const boundName = helper.getParameters()[position]?.getName();
+
+    if (boundName === undefined) {
+        return false;
+    }
 
     return helper.getDescendantsOfKind(SyntaxKind.TryStatement).some((tryStatement) => {
+        // Only an awaited call is a guard: an unawaited one returns its promise past
+        // the try, so its rejection is never caught there.
         const invokesParameter = tryStatement
             .getTryBlock()
             .getDescendantsOfKind(SyntaxKind.CallExpression)
             .some((inner) => {
                 const invoked = inner.getExpression();
 
-                return Node.isIdentifier(invoked) && parameters.has(invoked.getText());
+                return Node.isIdentifier(invoked) && invoked.getText() === boundName && Node.isAwaitExpression(inner.getParent());
             });
         const catchClause = tryStatement.getCatchClause();
 
