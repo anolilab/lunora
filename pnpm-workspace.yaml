@@ -1078,12 +1078,6 @@ minimumReleaseAgeExclude:
   # Per-message ttl/urgency (visulima/visulima#936), published 2026-10-08 —
   # dead weight after 2026-10-09, drop it then.
   - '@visulima/notification@1.2.0'
-  # User-authorized one-off for the upstream storage fixes: storage 2.0.33 +
-  # storage-client 1.0.8 (visulima/visulima#923, #925, on top of #899-#921).
-  # Remove these entries once they are 24h old: storage 2026-10-06 22:16 UTC,
-  # storage-client 2026-10-06 16:57 UTC.
-  - '@visulima/storage@2.0.33'
-  - '@visulima/storage-client@1.0.8'
   # vis 4.2.0 (affectedIgnore, visulima/visulima#937) + its task-runner 1.1.0, published
   # 2026-10-09 ~11:00 UTC. Remove the vis + task-runner entries after 2026-10-10 11:00 UTC.
   - '@visulima/task-runner@1.1.0'
