@@ -1,3 +1,9 @@
+## @lunora/testing [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.246...@lunora/testing@1.0.0-alpha.247) (2026-10-09)
+
+### Features
+
+* **testing:** record ctx.queues and ctx.notify / ctx.push in lunoraTest ([#1046](https://github.com/anolilab/lunora/issues/1046)) ([7d8a768](https://github.com/anolilab/lunora/commit/7d8a768d3ffa78fbecc0187085d3dd6e020d6fbc))
+
 ## @lunora/testing [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.245...@lunora/testing@1.0.0-alpha.246) (2026-10-08)
 
 

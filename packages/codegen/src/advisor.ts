@@ -21,6 +21,7 @@ import type {
     AuthApiCallIR,
     AuthConfigIR,
     BrowserUrlAccessIR,
+    CallEdgeIR,
     ConfigCallIR,
     ContainerIR,
     ContainerKeyAccessIR,
@@ -63,6 +64,7 @@ import type {
     StorageUploadIR,
     TableIR,
     TableWriteIR,
+    UnboundedLoopIR,
     UnrestrictedWhereBranchIR,
     VectorNamespaceAccessIR,
     WorkflowCallIR,
@@ -199,6 +201,7 @@ interface LintSchemaOptions {
     authApiCalls?: ReadonlyArray<AuthApiCallIR>;
     authConfigs?: ReadonlyArray<AuthConfigIR>;
     browserUrlAccesses?: ReadonlyArray<BrowserUrlAccessIR>;
+    callEdges?: ReadonlyArray<CallEdgeIR>;
     configCalls?: ReadonlyArray<ConfigCallIR>;
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
@@ -245,6 +248,7 @@ interface LintSchemaOptions {
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
     tableWrites?: ReadonlyArray<TableWriteIR>;
+    unboundedLoops?: ReadonlyArray<UnboundedLoopIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;

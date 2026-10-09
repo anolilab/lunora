@@ -122,6 +122,17 @@ Pass a `services` option with a fake per `lunora.config` service an action calls
 (`{ documentParser: { fetch } }`). See the [package docs](https://lunora.sh/docs/packages/testing#injectable-ctxservices)
 for an example.
 
+#### Recording `ctx.queues` and `ctx.notify` / `ctx.push`
+
+Pass `queues` (the export names from `lunora/queues.ts`) and/or `notify` (the
+`lunora/notify.ts` default export). Sends are recorded instead of delivered, and
+read back with `t.queues.sent(name)` / `t.notify.sent(channel)`. See the
+[package docs](https://lunora.sh/docs/packages/testing#queues) for details.
+
+```ts
+const t = lunoraTest(schema, { notify, queues: ["jobs"] });
+```
+
 #### Fixed `ctx.now`
 
 Pass a `now` option (epoch ms) to pin `ctx.now` across every context, so

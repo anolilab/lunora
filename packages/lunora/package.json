@@ -162,7 +162,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/cli": "1.0.0-alpha.365",
+        "@lunora/cli": "1.0.0-alpha.366",
         "@lunora/client": "1.0.0-alpha.191",
         "@lunora/do": "1.0.0-alpha.201",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
