@@ -7,7 +7,6 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -18,6 +17,7 @@ import { DiagnoseBoxDialog } from "./DiagnoseBoxDialog";
 import { EnrolBoxDialog } from "./EnrolBoxDialog";
 import { RenameBoxDialog } from "./RenameBoxDialog";
 import { RevokeBoxDialog } from "./RevokeBoxDialog";
+import { HostEmpty } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { projectNamesByHost } from "./target-capabilities";
 import { useBoxDomain, useMyRole } from "./use-boxes";
@@ -107,21 +107,10 @@ export const BoxesSection = ({ organizationId, preloaded }: SectionProps<ReturnO
         );
     } else if (boxes.length === 0) {
         body = (
-            <Empty className="border-0 py-10">
-                <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                        <HugeiconsIcon icon={ServerStack01Icon} strokeWidth={2} />
-                    </EmptyMedia>
-                    <EmptyTitle>Run your apps on your own server</EmptyTitle>
-                    <EmptyDescription>
-                        A box is a Linux server your organization owns. Lunora Cloud deploys your apps onto it with celld and manages it through an agent that
-                        dials out to us, so the control plane never needs a way in. Your apps&apos; data stays in your own bucket.
-                    </EmptyDescription>
-                </EmptyHeader>
-                <div className="flex justify-center">
-                    {enrolButton ?? <p className="m-0 text-sm text-muted-foreground">Ask an owner or admin to enrol one.</p>}
-                </div>
-            </Empty>
+            <HostEmpty action={enrolButton} fallback="Ask an owner or admin to enrol one." icon={ServerStack01Icon} title="Run your apps on your own server">
+                A box is a Linux server your organization owns. Lunora Cloud deploys your apps onto it with celld and manages it through an agent that dials out
+                to us, so the control plane never needs a way in. Your apps&apos; data stays in your own bucket.
+            </HostEmpty>
         );
     } else {
         body = (

@@ -52,6 +52,11 @@ export interface ApiTypes {
         disconnect: FunctionReference<"mutation", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, void>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
     };
+    cloudflare_alerts: {
+        apply: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; products: Array<{ id: unknown; limit: number }>; recipients: Array<unknown> }, { results: { action: "created" | "failed" | "updated"; duplicates: number; keptDestinations: number; keptRecipients: string[]; kind: "missing-scope" | "not-eligible" | "transient" | "validation" | null; message: null | string; productId: string; stored: { destinations: number; enabled: boolean; limit: null | string; policyId: string; recipients: string[]; }[]; }[] }>;
+        overview: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "no-data" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; proposedLimit: number | null }[]; productSource: "listed" | "published"; state: "unavailable" | "unconfigured" | "missing-scope" | "not-eligible" | "ready" }>;
+        remove: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { failed: { message: string; policyId: string; }[]; removed: string[] }>;
+    };
     dashboards: {
         create: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations">; panels?: Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }> }, Id<"dashboards">>;
         get: FunctionReference<"query", { id: Id<"dashboards">; organizationId: Id<"organizations"> }, null | { _id: Id<"dashboards">; createdAt: number; name: string; panels: { config: { filter?: string; metricName?: string; stat?: "count" | "first" | "last"; }; id: string; kind: "logs" | "metric" | "stat" | "traces"; title: string }[]; updatedAt: number }>;
@@ -231,6 +236,9 @@ export interface InternalApiTypes {
     cloudflare_accounts: {
         connect: FunctionReference<"mutation", { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }, Id<"cloudflareAccounts">>;
         costTarget: FunctionReference<"query", { deployKey: unknown; id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { accountId: string; ciphertext: string; iv: string; permissions: string[]; }>;
+    };
+    cloudflare_alerts: {
+        assertAlertsManager: FunctionReference<"query", { organizationId: Id<"organizations"> }, null>;
     };
     deploy_keys: {
         ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
