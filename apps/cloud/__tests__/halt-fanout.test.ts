@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import type { ControlPlaneEnv } from "../src/control-plane-env";
 import { withoutHalted } from "../src/fanout/live";
-import { HELD_RETRY_DELAY_SECONDS, handleQueueBatch } from "../src/fanout/platform-queue";
+import { deliverQueueBatch, HELD_RETRY_DELAY_SECONDS } from "../src/fanout/platform-queue";
 import { tenantResourceName } from "../src/provision-contract";
+import type { TargetFleet } from "../src/targets/driver";
+import { memoryStore } from "./support/memory-store";
 
 /**
  * While an emergency stop holds an alias, its Worker runs the stub — so the
@@ -12,38 +13,28 @@ import { tenantResourceName } from "../src/provision-contract";
  * their retries.
  */
 
-const state = vi.hoisted(() => {
-    return { halted: new Set<string>(), sent: [] as string[] };
-});
+const NOW = Date.UTC(2026, 9, 9, 12);
 
-vi.mock(import("../src/fanout/live"), async (importOriginal) => {
-    const original = await importOriginal();
+/** One serving organization's live `shop` release, and an in-network path that records what reached it. */
+const delivery = (halted: ReadonlySet<string>) => {
+    const sent: string[] = [];
+    const dispatch: NonNullable<TargetFleet["dispatch"]> = () => async (path) => {
+        sent.push(path);
+
+        return Response.json({ retry: [] });
+    };
 
     return {
-        ...original,
-        readHaltedAliases: async () => state.halted,
-        readLiveDeployments: async () => [{ adminToken: "admin", alias: "shop", scriptName: "shop", target: "cloudflare-wfp" }],
+        ports: {
+            dispatches: new Map([["cloudflare-wfp" as const, dispatch]]),
+            halted,
+            live: [{ adminToken: "admin", alias: "shop", organizationId: "org_ok", scriptName: "shop", target: "cloudflare-wfp" }],
+            now: NOW,
+            store: memoryStore({ organizations: [{ _id: "org_ok", plan: "pro" }] }),
+        },
+        sent,
     };
-});
-
-vi.mock(import("../src/targets/registry"), async (importOriginal) => {
-    const original = await importOriginal();
-
-    return {
-        ...original,
-        registeredFleets: () => [
-            {
-                dispatch: () => async (path: string) => {
-                    state.sent.push(path);
-
-                    return Response.json({ retry: [] });
-                },
-                id: "cloudflare-wfp" as const,
-                reach: () => async () => new Response(null),
-            },
-        ],
-    };
-});
+};
 
 const batch = () => {
     const outcome: { acked: string[]; retried: { delaySeconds?: number; id: string }[] } = { acked: [], retried: [] };
@@ -64,18 +55,15 @@ const batch = () => {
 };
 
 describe("the platform queue consumer under an emergency stop", () => {
-    beforeEach(() => {
-        state.halted.clear();
-        state.sent.length = 0;
-    });
-
     it("holds a halted alias's batch, undelivered, for the longest retry delay", async () => {
+        expect.assertions(3);
+
         const { batch: halted, outcome } = batch();
+        const { ports, sent } = delivery(new Set(["shop"]));
 
-        state.halted.add("shop");
-        await handleQueueBatch(halted, {} as ControlPlaneEnv);
+        await deliverQueueBatch(halted, ports);
 
-        expect(state.sent).toStrictEqual([]);
+        expect(sent).toStrictEqual([]);
         expect(outcome.acked).toStrictEqual([]);
         expect(outcome.retried).toStrictEqual([
             { delaySeconds: HELD_RETRY_DELAY_SECONDS, id: "m1" },
@@ -84,11 +72,14 @@ describe("the platform queue consumer under an emergency stop", () => {
     });
 
     it("delivers the alias's batch again once the halt is gone", async () => {
+        expect.assertions(2);
+
         const { batch: resumed, outcome } = batch();
+        const { ports, sent } = delivery(new Set());
 
-        await handleQueueBatch(resumed, {} as ControlPlaneEnv);
+        await deliverQueueBatch(resumed, ports);
 
-        expect(state.sent).toStrictEqual(["/_lunora/queue"]);
+        expect(sent).toStrictEqual(["/_lunora/queue"]);
         expect(outcome.acked).toStrictEqual(["m1", "m2"]);
     });
 });

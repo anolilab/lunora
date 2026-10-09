@@ -613,8 +613,8 @@ and past the dispatcher. Both apply the same admission test
 crons do not tick, and its queue batches are held: every message is retried
 with Cloudflare's longest delay (12 h) rather than acked, so a suspension loses
 nothing until the queue's `max_retries` runs out. Code already running inside
-the tenant — a Durable Object alarm that keeps re-arming itself — is not
-stopped by any of this.
+the tenant — a Durable Object alarm that keeps re-arming itself — is stopped
+only by the **Emergency stop** below.
 
 **Edge block.** A cell can also enforce a suspension in front of the Worker, so
 an attack on a suspended tenant stops costing a billed request each time. The
