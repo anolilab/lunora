@@ -113,7 +113,7 @@
             # Before the build, not after: a mismatch is a matrix bug, and there is no
             # reason to spend twenty minutes compiling to find out.
             # The node -e script is JavaScript, its `${}` is not shell.
-            # jactionlint ignore=shellcheck
+            # jactionlint ignore=SC2016
             - "name": "Report FTS5 coverage for this leg"
               "shell": "bash"
               "run": |
@@ -421,7 +421,7 @@
                       --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
 
             # The node -e script is JavaScript, its `${}` is not shell.
-            # jactionlint ignore=shellcheck
+            # jactionlint ignore=SC2016
             - "name": "Assert the suites executed their cases"
               "run": |
                   node -e '
