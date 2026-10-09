@@ -24,7 +24,9 @@
         "name": "Semantic Release"
         "if": "github.repository == 'anolilab/lunora'"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # 30 minutes was cut off mid-release (run 37775172245 was killed at 30m24s, after the lunorash tag was
+        # pushed and before its channel note). The tag then looked "never released" to every later run (#1054).
+        "timeout-minutes": 60
         # Gate npm publishing behind a GitHub Environment so secrets are scoped and
         # required-reviewer rules (configured in repo settings) can apply.
         "environment": "release"

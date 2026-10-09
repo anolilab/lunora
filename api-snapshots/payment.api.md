@@ -628,6 +628,7 @@ type SubscriptionAction = "activate" | "cancel" | "mark_past_due" | "pause" | "r
 interface SubscriptionPatch {
     readonly idempotencyKey?: string;
     readonly priceId?: string;
+    readonly proration?: "immediate" | "next-invoice" | "none";
     readonly quantity?: number;
 }
 ```

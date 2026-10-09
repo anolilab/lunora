@@ -87,6 +87,13 @@ const SUBSCRIPTION_STATE_BY_CREEM_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = makeNotSupported("creem (merchant-of-record)");
 
+/** Creem's `updateBehavior` for each neutral {@link SubscriptionPatch.proration} choice. */
+const UPDATE_BEHAVIOR_BY_PRORATION = {
+    immediate: "proration-charge-immediately",
+    "next-invoice": "proration-charge",
+    none: "proration-none",
+} as const;
+
 /** Creem `product`/`customer` fields are either an expanded object or a bare id string. */
 const idOf = (value: unknown): string | undefined => (typeof value === "string" ? value : readString(asRecord(value), "id"));
 
@@ -431,15 +438,57 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         resumeSubscription: async (subscriptionId) => subscriptionFromCreem(await client.subscriptions.resume(subscriptionId)),
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
-            // A plan change is an `upgrade` to the new product (prorated immediately); a bare
-            // metadata/quantity patch has no upgrade semantics, so return the current truth.
-            // Un-deduped on purpose, for want of anywhere to put a key: neither
-            // `UpgradeSubscriptionRequestEntity` nor Creem's `RequestOptions` carries one (checkout's
-            // `requestId` has no counterpart here), so a retry charges the proration twice.
-            if (patch.priceId) {
-                return subscriptionFromCreem(
-                    await client.subscriptions.upgrade(subscriptionId, { productId: patch.priceId, updateBehavior: "proration-charge-immediately" }),
+            // `upgrade` changes the product and `update` changes item units; neither takes the other's
+            // field. Two calls are not atomic, so refuse the combined patch rather than apply half of it.
+            if (patch.priceId && patch.quantity !== undefined) {
+                return notSupported("changing the plan and the quantity in one update; apply them as two updates");
+            }
+
+            if (patch.quantity !== undefined && (!Number.isSafeInteger(patch.quantity) || patch.quantity < 0)) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `updateSubscription(): \`quantity\` must be a non-negative safe integer (got ${String(patch.quantity)})`,
                 );
+            }
+
+            const updateBehavior = UPDATE_BEHAVIOR_BY_PRORATION[patch.proration ?? "immediate"];
+
+            // A plan change is an `upgrade` to the new product. `upgrade` is un-deduped on purpose, for
+            // want of anywhere to put a key: neither `UpgradeSubscriptionRequestEntity` nor Creem's
+            // `RequestOptions` carries one (checkout's `requestId` has no counterpart here), so a retry
+            // after an applied upgrade charges the proration again. Seat changes below are absolute, so
+            // a retry of an applied one is a no-op.
+            if (patch.priceId) {
+                return subscriptionFromCreem(await client.subscriptions.upgrade(subscriptionId, { productId: patch.priceId, updateBehavior }));
+            }
+
+            if (patch.quantity !== undefined) {
+                const current = asRecord(await client.subscriptions.get(subscriptionId));
+                const productId = idOf(current.product);
+                const items = Array.isArray(current.items) ? current.items.map((item) => asRecord(item)) : [];
+                // Units belong to the item for the current product; an add-on item carries its own count.
+                const itemId = readString(asRecord(items.find((item) => readString(item, "productId") === productId)), "id");
+
+                // Falling back to the unchanged subscription here would report success for a seat change
+                // that never happened, which is the failure this branch exists to prevent.
+                if (itemId === undefined) {
+                    return notSupported("a seat change for a subscription with no item for its current product");
+                }
+
+                const subscription = subscriptionFromCreem(
+                    await client.subscriptions.update(subscriptionId, { items: [{ id: itemId, units: patch.quantity }], updateBehavior }),
+                );
+
+                // Confirm the unit count landed rather than trusting the call: a silent no-op would read back
+                // as the old count and look like success.
+                if (subscription.quantity !== patch.quantity) {
+                    throw new LunoraPaymentError(
+                        "PROVIDER_ERROR",
+                        `creem did not apply the unit count ${String(patch.quantity)} to subscription ${subscriptionId}`,
+                    );
+                }
+
+                return subscription;
             }
 
             return subscriptionFromCreem(await client.subscriptions.get(subscriptionId));

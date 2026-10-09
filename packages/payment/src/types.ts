@@ -358,6 +358,13 @@ export interface SubscriptionPatch {
      */
     readonly idempotencyKey?: string;
     readonly priceId?: string;
+
+    /**
+     * How the change is billed. Honoured by the Creem adapter only; other adapters bill per their own
+     * endpoint defaults. `immediate` (the default) charges the prorated difference now; `next-invoice`
+     * defers it to the next invoice; `none` changes the plan or seats without billing the difference.
+     */
+    readonly proration?: "immediate" | "next-invoice" | "none";
     readonly quantity?: number;
 }
 
