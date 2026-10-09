@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PeriodUsage } from "../src/billing/spend";
 import { CloudflareTokenError } from "../src/cloudflare/fetch";
+import { cloudflareGraphql, CloudflareGraphqlQueryError } from "../src/cloudflare/graphql";
 import {
     D1_QUERY_BATCH,
+    PROBE_TTL_MS,
     probeDurableObjectsDataset,
     readD1UsageByAlias,
     readDurableObjectUsageByScript,
@@ -32,7 +34,7 @@ interface GraphqlRequest {
 /** A fake Cloudflare API: REST listings by path, and every GraphQL request handed to `graphql`. */
 const fakeCloudflare = (options: {
     graphql: (request: GraphqlRequest) => { data?: unknown; errors?: { message: string }[]; status?: number };
-    rest?: Record<string, (page: number) => { result: unknown[]; totalPages?: number } | { status: number }>;
+    rest?: Record<string, (page: number, perPage: number) => { result: unknown[]; resultInfo?: Record<string, number> } | { status: number }>;
 }) =>
     vi.fn<typeof fetch>(async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
@@ -50,11 +52,11 @@ const fakeCloudflare = (options: {
             return Response.json({ errors: [{ message: "not found" }], success: false }, { status: 404 });
         }
 
-        const answer = listing(Number(url.searchParams.get("page") ?? "1"));
+        const answer = listing(Number(url.searchParams.get("page") ?? "1"), Number(url.searchParams.get("per_page") ?? "20"));
 
         return "status" in answer
             ? Response.json({ errors: [{ message: "Authentication error" }], success: false }, { status: answer.status })
-            : Response.json({ result: answer.result, result_info: { total_pages: answer.totalPages ?? 1 }, success: true });
+            : Response.json({ result: answer.result, ...(answer.resultInfo === undefined ? {} : { result_info: answer.resultInfo }), success: true });
     });
 
 const access = (fetch: typeof globalThis.fetch) => {
@@ -94,9 +96,10 @@ describe(readD1UsageByAlias, () => {
                                   // The platform's own database: no tenant produced its name.
                                   { name: "lunora-cloud", uuid: "uuid-platform" },
                               ],
-                              totalPages: 2,
+                              // A page as full as the page size the envelope reports: there may be more.
+                              resultInfo: { page: 1, per_page: 3 },
                           }
-                        : { result: [{ name: "blog--db", uuid: "uuid-blog-db" }], totalPages: 2 },
+                        : { result: [{ name: "blog--db", uuid: "uuid-blog-db" }], resultInfo: { page: 2, per_page: 3 } },
             },
         });
 
@@ -110,6 +113,60 @@ describe(readD1UsageByAlias, () => {
         // `datetimeHour_leq` is inclusive, so it names the window's last hour, never the open one.
         expect(queries[0]).toContain('datetimeHour_geq: "2026-06-15T09:00:00.000Z", datetimeHour_leq: "2026-06-15T10:00:00.000Z"');
         expect(queries[0]).not.toContain("uuid-platform");
+    });
+
+    /** A page-numbered listing of `count` databases, sliced as the API pages it. */
+    const databasesListing =
+        (count: number, resultInfo: (page: number, perPage: number) => Record<string, number> | undefined) => (page: number, perPage: number) => {
+            const all = Array.from({ length: count }, (_, index) => {
+                return { name: `app${String(index)}--db`, uuid: `uuid-${String(index)}` };
+            });
+            const info = resultInfo(page, perPage);
+
+            return { result: all.slice((page - 1) * perPage, page * perPage), ...(info === undefined ? {} : { resultInfo: info }) };
+        };
+
+    /** The aliases a D1 read queried, from the GraphQL requests it sent. */
+    const queriedUuids = (graphql: { mock: { calls: [GraphqlRequest][] } }): number =>
+        graphql.mock.calls.reduce((sum, [request]) => sum + [...request.query.matchAll(/databaseId: "/gu)].length, 0);
+
+    it.each([
+        [
+            "count, page, per_page and total_count but no total_pages",
+            (page: number, perPage: number) => {
+                return { count: perPage, page, per_page: perPage, total_count: 150 };
+            },
+        ],
+        ["no result_info at all", () => undefined],
+    ])("meters every database of a 150-database account whose listing sends %s", async (_label, resultInfo) => {
+        const graphql = vi.fn<(request: GraphqlRequest) => { data: unknown }>(() => {
+            return { data: { viewer: { accounts: [{}] } } };
+        });
+        const fetch = fakeCloudflare({ graphql, rest: { [`/accounts/${ACCOUNT}/d1/database`]: databasesListing(150, resultInfo) } });
+
+        await readD1UsageByAlias(access(fetch), WINDOW);
+
+        expect(queriedUuids(graphql)).toBe(150);
+    });
+
+    it("refuses a listing it cannot finish, visibly, rather than meter a partial one", async () => {
+        const fetch = fakeCloudflare({
+            graphql: () => {
+                return { data: { viewer: { accounts: [{}] } } };
+            },
+            // Every page full, forever.
+            rest: {
+                [`/accounts/${ACCOUNT}/d1/database`]: (page, perPage) => {
+                    return {
+                        result: Array.from({ length: perPage }, (_, index) => {
+                            return { name: `app${String(page)}x${String(index)}--db`, uuid: `uuid-${String(page)}-${String(index)}` };
+                        }),
+                    };
+                },
+            },
+        });
+
+        await expect(readD1UsageByAlias(access(fetch), WINDOW)).rejects.toThrow(UsageUnavailableError);
     });
 
     it("batches the databases into requests of a bounded size", async () => {
@@ -320,6 +377,33 @@ describe(probeDurableObjectsDataset, () => {
         expect(fetch).toHaveBeenCalledTimes(calls);
     });
 
+    it("remembers an answer per account, and only for a while", async () => {
+        const fetch = fakeCloudflare({ graphql: fakeGraphql({}) });
+        const other = { accountId: "b".repeat(32), apiToken: TOKEN, fetch };
+
+        await expect(probeDurableObjectsDataset(access(fetch), 0)).rejects.toThrow(UsageUnavailableError);
+
+        const calls = fetch.mock.calls.length;
+
+        // Another account asks its own schema…
+        await expect(probeDurableObjectsDataset(other, 0)).rejects.toThrow(UsageUnavailableError);
+        expect(fetch.mock.calls.length).toBeGreaterThan(calls);
+
+        const afterOther = fetch.mock.calls.length;
+
+        // …and the first asks again once the answer is older than the TTL.
+        await expect(probeDurableObjectsDataset(access(fetch), PROBE_TTL_MS)).rejects.toThrow(UsageUnavailableError);
+        expect(fetch.mock.calls.length).toBeGreaterThan(afterOther);
+    });
+
+    it("prefers a namespace id to a script name, which several dispatch namespaces can share", async () => {
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql({ durableObjectsPeriodicGroups: { dimensions: ["scriptName", "namespaceId"], filter: HOURLY_FILTER, sum: ["rowsRead"] } }),
+        });
+
+        await expect(probeDurableObjectsDataset(access(fetch))).resolves.toMatchObject({ by: "namespaceId" });
+    });
+
     it("never prices 4 KB storage units as rows: a dataset with only those is unavailable, and says what it has", async () => {
         const fetch = fakeCloudflare({
             graphql: fakeGraphql({
@@ -346,6 +430,14 @@ describe(probeDurableObjectsDataset, () => {
     });
 });
 
+/** The Durable Object namespace listing of the account. */
+const NAMESPACES = `/accounts/${ACCOUNT}/workers/durable_objects/namespaces`;
+
+/** A namespace as the listing reports it; `dispatchNamespace` only for a Workers-for-Platforms user script's. */
+const namespace = (id: string, script: string, dispatchNamespace?: string) => {
+    return { class: "ShardDO", id, name: `${script}_ShardDO`, script, ...(dispatchNamespace === undefined ? {} : { dispatch_namespace: dispatchNamespace }) };
+};
+
 describe(readDurableObjectUsageByScript, () => {
     afterEach(() => {
         resetDurableObjectsProbe();
@@ -362,6 +454,12 @@ describe(readDurableObjectUsageByScript, () => {
                 ],
                 seen,
             ),
+            // A connected account: plain Workers, outside any dispatch namespace.
+            rest: {
+                [NAMESPACES]: () => {
+                    return { result: [namespace("ns-shop", "shop"), namespace("ns-blog", "blog")] };
+                },
+            },
         });
 
         const usage = await readDurableObjectUsageByScript(access(fetch), WINDOW);
@@ -387,11 +485,13 @@ describe(readDurableObjectUsageByScript, () => {
                 { dimensions: { namespaceId: "ns-gone" }, sum: { rowsRead: 5, rowsWritten: 0 } },
             ]),
             rest: {
-                [`/accounts/${ACCOUNT}/workers/durable_objects/namespaces`]: () => {
+                [NAMESPACES]: () => {
                     return {
                         result: [
-                            { class: "ShardDO", dispatch_namespace: "lunora-production", id: "ns-shop", name: "shop_ShardDO", script: "shop" },
-                            { class: "ShardDO", dispatch_namespace: "lunora-staging", id: "ns-staging", name: "x_ShardDO", script: "shop" },
+                            namespace("ns-shop", "shop", "lunora-production"),
+                            namespace("ns-staging", "shop", "lunora-staging"),
+                            // The platform's own Worker in the same account: no dispatch namespace.
+                            namespace("ns-platform", "lunora-cloud"),
                         ],
                     };
                 },
@@ -401,9 +501,64 @@ describe(readDurableObjectUsageByScript, () => {
         const usage = await readDurableObjectUsageByScript(access(fetch), WINDOW, { dispatchNamespace: "lunora-production" });
 
         expect(Object.fromEntries(usage)).toStrictEqual({
-            "namespace:ns-gone": { doRowsRead: 5 },
             shop: { doRowsRead: 10, doRowsWritten: 1 },
+            "unattributed:namespace:ns-gone": { doRowsRead: 5 },
         });
+    });
+
+    /** A `scriptName` dataset over the cell account of a staging and a production environment. */
+    const scriptNameRows = (rows: unknown[], namespaces: unknown[]) =>
+        fakeCloudflare({
+            graphql: fakeGraphql(
+                { durableObjectsPeriodicGroups: { dimensions: ["scriptName"], filter: HOURLY_FILTER, sum: ["rowsRead", "rowsWritten"] } },
+                rows,
+            ),
+            rest: {
+                [NAMESPACES]: () => {
+                    return { result: namespaces };
+                },
+            },
+        });
+
+    it("never sums a staging and a production Worker named alike into the production tenant, by script name", async () => {
+        const fetch = scriptNameRows(
+            [
+                // One row for every Worker named `shop`, whichever dispatch namespace it is in.
+                { dimensions: { scriptName: "shop" }, sum: { rowsRead: 99, rowsWritten: 9 } },
+                { dimensions: { scriptName: "blog" }, sum: { rowsRead: 7, rowsWritten: 1 } },
+                { dimensions: { scriptName: "only-staging" }, sum: { rowsRead: 3, rowsWritten: 3 } },
+            ],
+            [
+                namespace("ns-shop", "shop", "lunora-production"),
+                namespace("ns-shop-staging", "shop", "lunora-staging"),
+                namespace("ns-blog", "blog", "lunora-production"),
+                namespace("ns-only-staging", "only-staging", "lunora-staging"),
+            ],
+        );
+
+        const usage = await readDurableObjectUsageByScript(access(fetch), WINDOW, { dispatchNamespace: "lunora-production" });
+
+        expect(Object.fromEntries(usage)).toStrictEqual({
+            blog: { doRowsRead: 7, doRowsWritten: 1 },
+            // Shared by two environments: shown as unattributed, billed to neither.
+            "unattributed:ambiguous-script:shop": { doRowsRead: 99, doRowsWritten: 9 },
+        });
+    });
+
+    it("never bills the platform's own Worker to a tenant whose alias is its name", async () => {
+        const fetch = scriptNameRows(
+            [
+                { dimensions: { scriptName: "lunora-cloud" }, sum: { rowsRead: 5_000_000, rowsWritten: 50_000 } },
+                { dimensions: { scriptName: "mystery" }, sum: { rowsRead: 1, rowsWritten: 0 } },
+            ],
+            // The platform's Worker, outside any dispatch namespace.
+            [namespace("ns-platform", "lunora-cloud")],
+        );
+
+        const usage = await readDurableObjectUsageByScript(access(fetch), WINDOW, { dispatchNamespace: "lunora-production" });
+
+        // Dropped, not attributed (a tenant aliased `lunora-cloud` would otherwise absorb it); the unknown script stays visible.
+        expect(Object.fromEntries(usage)).toStrictEqual({ "unattributed:script:mystery": { doRowsRead: 1 } });
     });
 
     it("throws the probe's reason instead of reading zero when no dataset can be metered", async () => {
@@ -411,6 +566,29 @@ describe(readDurableObjectUsageByScript, () => {
 
         await expect(readDurableObjectUsageByScript(access(fetch), WINDOW)).rejects.toBeInstanceOf(UsageUnavailableError);
     });
+});
+
+describe(cloudflareGraphql, () => {
+    const answering = (message: string) =>
+        fakeCloudflare({
+            graphql: () => {
+                return { errors: [{ message }] };
+            },
+        });
+
+    it.each(["not authorized for that account", "Unauthorized", "the token does not have permission to read analytics"])(
+        "reads %j as a refused token",
+        async (message) => {
+            await expect(cloudflareGraphql(access(answering(message)), "{ viewer { __typename } }")).rejects.toBeInstanceOf(CloudflareTokenError);
+        },
+    );
+
+    it.each(["argument 'limit' is not allowed above 10000", "introspection is not allowed", "unknown field rowsRead"])(
+        "reads %j as a rejected query, not a refused token",
+        async (message) => {
+            await expect(cloudflareGraphql(access(answering(message)), "{ viewer { __typename } }")).rejects.toBeInstanceOf(CloudflareGraphqlQueryError);
+        },
+    );
 });
 
 describe("the readback fleets' storage families", () => {
@@ -519,6 +697,7 @@ describe(meteringNotices, () => {
                 ],
                 accounts,
                 "default",
+                0,
             ),
         ).toStrictEqual([
             {
@@ -536,8 +715,8 @@ describe(meteringNotices, () => {
     });
 
     it("never shows another organization's account, or another cell's platform source", () => {
-        expect(meteringNotices([{ scopeKey: "cfa_2#d1", target: "cloudflare-workers", unavailableReason: "x" }], accounts, "default")).toStrictEqual([]);
-        expect(meteringNotices([{ scopeKey: "eu-1#d1", target: "cloudflare-wfp", unavailableReason: "x" }], accounts, "default")).toStrictEqual([]);
+        expect(meteringNotices([{ scopeKey: "cfa_2#d1", target: "cloudflare-workers", unavailableReason: "x" }], accounts, "default", 0)).toStrictEqual([]);
+        expect(meteringNotices([{ scopeKey: "eu-1#d1", target: "cloudflare-wfp", unavailableReason: "x" }], accounts, "default", 0)).toStrictEqual([]);
     });
 
     it("reads the family off the scope key, and a bare scope as request counts", () => {

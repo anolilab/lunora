@@ -190,8 +190,7 @@ interface CheckpointRow {
 
 interface StatusRow {
     _id: string;
-    unattributedQuantity?: null | number;
-    unavailableReason?: null | string;
+    failingSince?: null | number;
 }
 
 /**
@@ -202,13 +201,18 @@ interface StatusRow {
  */
 export const usageScopeKey = (scope: string, family: UsageFamily): string => (family === "requests" ? scope : `${scope}#${family}`);
 
-/** What the last run of one (scope, family) found, kept in `usageSourceStatus` for the Usage tab. */
-export interface UsageSourceStatus {
-    /** The total quantity the source read for resources no deployment matches. */
-    unattributedQuantity?: number;
-    /** Why the source cannot read, or `null` once it reads again. */
-    unavailableReason: null | string;
-}
+/**
+ * What one run of one (scope, family) found, kept in `usageSourceStatus` for the
+ * Usage tab and the operator. Each run writes the fields its outcome sets; a
+ * `null` clears one.
+ */
+export type UsageSourceStatus =
+    /** A read failed this time (a 5xx, a 429, a truncated result); retried next hour, shown once it persists. */
+    | { kind: "failed"; message: string }
+    /** The source read: what it could not attribute, and any span too old to read. */
+    | { gap?: string; kind: "read"; unattributedQuantity: number }
+    /** The source cannot read at all; the reason stays until it reads again. */
+    | { kind: "unavailable"; message: string };
 
 /** Insert `fields` as a new row of `table` for one (target, scope key), or patch the row `rowId` names. */
 const upsertRow = async (
@@ -231,22 +235,16 @@ const upsertRow = async (
 };
 
 /**
- * The checkpoint of one (target, scope key) and how to advance it, and the
- * source's status beside it (`usageSourceStatus`). The status lives in its own
- * table, so writing it never creates or moves a checkpoint.
+ * The checkpoint of one (target, scope key) and how to advance it. Reads only
+ * `usageCheckpoints`: request billing never depends on the status table.
  */
 const checkpointPorts = async (
     database: ControlPlaneDatabase,
     options: { now: number; scopeKey: string; target: TargetId },
-): Promise<Pick<UsageRollbackPorts, "getCheckpoint" | "setCheckpoint"> & { setStatus: (status: UsageSourceStatus) => Promise<void> }> => {
-    const where = { where: { scopeKey: options.scopeKey, target: options.target } };
-    const [{ page: checkpoints }, { page: statuses }] = await Promise.all([
-        database.findMany("usageCheckpoints", where),
-        database.findMany("usageSourceStatus", where),
-    ]);
-    const checkpoint = (checkpoints as CheckpointRow[]).at(0);
-    const status = (statuses as StatusRow[]).at(0);
-    // Each row's id once it exists, so a second write in the same run patches it
+): Promise<Pick<UsageRollbackPorts, "getCheckpoint" | "setCheckpoint">> => {
+    const { page } = await database.findMany("usageCheckpoints", { where: { scopeKey: options.scopeKey, target: options.target } });
+    const checkpoint = (page as CheckpointRow[]).at(0);
+    // The row's id once it exists, so a second write in the same run patches it
     // rather than inserting a duplicate (a run writes one checkpoint per month part).
     let checkpointId = checkpoint?._id;
 
@@ -255,17 +253,39 @@ const checkpointPorts = async (
         setCheckpoint: async (ms) => {
             checkpointId = await upsertRow(database, "usageCheckpoints", checkpointId, { readAtMs: ms }, options);
         },
-        setStatus: async (next) => {
-            const unattributedQuantity = next.unattributedQuantity ?? status?.unattributedQuantity ?? null;
-
-            // Nothing to write when the status is what the row already says (or there is no row and nothing to say).
-            if (next.unavailableReason === (status?.unavailableReason ?? null) && unattributedQuantity === (status?.unattributedQuantity ?? null)) {
-                return;
-            }
-
-            await upsertRow(database, "usageSourceStatus", status?._id, { unattributedQuantity, unavailableReason: next.unavailableReason }, options);
-        },
     };
+};
+
+/**
+ * Record what one run of a (target, scope key) found in `usageSourceStatus` —
+ * its own table, read only here, so writing it can never create or move a
+ * checkpoint, and a failing status table never stops billing.
+ */
+export const recordSourceStatus = async (
+    database: ControlPlaneDatabase,
+    status: UsageSourceStatus,
+    options: { now: number; scopeKey: string; target: TargetId },
+): Promise<void> => {
+    const { page } = await database.findMany("usageSourceStatus", { where: { scopeKey: options.scopeKey, target: options.target } });
+    const row = (page as StatusRow[]).at(0);
+    let fields: Record<string, unknown>;
+
+    if (status.kind === "read") {
+        fields = {
+            failingSince: null,
+            lastError: null,
+            unattributedQuantity: status.unattributedQuantity,
+            unavailableReason: null,
+            ...(status.gap === undefined ? {} : { gapNote: status.gap, gapRecordedAt: options.now }),
+        };
+    } else if (status.kind === "unavailable") {
+        fields = { failingSince: null, lastError: null, unavailableReason: status.message };
+    } else {
+        // Since the FIRST failure in a row: how long the source has been stuck is what makes it worth showing.
+        fields = { failingSince: row?.failingSince ?? options.now, lastError: status.message };
+    }
+
+    await upsertRow(database, "usageSourceStatus", row?._id, fields, options);
 };
 
 /**
@@ -324,7 +344,7 @@ export const usageRollbackPorts = async (
     database: ControlPlaneStore,
     source: UsageSource & { scope: string },
     options: { attribution: ReadonlyMap<string, UsageAttribution>; family: UsageFamily; now: number; target: TargetId },
-): Promise<UsageRollbackPorts & { setStatus: (status: UsageSourceStatus) => Promise<void> }> => {
+): Promise<UsageRollbackPorts> => {
     const billable = isBilledTarget(options.target);
 
     return {
@@ -332,7 +352,7 @@ export const usageRollbackPorts = async (
         cadence: source.cadence,
         now: options.now,
         read: async (window) => source.read(source.scope, window),
-        record: async ({ attribution, meter, periodStart, quantity }) => {
+        record: async ({ attribution, meter, periodStart, quantity, window }) => {
             await database.insert("platformUsage", {
                 // A tenant on a host its organization owns (its own Cloudflare
                 // account): its usage is on the customer's bill, so the row is
@@ -345,6 +365,9 @@ export const usageRollbackPorts = async (
                 periodStart,
                 ...(attribution.placementRef === undefined ? {} : { placementRef: attribution.placementRef }),
                 quantity,
+                // When the usage happened, which the anomaly sweep scores by.
+                windowEnd: window.untilMs,
+                windowStart: window.sinceMs,
             });
 
             if (billable) {
@@ -389,6 +412,56 @@ export interface ReadbackFleet {
 /** The label of a family's unavailable state: what the Usage tab and the log say. */
 const meteringLabel = (family: UsageFamily): string => (family === "requests" ? "request metering" : "storage metering");
 
+/** The callbacks of {@link runReadbackUsageSweep}. */
+interface ReadbackSweepOptions {
+    now: number;
+    /** What the operator should know of a run that succeeded: unattributed volume, a span too old to read. */
+    onNote?: (target: TargetId, scopeKey: string, message: string) => void;
+    onScopeFailed: (target: TargetId, scope: string, reason: unknown) => void;
+    onUnavailable?: (target: TargetId, scope: string, message: string) => void;
+}
+
+/** Read one (scope, family) into the ledger, and say how it went — the status the sweep records. */
+const readFamily = async (
+    database: ControlPlaneStore,
+    input: { attribution: ReadonlyMap<string, UsageAttribution>; family: UsageFamily; scope: string; source: UsageSource; target: TargetId },
+    options: ReadbackSweepOptions,
+): Promise<UsageSourceStatus> => {
+    const { attribution, family, scope, source, target } = input;
+    const scopeKey = usageScopeKey(scope, family);
+
+    try {
+        const ports = await usageRollbackPorts(database, { ...source, scope }, { attribution, family, now: options.now, target });
+        const result = await runUsageRollback(ports);
+        const gap =
+            result.gap === undefined
+                ? undefined
+                : `usage from ${new Date(result.gap.sinceMs).toISOString()} to ${new Date(result.gap.untilMs).toISOString()} was older than Cloudflare keeps it and was not read`;
+
+        if (result.unattributed > 0) {
+            options.onNote?.(target, scopeKey, `${String(result.unattributed)} read for resources no deployment matches (not billed)`);
+        }
+
+        if (gap !== undefined) {
+            options.onNote?.(target, scopeKey, gap);
+        }
+
+        return { kind: "read", unattributedQuantity: result.unattributed, ...(gap === undefined ? {} : { gap }) };
+    } catch (error) {
+        if (error instanceof UsageUnavailableError) {
+            const message = `${meteringLabel(family)} unavailable: ${error.message}`.slice(0, 500);
+
+            options.onUnavailable?.(target, scope, message);
+
+            return { kind: "unavailable", message };
+        }
+
+        options.onScopeFailed(target, family === "requests" ? scope : scopeKey, error);
+
+        return { kind: "failed", message: (error instanceof Error ? error.message : String(error)).slice(0, 500) };
+    }
+};
+
 /**
  * Fold every readback fleet's usage into `platformUsage`, every (scope, family)
  * delta-read off its own checkpoint. The deployments table is drained ONCE per
@@ -398,8 +471,14 @@ const meteringLabel = (family: UsageFamily): string => (family === "requests" ? 
  * another, each on its own: one whose read throws keeps its checkpoint and is
  * retried next hour, while the others advance.
  *
- * - A read that fails this once is reported through `onScopeFailed` (scope `*`
- *   when a target's scopes could not be listed).
+ * - A read that fails is reported through `onScopeFailed` (scope `*` when a
+ *   target's scopes could not be listed) and retried next hour; its error and
+ *   since when it has failed are kept in `usageSourceStatus`, so a source that
+ *   keeps failing (a persistent 429/5xx, a refused truncated result) is shown
+ *   rather than stalling silently.
+ * - A run that read reports the volume it could not attribute and any span
+ *   older than Cloudflare keeps (`MAX_LOOKBACK_MS`) through `onNote`, and keeps
+ *   both in `usageSourceStatus`.
  * - A source that cannot read at all (`UsageUnavailableError`: no dataset to
  *   meter, or a token the account refuses) records "storage metering
  *   unavailable: …" (or "request metering …") in `usageSourceStatus`, which
@@ -409,11 +488,7 @@ const meteringLabel = (family: UsageFamily): string => (family === "requests" ? 
 export const runReadbackUsageSweep = async (
     database: ControlPlaneStore,
     fleets: ReadonlyArray<ReadbackFleet>,
-    options: {
-        now: number;
-        onScopeFailed: (target: TargetId, scope: string, reason: unknown) => void;
-        onUnavailable?: (target: TargetId, scope: string, message: string) => void;
-    },
+    options: ReadbackSweepOptions,
 ): Promise<void> => {
     const reading = fleets.flatMap(({ id, usage }) => (usage === undefined ? [] : [{ target: id, usage }]));
 
@@ -447,27 +522,14 @@ export const runReadbackUsageSweep = async (
                 continue;
             }
 
-            let ports: Awaited<ReturnType<typeof usageRollbackPorts>> | undefined;
-
+            const scopeKey = usageScopeKey(scope, family);
             /* eslint-disable no-await-in-loop -- a scope's families run in turn, so their accruals never race each other */
-            try {
-                ports = await usageRollbackPorts(database, { ...source, scope }, { attribution, family, now: options.now, target });
+            const status = await readFamily(database, { attribution, family, scope, source, target }, options);
 
-                const result = await runUsageRollback(ports);
-
-                await ports.setStatus({ unattributedQuantity: result.unattributed, unavailableReason: null });
-            } catch (error) {
-                if (ports !== undefined && error instanceof UsageUnavailableError) {
-                    const message = `${meteringLabel(family)} unavailable: ${error.message}`.slice(0, 500);
-
-                    options.onUnavailable?.(target, scope, message);
-                    await ports.setStatus({ unavailableReason: message }).catch((statusError: unknown) => {
-                        options.onScopeFailed(target, scope, statusError);
-                    });
-                } else {
-                    options.onScopeFailed(target, family === "requests" ? scope : usageScopeKey(scope, family), error);
-                }
-            }
+            // Best-effort and separate: the ledger and the checkpoint are already written.
+            await recordSourceStatus(database, status, { now: options.now, scopeKey, target }).catch((statusError: unknown) => {
+                options.onScopeFailed(target, `${scopeKey} (status)`, statusError);
+            });
             /* eslint-enable no-await-in-loop */
         }
     });

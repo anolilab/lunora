@@ -91,8 +91,19 @@ Workers Scripts read (to list namespaces).
 
 **Check:** `wrangler tail lunora-cloud --env staging` across the top of an
 hour shows no `metering unavailable` line, and `SELECT * FROM
-usageSourceStatus WHERE unavailableReason IS NOT NULL` on the control-plane D1
-is empty.
+usageSourceStatus WHERE unavailableReason IS NOT NULL OR failingSince IS NOT
+NULL` on the control-plane D1 is empty.
+
+The same table is the operator's view of what the readback could not bill:
+`lastError`/`failingSince` for a source whose reads keep failing (a 429, a 5xx,
+a result at the 10,000-row limit), `gapNote` for a span older than Cloudflare
+keeps that was skipped, and `unattributedQuantity` for volume read for
+resources no deployment matches — the platform's own Workers are already
+excluded, so a steady non-zero value there (also logged hourly as `[usage]
+cloudflare-wfp <cell>#durableObjects: N read for resources no deployment
+matches`) means tenant usage is going unbilled: typically Durable Object
+namespaces of the dispatch namespace that the namespace list does not report,
+or a script name two environments share in one account.
 
 Tokens an organization pastes for its own account (the `cloudflare-workers`
 target, Cloudflare accounts tab) are not operator tokens and never go here.

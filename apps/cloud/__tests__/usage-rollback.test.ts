@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { UsageAttribution, UsageRecord, UsageRollbackPorts } from "../src/metering/rollback";
-import { BOOTSTRAP_WINDOW_MS, HOURLY_ANALYTICS_LAG_MS, MAX_HOURLY_CATCHUP_MS, runUsageRollback, splitByMonth } from "../src/metering/rollback";
+import { BOOTSTRAP_WINDOW_MS, HOURLY_ANALYTICS_LAG_MS, MAX_HOURLY_CATCHUP_MS, MAX_LOOKBACK_MS, runUsageRollback, splitByMonth } from "../src/metering/rollback";
 import type { UsageWindow } from "../src/targets/driver";
 
 const NOW = 1_700_000_000_000;
@@ -87,12 +87,14 @@ describe(runUsageRollback, () => {
         );
 
         const period = Date.UTC(2023, 10, 1);
+        // Every row carries the window it was read for: when the usage happened.
+        const window = { sinceMs: NOW - BOOTSTRAP_WINDOW_MS, untilMs: NOW };
 
         // A zero meter writes nothing; every other meter is its own row.
         expect(recorded).toStrictEqual([
-            { attribution: attribution("org_a", "dep_a"), meter: "d1RowsRead", periodStart: period, quantity: 900 },
-            { attribution: attribution("org_a", "dep_a"), meter: "doRowsWritten", periodStart: period, quantity: 40 },
-            { attribution: attribution("org_b", "dep_b"), meter: "requests", periodStart: period, quantity: 3 },
+            { attribution: attribution("org_a", "dep_a"), meter: "d1RowsRead", periodStart: period, quantity: 900, window },
+            { attribution: attribution("org_a", "dep_a"), meter: "doRowsWritten", periodStart: period, quantity: 40, window },
+            { attribution: attribution("org_b", "dep_b"), meter: "requests", periodStart: period, quantity: 3, window },
         ]);
         expect(result).toStrictEqual({ attributed: 2, failed: 0, recorded: { d1RowsRead: 900, doRowsWritten: 40, requests: 3 }, skipped: 0, unattributed: 0 });
     });
@@ -209,6 +211,28 @@ describe("hourly sources", () => {
         expect(windows).toStrictEqual([]);
         expect(advanced).toBe(false);
         expect(result.attributed).toBe(0);
+    });
+
+    it("never asks for an hour older than Cloudflare keeps: it starts at the oldest kept hour and reports the gap", async () => {
+        const windows: UsageWindow[] = [];
+        const stale = closed - 60 * 24 * HOUR;
+        const earliest = Math.ceil((now - MAX_LOOKBACK_MS) / HOUR) * HOUR;
+
+        const result = await runUsageRollback(
+            ports({
+                cadence: "hourly",
+                getCheckpoint: () => Promise.resolve(stale),
+                now,
+                read: (window) => {
+                    windows.push(window);
+
+                    return Promise.resolve([]);
+                },
+            }),
+        );
+
+        expect(windows).toStrictEqual([{ sinceMs: earliest, untilMs: earliest + MAX_HOURLY_CATCHUP_MS }]);
+        expect(result.gap).toStrictEqual({ sinceMs: stale, untilMs: earliest });
     });
 
     it("catches a backlog up at most a day per run", async () => {

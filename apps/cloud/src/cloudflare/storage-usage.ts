@@ -63,24 +63,39 @@ const addUsage = (into: Map<string, PeriodUsage>, key: string, usage: PeriodUsag
     into.set(key, total);
 };
 
-/** Every item of a page-numbered v4 listing. */
+/** Items asked for per page of a listing. */
+const LIST_PAGE_SIZE = 100;
+
+/**
+ * Every item of a page-numbered v4 listing. It pages until a page comes back
+ * short (fewer items than the page size the envelope reports, or than asked
+ * for), or `total_count` is reached. `total_pages` is not trusted: listings
+ * such as D1's do not always send it, and a missing one read as "1 page" metered
+ * only the first hundred databases.
+ * @throws {UsageUnavailableError} past {@link MAX_LIST_PAGES} full pages — a
+ * partial list would silently drop tenants, so it is reported instead.
+ */
 const listAll = async <T>(access: CloudflareAccountAccess, path: string): Promise<T[]> => {
     const call = cloudflareFetch(access);
     const items: T[] = [];
 
     for (let page = 1; page <= MAX_LIST_PAGES; page += 1) {
         // eslint-disable-next-line no-await-in-loop -- page-numbered listing is sequential by construction
-        const answer = await call<T[]>(`${path}${path.includes("?") ? "&" : "?"}page=${String(page)}&per_page=100`);
+        const answer = await call<T[]>(`${path}${path.includes("?") ? "&" : "?"}page=${String(page)}&per_page=${String(LIST_PAGE_SIZE)}`);
         const result = answer?.result ?? [];
 
         items.push(...result);
 
-        if (result.length === 0 || page >= (answer?.totalPages ?? 1)) {
-            break;
+        const complete = answer?.totalCount === undefined ? result.length < (answer?.perPage ?? LIST_PAGE_SIZE) : items.length >= answer.totalCount;
+
+        if (result.length === 0 || complete) {
+            return items;
         }
     }
 
-    return items;
+    throw new UsageUnavailableError(
+        `the listing ${path.split("?")[0] ?? path} has more than ${String(MAX_LIST_PAGES * LIST_PAGE_SIZE)} entries; refusing to meter a partial list`,
+    );
 };
 
 /** A D1 database as the listing reports it. */
@@ -246,12 +261,20 @@ const typeFields = async (access: CloudflareAccountAccess, names: ReadonlyArray<
     return cloudflareGraphql<Record<string, unknown>>(access, `query LunoraIntrospect { ${fields.join(" ")} }`);
 };
 
-/** The schema discovery's outcome, kept for the isolate: the dataset, or why there is none. */
-let probed: DurableObjectsDataset | UsageUnavailableError | undefined;
+/** How long the isolate trusts a probe's outcome before asking the schema again. */
+export const PROBE_TTL_MS = 6 * 60 * 60 * 1000;
 
-/** Forget the probe's outcome — for tests, which each describe their own schema. */
+/**
+ * The schema discovery's outcome per account — the dataset, or why there is
+ * none — with when it was found. Per account, so one account's schema (or
+ * plan) never decides another's, and for {@link PROBE_TTL_MS} only, so a
+ * schema that gains the dataset is noticed without a new isolate.
+ */
+const probed = new Map<string, { at: number; outcome: DurableObjectsDataset | UsageUnavailableError }>();
+
+/** Forget every probe outcome — for tests, which each describe their own schema. */
 export const resetDurableObjectsProbe = (): void => {
-    probed = undefined;
+    probed.clear();
 };
 
 /** Walk the schema to the account type: `Query.viewer` → `.accounts` → its element type. */
@@ -323,10 +346,11 @@ const chooseDataset = async (access: CloudflareAccountAccess, candidates: Readon
 
         let by: DurableObjectsDataset["by"] | undefined;
 
-        if (dimensions.has("scriptName")) {
-            by = "scriptName";
-        } else if (dimensions.has("namespaceId")) {
+        // A namespace id names one namespace; a script name can be shared across dispatch namespaces.
+        if (dimensions.has("namespaceId")) {
             by = "namespaceId";
+        } else if (dimensions.has("scriptName")) {
+            by = "scriptName";
         }
 
         if (rowSums.length > 0 && filter !== undefined && by !== undefined) {
@@ -346,7 +370,8 @@ const chooseDataset = async (access: CloudflareAccountAccess, candidates: Readon
 
 /**
  * Find the Durable Objects dataset that reports rows read and written, by
- * GraphQL introspection, and remember the answer for the isolate.
+ * GraphQL introspection, and remember the answer for the account, for
+ * {@link PROBE_TTL_MS}.
  *
  * Storage units (`storageReadUnits`, `storageWriteUnits`) are deliberately not
  * taken as rows. They are 4 KB units of the key-value backend, priced
@@ -360,13 +385,15 @@ const chooseDataset = async (access: CloudflareAccountAccess, candidates: Readon
  * @throws {UsageUnavailableError} when the schema offers no dataset to meter.
  * @throws {CloudflareTokenError} when the token is refused.
  */
-export const probeDurableObjectsDataset = async (access: CloudflareAccountAccess): Promise<DurableObjectsDataset> => {
-    if (probed instanceof UsageUnavailableError) {
-        throw probed;
-    }
+export const probeDurableObjectsDataset = async (access: CloudflareAccountAccess, now = Date.now()): Promise<DurableObjectsDataset> => {
+    const known = probed.get(access.accountId);
 
-    if (probed !== undefined) {
-        return probed;
+    if (known !== undefined && now - known.at < PROBE_TTL_MS) {
+        if (known.outcome instanceof UsageUnavailableError) {
+            throw known.outcome;
+        }
+
+        return known.outcome;
     }
 
     try {
@@ -390,12 +417,14 @@ export const probeDurableObjectsDataset = async (access: CloudflareAccountAccess
             throw new UsageUnavailableError(`the GraphQL account type ${account} has no durableObjects* dataset`);
         }
 
-        probed = await chooseDataset(access, candidates);
+        const dataset = await chooseDataset(access, candidates);
 
-        return probed;
+        probed.set(access.accountId, { at: now, outcome: dataset });
+
+        return dataset;
     } catch (error) {
         if (error instanceof UsageUnavailableError) {
-            probed = error;
+            probed.set(access.accountId, { at: now, outcome: error });
         }
 
         throw error;
@@ -407,45 +436,82 @@ interface DurableObjectsGroup {
     sum?: { rowsRead?: number; rowsWritten?: number };
 }
 
+/** The key of usage no tenant can be named for. It matches no `resourceRef`, so the rollback counts it as unattributed. */
+const unattributed = (what: string): string => `unattributed:${what}`;
+
 /**
- * The script a namespace-id row belongs to: the namespace list's `script`, or
- * `namespace:{id}` when the list cannot resolve it, so its volume shows up as
- * unattributed. `undefined` (skipped) for a namespace the list puts in another
- * dispatch namespace than `dispatchNamespace` — another environment's, in the
- * same account, which this cell does not meter.
+ * Whether a namespace holds the tenants this reader meters: those of
+ * `dispatchNamespace` on `cloudflare-wfp`, and on a connected account (no
+ * dispatch namespace given) the plain Workers outside any dispatch namespace.
  */
-const scriptOfNamespace = (
-    id: string | undefined,
-    ofNamespace: ReadonlyMap<string, DurableObjectNamespaceRef>,
+const isTenantNamespace = (namespace: DurableObjectNamespaceRef, dispatchNamespace: string | undefined): boolean =>
+    namespace.dispatchNamespace === dispatchNamespace;
+
+/**
+ * The tenant a dataset row belongs to, by the namespace list — never by its
+ * name alone. `undefined` drops the row: it is a namespace outside this
+ * reader's tenants (the platform's own Workers, another environment's dispatch
+ * namespace in the same account), which no tenant here may be billed for.
+ * Usage the list cannot place is keyed {@link unattributed}, so it is counted
+ * and shown rather than billed to whoever has the same name:
+ *
+ * - a namespace id the list does not have, or one without a script;
+ * - a script name the list does not have;
+ * - a script name both a tenant namespace and another one carry (a staging and
+ *   a production Worker named alike), since the row cannot be split between them.
+ */
+const tenantOf = (
+    group: DurableObjectsGroup,
+    by: DurableObjectsDataset["by"],
+    namespaces: ReadonlyArray<DurableObjectNamespaceRef>,
     dispatchNamespace: string | undefined,
 ): string | undefined => {
-    if (id === undefined) {
+    if (by === "namespaceId") {
+        const id = group.dimensions?.namespaceId;
+
+        if (id === undefined || id === "") {
+            return undefined;
+        }
+
+        const namespace = namespaces.find((candidate) => candidate.id === id);
+
+        if (namespace === undefined) {
+            return unattributed(`namespace:${id}`);
+        }
+
+        if (!isTenantNamespace(namespace, dispatchNamespace)) {
+            return undefined;
+        }
+
+        return namespace.script ?? unattributed(`namespace:${id}`);
+    }
+
+    const script = group.dimensions?.scriptName;
+
+    if (script === undefined || script === "") {
         return undefined;
     }
 
-    const namespace = ofNamespace.get(id);
+    const owners = namespaces.filter((namespace) => namespace.script === script);
+    const tenant = owners.some((namespace) => isTenantNamespace(namespace, dispatchNamespace));
+    const other = owners.some((namespace) => !isTenantNamespace(namespace, dispatchNamespace));
 
-    if (dispatchNamespace !== undefined && namespace?.dispatchNamespace !== undefined && namespace.dispatchNamespace !== dispatchNamespace) {
-        return undefined;
+    if (tenant) {
+        return other ? unattributed(`ambiguous-script:${script}`) : script;
     }
 
-    return namespace?.script ?? `namespace:${id}`;
+    return other ? undefined : unattributed(`script:${script}`);
 };
 
 /**
  * Durable Object rows read and written per Worker script in a closed,
  * hour-aligned window (`[sinceMs, untilMs)`), through the dataset the probe
- * found. Rows are attributed by script name, or by namespace id resolved
- * through the namespace list.
- *
- * - `dispatchNamespace` (`cloudflare-wfp`) drops the namespaces the list says
- *   belong to ANOTHER dispatch namespace, such as another environment's in the
- *   same account. Nothing else is dropped here: a row of the platform's own
- *   scripts matches no deployment, so the rollback counts it as unattributed,
- *   which keeps a misattribution visible rather than silent.
- * - A namespace the list cannot resolve is keyed `namespace:{id}`. No tenant
- *   has that name, so the rollback counts its volume as unattributed and the
- *   sweep reports it, instead of dropping it silently.
+ * found. Every row is placed through the namespace list ({@link tenantOf}),
+ * whichever dimension the dataset has: only namespaces of this reader's tenants
+ * (`dispatchNamespace` on `cloudflare-wfp`; outside any dispatch namespace on a
+ * connected account) are attributed. The platform's own Workers and another
+ * environment's are dropped, and what the list cannot place is keyed
+ * `unattributed:…`, which the rollback counts and the sweep reports.
  * @throws {UsageUnavailableError} when no dataset can be metered.
  * @throws {CloudflareTokenError} when the token lacks Account Analytics Read.
  */
@@ -470,17 +536,13 @@ export const readDurableObjectUsageByScript = async (
         throw new Error(`Durable Objects analytics hit the ${String(STORAGE_QUERY_LIMIT)}-row limit; refusing a truncated count`);
     }
 
-    const namespaces = dataset.by === "namespaceId" ? await listDurableObjectNamespaces(access) : [];
-    const ofNamespace = new Map(namespaces.map((namespace) => [namespace.id, namespace]));
+    const namespaces = await listDurableObjectNamespaces(access);
     const byScript = new Map<string, PeriodUsage>();
 
     for (const group of groups) {
-        const script =
-            dataset.by === "scriptName"
-                ? group.dimensions?.scriptName
-                : scriptOfNamespace(group.dimensions?.namespaceId, ofNamespace, options.dispatchNamespace);
+        const script = tenantOf(group, dataset.by, namespaces, options.dispatchNamespace);
 
-        if (script !== undefined && script !== "") {
+        if (script !== undefined) {
             addUsage(byScript, script, { doRowsRead: count(group.sum?.rowsRead), doRowsWritten: count(group.sum?.rowsWritten) });
         }
     }

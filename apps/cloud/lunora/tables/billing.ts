@@ -48,8 +48,13 @@ export const billingTables = {
         // compacts it only with its own host's rows. Absent on platform-metered rows.
         placementRef: v.optional(placementHost),
         quantity: v.number(),
-        // The report window a box row counts (epoch ms) — with `placementRef`,
+        // When the usage happened (epoch ms): the window a box report counts, or
+        // the window the usage readback read. The anomaly sweep scores an hour by
+        // the usage whose window overlaps it, apportioned, never by `createdAt`.
+        // Absent on rows a tenant self-reports (`usage.ingest`), which are scored
+        // by `createdAt`. For a box row, `windowStart` with `placementRef` is also
         // the key that makes a replayed report a no-op instead of a double count.
+        windowEnd: v.optional(v.number()),
         windowStart: v.optional(v.number()),
     })
         .global()
@@ -79,8 +84,17 @@ export const billingTables = {
     // cannot read ("storage metering unavailable: …") until it reads again; the
     // Usage tab shows it (`usage.meteringStatus`) instead of a silent zero.
     // `unattributedQuantity` is the volume the last run read for resources no
-    // deployment matches, so dropped usage stays visible.
+    // deployment matches (the platform's own Workers excluded), so dropped
+    // usage stays visible to the operator.
     usageSourceStatus: defineTable({
+        // Since when the source's reads have failed in a row (a 5xx, a 429, a
+        // refused truncated result), and the last error — shown once it persists.
+        failingSince: v.optional(v.number()),
+        // A span the checkpoint asked for that is older than Cloudflare keeps:
+        // skipped, so what was lost is recorded rather than silent.
+        gapNote: v.optional(v.string()),
+        gapRecordedAt: v.optional(v.number()),
+        lastError: v.optional(v.string()),
         scopeKey: v.string(),
         target: deployTarget,
         unattributedQuantity: v.optional(v.number()),

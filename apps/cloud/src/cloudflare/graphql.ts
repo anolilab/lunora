@@ -24,8 +24,13 @@ export class CloudflareGraphqlQueryError extends Error {
     }
 }
 
-/** How the GraphQL API words a token that lacks the permission for a query. */
-const AUTHORIZATION_ERROR = /\bauthoriz|permission|not allowed/iu;
+/**
+ * How the GraphQL API words a token that lacks the permission for a query
+ * ("not authorized for that account"). Narrow on purpose: a bare "not allowed"
+ * also words a rejected argument or a disabled introspection, which is a query
+ * error, not the token's.
+ */
+const AUTHORIZATION_ERROR = /\b(?:not authori[sz]ed|unauthori[sz]ed|permission denied|(?:lacks?|does not have|missing)(?: the)? permissions?|forbidden)\b/iu;
 
 interface GraphqlResponse<T> {
     data?: null | T;

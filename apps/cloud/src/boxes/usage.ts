@@ -111,6 +111,7 @@ export const recordBoxReport = async (
             periodStart: periodStartOf(windowStart),
             placementRef: box._id,
             quantity: entry.requests,
+            windowEnd,
             windowStart,
         });
         recorded += 1;

@@ -127,6 +127,10 @@ const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
             // eslint-disable-next-line no-console -- a failed scope keeps its checkpoint; this is its only record
             console.error(`[usage] ${target} readback failed for scope ${scope}`, reason);
         },
+        onNote: (target, scopeKey, message) => {
+            // eslint-disable-next-line no-console -- also kept in `usageSourceStatus`; this is the operator's copy
+            console.warn(`[usage] ${target} ${scopeKey}: ${message}`);
+        },
         onUnavailable: (target, scope, message) => {
             // eslint-disable-next-line no-console -- also kept in `usageSourceStatus` (`usage.meteringStatus`); this is the operator's copy
             console.warn(`[usage] ${target} scope ${scope}: ${message}`);
@@ -243,7 +247,7 @@ const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
-    const { deliveries, transitions } = await runAnomalySweep(database, { now });
+    const { deliveries, transitions } = await runAnomalySweep(database, { cell: env.LUNORA_CELL ?? "default", now });
 
     await deliverFiredAlerts(env, database, deliveries, now);
     // The anomaly → rate-limit action (plan 365 W7): intent only; `sweepEdgeRules` applies it.

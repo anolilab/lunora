@@ -4,6 +4,7 @@ import { accrualBreached, RATE_CARD } from "../src/billing/spend";
 import type { ReadbackFleet } from "../src/deploy/sweeps";
 import { runReadbackUsageSweep, teardownPorts, USAGE_SCOPE_CONCURRENCY, usageAttributionOf, usageRollbackPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
+import { MAX_LOOKBACK_MS } from "../src/metering/rollback";
 import type { SourceStatusRow } from "../src/metering/status";
 import { meteringNotices } from "../src/metering/status";
 import { UsageUnavailableError } from "../src/metering/unavailable";
@@ -322,7 +323,13 @@ describe(usageRollbackPorts, () => {
             now: 1000,
             target: "cloudflare-wfp",
         });
-        await ports.record({ attribution: { deploymentId: "dep_a", organizationId: "org_a" }, meter: "requests", periodStart: 777, quantity: 12 });
+        await ports.record({
+            attribution: { deploymentId: "dep_a", organizationId: "org_a" },
+            meter: "requests",
+            periodStart: 777,
+            quantity: 12,
+            window: { sinceMs: 100, untilMs: 900 },
+        });
 
         expect(insert).toHaveBeenCalledWith("platformUsage", {
             createdAt: 1000,
@@ -331,6 +338,8 @@ describe(usageRollbackPorts, () => {
             organizationId: "org_a",
             periodStart: 777,
             quantity: 12,
+            windowEnd: 900,
+            windowStart: 100,
         });
     });
 
@@ -364,7 +373,13 @@ describe(usageRollbackPorts, () => {
         // A same-named script in another account is never this tenant's.
         expect(ports.resolveResource("cfa_2/web")).toBeUndefined();
 
-        await ports.record({ attribution: attribution as NonNullable<typeof attribution>, meter: "requests", periodStart: 777, quantity: 5 });
+        await ports.record({
+            attribution: attribution as NonNullable<typeof attribution>,
+            meter: "requests",
+            periodStart: 777,
+            quantity: 5,
+            window: { sinceMs: 100, untilMs: 900 },
+        });
 
         expect(insert).toHaveBeenCalledWith(
             "platformUsage",
@@ -381,7 +396,13 @@ describe(usageRollbackPorts, () => {
             const database = fakeControlPlaneDb({ organizations: [{ _id: "org_a", spendNanoCents: 7, spendPeriod: period }], usageCheckpoints: [] }, { patch });
             const ports = await usageRollbackPorts(database, source([], "s"), { attribution: new Map(), family: "requests", now, target });
 
-            await ports.record({ attribution: { organizationId: "org_a" }, meter: "requests", periodStart: period, quantity: 4 });
+            await ports.record({
+                attribution: { organizationId: "org_a" },
+                meter: "requests",
+                periodStart: period,
+                quantity: 4,
+                window: { sinceMs: period, untilMs: now },
+            });
 
             return patch.mock.calls.filter((call) => call[2] === "organizations");
         };
@@ -668,7 +689,7 @@ describe(runReadbackUsageSweep, () => {
             expect(database.tables["usageCheckpoints"]).toStrictEqual([]);
             expect(database.tables["platformUsage"]).toBeUndefined();
             // The member-facing notice, read off the same row.
-            expect(meteringNotices(database.tables["usageSourceStatus"] as unknown as SourceStatusRow[], [], "default")).toStrictEqual([
+            expect(meteringNotices(database.tables["usageSourceStatus"] as unknown as SourceStatusRow[], [], "default", now)).toStrictEqual([
                 {
                     family: "durableObjects",
                     message: expect.stringContaining("Durable Object rows read and written are not counted") as string,
@@ -774,6 +795,89 @@ describe(runReadbackUsageSweep, () => {
                 expect.objectContaining({ billable: false, kind: "doRowsWritten", placementRef: "cfa_1", quantity: 9 }),
             ]);
             expect(database.tables["organizations"]).toStrictEqual([{ _id: "org_a", plan: "free" }]);
+        });
+
+        it("keeps a source that keeps failing visible, from its first failure, and clears it once it reads", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, usageCheckpoints: [] });
+            let failing = true;
+            const fleet = wfpFleet({
+                d1: {
+                    cadence: "hourly",
+                    read: () => (failing ? Promise.reject(new Error("GraphQL 429: rate limited")) : Promise.resolve([])),
+                },
+            });
+
+            await runReadbackUsageSweep(database, [fleet], { now, onScopeFailed: () => undefined });
+            await runReadbackUsageSweep(database, [fleet], { now: now + 4 * 60 * 60 * 1000, onScopeFailed: () => undefined });
+
+            const [row] = database.tables["usageSourceStatus"] as unknown as SourceStatusRow[];
+
+            expect(row).toMatchObject({ failingSince: now, lastError: "GraphQL 429: rate limited", scopeKey: "default#d1" });
+            // Shown once it has failed for a while; a single blip is not.
+            expect(meteringNotices([row], [], "default", now)).toStrictEqual([]);
+            expect(meteringNotices([row], [], "default", now + 4 * 60 * 60 * 1000)).toStrictEqual([
+                expect.objectContaining({ family: "d1", message: expect.stringContaining("has not been able to read this usage since") as string }),
+            ]);
+
+            failing = false;
+            await runReadbackUsageSweep(database, [fleet], { now: now + 5 * 60 * 60 * 1000, onScopeFailed: () => undefined });
+
+            expect(database.tables["usageSourceStatus"]).toStrictEqual([expect.objectContaining({ failingSince: null, lastError: null })]);
+        });
+
+        it("bills requests even when the status table cannot be read or written", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, organizations: [{ _id: "org_a", plan: "pro" }], usageCheckpoints: [] });
+            const findMany = database.findMany.bind(database);
+            const failed: string[] = [];
+
+            database.findMany = (table, args) => (table === "usageSourceStatus" ? Promise.reject(new Error("no such table")) : findMany(table, args));
+
+            await runReadbackUsageSweep(database, [wfpFleet({ requests })], { now, onScopeFailed: (_target, scope) => failed.push(scope) });
+
+            expect(database.tables["platformUsage"]).toStrictEqual([expect.objectContaining({ kind: "requests", quantity: 10 })]);
+            expect(database.tables["usageCheckpoints"]).toStrictEqual([expect.objectContaining({ readAtMs: now, scopeKey: "default" })]);
+            expect(failed).toStrictEqual(["default (status)"]);
+        });
+
+        it("reports a checkpoint older than Cloudflare keeps as a gap, and reads on from what is kept", async () => {
+            const stale = now - MAX_LOOKBACK_MS - 10 * 24 * 60 * 60 * 1000;
+            const database = memoryStore({
+                deployments: wfpDeployments,
+                usageCheckpoints: [{ _id: "cp", readAtMs: stale, scopeKey: "default", target: "cloudflare-wfp", updatedAt: 0 }],
+            });
+            const notes: string[] = [];
+
+            await runReadbackUsageSweep(database, [wfpFleet({ requests })], {
+                now,
+                onNote: (_target, scopeKey, message) => notes.push(`${scopeKey}: ${message}`),
+                onScopeFailed: () => undefined,
+            });
+
+            const gap = `usage from ${new Date(stale).toISOString()} to ${new Date(now - MAX_LOOKBACK_MS).toISOString()} was older than Cloudflare keeps it and was not read`;
+
+            expect(notes).toStrictEqual([`default: ${gap}`]);
+            expect(database.tables["usageSourceStatus"]).toStrictEqual([expect.objectContaining({ gapNote: gap, gapRecordedAt: now })]);
+            expect(database.tables["usageCheckpoints"]).toStrictEqual([expect.objectContaining({ readAtMs: now })]);
+        });
+
+        it("logs the volume it could not attribute", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, usageCheckpoints: [] });
+            const notes: string[] = [];
+
+            await runReadbackUsageSweep(
+                database,
+                [
+                    wfpFleet({
+                        durableObjects: {
+                            cadence: "hourly",
+                            read: () => Promise.resolve([{ meters: { doRowsRead: 70 }, resourceRef: "unattributed:namespace:x" }]),
+                        },
+                    }),
+                ],
+                { now, onNote: (_target, scopeKey, message) => notes.push(`${scopeKey}: ${message}`), onScopeFailed: () => undefined },
+            );
+
+            expect(notes).toStrictEqual(["default#durableObjects: 70 read for resources no deployment matches (not billed)"]);
         });
     });
 });

@@ -619,6 +619,7 @@ export interface Doc_platformUsage {
     periodStart: number;
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     quantity: number;
+    windowEnd?: number;
     windowStart?: number;
 }
 
@@ -634,6 +635,10 @@ export interface Doc_usageCheckpoints {
 export interface Doc_usageSourceStatus {
     _id: Id<"usageSourceStatus">;
     _creationTime: number;
+    failingSince?: number;
+    gapNote?: string;
+    gapRecordedAt?: number;
+    lastError?: string;
     scopeKey: string;
     target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     unattributedQuantity?: number;
@@ -1560,6 +1565,7 @@ export interface Insert_platformUsage {
     periodStart: number;
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     quantity: number;
+    windowEnd?: number;
     windowStart?: number;
 }
 
@@ -1575,6 +1581,10 @@ export interface Insert_usageCheckpoints {
 export interface Insert_usageSourceStatus {
     _id?: Id<"usageSourceStatus">;
     _creationTime?: number;
+    failingSince?: number;
+    gapNote?: string;
+    gapRecordedAt?: number;
+    lastError?: string;
     scopeKey: string;
     target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     unattributedQuantity?: number;

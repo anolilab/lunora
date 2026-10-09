@@ -366,7 +366,7 @@ export const meteringStatus = query
         ]);
 
         // The platform's own source is shown for the organization's cell only: its name is the `cloudflare-wfp` scope.
-        return meteringNotices(statuses, accounts, cell?.name);
+        return meteringNotices(statuses, accounts, cell?.name, context.now);
     });
 
 /** Shortest elapsed span a projection extrapolates from, so the first minutes of a month do not project a runaway. */

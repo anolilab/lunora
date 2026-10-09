@@ -515,26 +515,47 @@ therefore neither blocks nor skips the request window.
 - **Attribution.** A D1 database is a tenant's when its name is one
   `tenantResourceName` produced (`{alias}--{binding}`); the database list
   (`GET /accounts/{id}/d1/database`) maps it to its alias. Durable Object rows
-  are attributed by `scriptName`, or by `namespaceId` through the namespace
-  list (`script`, and on `cloudflare-wfp` its `dispatch_namespace`). Rows that
-  match no deployment are dropped but their volume is kept in
-  `usageSourceStatus.unattributedQuantity`, so a misattribution is visible.
+  are placed through the namespace list (`GET …/durable_objects/namespaces`)
+  whichever dimension the dataset has (`namespaceId` preferred, else
+  `scriptName`): only namespaces of this environment's tenants count — those
+  of its dispatch namespace on `cloudflare-wfp`, plain Workers on a connected
+  account. The platform's own Workers and another environment's in the same
+  account are dropped, never billed to a tenant named alike; a script both a
+  tenant namespace and another carry, or one the list does not have, is kept
+  as unattributed. Either way only an alias with a deployment in this control
+  plane is billed. Unattributed volume is logged
+  (`[usage] <target> <scope>#<family>: N read for resources no deployment
+matches`) and kept in `usageSourceStatus.unattributedQuantity`.
+- **Listings are read to the end.** The D1 and namespace listings page until a
+  short page or `total_count`, not `total_pages` (which D1 does not always
+  send); a listing longer than 10,000 entries is refused as unavailable rather
+  than metered in part.
 - **No hard-coded Durable Objects schema.** Nothing in this repository verifies
   the Durable Objects datasets' field names, so `probeDurableObjectsDataset`
   (`src/cloudflare/storage-usage.ts`) discovers them by GraphQL introspection
-  and caches the answer per isolate. Storage units (`storageReadUnits`, 4 KB
-  units of the key-value backend) are never priced as rows.
+  and caches the answer per account for six hours. Storage units
+  (`storageReadUnits`, 4 KB units of the key-value backend) are never priced
+  as rows.
 - **Unavailable is shown, never zero.** When a source cannot read at all — the
   schema has no dataset to meter, the token lacks Account Analytics: Read, or
-  Cloudflare rejects the query itself (a 200 with `errors`) —
-  the sweep records `storage metering unavailable: <reason>` in
-  `usageSourceStatus`, logs it, and keeps the checkpoint where it was. The
-  Usage tab shows it (`usage.meteringStatus`); for the platform's own account
-  (to the organizations of that cell) it says storage is not counted toward
-  the spend cap until it can be read. A failed request (a 5xx) is retried next
-  hour instead.
+  Cloudflare rejects the query itself (a 200 with `errors`) — the sweep
+  records `storage metering unavailable: <reason>` in `usageSourceStatus`,
+  logs it, and keeps the checkpoint where it was. A read that fails (a 5xx, a
+  429, a result at the 10,000-row limit) is retried next hour; its error and
+  since when it has failed are kept too, and the Usage tab shows it once it has
+  failed for three hours. A checkpoint older than Cloudflare keeps its data (28
+  days, conservatively) starts from what is still kept, and the skipped span
+  is logged and shown for a week. The Usage tab reads all of this through
+  `usage.meteringStatus`; for the platform's own account (to the organizations
+  of that cell) it says the usage is not counted toward the spend cap until it
+  can be read.
 - **Each window is billed to its own month.** A window that crosses a month
   boundary is split there, so the last hour of a month stays on that month.
+  Known gap: the six-hourly overage reconcile reads the current period only,
+  so `requests` rows of a closed month written after it closed (the last
+  readback hour) are never debited as overage. The spend cap, the summary and
+  the invoice read them; overage prices only `requests` and `cpuMs`, so
+  storage is unaffected.
 - **Spend cap.** On `cloudflare-wfp`, storage rows are billable like requests:
   priced by `RATE_CARD`, accrued into `organizations.spendNanoCents` at once
   (admission), and summed by `usage.enforceSpendCaps` every hour. BYO rows stay
@@ -693,28 +714,39 @@ traffic that falls away). The noise controls are fixed by the platform:
 The signals come from stores every target writes to. That makes the score
 target-agnostic:
 
-| Signal                               | Source                                                                                                            | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ---------------- | -------------------------- | ----------------------- |
-| requests (`usage_anomaly`)           | `platformUsage` `requests` rows created in the hour                                                               | AE readback      | readback of the account    | the box's usage reports |
-| storage row cost (`storage_anomaly`) | `platformUsage` D1 and Durable Object row-operation rows created in the hour, priced by `RATE_CARD` in nano-cents | GraphQL readback | readback of the account    | not metered             |
-| error spans (`error_anomaly`)        | error-level `observations` started in the hour (OTLP)                                                             | when telemetered | when telemetered           | when telemetered        |
+| Signal                               | Source                                                                                                              | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ---------------- | -------------------------- | ----------------------- |
+| requests (`usage_anomaly`)           | `platformUsage` `requests` usage that happened in the hour                                                          | AE readback      | readback of the account    | the box's usage reports |
+| storage row cost (`storage_anomaly`) | `platformUsage` D1 and Durable Object row operations that happened in the hour, priced by `RATE_CARD` in nano-cents | GraphQL readback | readback of the account    | not metered             |
+| error spans (`error_anomaly`)        | error-level `observations` started in the hour (OTLP)                                                               | when telemetered | when telemetered           | when telemetered        |
 
 The storage signal is priced rather than a row count because a written row
 costs a thousand times a read one: summed as rows, a read-heavy normal would
 hide a write runaway that costs far more. Its σ floor is the Poisson spread of
-written rows, the dearest unit. Storage rows arrive an hour or two behind
-(closed hours only), so a runaway scores in the hour its rows land. A storage
-anomaly does not arm the edge rate limit: a Durable Object loop is not per-IP
-traffic.
+written rows, the dearest unit. A storage anomaly does not arm the edge rate
+limit: a Durable Object loop is not per-IP traffic.
+
+The ledger signals score an hour by when the usage **happened**: each
+readback row carries the window it was read for (`windowStart`/`windowEnd`;
+a box row its report window), and a row's quantity is spread over the hours
+its window covers. A catch-up run that reads several hours at once therefore
+scores as the hours it covers, not as one spike, and a window split at a
+month boundary as one steady hour, not a collapse. Rows without a window (a
+tenant's own `usage.ingest`) count in the hour they were written, for their
+own month only. Because the readback runs on the same hourly tick, requests
+score the hour the previous tick's readback finished and storage the hour
+before that (its datasets are read only once an hour has closed). An hour is
+scored only once every readback source of the organization — the cell, and
+its connected accounts — has read past it; a source still behind (up to six
+hours) skips the hour rather than scoring a dip its catch-up then refills.
+Hours of a month that has closed are never scored, because ledger compaction
+can fold the whole month onto one of its rows: the last two hours of a month
+for requests, three for storage.
 
 A box's rows are display-only (`billable: false`) and still count, because
-an anomaly is about traffic, not the invoice. The ledger signals count only
-rows of the scored hour's own month (`periodStart`): the readback bills a
-window to the month it happened in, so the first runs of a month write rows of
-the month before, and compaction can fold that whole closed month onto one of
-them. The last hour of each month is not scored, for the same reason. An hour with no usage report, for example from a box
-that went offline, scores as zero traffic, which an `lt` rule reads as a
-collapse.
+an anomaly is about traffic, not the invoice. An hour with no usage report,
+for example from a box that went offline, scores as zero traffic, which an
+`lt` rule reads as a collapse.
 
 ### Edge protection & DDoS (`lunora/edge.ts`, `src/edge/`, plan 365 W7)
 

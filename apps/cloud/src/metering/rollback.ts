@@ -44,6 +44,16 @@ export const HOURLY_ANALYTICS_LAG_MS = 15 * 60 * 1000;
  */
 export const MAX_HOURLY_CATCHUP_MS = 24 * HOUR_MS;
 
+/**
+ * The furthest back a checkpoint may ask. Cloudflare keeps its analytics for a
+ * limited time (the adaptive GraphQL datasets and Analytics Engine alike), so a
+ * checkpoint older than that would ask for data that no longer exists and
+ * stall for good. Past it, the window starts here instead and the skipped span
+ * is reported (`UsageRollbackResult.gap`) — kept visible, never silent.
+ * Conservative: shorter than any retention we read from.
+ */
+export const MAX_LOOKBACK_MS = 28 * 24 * HOUR_MS;
+
 /** Which org (and deployment) a resource's usage belongs to. */
 export interface UsageAttribution {
     deploymentId?: string;
@@ -59,6 +69,13 @@ export interface UsageRecord {
     /** The UTC month the usage happened in, which is not always the month the sweep runs in. */
     periodStart: number;
     quantity: number;
+
+    /**
+     * When the usage happened: the window it was read for. The anomaly sweep
+     * scores an hour by the usage that happened in it — apportioned across the
+     * hours a multi-hour window covers — never by when the row was written.
+     */
+    window: UsageWindow;
 }
 
 export interface UsageRollbackPorts {
@@ -83,6 +100,8 @@ export interface UsageRollbackResult {
     attributed: number;
     /** Ledger writes that threw. The quantity is dropped, so this under-counts. */
     failed: number;
+    /** A span the checkpoint asked for but that is older than {@link MAX_LOOKBACK_MS}: skipped, and reported. */
+    gap?: UsageWindow;
     /** What was recorded this run, by meter. */
     recorded: PeriodUsage;
     /** Rows of resources with no matching deployment. These are dropped. */
@@ -94,18 +113,38 @@ export interface UsageRollbackResult {
 /** A positive, finite quantity; anything else records nothing. */
 const positive = (value: number | undefined): number => (value !== undefined && Number.isFinite(value) && value > 0 ? value : 0);
 
-/** The window this run reads, or `undefined` when nothing new has closed yet. */
-const windowOf = (ports: Pick<UsageRollbackPorts, "cadence" | "now">, checkpoint: number | undefined): undefined | UsageWindow => {
+/**
+ * Where this run starts: the checkpoint, unless it is older than the data
+ * Cloudflare still keeps — then the earliest instant still kept, and the
+ * skipped span as a gap.
+ */
+const startOf = (cadence: UsageSource["cadence"], now: number, checkpoint: number): { gap?: UsageWindow; sinceMs: number } => {
+    const earliest = now - MAX_LOOKBACK_MS;
+
+    if (checkpoint >= earliest) {
+        return { sinceMs: checkpoint };
+    }
+
+    // An hourly source reads whole hours, so its start stays hour-aligned.
+    const sinceMs = cadence === "hourly" ? Math.ceil(earliest / HOUR_MS) * HOUR_MS : earliest;
+
+    return { gap: { sinceMs: checkpoint, untilMs: sinceMs }, sinceMs };
+};
+
+/** The window this run reads (`undefined` when nothing new has closed yet), and any span skipped as too old. */
+const windowOf = (ports: Pick<UsageRollbackPorts, "cadence" | "now">, checkpoint: number | undefined): { gap?: UsageWindow; window?: UsageWindow } => {
     if (ports.cadence === "continuous") {
-        return { sinceMs: checkpoint ?? ports.now - BOOTSTRAP_WINDOW_MS, untilMs: ports.now };
+        const start = checkpoint === undefined ? { sinceMs: ports.now - BOOTSTRAP_WINDOW_MS } : startOf("continuous", ports.now, checkpoint);
+
+        return { ...start, window: { sinceMs: start.sinceMs, untilMs: ports.now } };
     }
 
     // Only hours that ended at least the lag ago, so a bucket is never read while it still fills.
     const closed = Math.floor((ports.now - HOURLY_ANALYTICS_LAG_MS) / HOUR_MS) * HOUR_MS;
-    const sinceMs = checkpoint ?? closed - BOOTSTRAP_WINDOW_MS;
-    const untilMs = Math.min(closed, sinceMs + MAX_HOURLY_CATCHUP_MS);
+    const start = checkpoint === undefined ? { sinceMs: closed - BOOTSTRAP_WINDOW_MS } : startOf("hourly", ports.now, checkpoint);
+    const untilMs = Math.min(closed, start.sinceMs + MAX_HOURLY_CATCHUP_MS);
 
-    return untilMs > sinceMs ? { sinceMs, untilMs } : undefined;
+    return { ...(start.gap === undefined ? {} : { gap: start.gap }), ...(untilMs > start.sinceMs ? { window: { sinceMs: start.sinceMs, untilMs } } : {}) };
 };
 
 /** The first instant of the UTC month after `at`. */
@@ -152,11 +191,15 @@ const addResults = (a: UsageRollbackResult, b: UsageRollbackResult): UsageRollba
         recorded,
         skipped: a.skipped + b.skipped,
         unattributed: a.unattributed + b.unattributed,
+        ...(a.gap === undefined ? {} : { gap: a.gap }),
     };
 };
 
 /** Record one row's meters into the ledger, and say what that did. */
-const recordRow = async (ports: UsageRollbackPorts, row: UsageRow, periodStart: number): Promise<UsageRollbackResult> => {
+const recordRow = async (ports: UsageRollbackPorts, row: UsageRow, part: UsageWindow): Promise<UsageRollbackResult> => {
+    // A part's usage happened in the part's month. The part is `(since, until]` or
+    // `[since, until)` and never crosses a month, so its start names that month.
+    const periodStart = periodStartOf(part.sinceMs);
     const tally = emptyResult();
     const meters = Object.entries(row.meters).flatMap(([meter, quantity]) =>
         isUsageMeter(meter) && positive(quantity) > 0 ? [{ meter, quantity: positive(quantity) }] : [],
@@ -175,7 +218,7 @@ const recordRow = async (ports: UsageRollbackPorts, row: UsageRow, periodStart: 
     for (const { meter, quantity } of meters) {
         try {
             // eslint-disable-next-line no-await-in-loop -- sequential ledger writes; per-scope resource counts are small
-            await ports.record({ attribution, meter, periodStart, quantity });
+            await ports.record({ attribution, meter, periodStart, quantity, window: part });
             tally.recorded[meter] = (tally.recorded[meter] ?? 0) + quantity;
             tally.attributed = 1;
         } catch {
@@ -199,23 +242,19 @@ const recordRow = async (ports: UsageRollbackPorts, row: UsageRow, periodStart: 
  *   succeeded, and the next run retries from there.
  */
 export const runUsageRollback = async (ports: UsageRollbackPorts): Promise<UsageRollbackResult> => {
-    const window = windowOf(ports, await ports.getCheckpoint());
+    const { gap, window } = windowOf(ports, await ports.getCheckpoint());
+    let result: UsageRollbackResult = { ...emptyResult(), ...(gap === undefined ? {} : { gap }) };
 
     if (window === undefined) {
-        return emptyResult();
+        return result;
     }
-
-    let result = emptyResult();
 
     /* eslint-disable no-await-in-loop -- parts are sequential: each advances the checkpoint the next one starts from */
     for (const part of splitByMonth(window)) {
-        // A part's usage happened in the part's month. The part is `(since, until]` or
-        // `[since, until)` and never crosses a month, so its start names that month.
-        const periodStart = periodStartOf(part.sinceMs);
         const rows = await ports.read(part);
 
         for (const row of rows) {
-            result = addResults(result, await recordRow(ports, row, periodStart));
+            result = addResults(result, await recordRow(ports, row, part));
         }
 
         await ports.setCheckpoint(part.untilMs);

@@ -123,6 +123,7 @@ describe("recording a box's usage report", () => {
                 periodStart: periodStartOf(windowStart),
                 placementRef: "box_1",
                 quantity: 42,
+                windowEnd: windowStart + MINUTE,
                 windowStart,
             },
         ]);

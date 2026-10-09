@@ -693,6 +693,7 @@ export const platformUsage = sqliteTable("platformUsage", {
     periodStart: real("periodStart").notNull(),
     placementRef: text("placementRef", { mode: "json" }).$type<Id<"boxes"> | Id<"cloudflareAccounts">>(),
     quantity: real("quantity").notNull(),
+    windowEnd: real("windowEnd"),
     windowStart: real("windowStart"),
 }, (t) => ({
     by_placement_window: index("by_placement_window").on(t.placementRef, t.windowStart),
@@ -713,6 +714,10 @@ export const usageCheckpoints = sqliteTable("usageCheckpoints", {
 export const usageSourceStatus = sqliteTable("usageSourceStatus", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    failingSince: real("failingSince"),
+    gapNote: text("gapNote"),
+    gapRecordedAt: real("gapRecordedAt"),
+    lastError: text("lastError"),
     scopeKey: text("scopeKey").notNull(),
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">().notNull(),
     unattributedQuantity: real("unattributedQuantity"),
