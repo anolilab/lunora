@@ -461,6 +461,75 @@ const hasEnclosingTry = (call: TsNode): boolean => {
     return false;
 };
 
+/**
+ * True when `call` runs inside a `Promise.allSettled(...)` fan-out: `allSettled`
+ * records each rejection instead of propagating it, so one failed call cannot
+ * fail the action. `Promise.allSettled(items.map(async (i) => ctx.storage.delete(i)))`
+ * is the shape. The call must sit under the combinator's own argument.
+ */
+const isAllSettledFanout = (call: CallExpression): boolean => {
+    for (let ancestor = call.getParent(); ancestor !== undefined; ancestor = ancestor.getParent()) {
+        if (Node.isCallExpression(ancestor) && ancestor.getExpression().getText() === "Promise.allSettled") {
+            return true;
+        }
+
+        if (Node.isFunctionDeclaration(ancestor) || Node.isMethodDeclaration(ancestor)) {
+            return false;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * True when `call` sits in a callback handed to a guard helper: a function whose
+ * own body wraps a call to one of its parameters in a `try` whose `catch` rethrows.
+ * `withDependency("mail", () => ctx.mail.send(…))` is the shape. The try lives in the
+ * helper, not in the procedure, so the procedure's own body never shows it.
+ *
+ * The helper is resolved through its symbol, so an imported helper counts too. A
+ * helper that swallows the error, or never calls the callback inside its try, does
+ * not qualify.
+ */
+const isGuardHelperArgument = (call: CallExpression): boolean => {
+    const callback = call.getFirstAncestor((node) => Node.isArrowFunction(node) || Node.isFunctionExpression(node));
+    const helperCall = callback?.getParent();
+
+    if (!callback || !Node.isCallExpression(helperCall) || !helperCall.getArguments().includes(callback)) {
+        return false;
+    }
+
+    const callee = helperCall.getExpression();
+
+    if (!Node.isIdentifier(callee)) {
+        return false;
+    }
+
+    const symbol = callee.getSymbol();
+    const declaration = symbol?.getAliasedSymbol()?.getValueDeclaration() ?? symbol?.getValueDeclaration();
+    const helper = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : declaration;
+
+    if (!Node.isArrowFunction(helper) && !Node.isFunctionExpression(helper) && !Node.isFunctionDeclaration(helper)) {
+        return false;
+    }
+
+    const parameters = new Set(helper.getParameters().map((parameter) => parameter.getName()));
+
+    return helper.getDescendantsOfKind(SyntaxKind.TryStatement).some((tryStatement) => {
+        const invokesParameter = tryStatement
+            .getTryBlock()
+            .getDescendantsOfKind(SyntaxKind.CallExpression)
+            .some((inner) => {
+                const invoked = inner.getExpression();
+
+                return Node.isIdentifier(invoked) && parameters.has(invoked.getText());
+            });
+        const catchClause = tryStatement.getCatchClause();
+
+        return invokesParameter && catchClause !== undefined && catchClause.getDescendantsOfKind(SyntaxKind.ThrowStatement).length > 0;
+    });
+};
+
 /** True when `call` is the receiver of a `.catch(...)` — directly, or at the end of a `.then(...)`/`.finally(...)` chain. */
 const isCatchGuarded = (call: CallExpression): boolean => {
     let node: TsNode = call;
@@ -535,7 +604,7 @@ const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boole
 
         reachesOutbound = true;
 
-        if (!hasEnclosingTry(call) && !isCatchGuarded(call)) {
+        if (!hasEnclosingTry(call) && !isCatchGuarded(call) && !isGuardHelperArgument(call) && !isAllSettledFanout(call)) {
             allGuarded = false;
         }
     }
