@@ -250,11 +250,11 @@ the failure is one line instead of a wrangler stack trace. Images must target
 **`linux/amd64`**.
 
 To split image build/push from the Worker deploy (e.g. across CI jobs), use the
-`lunora containers` wrappers:
+`lunora cloudflare containers` wrappers:
 
 ```bash
-lunora containers build ./containers/transcoder --tag transcoder:v1 --push
-lunora containers images list
+lunora cloudflare containers build ./containers/transcoder --tag transcoder:v1 --push
+lunora cloudflare containers images list
 ```
 
 Container egress is billed separately from Workers. See [Limits](/docs/limits).
@@ -419,8 +419,8 @@ Bundle size still affects cold-start time, so if yours is growing:
 - **Check for a dev-only import reaching the Worker entry.** A seed script, a
   test helper, or a Node-only utility imported from `lunora/` pulls its whole
   dependency tree into the deployed bundle.
-- **Look at what is actually heavy.** `lunora analyze` bundles the Worker and
-  prints the largest modules, which is usually enough to name the culprit.
+- **Look at what is actually heavy.** `lunora cloudflare analyze` bundles the
+  Worker and prints the largest modules, which is usually enough to name the culprit.
 
 ## Streaming logs
 

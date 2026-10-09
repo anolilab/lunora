@@ -88,7 +88,7 @@ export const summarize = action.input({ text: v.string().max(20_000) }).action(a
 const result = streamText({ model: ctx.ai.model("anthropic/claude-sonnet-5"), messages });
 ```
 
-Every `ctx.ai.model(...)` call is traced and its tokens and cost are counted per function (`gen_ai.usage.*`), which Studio's **AI usage** page charts. `lunora ai gateway` creates a gateway for the app and sets `LUNORA_AI_GATEWAY_ID`; without it, calls use the account's `default` gateway.
+Every `ctx.ai.model(...)` call is traced and its tokens and cost are counted per function (`gen_ai.usage.*`), which Studio's **AI usage** page charts. `lunora cloudflare ai-gateway` creates a gateway for the app and sets `LUNORA_AI_GATEWAY_ID`; without it, calls use the account's `default` gateway.
 
 ```ts
 // RAG: embed via ctx.ai, store/search with @lunora/bindings/vectors (ctx.vectors)

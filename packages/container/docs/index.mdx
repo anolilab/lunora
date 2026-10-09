@@ -1091,14 +1091,14 @@ a Docker-enabled CI job, separate from the default unit-test matrix.
 
 ## CLI
 
-Manage images and instances with `lunora containers`, thin wrappers over
-`wrangler containers` with a Docker preflight on the build/push paths:
+Manage images and instances with `lunora cloudflare containers`, thin wrappers
+over `wrangler containers` with a Docker preflight on the build/push paths:
 
 ```bash
-lunora containers build ./containers/transcoder --tag transcoder:v1 --push
-lunora containers push transcoder:v1
-lunora containers images list
-lunora containers images delete transcoder:v1
+lunora cloudflare containers build ./containers/transcoder --tag transcoder:v1 --push
+lunora cloudflare containers push transcoder:v1
+lunora cloudflare containers images list
+lunora cloudflare containers images delete transcoder:v1
 ```
 
 Splitting build/push from `lunora deploy` lets CI build the image in one job and
