@@ -121,13 +121,15 @@ describe("the cloudflare-workers account API", () => {
             ),
         );
 
-        await expect(readScriptRequests({ accountId: ACCOUNT, apiToken: TOKEN, fetch }, 1000)).resolves.toStrictEqual([{ requests: 42, scriptName: "web" }]);
+        await expect(readScriptRequests({ accountId: ACCOUNT, apiToken: TOKEN, fetch }, 1000, 5000)).resolves.toStrictEqual([
+            { requests: 42, scriptName: "web" },
+        ]);
 
         const body = JSON.parse(fetch.mock.calls[0]?.[1]?.body as string) as { query: string; variables: Record<string, string> };
 
         expect(body.query).toContain("workersInvocationsAdaptive");
-        expect(body.query).toContain("datetime_gt: $since");
-        expect(body.variables).toStrictEqual({ accountTag: ACCOUNT, since: new Date(1000).toISOString() });
+        expect(body.query).toContain("datetime_gt: $since, datetime_leq: $until");
+        expect(body.variables).toStrictEqual({ accountTag: ACCOUNT, since: new Date(1000).toISOString(), until: new Date(5000).toISOString() });
     });
 
     it("reports a GraphQL authorization error as a refused token", async () => {
@@ -179,8 +181,8 @@ describe("the cloudflare-workers usage readback", () => {
             read: () => Promise.resolve([{ requests: 3, scriptName: "web" }]),
         });
 
-        await expect(fleet.usage?.read("cfa_1", 0)).resolves.toStrictEqual([
-            { requests: 3, resourceRef: resourceRefOf({ placementRef: "cfa_1", target: "cloudflare-workers" }, "web") },
+        await expect(fleet.usage?.sources.requests?.read("cfa_1", { sinceMs: 0, untilMs: 1000 })).resolves.toStrictEqual([
+            { meters: { requests: 3 }, resourceRef: resourceRefOf({ placementRef: "cfa_1", target: "cloudflare-workers" }, "web") },
         ]);
     });
 });

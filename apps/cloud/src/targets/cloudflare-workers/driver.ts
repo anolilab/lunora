@@ -13,9 +13,10 @@
  * fanned out to it (`fanout: "native"`).
  *
  * Metering reads each connected account's GraphQL Analytics API back
- * (`metering: "readback"`), one usage scope per account, for display: the
- * requests are on the customer's Cloudflare bill, so the rows are never billed
- * (`isBillableUsage`).
+ * (`metering: "readback"`), one usage scope per account: request counts, and
+ * D1 and Durable Object rows (`src/cloudflare/storage-usage.ts`). They are for
+ * display and anomaly detection only. The usage is on the customer's
+ * Cloudflare bill, so the rows are never billed (`isBillableUsage`).
  *
  * {@link createCloudflareWorkersDriver} and {@link createCloudflareWorkersFleet}
  * are pure over their ports; the `*FromEnv` builders are the one place those
@@ -25,16 +26,19 @@ import type { D1DatabaseLike } from "@lunora/d1";
 import { LunoraError } from "@lunora/server";
 
 import { tenantSender } from "../../backup/tenant-transport";
+import type { PeriodUsage } from "../../billing/spend";
+import { readD1UsageByAlias, readDurableObjectUsageByScript, unavailableOnRefusal } from "../../cloudflare/storage-usage";
 import type { CloudflareAccountStore } from "../../cloudflare-accounts/store";
 import { accountTableIn, cloudflareAccountStore } from "../../cloudflare-accounts/store";
 import { controlPlaneDatabase } from "../../d1-store";
 import { BINDING_SUPPORT } from "../../provision-contract";
-import type { ProgressLine, TargetDriver, TargetFleet } from "../driver";
+import type { ProgressLine, TargetDriver, TargetFleet, UsageSource, UsageWindow } from "../driver";
 import type { AccountHost } from "../placement";
 import { resourceRefOf } from "../placement";
 import type { ProvisionBox } from "../provision-box/client";
 import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "../provision-box/client";
 import type { PlatformStateStore, ProvisionTarget } from "../provision-box/contract";
+import { usageRows } from "../storage-sources";
 import type { ScriptRequests } from "./api";
 import { readScriptRequests } from "./api";
 
@@ -102,40 +106,71 @@ export const createCloudflareWorkersDriver = (ports: CloudflareWorkersPorts): Ta
     };
 };
 
-/** Requests per script in one connected account since a moment — the GraphQL Analytics API. */
-export type AccountUsageReader = (access: { accountId: string; apiToken: string }, sinceMs: number) => Promise<ScriptRequests[]>;
+/** One connected account's credentials, as the readers take them. */
+type AccountAccess = { accountId: string; apiToken: string };
+
+/** Requests per script in one connected account in `(sinceMs, untilMs]` — the GraphQL Analytics API. */
+export type AccountUsageReader = (access: AccountAccess, sinceMs: number, untilMs: number) => Promise<ScriptRequests[]>;
+
+/** Storage rows per tenant name (D1: alias; Durable Objects: script) in one connected account, in a closed window. */
+export type AccountStorageReader = (access: AccountAccess, window: UsageWindow) => Promise<Map<string, PeriodUsage>>;
 
 export interface CloudflareWorkersFleetPorts {
     /** The connected accounts this control plane meters — one usage scope each — by row id. */
     accounts: () => Promise<string[]>;
     credentials: AccountCredentials;
     read: AccountUsageReader;
+    /** D1 and Durable Object rows; absent → this control plane reads only request counts. */
+    storage?: { d1: AccountStorageReader; durableObjects: AccountStorageReader };
 }
 
 export const createCloudflareWorkersFleet = (ports: CloudflareWorkersFleetPorts): TargetFleet => {
+    // The scope IS the account's row id — the `placementRef` its deployments
+    // carry — so a script in this account can only ever be attributed to a
+    // deployment placed in it (`resourceRefOf`, as `deployments.create` wrote it).
+    const resourceRef = (scope: string, name: string): string => resourceRefOf({ placementRef: scope, target: "cloudflare-workers" }, name);
+    // Only an account this control plane meters, with its own token.
+    const accessOf = async (scope: string): Promise<AccountAccess | undefined> => {
+        const metered = await ports.accounts();
+
+        return metered.includes(scope) ? ports.credentials(scope) : undefined;
+    };
+    const storage = (read: AccountStorageReader): UsageSource => {
+        return {
+            cadence: "hourly",
+            read: async (scope, window) => {
+                const access = await accessOf(scope);
+
+                return access === undefined ? [] : usageRows(await read(access, window), (name) => resourceRef(scope, name));
+            },
+        };
+    };
+
     return {
         id: "cloudflare-workers",
         // A tenant answers on its public workers.dev URL; nothing of the platform sits in front of it.
         reach: (tenant) => tenantSender(tenant),
         usage: {
-            read: async (scope, sinceMs) => {
-                const metered = await ports.accounts();
-
-                if (!metered.includes(scope)) {
-                    return [];
-                }
-
-                const credentials = await ports.credentials(scope);
-                const rows = await ports.read(credentials, sinceMs);
-
-                // The scope IS the account's row id — the `placementRef` its deployments
-                // carry — so a script in this account can only ever be attributed to a
-                // deployment placed in it (`resourceRefOf`, as `deployments.create` wrote it).
-                return rows.map((row) => {
-                    return { requests: row.requests, resourceRef: resourceRefOf({ placementRef: scope, target: "cloudflare-workers" }, row.scriptName) };
-                });
-            },
             scopes: ports.accounts,
+            sources: {
+                requests: {
+                    cadence: "continuous",
+                    read: async (scope, window) => {
+                        const access = await accessOf(scope);
+
+                        if (access === undefined) {
+                            return [];
+                        }
+
+                        const rows = await ports.read(access, window.sinceMs, window.untilMs);
+
+                        return rows.map((row) => {
+                            return { meters: { requests: row.requests }, resourceRef: resourceRef(scope, row.scriptName) };
+                        });
+                    },
+                },
+                ...(ports.storage === undefined ? {} : { d1: storage(ports.storage.d1), durableObjects: storage(ports.storage.durableObjects) }),
+            },
         },
     };
 };
@@ -235,5 +270,10 @@ export const cloudflareWorkersFleetFromEnv = (environment: CloudflareWorkersEnvi
     createCloudflareWorkersFleet({
         accounts: meteredAccountsFrom(environment),
         credentials: credentialsFrom(environment),
-        read: (access, sinceMs) => readScriptRequests(access, sinceMs),
+        // A customer's token without the permission is shown on its account, not retried hourly as a failure.
+        read: async (access, sinceMs, untilMs) => unavailableOnRefusal(async () => readScriptRequests(access, sinceMs, untilMs)),
+        storage: {
+            d1: async (access, window) => unavailableOnRefusal(async () => readD1UsageByAlias(access, window)),
+            durableObjects: async (access, window) => unavailableOnRefusal(async () => readDurableObjectUsageByScript(access, window)),
+        },
     });

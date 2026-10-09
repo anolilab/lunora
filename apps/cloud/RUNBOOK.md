@@ -72,12 +72,38 @@ JSON array (`["CloudflareStateStore", …]`).
 
 Two tokens, both scoped to this account:
 
-| Token                            | Where it goes                                                            | Permissions                                                                                                                                                                                                                          |
-| -------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **CI deploy token**              | GitHub Environment `cloud-staging` → secret `CLOUDFLARE_API_TOKEN`       | Workers Scripts:Edit, Workers KV:Edit, D1:Edit, R2:Edit, Queues:Edit, Workers for Platforms:Edit, Account Analytics:Read, Zone → Workers Routes:Edit (routed zone)                                                                   |
-| **Cell token** (provision + DNS) | Worker secret `CLOUDFLARE_API_TOKEN` on `lunora-cloud` (`--env staging`) | the provision box's set (Workers Scripts incl. WfP, D1, R2, KV, Queues, Secrets Store, Workers subdomain read) **plus Zone → DNS:Edit on the box zone** (step 6) **and Zone → SSL and Certificates:Edit on the SaaS zone** (step 6a) |
+| Token                            | Where it goes                                                            | Permissions                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CI deploy token**              | GitHub Environment `cloud-staging` → secret `CLOUDFLARE_API_TOKEN`       | Workers Scripts:Edit, Workers KV:Edit, D1:Edit, R2:Edit, Queues:Edit, Workers for Platforms:Edit, Account Analytics:Read, Zone → Workers Routes:Edit (routed zone)                                                                                                                           |
+| **Cell token** (provision + DNS) | Worker secret `CLOUDFLARE_API_TOKEN` on `lunora-cloud` (`--env staging`) | the provision box's set (Workers Scripts incl. WfP, D1, R2, KV, Queues, Secrets Store, Workers subdomain read) **plus Account Analytics:Read** (usage metering, below) **plus Zone → DNS:Edit on the box zone** (step 6) **and Zone → SSL and Certificates:Edit on the SaaS zone** (step 6a) |
 
 Also set `CLOUDFLARE_ACCOUNT_ID` on the GitHub Environment.
+
+The cell token's **Account Analytics:Read** is what the hourly usage readback
+needs: the dispatcher's request counts (Analytics SQL API) and the D1 and
+Durable Object row counts (GraphQL Analytics API) that the spend cap prices.
+Without it, the sweep logs `[usage] cloudflare-wfp scope <cell>: storage
+metering unavailable: …` (or `request metering …`) every hour, records it in
+`usageSourceStatus`, and the Usage tab tells every organization that storage
+is not counted toward its spend cap. D1 rows also need the D1 permission the
+token already holds (to list databases), and Durable Object rows may need
+Workers Scripts read (to list namespaces).
+
+**Check:** `wrangler tail lunora-cloud --env staging` across the top of an
+hour shows no `metering unavailable` line, and `SELECT * FROM
+usageSourceStatus WHERE unavailableReason IS NOT NULL OR failingSince IS NOT
+NULL` on the control-plane D1 is empty.
+
+The same table is the operator's view of what the readback could not bill:
+`lastError`/`failingSince` for a source whose reads keep failing (a 429, a 5xx,
+a result at the 10,000-row limit), `gapNote` for a span older than Cloudflare
+keeps that was skipped, and `unattributedQuantity` for volume read for
+resources no deployment matches — the platform's own Workers are already
+excluded, so a steady non-zero value there (also logged hourly as `[usage]
+cloudflare-wfp <cell>#durableObjects: N read for resources no deployment
+matches`) means tenant usage is going unbilled: typically Durable Object
+namespaces of the dispatch namespace that the namespace list does not report,
+or a script name two environments share in one account.
 
 Tokens an organization pastes for its own account (the `cloudflare-workers`
 target, Cloudflare accounts tab) are not operator tokens and never go here.
