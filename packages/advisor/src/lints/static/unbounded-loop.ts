@@ -1,10 +1,11 @@
 import { callSiteLabel, isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import type { AdvisorUnboundedLoop } from "../../unbounded-loops";
 import { callSiteFields, callSiteWhere } from "../helpers";
 
 /** How the finding names each loop form. */
-const LOOP_TEXT: Readonly<Record<"do" | "for" | "while", string>> = {
+const LOOP_TEXT: Readonly<Record<AdvisorUnboundedLoop["kind"], string>> = {
     do: "`do { … } while (true)`",
     for: "`for (;;)`",
     while: "`while (true)`",
@@ -16,17 +17,15 @@ const LOOP_TEXT: Readonly<Record<"do" | "for" | "while", string>> = {
  * `break` bound to it, no `return`/`throw` leaving its function, no `yield`
  * suspending it.
  *
- * Inside a Durable Object such a loop never yields the isolate: a request, an
- * alarm or a queue consumer that enters it holds the object and its storage
- * forever, and every `ctx.db` read or write in the body is billed on each turn.
- * That is how a single alarm handler racks up trillions of storage operations.
+ * Inside a Durable Object such a loop never yields the isolate: a request, a
+ * scheduled run or a queue consumer that enters it holds the object and its
+ * storage forever, and every `ctx.db` read or write in the body is billed on
+ * each turn.
  *
- * `ERROR`, because the feeder only records a loop it can prove cannot exit by
- * its own syntax: a condition other than a literal `true` is never recorded
- * (it may be bounded by state the walk cannot read), and an exit the walk can
- * see — even one behind a guard — clears the loop. A loop in a helper no export
- * reaches is dead code and stays quiet; module scope runs at import, so it does
- * not.
+ * `ERROR`, because the feeder (codegen's `discoverUnboundedLoops`) records only
+ * a loop whose own syntax proves it cannot exit; what counts as an exit is
+ * defined there. A loop in a helper no export reaches is dead code and stays
+ * quiet; module scope runs at import, so it does not.
  *
  * Runs only when the codegen feeder supplied loop evidence
  * (`context.unboundedLoops` present); a runtime caller flags nothing.
@@ -45,24 +44,17 @@ const unboundedLoop: Lint = {
             return [];
         }
 
-        const occurrences = new Map<string, number>();
-
+        // Line-free, so a dismissal survives the code moving; `runAdvisor`'s
+        // `dedupeCacheKeys` keeps two loops of one kind in one function apart.
         return context.unboundedLoops
             .filter((loop) => loop.scope.kind === "module" || isReachableSite(loop.scope))
-            .map((loop) => {
-                // Line-free, so a dismissal survives the code moving; the
-                // occurrence suffix keeps two loops in one function apart.
-                const baseKey = `unbounded_loop:${loop.file}:${callSiteLabel(loop.scope)}:${loop.kind}`;
-                const occurrence = (occurrences.get(baseKey) ?? 0) + 1;
-
-                occurrences.set(baseKey, occurrence);
-
-                return emit(unboundedLoop, {
-                    cacheKey: occurrence > 1 ? `${baseKey}:${occurrence.toString()}` : baseKey,
+            .map((loop) =>
+                emit(unboundedLoop, {
+                    cacheKey: `unbounded_loop:${loop.file}:${callSiteLabel(loop.scope)}:${loop.kind}`,
                     detail: `${LOOP_TEXT[loop.kind]} in ${callSiteWhere(loop)} has no \`break\`, \`return\` or \`throw\` that can leave it — once entered it never ends, and every storage call in its body is billed on every turn.`,
                     metadata: { ...callSiteFields(loop), loop: loop.kind },
-                });
-            });
+                }),
+            );
     },
     source: "static",
     title: "Infinite loop with no exit",

@@ -1,7 +1,8 @@
+import { sanitizeNamespace } from "../../../../../shared/dispatch-namespace";
 import { callSiteMetadata } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteWhere, dispatchNamespace } from "../helpers";
+import { callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.run`/`context.run` back into a Lunora function from inside a
@@ -58,7 +59,7 @@ const privilegedDispatchUnvalidatedPayload: Lint = {
         const targetUsesRls = (targetFile: string, targetExport: string): boolean =>
             rlsProcedures.some(
                 (procedure) =>
-                    procedure.usesRls && dispatchNamespace(procedure.file) === dispatchNamespace(targetFile) && procedure.exportName === targetExport,
+                    procedure.usesRls && sanitizeNamespace(procedure.file) === sanitizeNamespace(targetFile) && procedure.exportName === targetExport,
             );
 
         return context.privilegedDispatches

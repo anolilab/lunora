@@ -771,13 +771,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     );
     const wantsArchitecture = declaredModules.length > 0;
 
-    // The query/insert/workflow-call walks feed both the advisor and the
+    // The call-edge/query/insert/workflow-call walks feed both the advisor and the
     // architecture manifest, so they run once when either needs them — and not
     // at all on a `lint: false` run of an app with no declared module.
     const callSites: CallSites | undefined =
         options.lint === false && !wantsArchitecture
             ? undefined
             : {
+                  callEdges: discoverCallEdges(project, lunoraDirectory),
                   inserts: discoverInserts(project, lunoraDirectory),
                   queries: discoverQueries(project, lunoraDirectory),
                   tableWrites: discoverTableWrites(project, lunoraDirectory),
@@ -807,7 +808,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   authApiCalls: discoverAuthApiCalls(project, lunoraDirectory),
                   authConfigs: discoverAuthConfig(project, lunoraDirectory),
                   browserUrlAccesses: discoverBrowserUrlAccesses(project, lunoraDirectory),
-                  callEdges: discoverCallEdges(project, lunoraDirectory),
+                  callEdges: callSites.callEdges,
                   configCalls: discoverConfigCalls(project, lunoraDirectory),
                   containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
                   containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
@@ -1160,8 +1161,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         wantsArchitecture && callSites !== undefined
             ? buildArchitecture({
                   ...callSites,
-                  // The advisor's `dispatch_cycle` already walked them when linting is on.
-                  callEdges: advisorContext?.callEdges ?? discoverCallEdges(project, lunoraDirectory),
                   crons,
                   functions,
                   httpRoutes,

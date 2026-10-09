@@ -32,6 +32,7 @@ import { namespaceSegments, sanitizeNamespace } from "./paths";
 
 /** The call-site evidence, shared with the advisor so each walk runs once per codegen. */
 interface CallSites {
+    callEdges: ReadonlyArray<CallEdgeIR>;
     inserts: ReadonlyArray<InsertWriteIR>;
     queries: ReadonlyArray<QueryReadIR>;
     /** Writes other than a plain `ctx.db.insert` — by id, batch, and the `ctx.db.<table>` facade. */
@@ -40,7 +41,6 @@ interface CallSites {
 }
 
 interface ArchitectureInput extends CallSites {
-    callEdges: ReadonlyArray<CallEdgeIR>;
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;

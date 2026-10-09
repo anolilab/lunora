@@ -24,9 +24,9 @@ export const drain = mutation({
 
 /** An export whose handler spins in a condition-less `for (;;)` loop. */
 const LOOP_FOR = `
-import { query } from "@lunora/server";
+import { mutation } from "@lunora/server";
 
-export const poll = query({
+export const poll = mutation({
     args: {},
     handler: async (ctx) => {
         for (;;) {
@@ -38,9 +38,9 @@ export const poll = query({
 
 /** An export whose handler spins in a `for (; true;)` loop — the explicit head. */
 const LOOP_FOR_TRUE = `
-import { query } from "@lunora/server";
+import { mutation } from "@lunora/server";
 
-export const keepAlive = query({
+export const keepAlive = mutation({
     args: {},
     handler: async (ctx) => {
         for (; true;) {
@@ -309,6 +309,43 @@ describe("discoverUnboundedLoops", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "drain.ts"), LOOP_COUNTED, "utf8");
+
+        expect(discoverUnboundedLoops(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["a labeled continue to an outer loop", `outer: for (const id of ids) { while (true) { if (id) continue outer; } }`],
+        ["a labeled break out of a wrapping block", `done: { while (true) { break done; } }`],
+        ["an abort-signal check", `while (true) { signal.throwIfAborted(); }`],
+        ["a return inside a try", `while (true) { try { return; } finally { void 0; } }`],
+    ])("records nothing for a loop left by %s", (_label, body) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "exits.ts"), `export const run = (ids: string[], signal: AbortSignal) => {\n${body}\n};\n`, "utf8");
+
+        expect(discoverUnboundedLoops(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["a continue to the loop itself", `while (true) { continue; }`],
+        ["a break out of a nested switch", `while (true) { switch (ids.length) { case 0: break; } }`],
+        ["a break out of a nested loop", `while (true) { for (const id of ids) { if (id) break; } }`],
+    ])("records the loop when the only jump is %s", (_label, body) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "spins.ts"), `export const run = (ids: string[]) => {\n${body}\n};\n`, "utf8");
+
+        expect(discoverUnboundedLoops(project, join(workdir, "lunora"))).toMatchObject([{ file: "spins", kind: "while" }]);
+    });
+
+    it("records nothing for a loop in a class method, which attribution cannot place", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "worker.ts"),
+            `class Pump {\n    run() {\n        while (true) {\n            void 0;\n        }\n    }\n}\nvoid Pump;\n`,
+            "utf8",
+        );
 
         expect(discoverUnboundedLoops(project, join(workdir, "lunora"))).toHaveLength(0);
     });

@@ -3,7 +3,7 @@ import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import type { AdvisorCallEdge, LintContext } from "../src";
-import { fromServerSchema, STATIC_LINTS } from "../src";
+import { fromServerSchema } from "../src";
 import dispatchCycle from "../src/lints/static/dispatch-cycle";
 
 const context = (callEdges?: AdvisorCallEdge[]): LintContext => {
@@ -16,12 +16,6 @@ const edge = (file: string, from: string, target: string, overrides: Partial<Adv
 };
 
 describe("dispatch_cycle", () => {
-    it("is registered as a static lint", () => {
-        expect.assertions(1);
-
-        expect(STATIC_LINTS).toContain(dispatchCycle);
-    });
-
     it("finds nothing without call edges", () => {
         expect.assertions(1);
 

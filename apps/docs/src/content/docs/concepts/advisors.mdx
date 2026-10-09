@@ -60,6 +60,8 @@ studio.
 | `unindexed_foreign_key` | info  | A foreign-key column with no index leading with it: reads on it full-scan. (Honours SQLite's leftmost-prefix rule; exempts FKs onto `_id`.) |
 | `filter_without_index`  | warn  | A `query(...).filter(...)` with no `.withIndex()` first: loads every row and filters in memory.                                             |
 | `duplicate_index`       | info  | An index whose columns are a leading prefix of another: pure write/storage overhead. (Unique indexes exempt.)                               |
+| `unbounded_loop`        | error | A `while (true)` / `for (;;)` with no `break`, `return` or `throw`: it never ends, billing every turn.                                      |
+| `dispatch_cycle`        | error | Functions schedule or call each other (or themselves) with no guard on any hop: an endless chain.                                           |
 
 ### Security
 
@@ -81,8 +83,6 @@ studio.
 
 | Lint                           | Level | Detects                                                                                                |
 | ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------ |
-| `unbounded_loop`               | error | A `while (true)` / `for (;;)` with no `break`, `return` or `throw`: it never ends, billing every turn. |
-| `dispatch_cycle`               | error | Functions schedule or call each other (or themselves) with no guard on any hop: an endless chain.      |
 | `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band.                                |
 | `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                           |
 | `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable. |

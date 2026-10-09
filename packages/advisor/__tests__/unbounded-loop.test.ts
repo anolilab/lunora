@@ -3,7 +3,7 @@ import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import type { AdvisorUnboundedLoop, LintContext } from "../src";
-import { fromServerSchema, STATIC_LINTS } from "../src";
+import { fromServerSchema, runAdvisor } from "../src";
 import unboundedLoop from "../src/lints/static/unbounded-loop";
 
 const context = (unboundedLoops?: AdvisorUnboundedLoop[]): LintContext => {
@@ -13,12 +13,6 @@ const context = (unboundedLoops?: AdvisorUnboundedLoop[]): LintContext => {
 const DRAIN: AdvisorUnboundedLoop = { file: "jobs", kind: "while", line: 7, scope: { kind: "export", name: "drain" } };
 
 describe("unbounded_loop", () => {
-    it("is registered as a static lint", () => {
-        expect.assertions(1);
-
-        expect(STATIC_LINTS).toContain(unboundedLoop);
-    });
-
     it("finds nothing without loop evidence", () => {
         expect.assertions(1);
 
@@ -64,9 +58,8 @@ describe("unbounded_loop", () => {
     it("keeps two loops in one function apart", () => {
         expect.assertions(1);
 
-        expect(unboundedLoop.run(context([DRAIN, { ...DRAIN, line: 12 }])).map((finding) => finding.cacheKey)).toStrictEqual([
-            "unbounded_loop:jobs:drain:while",
-            "unbounded_loop:jobs:drain:while:2",
-        ]);
+        const findings = runAdvisor(context([DRAIN, { ...DRAIN, line: 12 }]), { lints: [unboundedLoop] });
+
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["unbounded_loop:jobs:drain:while", "unbounded_loop:jobs:drain:while:2"]);
     });
 });

@@ -1,9 +1,10 @@
-import type { Block, CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node, SyntaxKind, ts } from "ts-morph";
 
 import type { CallEdgeIR } from "../ir";
-import { collectCallRows, collectNodeRows, functionKeyOf, isFunctionLike, RUN_METHODS } from "./ast";
+import { collectCallRows, collectNodeRows, functionKeyOf, isFunctionLike, isSameNode, RUN_METHODS } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { mayLeave } from "./jumps";
 
 /** `ctx.<surface>.<name>.<method>(…)` → `name`, when the receiver chain is exactly that shape. */
 const surfaceMemberOf = (callee: TsNode, surface: string): string | undefined => {
@@ -43,6 +44,9 @@ const SURFACE_METHODS: ReadonlyMap<string, { kind: "enqueue" | "publish"; surfac
     ["sendBatch", { kind: "enqueue", surface: "queues" }],
 ]);
 
+/** A `namespace:export` dispatch key, as a string target spells it. */
+const FUNCTION_KEY = /^[\w$]+:[\w$]+$/u;
+
 type CallSiteEdge = Omit<CallEdgeIR, "file" | "line" | "scope">;
 
 /** A `run*` call: drawn when its reference is static, reported when an explicit `runQuery`/… target is not. */
@@ -57,7 +61,7 @@ const runEdge = (method: string, reference: TsNode | undefined): CallSiteEdge | 
     // `runQuery`/`runMutation`/`runAction` with an unreadable target is a real
     // edge the graph cannot draw, so it is reported rather than dropped.
     return method !== "run" && reference !== undefined
-        ? { kind: "call", reason: "the function reference is not a static api.* / internal.* chain" }
+        ? { kind: "call", reason: 'the function reference is not a static api.* / internal.* chain or a "namespace:export" key' }
         : undefined;
 };
 
@@ -77,10 +81,12 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
     }
 
     if ((method === "runAfter" || method === "runAt") && isSchedulerCall(callee)) {
-        const target = functionKeyOf(second);
+        // The scheduler also takes the dispatch key itself: `runAfter(0, "payments:charge", …)`.
+        const target =
+            functionKeyOf(second) ?? (Node.isStringLiteral(second) && FUNCTION_KEY.test(second.getLiteralText()) ? second.getLiteralText() : undefined);
 
         return target === undefined
-            ? { kind: "schedule", reason: "the scheduled function is not a static api.* / internal.* chain" }
+            ? { kind: "schedule", reason: 'the scheduled function is not a static api.* / internal.* chain or a "namespace:export" key' }
             : { kind: "schedule", target };
     }
 
@@ -89,26 +95,6 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
 
     return producer === undefined || target === undefined ? undefined : { kind: producer.kind, target };
 };
-
-/**
- * An ancestor that only ever runs its body conditionally — a branch, a loop
- * (which may iterate zero times), a `switch` arm, or a `try`/`catch`/`finally`
- * block (which a throw may skip; `finally` needs no kind of its own, its block
- * hangs off the `TryStatement`). A call under any of them may never fire.
- */
-const CONDITIONAL_ANCESTORS: ReadonlySet<SyntaxKind> = new Set<SyntaxKind>([
-    SyntaxKind.CaseClause,
-    SyntaxKind.CatchClause,
-    SyntaxKind.DefaultClause,
-    SyntaxKind.DoStatement,
-    SyntaxKind.ForInStatement,
-    SyntaxKind.ForOfStatement,
-    SyntaxKind.ForStatement,
-    SyntaxKind.IfStatement,
-    SyntaxKind.SwitchStatement,
-    SyntaxKind.TryStatement,
-    SyntaxKind.WhileStatement,
-]);
 
 /** Logical operators, whose right operand is evaluated only when the left one allows it. */
 const LOGICAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set<SyntaxKind>([
@@ -120,39 +106,30 @@ const LOGICAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set<SyntaxKind>([
     SyntaxKind.QuestionQuestionToken,
 ]);
 
+/** `true` when TypeScript marks `node` as a link of an optional chain — evaluated only when no earlier `?.` short-circuited. */
+const inOptionalChain = (node: TsNode): boolean => ts.isOptionalChain(node.compilerNode);
+
 /**
- * A preceding sibling that leaves the block — an early exit, a guard that may
- * take it, a loop that may never finish — so whatever follows runs only when it
- * doesn't. This is what keeps `if (done()) return; ctx.scheduler.runAfter(…)`
- * out of a dispatch cycle: the reschedule is a *sibling* of that guard, not
- * beneath it, so no ancestor walk would ever see it.
- *
- * Over-approximated on purpose: a preceding `if` whose branch does NOT exit
- * (`if (log) console.log(…)`) still marks what follows conditional. That costs
- * the lint a cycle it might otherwise flag and buys the absence of a false
- * build-blocking ERROR — the right trade for a rule whose whole claim is that
- * it cannot cry wolf.
+ * `true` when `child`, sitting directly in `parent`, does not run on every pass
+ * of the code around it. Exact rather than kind-based, so a guard is only
+ * claimed where one is: an `if`'s condition, a `while`'s test, a `for`'s head,
+ * a `do` body, a `try` block and a `switch` discriminant all run every time;
+ * the branches, loop bodies, `case` arms and `catch` clauses do not.
  */
-const EXITING_SIBLINGS: ReadonlySet<SyntaxKind> = new Set<SyntaxKind>([
-    SyntaxKind.BreakStatement,
-    SyntaxKind.ContinueStatement,
-    SyntaxKind.DoStatement,
-    SyntaxKind.ForInStatement,
-    SyntaxKind.ForOfStatement,
-    SyntaxKind.ForStatement,
-    SyntaxKind.IfStatement,
-    SyntaxKind.ReturnStatement,
-    SyntaxKind.ThrowStatement,
-    SyntaxKind.WhileStatement,
-]);
-
-/** `true` when a statement of `block` ending before `child` starts may take control away from it. */
-const precededByExit = (block: Block, child: TsNode): boolean =>
-    block.getStatements().some((statement) => statement.getEnd() <= child.getStart() && EXITING_SIBLINGS.has(statement.getKind()));
-
-/** `true` when `child` sits in `parent` at a position that does not run on every pass. */
 const conditionalPosition = (child: TsNode, parent: TsNode): boolean => {
-    if (CONDITIONAL_ANCESTORS.has(parent.getKind())) {
+    if (Node.isIfStatement(parent)) {
+        return !isSameNode(child, parent.getExpression());
+    }
+
+    if (Node.isWhileStatement(parent) || Node.isForInStatement(parent) || Node.isForOfStatement(parent)) {
+        return isSameNode(child, parent.getStatement());
+    }
+
+    if (Node.isForStatement(parent)) {
+        return isSameNode(child, parent.getStatement()) || isSameNode(parent.getIncrementor(), child);
+    }
+
+    if (Node.isCaseClause(parent) || Node.isDefaultClause(parent) || Node.isCatchClause(parent)) {
         return true;
     }
 
@@ -163,70 +140,77 @@ const conditionalPosition = (child: TsNode, parent: TsNode): boolean => {
         return parent.getFirstAncestor(isFunctionLike) !== undefined;
     }
 
-    // `cond ? a : b` — only the arm taken runs; the condition itself is no guard.
     if (Node.isConditionalExpression(parent)) {
-        return child !== parent.getCondition();
+        return !isSameNode(child, parent.getCondition());
     }
 
-    // `a && b()` / `a ?? b()` — `b` runs only when `a` leaves room for it.
     if (Node.isBinaryExpression(parent)) {
-        return child !== parent.getLeft() && LOGICAL_OPERATORS.has(parent.getOperatorToken().getKind());
+        return !isSameNode(child, parent.getLeft()) && LOGICAL_OPERATORS.has(parent.getOperatorToken().getKind());
     }
 
-    // `a?.b(…)` / `a.b?.(…)` — the member/call runs only when the receiver is present.
-    if (Node.isQuestionDotTokenable(child)) {
-        return child.hasQuestionDotToken();
+    // `a?.b(site)` / `a?.[site]` — skipped whole when the chain short-circuits.
+    if ((Node.isCallExpression(parent) || Node.isElementAccessExpression(parent)) && inOptionalChain(parent)) {
+        return !isSameNode(child, parent.getExpression());
     }
 
-    return Node.isBlock(parent) && precededByExit(parent, child);
+    // `if (done) return; site` — the site is a SIBLING of the guard, not beneath
+    // it, so only an earlier statement of the same block that may leave it shows it.
+    return Node.isBlock(parent) && parent.getStatements().some((statement) => statement.getEnd() <= child.getStart() && mayLeave(statement));
 };
 
 /**
- * `true` when the site's own receiver chain may short-circuit —
- * `ctx.scheduler?.runAfter(…)`, `ctx.services.billing?.charge` — so the call
- * runs only when every link is present. The chain hangs BELOW the site, where
- * the ancestor walk never looks.
+ * `true` when a scheduled dispatch can be undone: its returned id is kept
+ * (`const id = await ctx.scheduler.runAfter(…)`), so something can `cancel` it,
+ * or a `throw` follows it in the same function, which rolls the mutation — and
+ * the schedule with it — back.
  */
-const isOptionalChain = (site: TsNode): boolean => {
-    let current: TsNode = site;
+const isRevocableSchedule = (site: TsNode): boolean => {
+    let value: TsNode = site;
+    let parent = site.getParent();
 
-    while (Node.isCallExpression(current) || Node.isPropertyAccessExpression(current) || Node.isElementAccessExpression(current)) {
-        if (current.hasQuestionDotToken()) {
-            return true;
-        }
-
-        current = current.getExpression();
+    while (parent !== undefined && (Node.isAwaitExpression(parent) || Node.isParenthesizedExpression(parent))) {
+        value = parent;
+        parent = parent.getParent();
     }
 
-    return false;
+    const kept =
+        Node.isVariableDeclaration(parent) ||
+        (Node.isBinaryExpression(parent) && isSameNode(value, parent.getRight()) && parent.getOperatorToken().getKind() === SyntaxKind.EqualsToken);
+    const owner = site.getFirstAncestor(isFunctionLike);
+
+    return (
+        kept ||
+        owner
+            ?.getDescendantsOfKind(SyntaxKind.ThrowStatement)
+            .some((statement) => statement.getStart() >= site.getEnd() && isSameNode(statement.getFirstAncestor(isFunctionLike), owner)) === true
+    );
 };
 
 /**
- * `true` when the site sits behind a guard — walked from the site out to its
- * `SourceFile` rather than to the nearest function, so a guard ABOVE the
- * callback holding the site (`if (enabled) { const work = () => … }`) is seen
- * as well as one inside it.
+ * `true` when the edge may not take effect on every pass of its function: any
+ * position {@link conditionalPosition} calls guarded between the site and the
+ * file, the site's own optional chain (`ctx.scheduler?.runAfter(…)`), or — for
+ * a schedule — a dispatch that can be undone ({@link isRevocableSchedule}).
+ * Walked to the `SourceFile` rather than the nearest function, so a guard ABOVE
+ * the callback holding the site (`if (enabled) { const work = () => … }`) is
+ * seen as well as one inside it.
  */
-const isConditionalSite = (site: TsNode): boolean => {
-    if (isOptionalChain(site)) {
+const isConditionalSite = (site: TsNode, kind: CallEdgeIR["kind"]): boolean => {
+    if (inOptionalChain(site) || (kind === "schedule" && isRevocableSchedule(site))) {
         return true;
     }
 
     let child: TsNode = site;
 
-    for (;;) {
-        const parent = child.getParent();
-
-        if (parent === undefined || Node.isSourceFile(parent)) {
-            return false;
-        }
-
+    for (let parent = child.getParent(); parent !== undefined && !Node.isSourceFile(parent); parent = parent.getParent()) {
         if (conditionalPosition(child, parent)) {
             return true;
         }
 
         child = parent;
     }
+
+    return false;
 };
 
 /** The {@link CallEdgeIR} of a site, or `undefined` when it carries no edge. */
@@ -235,7 +219,7 @@ const edgeRecord = (site: TsNode, file: string, edge: CallSiteEdge | undefined):
         ? undefined
         : {
               ...edge,
-              ...(isConditionalSite(site) ? { conditional: true as const } : {}),
+              ...(isConditionalSite(site, edge.kind) ? { conditional: true as const } : {}),
               file,
               line: site.getStartLineNumber(),
               scope: callSiteScopeOf(site),

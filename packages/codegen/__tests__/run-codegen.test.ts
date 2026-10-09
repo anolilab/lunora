@@ -2452,7 +2452,7 @@ export const drain = internalMutation.mutation(async ({ ctx }) => {
 `,
             );
 
-            const findings = runCodegen({ projectRoot: workdir }).advisories.filter(
+            const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
                 (advisory) => advisory.name === "dispatch_cycle" || advisory.name === "unbounded_loop",
             );
 

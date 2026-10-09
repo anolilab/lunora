@@ -12,18 +12,15 @@ import type { AdvisorCallSiteScope } from "./call-site-scope";
  * name for `enqueue` / `publish`. `reason` says why the target could not be
  * read statically, in which case `target` is absent.
  *
- * `conditional` is set (only ever to `true`) when the call sits behind
- * something that may not run — a guard, a loop, a `try`, an optional chain, a
- * ternary/logical right operand, or a statement an earlier early-exit shadows.
- * The cycle lint reads it as its false-positive gate: a cycle containing ANY
- * conditional edge is not an infinite loop, so only cycles whose every edge is
- * unconditional are flagged.
+ * `conditional` is set (only ever to `true`) when the hop may not take effect
+ * on every pass; codegen's `isConditionalSite` owns the rules. The cycle lint
+ * reads it as its false-positive gate.
  *
  * Produced by the codegen feeder; runtime callers don't supply it, so the lint
  * finds nothing there.
  */
 export interface AdvisorCallEdge {
-    /** `true` when the call may not run on every pass — any guard between it and the module top. */
+    /** `true` when the hop may not take effect on every pass. */
     conditional?: true;
     /** Source file relative to the lunora dir, no extension. */
     file: string;

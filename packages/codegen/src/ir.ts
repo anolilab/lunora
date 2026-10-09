@@ -898,14 +898,9 @@ export interface HandlerSiteIR {
  */
 export interface CallEdgeIR {
     /**
-     * `true` when the call sits behind something that may not run — a guard, a
-     * loop, a `try`, an optional chain, a ternary/logical right operand, or a
-     * statement an earlier early-exit shadows. Set only (never `false`), so a
-     * straight-line row stays byte-identical to a pre-`conditional` one.
-     *
-     * The `dispatch_cycle` lint reads it as its false-positive gate: a cycle
-     * containing ANY conditional edge is not an infinite loop — some guard
-     * breaks it — so only a cycle whose every edge is unconditional is flagged.
+     * `true` when the hop may not take effect on every pass of its function —
+     * see `isConditionalSite` in `discover/call-edges.ts` for the rules. Set
+     * only, never `false`. The `dispatch_cycle` lint's false-positive gate.
      */
     conditional?: true;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */

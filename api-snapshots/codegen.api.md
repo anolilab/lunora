@@ -434,6 +434,7 @@ interface LintSchemaOptions {
     authApiCalls?: ReadonlyArray<AuthApiCallIR>;
     authConfigs?: ReadonlyArray<AuthConfigIR>;
     browserUrlAccesses?: ReadonlyArray<BrowserUrlAccessIR>;
+    callEdges?: ReadonlyArray<CallEdgeIR>;
     configCalls?: ReadonlyArray<ConfigCallIR>;
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
@@ -480,6 +481,7 @@ interface LintSchemaOptions {
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
     tableWrites?: ReadonlyArray<TableWriteIR>;
+    unboundedLoops?: ReadonlyArray<UnboundedLoopIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;
@@ -2265,6 +2267,20 @@ const CAPABILITY_ROWS: readonly [
 ];
 ```
 
+### `CallEdgeIR` (interface)
+
+```ts
+interface CallEdgeIR {
+    conditional?: true;
+    file: string;
+    kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
+    line: number;
+    reason?: string;
+    scope: CallSiteScope;
+    target?: string;
+}
+```
+
 ### `CallSiteScope` (type)
 
 ```ts
@@ -2952,6 +2968,17 @@ interface TtlIR {
 interface TtlSnapshot {
     after?: number;
     field: string;
+}
+```
+
+### `UnboundedLoopIR` (interface)
+
+```ts
+interface UnboundedLoopIR {
+    file: string;
+    kind: "do" | "for" | "while";
+    line: number;
+    scope: CallSiteScope;
 }
 ```
 

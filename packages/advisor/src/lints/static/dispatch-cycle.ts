@@ -1,7 +1,7 @@
+import { sanitizeNamespace } from "../../../../../shared/dispatch-namespace";
 import type { AdvisorCallEdge } from "../../call-edges";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { dispatchNamespace } from "../helpers";
 
 /** One unconditional `call`/`schedule` edge between two functions, keyed `namespace:export`. */
 interface Dispatch {
@@ -25,7 +25,7 @@ const unconditionalDispatches = (edges: ReadonlyArray<AdvisorCallEdge>): Dispatc
         if ((edge.kind === "call" || edge.kind === "schedule") && edge.target !== undefined && edge.conditional !== true && edge.scope.kind === "export") {
             dispatches.push({
                 file: edge.file,
-                from: `${dispatchNamespace(edge.file)}:${edge.scope.name}`,
+                from: `${sanitizeNamespace(edge.file)}:${edge.scope.name}`,
                 kind: edge.kind,
                 line: edge.line,
                 to: edge.target,
@@ -43,28 +43,30 @@ const unconditionalDispatches = (edges: ReadonlyArray<AdvisorCallEdge>): Dispatc
  * is a loop.
  */
 const stronglyConnected = (nodes: ReadonlyArray<string>, successors: ReadonlyMap<string, ReadonlyArray<string>>): string[][] => {
-    const index = new Map<string, number>();
-    const lowLink = new Map<string, number>();
+    // Per node: its DFS discovery order and the lowest order reachable from it.
+    const visited = new Map<string, { index: number; lowLink: number }>();
     const onStack = new Set<string>();
     const stack: string[] = [];
     const components: string[][] = [];
 
-    const visit = (node: string): void => {
-        index.set(node, index.size);
-        lowLink.set(node, index.get(node) as number);
+    const visit = (node: string): { index: number; lowLink: number } => {
+        const state = { index: visited.size, lowLink: visited.size };
+
+        visited.set(node, state);
         stack.push(node);
         onStack.add(node);
 
         for (const next of successors.get(node) ?? []) {
-            if (!index.has(next)) {
-                visit(next);
-                lowLink.set(node, Math.min(lowLink.get(node) as number, lowLink.get(next) as number));
+            const seen = visited.get(next);
+
+            if (seen === undefined) {
+                state.lowLink = Math.min(state.lowLink, visit(next).lowLink);
             } else if (onStack.has(next)) {
-                lowLink.set(node, Math.min(lowLink.get(node) as number, index.get(next) as number));
+                state.lowLink = Math.min(state.lowLink, seen.index);
             }
         }
 
-        if (lowLink.get(node) === index.get(node)) {
+        if (state.lowLink === state.index) {
             const component: string[] = [];
 
             for (let member = stack.pop(); member !== undefined; member = member === node ? undefined : stack.pop()) {
@@ -74,10 +76,12 @@ const stronglyConnected = (nodes: ReadonlyArray<string>, successors: ReadonlyMap
 
             components.push(component);
         }
+
+        return state;
     };
 
     for (const node of nodes) {
-        if (!index.has(node)) {
+        if (!visited.has(node)) {
             visit(node);
         }
     }
@@ -93,16 +97,15 @@ const describeDispatch = (dispatch: Dispatch): string =>
  * Flags a cycle of function dispatches in which every hop runs unconditionally:
  * a function that always schedules itself (`ctx.scheduler.runAfter(…, self)`),
  * or two that always schedule or call each other. Nothing in such a cycle can
- * stop it — once one member runs, the chain re-arms forever. A self-scheduling
- * alarm loop like this burns storage operations until someone notices the bill.
+ * stop it — once one member runs, the chain re-arms forever, burning storage
+ * operations until someone notices the bill.
  *
- * The false-positive gate is the feeder's `conditional` flag: a hop behind an
- * `if`, a loop, a `try`, a `switch` arm, an optional chain, a ternary or logical
- * right operand, an earlier early exit, or inside a nested callback is assumed
- * to stop the cycle, and drops out. Only hops in an export's own body count —
- * a helper's call may be guarded where the helper is called — and only static
- * `api.*` / `internal.*` targets. What remains is a loop the source code itself
- * proves endless, hence `ERROR`.
+ * The false-positive gate is the feeder's `conditional` flag, whose rules live
+ * with codegen's `isConditionalSite`: a hop that may not run, or that can be
+ * cancelled or rolled back, drops out. Only hops in an export's own body count
+ * — a helper's call may be guarded where the helper is called — and only
+ * static targets. Re-arming outside `ctx.scheduler` (a raw Durable Object
+ * `setAlarm`, a queue re-enqueue) is not modelled.
  *
  * Runs only when the codegen feeder supplied call edges (`context.callEdges`
  * present); a runtime caller flags nothing.
@@ -115,7 +118,7 @@ const dispatchCycle: Lint = {
     level: "ERROR",
     name: "dispatch_cycle",
     remediation:
-        "Put a stop condition in front of the re-dispatch: reschedule only while there is work left (`if (remaining > 0) await ctx.scheduler.runAfter(…)`), carry an attempt counter in the args and stop at a cap, or move periodic work to a `cron` instead of a self-rescheduling function.",
+        "Put a stop condition in front of the re-dispatch: reschedule only while there is work left (`if (remaining > 0) await ctx.scheduler.runAfter(…)`), carry an attempt counter in the args and stop at a cap, keep the returned id so a stop path can `ctx.scheduler.cancel` it, or move periodic work to a `cron`. If the chain already stops by throwing from a helper, make that stop condition explicit at the call site.",
     run: (context) => {
         if (context.callEdges === undefined) {
             return [];
@@ -125,7 +128,13 @@ const dispatchCycle: Lint = {
         const successors = new Map<string, string[]>();
 
         for (const dispatch of dispatches) {
-            successors.set(dispatch.from, [...(successors.get(dispatch.from) ?? []), dispatch.to]);
+            const targets = successors.get(dispatch.from);
+
+            if (targets === undefined) {
+                successors.set(dispatch.from, [dispatch.to]);
+            } else {
+                targets.push(dispatch.to);
+            }
         }
 
         return stronglyConnected(

@@ -223,9 +223,8 @@ export interface LintContext {
 
     /**
      * Call-site edges of the architecture graph — `ctx.run*` calls, scheduler
-     * dispatches, enqueues, publishes and service uses, each with the site's
-     * scope and whether it sits behind a guard (`conditional`) — the
-     * `dispatch_cycle` input. Supplied by the codegen feeder; absent for runtime
+     * dispatches, enqueues, publishes and service uses — the `dispatch_cycle`
+     * input. Supplied by the codegen feeder; absent for runtime
      * callers, where the lint finds nothing.
      */
     callEdges?: ReadonlyArray<AdvisorCallEdge>;
