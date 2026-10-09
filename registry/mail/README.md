@@ -117,13 +117,19 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 
 3. In your Worker's `queue()` handler, build the mailer with `createMailerFromEnv` as well and drain the batch with `consumeQueuedSend` from `@lunora/mail`:
 
-    `cloudflareSend` is the module-private helper in the copied `lunora/mail/index.ts`, so a `queue()` handler in another module can't see it: copy it into that module (it reads the `SEND_EMAIL` binding from `cloudflare:workers`).
+    `cloudflareSend` in the copied `lunora/mail/index.ts` is module-private and reads that module's `env`, so the handler builds its own from the `env` it is given:
 
     ```ts
     import { consumeQueuedSend, createMailerFromEnv } from "@lunora/mail";
 
     export default {
         queue: async (batch, env) => {
+            const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
+                const { EmailMessage } = await import("cloudflare:email");
+                const binding = env["SEND_EMAIL"] as { send: (message: InstanceType<typeof EmailMessage>) => Promise<void> };
+
+                await binding.send(new EmailMessage(from, to, raw));
+            };
             const mailer = createMailerFromEnv(env, { cloudflareSend });
 
             for (const message of batch.messages) {
