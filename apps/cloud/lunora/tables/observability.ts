@@ -229,12 +229,15 @@ export const observabilityTables = {
         // Absent ⇒ `gt`; irrelevant for count-crossing targets.
         comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
         createdAt: v.number(),
-        // Email address (channel "email") or URL (channel "webhook").
+        // Email address (channel "email") — or `org:admins`, the organization's
+        // owners and admins, resolved at delivery — or URL (channel "webhook").
         destination: v.string(),
         enabled: v.boolean(),
         // Optional scope for a metric rule: evaluate only spans from this
         // function path (e.g. `messages:send`). Absent ⇒ the whole org.
         functionPath: v.optional(v.string()),
+        // When an owner/admin last sent this rule a test notification (`alerts.prepareTestAlert`).
+        lastTestedAt: v.optional(v.number()),
         // How a metric rule decides it is breaching. `threshold` (absent ⇒ this)
         // compares the window value to `threshold` directly — right when the
         // number has an absolute meaning (an SLO, a spend cap). `deviation`
