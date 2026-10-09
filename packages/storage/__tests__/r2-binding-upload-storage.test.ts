@@ -632,6 +632,7 @@ describe(createR2BindingUploadStorage, () => {
         expect([...bucket.objects.keys()].some((key) => key.startsWith(`${STATE_PREFIX}alice/`))).toBe(true);
 
         scope = "bob/";
+
         await expect(storage.update({ id: file.id }, { metadata: { label: "x" } })).rejects.toThrow(/Not found/u);
 
         scope = "alice/";
