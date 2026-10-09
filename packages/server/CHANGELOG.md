@@ -1,3 +1,13 @@
+## @lunora/server [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.188...@lunora/server@1.0.0-alpha.189) (2026-10-09)
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** createBatch takes the object form and reports per-instance errors (#1087)
+
+### Bug Fixes
+
+* **workflow:** createBatch takes the object form and reports per-instance errors ([#1087](https://github.com/anolilab/lunora/issues/1087)) ([295acc3](https://github.com/anolilab/lunora/commit/295acc39bceeb2f9506a85643002d367f2814064))
+
 ## @lunora/server [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.187...@lunora/server@1.0.0-alpha.188) (2026-10-09)
 
 ### Features

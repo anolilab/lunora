@@ -65,6 +65,9 @@ import { LunoraError } from "@lunora/errors";
 import type {
     WorkflowBatchDeleteResult,
     WorkflowBindingLike,
+    WorkflowCreateBatchError,
+    WorkflowCreateBatchOptions,
+    WorkflowCreateOptions,
     WorkflowInstanceLike,
     WorkflowInstanceStatus,
     WorkflowRollbackHandlerLike,
@@ -88,6 +91,27 @@ const TERMINATED_DEFINITION_ID = "@lunora/platform-node:terminated";
 
 /** Cloudflare's per-call cap on `Workflow.deleteBatch`, enforced here so a batch that works locally does not fail on deploy. */
 const MAX_DELETE_BATCH = 100;
+
+/** The most instances one `createBatch` call takes, as Cloudflare's binding does. */
+const MAX_CREATE_BATCH = 100;
+
+/**
+ * The entries one `createBatch` call creates, after checking the 1–100 size
+ * Cloudflare takes per call. `count` shares one params object across them all.
+ */
+const batchEntriesOf = (batchOptions: WorkflowCreateBatchOptions): ReadonlyArray<WorkflowCreateOptions> => {
+    const size = "instances" in batchOptions ? batchOptions.instances.length : batchOptions.count;
+
+    if (!Number.isInteger(size) || size < 1 || size > MAX_CREATE_BATCH) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: createBatch takes 1 to ${String(MAX_CREATE_BATCH)} instances, got ${String(size)}`);
+    }
+
+    return "instances" in batchOptions
+        ? batchOptions.instances
+        : Array.from({ length: batchOptions.count }, () => {
+              return { params: batchOptions.params };
+          });
+};
 
 /** Millisecond multipliers for every duration unit the parser recognises. */
 const DURATION_MS: Record<string, number> = {
@@ -776,21 +800,29 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
         const result = await runtime.trigger(definitionId, createOptions.params);
 
-        await store.save({
-            definitionId: ALIAS_DEFINITION_ID,
-            runId: createOptions.id,
-            snapshot: result.runId,
-            status: "failed",
-            updatedAt: Date.now(),
-        });
-        // The reverse pointer, so deleting the run by either id frees the alias.
-        await store.save({
-            definitionId: ALIAS_DEFINITION_ID,
-            runId: aliasOfKey(result.runId),
-            snapshot: createOptions.id,
-            status: "failed",
-            updatedAt: Date.now(),
-        });
+        try {
+            await store.save({
+                definitionId: ALIAS_DEFINITION_ID,
+                runId: createOptions.id,
+                snapshot: result.runId,
+                status: "failed",
+                updatedAt: Date.now(),
+            });
+            // The reverse pointer, so deleting the run by either id frees the alias.
+            await store.save({
+                definitionId: ALIAS_DEFINITION_ID,
+                runId: aliasOfKey(result.runId),
+                snapshot: createOptions.id,
+                status: "failed",
+                updatedAt: Date.now(),
+            });
+        } catch (error) {
+            // The run exists but no alias names it, so the caller's retry with this id would start a second run.
+            // Remove the run before reporting the failure, so a failed create leaves nothing behind.
+            await deleteRun(result.runId);
+
+            throw error;
+        }
 
         return instanceFor(result.runId);
     };
@@ -802,15 +834,47 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
             create: async (createOptions) => startRun(id, createOptions),
             // Sequential, not `Promise.all`: two entries sharing a caller id must
             // collapse onto one run, and concurrent alias reads would both miss.
-            createBatch: async (batch) => {
-                const instances: WorkflowInstanceLike[] = [];
+            // Object form, as Cloudflare's binding: an entry that fails is reported
+            // in `errors` at its input index and the rest still run.
+            createBatch: async (batchOptions) => {
+                const entries = batchEntriesOf(batchOptions);
+                const created: WorkflowInstanceLike[] = [];
+                const errors: WorkflowCreateBatchError[] = [];
+                const claimed = new Set<string>();
 
-                for (const createOptions of batch) {
-                    // eslint-disable-next-line no-await-in-loop -- see above; the alias read must observe the previous entry's write
-                    instances.push(await startRun(id, createOptions));
+                for (const [index, createOptions] of entries.entries()) {
+                    const instanceId = createOptions.id;
+
+                    // Cloudflare refuses a repeated id and an id that already names an instance, and reports each one at its
+                    // index. A single create's "same id is the same run" retry does not apply inside a batch.
+                    // eslint-disable-next-line no-await-in-loop -- the alias write of one entry must be visible to the next entry's check
+                    const taken = instanceId !== undefined && (claimed.has(instanceId) || (await store.load(instanceId)) !== undefined);
+
+                    if (instanceId !== undefined && taken) {
+                        errors.push({ code: 409, id: instanceId, index, message: `workflow instance "${instanceId}" already exists in this batch or store` });
+
+                        continue;
+                    }
+
+                    if (instanceId !== undefined) {
+                        claimed.add(instanceId);
+                    }
+
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- see above; the alias read must observe the previous entry's write
+                        created.push(await startRun(id, createOptions));
+                    } catch (error) {
+                        // A refused create (a bad request) is a 400, anything else a 500.
+                        errors.push({
+                            code: error instanceof LunoraError ? 400 : 500,
+                            id: instanceId,
+                            index,
+                            message: error instanceof Error ? error.message : String(error),
+                        });
+                    }
                 }
 
-                return instances;
+                return { created, errors };
             },
             // Sequential for the same reason as `createBatch`: a duplicate id must
             // find the first entry's delete, so it is reported deleted, not missing.

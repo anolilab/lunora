@@ -1,3 +1,18 @@
+## @lunora/workflow [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.72...@lunora/workflow@1.0.0-alpha.73) (2026-10-09)
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** createBatch takes the object form and reports per-instance errors (#1087)
+
+### Bug Fixes
+
+* **workflow:** createBatch takes the object form and reports per-instance errors ([#1087](https://github.com/anolilab/lunora/issues/1087)) ([295acc3](https://github.com/anolilab/lunora/commit/295acc39bceeb2f9506a85643002d367f2814064))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.189
+
 ## @lunora/workflow [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.71...@lunora/workflow@1.0.0-alpha.72) (2026-10-08)
 
 ### Bug Fixes

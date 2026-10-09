@@ -33,6 +33,29 @@ export interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     retention?: WorkflowRetention;
 }
 
+/**
+ * Options for `Workflow.createBatch`, in the object form Cloudflare's binding takes:
+ * explicit `instances`, or `count` instances that share one `params` and `retention`.
+ * The array form is deprecated upstream and is not accepted here: it left out any
+ * instance it failed to create, and reported nothing for it.
+ */
+export type WorkflowCreateBatchOptions<Params = Record<string, unknown>> =
+    { instances: ReadonlyArray<WorkflowCreateOptions<Params>> } | { count: number; params?: Params; retention?: WorkflowRetention };
+
+/** One instance a batch did not create. `index` is its position in the input (`count` form: its position among the `count`). */
+export interface WorkflowCreateBatchError {
+    code: number;
+    id?: string;
+    index: number;
+    message: string;
+}
+
+/** Result of `Workflow.createBatch`: the instances that were created, and an error for each one that was not. */
+export interface WorkflowCreateBatchResult {
+    created: WorkflowInstanceLike[];
+    errors: WorkflowCreateBatchError[];
+}
+
 /** Result of `Workflow.deleteBatch`. Mirrors Cloudflare's `WorkflowBatchDeleteResult`: one entry per input position. */
 export interface WorkflowBatchDeleteResult {
     deleted: { id: string }[];
@@ -100,7 +123,7 @@ export interface WorkflowInstanceLike {
  */
 export interface WorkflowBindingLike<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
     deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
 }
@@ -634,8 +657,12 @@ export interface WorkflowDefinition<Params = Record<string, unknown>, Output = u
 export interface WorkflowHandle<Params = Record<string, unknown>> {
     /** Start a new instance (optionally with an id + params). */
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
-    /** Start many instances in one batched RPC. */
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+
+    /**
+     * Start many instances in one batched RPC. Returns what was created and a
+     * per-instance error for each one that was not, so a failed instance is never silently dropped.
+     */
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
     /** Delete up to 100 instances and their stored state; ids that do not exist come back as per-instance errors. */
     deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     /** Get a handle to an existing instance by id. */
