@@ -49,9 +49,9 @@ export type AlertMeter =
 
 /**
  * The lowest threshold proposed per meter: the monthly quantity the Workers
- * Paid plan includes (developers.cloudflare.com, Workers/D1/Durable Objects/KV/
- * R2/Queues pricing), so a proposal never alerts on usage the customer is not
- * charged for. "Well above normal" is the multiplier's job; this keeps a
+ * Paid plan includes (developers.cloudflare.com/workers/platform/pricing and
+ * /r2/pricing, read 2026-10-09), so a proposal never alerts on usage the
+ * customer is not charged for. "Well above normal" is the multiplier's job; this keeps a
  * nearly idle account from being alerted at a few hundred requests.
  */
 export const METER_FLOORS: Readonly<Record<AlertMeter, number>> = {

@@ -56,7 +56,7 @@ export class CloudflareNotificationsError extends Error {
  * missing scope or a validation error.
  */
 const NOT_ELIGIBLE =
-    /\b(?:not eligible|ineligible|not entitled|entitlement|pay[\s-]as[\s-]you[\s-]go|enterprise|upgrade your plan|not available (?:for|on) (?:this|your) (?:account|plan))\b/iu;
+    /\b(?:not eligible|ineligible|not entitled|entitlement|pay[\s-]as[\s-]you[\s-]go|upgrade your plan|not available (?:for|on) (?:this|your) (?:account|plan))\b/iu;
 
 interface Envelope {
     errors?: { code?: number; message?: string }[];

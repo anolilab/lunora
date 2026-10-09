@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { apply, overview } from "../lunora/cloudflare-alerts";
+import { alertManagers, apply, overview } from "../lunora/cloudflare-alerts";
+import { handleCloudflareAlertRecipientsRoute } from "../src/deploy/routes/cloudflare-accounts";
 import { encryptSecret } from "../src/secrets/crypto";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -145,11 +146,11 @@ users.rows = [
 ];
 
 describe("cloudflareAlerts.overview", () => {
-    it("proposes thresholds from last month's usage of this account and defaults recipients to owners and admins", async () => {
+    it("proposes thresholds from last month's usage of this account", async () => {
         const { fetch } = fakeNotifications({
             policies: [{ alert_type: "billing_usage_alert", filters: { limit: ["9"], product: ["argo"] }, id: "own", name: "mine" }],
         });
-        const { ctx } = await context(fetch, {
+        const { ctx, ops } = await context(fetch, {
             usage: [
                 { kind: "requests", periodStart: SEPTEMBER, placementRef: "cfa_1", quantity: 20_000_000 },
                 // Another account's usage and this month's are not last month's history here.
@@ -162,7 +163,8 @@ describe("cloudflareAlerts.overview", () => {
 
         expect(result.state).toBe("ready");
         expect(result.historyPeriodStart).toBe(SEPTEMBER);
-        expect(result.recipients).toStrictEqual(["admin@example.com", "owner@example.com"]);
+        // The token proved it can read notifications, though it was connected without: recorded.
+        expect(ops).toContainEqual({ id: "cfa_1", kind: "patch", patch: { permissions: ["workersScripts", "notifications"] } });
         expect(result.products).toStrictEqual([
             {
                 basis: "history",
@@ -311,5 +313,47 @@ describe("cloudflareAlerts.apply", () => {
             code: "BAD_REQUEST",
         });
         expect(fetch).not.toHaveBeenCalled();
+    });
+});
+
+describe("default alert recipients", () => {
+    it("lists the user ids of owners and admins only, and refuses a member", async () => {
+        const { ctx } = await context(fakeNotifications().fetch);
+
+        await expect(alertManagers.handler(ctx, { organizationId: "org_1" as never })).resolves.toStrictEqual(["usr_1", "usr_2"]);
+
+        const member = await context(fakeNotifications().fetch, { members: [{ _id: "m_3", organizationId: "org_1", role: "member", userId: "usr_1" }] });
+
+        await expect(alertManagers.handler(member.ctx, { organizationId: "org_1" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("resolves their addresses at the edge, lowercased and sorted", async () => {
+        const runQuery = vi.fn<(reference: unknown, args?: Record<string, unknown>) => Promise<unknown>>(() => Promise.resolve(["usr_1", "usr_2"]));
+        const response = await handleCloudflareAlertRecipientsRoute(
+            new Request("https://cloud.test/v1/cloudflare-accounts/alert-recipients", { body: JSON.stringify({ organizationId: "org_1" }), method: "POST" }),
+            { __lunoraCtx: { runAction: vi.fn<() => Promise<never>>(), runMutation: vi.fn<() => Promise<never>>(), runQuery: runQuery as never } },
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ recipients: ["admin@example.com", "owner@example.com"] });
+        expect(runQuery.mock.calls[0]?.[1]).toStrictEqual({ organizationId: "org_1" });
+    });
+
+    it("answers the query's refusal, and a 400 without an organization", async () => {
+        const refusing = vi.fn<() => Promise<never>>(() => Promise.reject(new Error("forbidden")));
+        const environment = {
+            __lunoraCtx: { runAction: vi.fn<() => Promise<never>>(), runMutation: vi.fn<() => Promise<never>>(), runQuery: refusing as never },
+        };
+        const post = async (body: unknown) =>
+            handleCloudflareAlertRecipientsRoute(
+                new Request("https://cloud.test/v1/cloudflare-accounts/alert-recipients", { body: JSON.stringify(body), method: "POST" }),
+                environment,
+            );
+
+        const refused = await post({ organizationId: "org_1" });
+        const missing = await post({});
+
+        expect(refused.status).toBe(403);
+        expect(missing.status).toBe(400);
     });
 });

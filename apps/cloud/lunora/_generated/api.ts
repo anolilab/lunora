@@ -52,7 +52,7 @@ export interface ApiTypes {
     };
     cloudflare_alerts: {
         apply: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; products: Array<{ id: unknown; limit: number }>; recipients: Array<unknown> }, { results: { action: "created" | "failed" | "updated"; kind: "missing-scope" | "not-eligible" | "transient" | "validation" | null; message: null | string; productId: string; }[] }>;
-        overview: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; meter: string | null; proposedLimit: number | null }[]; recipients: string[]; state: "unavailable" | "unconfigured" | "missing-scope" | "no-products" | "not-eligible" | "ready" }>;
+        overview: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; meter: string | null; proposedLimit: number | null }[]; state: "unavailable" | "unconfigured" | "missing-scope" | "no-products" | "not-eligible" | "ready" }>;
     };
     dashboards: {
         create: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations">; panels?: Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }> }, Id<"dashboards">>;
@@ -233,6 +233,9 @@ export interface InternalApiTypes {
     cloudflare_accounts: {
         connect: FunctionReference<"mutation", { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }, Id<"cloudflareAccounts">>;
         costTarget: FunctionReference<"query", { deployKey: unknown; id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { accountId: string; ciphertext: string; iv: string; permissions: string[]; }>;
+    };
+    cloudflare_alerts: {
+        alertManagers: FunctionReference<"query", { organizationId: Id<"organizations"> }, string[]>;
     };
     deploy_keys: {
         ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;

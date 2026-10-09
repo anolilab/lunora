@@ -42,12 +42,13 @@ const READY: UsageAlertsOverview = {
             proposedLimit: null,
         },
     ],
-    recipients: ["admin@example.com", "owner@example.com"],
     state: "ready",
 };
 
 const ENTER_YOURSELF = /enter a threshold yourself/u;
 const PAY_AS_YOU_GO = /Pay-as-you-go/u;
+
+const RECIPIENTS = ["admin@example.com", "owner@example.com"];
 
 const noop = vi.fn<() => Promise<never[]>>(() => Promise.resolve([]));
 
@@ -103,7 +104,7 @@ describe(UsageAlertsView, () => {
     it("shows the proposal, the default recipients and the budget alert's dashboard path", () => {
         expect.assertions(8);
 
-        const html = renderToStaticMarkup(<UsageAlertsView onApply={noop} overview={READY} />);
+        const html = renderToStaticMarkup(<UsageAlertsView onApply={noop} overview={READY} recipients={RECIPIENTS} />);
 
         expect(html).toContain("Workers Standard Requests");
         expect(html).toContain('value="100000000"');
@@ -118,7 +119,9 @@ describe(UsageAlertsView, () => {
     it("offers no setup when Cloudflare names no products, and still points at the dashboard", () => {
         expect.assertions(3);
 
-        const html = renderToStaticMarkup(<UsageAlertsView onApply={noop} overview={{ ...READY, products: [], state: "no-products" }} />);
+        const html = renderToStaticMarkup(
+            <UsageAlertsView onApply={noop} overview={{ ...READY, products: [], state: "no-products" }} recipients={RECIPIENTS} />,
+        );
 
         expect(html).not.toContain("Create or update alerts in Cloudflare");
         expect(html).toContain("creates none rather than guess");
@@ -129,7 +132,11 @@ describe(UsageAlertsView, () => {
         expect.assertions(4);
 
         const html = renderToStaticMarkup(
-            <UsageAlertsView onApply={noop} overview={{ ...READY, message: "Authentication error", products: [], state: "missing-scope" }} />,
+            <UsageAlertsView
+                onApply={noop}
+                overview={{ ...READY, message: "Authentication error", products: [], state: "missing-scope" }}
+                recipients={RECIPIENTS}
+            />,
         );
 
         expect(html).toContain("Notifications: Edit");

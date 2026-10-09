@@ -3,14 +3,17 @@
  * `user` table through the isolate's auth instance (`currentAuth`). Members
  * rows carry only the user id; the address lives with the account.
  *
- * Answers an empty map when auth has not been bootstrapped in this isolate (a
- * cron, or a unit test), so a caller that only wants defaults degrades to none
+ * Only reliable where the Worker's `fetch` has awaited `ensureAuth` — an edge
+ * route. A Lunora action runs inside the shard Durable Object, whose isolate
+ * may never have bootstrapped auth. Answers an empty map when auth is not
+ * bootstrapped here, so a caller that only wants defaults degrades to none
  * rather than failing.
  *
  * ponytail: a second, independent lookup of the same table is being added in
  * `src/auth.ts` (`authUserEmails`); once both land, this one should call that.
  */
 import { currentAuth } from "../auth";
+import { MAX_ALERT_RECIPIENTS } from "./usage-alerts";
 
 /** Ids looked up at most — an organization's owners and admins, never a whole roster. */
 const MAX_USERS = 50;
@@ -36,4 +39,11 @@ export const userEmails = async (userIds: ReadonlyArray<string>): Promise<Map<st
             .filter((user): user is { email: string; id: string } => typeof user.id === "string" && typeof user.email === "string" && user.email !== "")
             .map((user) => [user.id, user.email]),
     );
+};
+
+/** The addresses of `userIds`, lowercased, deduplicated, sorted and capped — the default alert recipients. */
+export const recipientsFor = async (userIds: ReadonlyArray<string>): Promise<string[]> => {
+    const emails = await userEmails(userIds);
+
+    return [...new Set([...emails.values()].map((email) => email.toLowerCase()))].toSorted((a, b) => a.localeCompare(b, "en")).slice(0, MAX_ALERT_RECIPIENTS);
 };

@@ -144,6 +144,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "cloudflare_accounts:costTarget": lunora_cloudflare_accounts_6.costTarget as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:disconnect": lunora_cloudflare_accounts_6.disconnect as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:list": lunora_cloudflare_accounts_6.list as unknown as RegisteredLunoraFunction,
+    "cloudflare_alerts:alertManagers": lunora_cloudflare_alerts_7.alertManagers as unknown as RegisteredLunoraFunction,
     "cloudflare_alerts:apply": lunora_cloudflare_alerts_7.apply as unknown as RegisteredLunoraFunction,
     "cloudflare_alerts:overview": lunora_cloudflare_alerts_7.overview as unknown as RegisteredLunoraFunction,
     "dashboards:create": lunora_dashboards_8.create as unknown as RegisteredLunoraFunction,
@@ -483,6 +484,12 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_cloudflare_accounts_6.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_cloudflare_alerts_7.alertManagers.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -1152,8 +1159,9 @@ export interface Caller {
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
     };
     cloudflare_alerts: {
+        alertManagers: (args: { organizationId: Id<"organizations"> }) => Promise<string[]>;
         apply: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; products: Array<{ id: unknown; limit: number }>; recipients: Array<unknown> }) => Promise<{ results: { action: "created" | "failed" | "updated"; kind: "missing-scope" | "not-eligible" | "transient" | "validation" | null; message: null | string; productId: string; }[] }>;
-        overview: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; meter: string | null; proposedLimit: number | null }[]; recipients: string[]; state: "unavailable" | "unconfigured" | "missing-scope" | "no-products" | "not-eligible" | "ready" }>;
+        overview: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; meter: string | null; proposedLimit: number | null }[]; state: "unavailable" | "unconfigured" | "missing-scope" | "no-products" | "not-eligible" | "ready" }>;
     };
     dashboards: {
         create: (args: { name: unknown; organizationId: Id<"organizations">; panels?: Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }> }) => Promise<Id<"dashboards">>;
@@ -1452,6 +1460,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         list: (args) => callRegistered(context, "cloudflare_accounts:list", args),
     },
     cloudflare_alerts: {
+        alertManagers: (args) => callRegistered(context, "cloudflare_alerts:alertManagers", args),
         apply: (args) => callRegistered(context, "cloudflare_alerts:apply", args),
         overview: (args) => callRegistered(context, "cloudflare_alerts:overview", args),
     },

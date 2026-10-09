@@ -326,13 +326,17 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
       history; nothing for a product no meter maps to. The ledger counts only
       Lunora projects' scripts, so the studio says to raise thresholds when other
       Workers share the account. Every threshold is editable.
-    - _Recipients_ default to the organization's owners' and admins' addresses
-      (better-auth `user` rows via `src/cloudflare-accounts/recipients.ts`), and
-      are editable. Email only: Cloudflare documents no test send.
-    - _Idempotent._ One policy per product named `Lunora Cloud usage alert:
-{product}`; a re-run replaces it (`PUT`), never duplicates it, and policies
-      the customer made are listed as coverage and never touched. Each run is
-      audited (`cloudflare_account.usage_alerts`).
+    - _Recipients_ default to the organization's owners' and admins' addresses,
+      and are editable. They come from `POST /v1/cloudflare-accounts/alert-recipients`
+      (the internal `cloudflareAlerts.alertManagers` query asserts owner/admin):
+      the addresses live in better-auth's `user` table, read through the auth
+      instance the Worker's `fetch` bootstraps — an action runs in the shard
+      Durable Object, where it may not be. Email only: Cloudflare documents no
+      test send.
+    - _Idempotent._ One policy per product, its name the product id after the
+      prefix `MANAGED_POLICY_PREFIX`; a re-run replaces it (`PUT`), never
+      duplicates it, and policies the customer made are listed as coverage and
+      never touched. Each run is audited (`cloudflare_account.usage_alerts`).
     - _Failures_ are classified: a refused token (add Notifications: Edit — the
       connect-time probe can only show that policies are readable), an
       ineligible account (Usage Based Billing notifications are Pay-as-you-go

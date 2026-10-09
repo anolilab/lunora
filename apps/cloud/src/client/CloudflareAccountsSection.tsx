@@ -7,7 +7,6 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -18,7 +17,7 @@ import { CloudflareUsageAlerts } from "./CloudflareUsageAlerts";
 import { ConnectCloudflareAccountDialog } from "./ConnectCloudflareAccountDialog";
 import { DisconnectCloudflareAccountDialog } from "./DisconnectCloudflareAccountDialog";
 import { COLUMN_LABEL } from "./section-styles";
-import { RelativeTime, StatusBadge } from "./section-ui";
+import { HostEmpty, RelativeTime, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { projectNamesByHost } from "./target-capabilities";
 import type { OrgId } from "./types";
@@ -138,21 +137,10 @@ export const CloudflareAccountsSection = ({ organizationId, preloaded }: Section
         body = <Skeleton className="h-24 w-full" />;
     } else if (accounts.length === 0) {
         body = (
-            <Empty className="border-0 py-10">
-                <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                        <HugeiconsIcon icon={CloudIcon} strokeWidth={2} />
-                    </EmptyMedia>
-                    <EmptyTitle>Deploy into your own Cloudflare account</EmptyTitle>
-                    <EmptyDescription>
-                        Connect a Cloudflare account and your projects deploy into it as plain Workers, with their databases, buckets and queues created there.
-                        Your data stays in your account, and Cloudflare bills you for it directly.
-                    </EmptyDescription>
-                </EmptyHeader>
-                <div className="flex justify-center">
-                    {connectButton ?? <p className="m-0 text-sm text-muted-foreground">Ask an owner or admin to connect one.</p>}
-                </div>
-            </Empty>
+            <HostEmpty action={connectButton} fallback="Ask an owner or admin to connect one." icon={CloudIcon} title="Deploy into your own Cloudflare account">
+                Connect a Cloudflare account and your projects deploy into it as plain Workers, with their databases, buckets and queues created there. Your
+                data stays in your account, and Cloudflare bills you for it directly.
+            </HostEmpty>
         );
     } else {
         body = (

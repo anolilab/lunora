@@ -1,7 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
 import { readAccountAlerts, writeAccountAlerts } from "../src/cloudflare-accounts/alerts-api";
-import { userEmails } from "../src/cloudflare-accounts/recipients";
 import type { AccountAccess, CloudflareAccountRow } from "../src/cloudflare-accounts/store";
 import { cloudflareAccountStore, unsealAccount } from "../src/cloudflare-accounts/store";
 import type { UsageRow } from "../src/cloudflare-accounts/usage-alerts";
@@ -19,7 +18,7 @@ import {
 } from "../src/cloudflare-accounts/usage-alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { ActionCtx as ActionContext } from "./_generated/server.js";
-import { action, v } from "./_generated/server.js";
+import { action, internalQuery, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
@@ -66,8 +65,6 @@ interface UsageAlertsOverview {
     /** Cloudflare's own text for a failed read, safe to show. */
     message: null | string;
     products: UsageAlertProductView[];
-    /** The organization's owners' and admins' addresses — the default recipients. */
-    recipients: string[];
     state: OverviewState;
 }
 
@@ -107,17 +104,6 @@ const unsealed = async (
     return { access: key ? await unsealAccount(row, key) : null, row };
 };
 
-/** Owners' and admins' addresses, in a stable order. */
-const ownerAndAdminEmails = async (context: ActionContext, organizationId: Id<"organizations">): Promise<string[]> => {
-    const { page } = await context.db.members.findMany({ where: { organizationId } });
-    const managers = page.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.userId);
-    const emails = await userEmails(managers);
-
-    return [...new Set(managers.map((userId) => emails.get(userId)?.toLowerCase()).filter((email): email is string => email !== undefined))]
-        .toSorted((a, b) => a.localeCompare(b, "en"))
-        .slice(0, MAX_ALERT_RECIPIENTS);
-};
-
 /** Last month's usage of the Lunora projects in the account, per meter. */
 const lastMonthUsage = async (context: ActionContext, id: Id<"cloudflareAccounts">, periodStart: number): Promise<Partial<Record<string, number>>> => {
     const rows = await collectAll<UsageRow>(async (cursor) => context.db.platformUsage.findMany({ cursor, where: { periodStart, placementRef: id } }));
@@ -126,8 +112,25 @@ const lastMonthUsage = async (context: ActionContext, id: Id<"cloudflareAccounts
 };
 
 /**
+ * The user ids of an organization's owners and admins — the default recipients
+ * of its Cloudflare usage alerts (owners/admins, under the caller's session).
+ * Internal: `POST /v1/cloudflare-accounts/alert-recipients` resolves them to
+ * addresses at the edge, where the auth instance that owns the `user` table is
+ * bootstrapped; an action runs where it may not be.
+ */
+export const alertManagers = internalQuery
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<string[]> => {
+        await assertMember(context, organizationId, ["owner", "admin"]);
+
+        const { page } = await context.db.members.findMany({ where: { organizationId } });
+
+        return page.filter((member) => member.role === "owner" || member.role === "admin").map((member) => member.userId);
+    });
+
+/**
  * What Cloudflare's Usage Based Billing notifications cover on a connected
- * account, and the thresholds and recipients a setup would use (owners/admins).
+ * account, and the thresholds a setup would propose (owners/admins).
  * Never throws for a Cloudflare failure: the state says what went wrong.
  */
 export const overview = action
@@ -138,7 +141,7 @@ export const overview = action
 
         const { access, row } = await unsealed(context, organizationId, id);
         const historyPeriodStart = previousPeriodStart(context.now);
-        const base = { dashboard: dashboardLinks(row.accountId), historyPeriodStart, message: null, products: [], recipients: [] };
+        const base = { dashboard: dashboardLinks(row.accountId), historyPeriodStart, message: null, products: [] };
 
         if (access === null) {
             return { ...base, state: "unconfigured" };
@@ -151,8 +154,14 @@ export const overview = action
         }
 
         const { listed, policies } = read;
+        if (!row.permissions.includes("notifications")) {
+            // The token was granted Notifications after it was connected (a token's permissions can be
+            // edited in Cloudflare without rotating it); record what this read just proved.
+            await context.db.patch(id, { permissions: [...row.permissions, "notifications"] });
+        }
+
         const discovered = discoverProducts(listed, policies);
-        const [usage, recipients] = await Promise.all([lastMonthUsage(context, id, historyPeriodStart), ownerAndAdminEmails(context, organizationId)]);
+        const usage = await lastMonthUsage(context, id, historyPeriodStart);
         const coverage = coverageByProduct(policies);
         const products = discovered.map((product): UsageAlertProductView => {
             const proposal = proposeThreshold(product, usage);
@@ -177,7 +186,7 @@ export const overview = action
             state = "no-products";
         }
 
-        return { ...base, products, recipients, state };
+        return { ...base, products, state };
     });
 
 /**

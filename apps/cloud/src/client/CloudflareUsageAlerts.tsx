@@ -103,14 +103,16 @@ const ProductRow = ({
 /** The editable setup: products and thresholds, recipients, and the write. Mounted per loaded overview, so it starts from the proposal. */
 const UsageAlertsForm = ({
     onApply,
-    overview,
+    products,
+    recipients: defaultRecipients,
 }: {
     onApply: ApplyUsageAlerts;
-    overview: Pick<UsageAlertsOverview, "historyPeriodStart" | "products" | "recipients">;
+    products: UsageAlertsOverview["products"];
+    recipients: ReadonlyArray<string>;
 }): ReactElement => {
-    const [selected, setSelected] = useState<string[]>(() => initialSelection(overview.products));
-    const [limits, setLimits] = useState<Record<string, string>>(() => initialLimits(overview.products));
-    const [recipients, setRecipients] = useState(() => overview.recipients.join("\n"));
+    const [selected, setSelected] = useState<string[]>(() => initialSelection(products));
+    const [limits, setLimits] = useState<Record<string, string>>(() => initialLimits(products));
+    const [recipients, setRecipients] = useState(() => defaultRecipients.join("\n"));
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<null | string>(null);
 
@@ -159,7 +161,7 @@ const UsageAlertsForm = ({
                 Cloudflare counts the whole account, so raise them if other Workers run there.
             </p>
             <ul className="m-0 grid list-none p-0">
-                {overview.products.map((product) => (
+                {products.map((product) => (
                     <ProductRow
                         checked={chosen.has(product.id)}
                         key={product.id}
@@ -220,10 +222,19 @@ const Outcome = ({ results }: { results: ReadonlyArray<UsageAlertsResult> }): Re
 );
 
 /** A loaded overview: its state line or the form, then the budget-alert note. */
-export const UsageAlertsView = ({ onApply, overview }: { onApply: ApplyUsageAlerts; overview: UsageAlertsOverview }): ReactElement => (
+export const UsageAlertsView = ({
+    onApply,
+    overview,
+    recipients,
+}: {
+    onApply: ApplyUsageAlerts;
+    overview: UsageAlertsOverview;
+    /** The organization's owners' and admins' addresses, or none when they could not be looked up. */
+    recipients: ReadonlyArray<string>;
+}): ReactElement => (
     <div className="grid gap-3">
         {overview.state === "ready" ? (
-            <UsageAlertsForm onApply={onApply} overview={overview} />
+            <UsageAlertsForm onApply={onApply} products={overview.products} recipients={recipients} />
         ) : (
             <p className="m-0 text-sm text-muted-foreground">
                 {STATE_COPY[overview.state]}
@@ -234,7 +245,42 @@ export const UsageAlertsView = ({ onApply, overview }: { onApply: ApplyUsageAler
     </div>
 );
 
-type Loaded = { overview: UsageAlertsOverview; status: "loaded"; version: number } | { status: "error" } | { status: "idle" } | { status: "loading" };
+type Loaded = { overview: UsageAlertsOverview; recipients: string[]; status: "loaded" } | { status: "error" } | { status: "idle" } | { status: "loading" };
+
+/** Deadline for the recipients lookup. */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/** The `recipients` of the lookup's answer, keeping only strings. */
+const recipientsOf = (payload: unknown): string[] => {
+    const list = (payload as null | { recipients?: unknown })?.recipients;
+
+    return Array.isArray(list) ? list.filter((entry): entry is string => typeof entry === "string") : [];
+};
+
+/**
+ * The organization's owners' and admins' addresses (`POST
+ * /v1/cloudflare-accounts/alert-recipients`), or none when the lookup fails —
+ * the form then starts empty and the addresses are typed in.
+ */
+const requestRecipients = async (organizationId: OrgId): Promise<string[]> => {
+    try {
+        const response = await fetch("/v1/cloudflare-accounts/alert-recipients", {
+            body: JSON.stringify({ organizationId }),
+            credentials: "include",
+            headers: { "content-type": "application/json" },
+            method: "POST",
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+            return [];
+        }
+
+        return recipientsOf(await response.json());
+    } catch {
+        return [];
+    }
+};
 
 /**
  * Cloudflare's own usage alerts on one connected account (owners/admins). Read
@@ -251,11 +297,12 @@ export const CloudflareUsageAlerts = ({ account, organizationId }: { account: Cl
         setLoaded({ status: "loading" });
 
         try {
-            const overview = await client.action(api.cloudflare_alerts.overview, { id: account._id, organizationId });
+            const [overview, recipients] = await Promise.all([
+                client.action(api.cloudflare_alerts.overview, { id: account._id, organizationId }),
+                requestRecipients(organizationId),
+            ]);
 
-            setLoaded((current) => {
-                return { overview, status: "loaded", version: current.status === "loaded" ? current.version + 1 : 0 };
-            });
+            setLoaded({ overview, recipients, status: "loaded" });
         } catch {
             setLoaded({ status: "error" });
         }
@@ -278,7 +325,7 @@ export const CloudflareUsageAlerts = ({ account, organizationId }: { account: Cl
             break;
         }
         case "loaded": {
-            body = <UsageAlertsView key={loaded.version} onApply={apply} overview={loaded.overview} />;
+            body = <UsageAlertsView onApply={apply} overview={loaded.overview} recipients={loaded.recipients} />;
             break;
         }
         case "loading": {

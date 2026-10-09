@@ -12,6 +12,7 @@
  */
 import { internal } from "../../../lunora/_generated/api.js";
 import { CloudflareTokenError } from "../../cloudflare/fetch";
+import { recipientsFor } from "../../cloudflare-accounts/recipients";
 import { encryptSecret } from "../../secrets/crypto";
 import { inspectAccount, isCloudflareAccountId } from "../../targets/cloudflare-workers/api";
 import type { RouterEnv } from "./shared";
@@ -100,5 +101,30 @@ export const handleCloudflareAccountConnectRoute = async (request: Request, envi
         return Response.json({ id, permissions: inspection.permissions, workersSubdomain: inspection.workersSubdomain });
     } catch (error) {
         return rejected(error, "connect Cloudflare account failed");
+    }
+};
+
+/**
+ * `POST /v1/cloudflare-accounts/alert-recipients` — the addresses of an
+ * organization's owners and admins, the default recipients of Cloudflare usage
+ * alerts (`session`; the internal `cloudflareAlerts.alertManagers` query
+ * asserts owner/admin). At the edge because the addresses live in better-auth's
+ * `user` table, read through the auth instance this Worker's `fetch`
+ * bootstrapped.
+ */
+export const handleCloudflareAlertRecipientsRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = requireContext(environment);
+    const body = (await request.json().catch(() => null)) as { organizationId?: unknown } | null;
+
+    if (typeof body?.organizationId !== "string") {
+        return jsonError(400, "organizationId is required");
+    }
+
+    try {
+        const userIds = await context.runQuery<string[]>(internal.cloudflare_alerts.alertManagers, { organizationId: body.organizationId });
+
+        return Response.json({ recipients: await recipientsFor(userIds) });
+    } catch (error) {
+        return rejected(error, "alert recipients lookup failed");
     }
 };
