@@ -78,6 +78,15 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = makeNotSupported("polar (merchant-of-record)");
 
+/** The one Polar update variant a patch maps to: seats, a plan change, or an empty update (no plan and no seats). */
+const polarSubscriptionUpdate = (patch: SubscriptionPatch): { productId?: string; seats?: number } => {
+    if (patch.quantity !== undefined) {
+        return { seats: patch.quantity };
+    }
+
+    return patch.priceId ? { productId: patch.priceId } : {};
+};
+
 type PolarRefundReason = Parameters<Polar["refunds"]["create"]>[0]["reason"];
 
 /** `RefundCreate.reason` is a CLOSED enum — a free-form reason fails the SDK's validation outright. */
@@ -236,6 +245,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 currentPeriodStart: readEpochMs(object, "current_period_start"),
                 customerId: readString(object, "customer_id"),
                 priceId: readString(object, "product_id"),
+                // Same reading as `subscriptionFromPolar`: a non-seat subscription carries `seats: null`, so
+                // the stored quantity stands rather than being reset to 1 on every webhook.
+                quantity: readNumber(object, "seats"),
                 referenceId: referenceFromMetadata(object),
                 subscriptionId: readString(object, "id"),
                 type,
@@ -431,20 +443,11 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
             // Polar's plan change (`productId`) and seat change (`seats`) are separate update variants,
             // so one call cannot carry both. Refuse the combined patch rather than drop one half.
-            if (patch.priceId && patch.quantity !== undefined) {
+            if (patch.priceId !== undefined && patch.quantity !== undefined) {
                 return notSupported("changing the plan and the seat count in one update; apply them as two updates");
             }
 
-            if (patch.quantity !== undefined) {
-                return subscriptionFromPolar(await client.subscriptions.update({ id: subscriptionId, subscriptionUpdate: { seats: patch.quantity } }));
-            }
-
-            const subscription = await client.subscriptions.update({
-                id: subscriptionId,
-                subscriptionUpdate: patch.priceId ? { productId: patch.priceId } : {},
-            });
-
-            return subscriptionFromPolar(subscription);
+            return subscriptionFromPolar(await client.subscriptions.update({ id: subscriptionId, subscriptionUpdate: polarSubscriptionUpdate(patch) }));
         },
     };
 };

@@ -95,7 +95,7 @@ const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall
         },
         subscriptions: {
             get: async () => {
-                return { id: "sub_1", metadata: { referenceId: "user_1" }, status: "active" };
+                return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: null, status: "active" };
             },
             revoke: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "sub.revoke" });
@@ -398,7 +398,7 @@ describe("polar adapter", () => {
 
         const call = calls.find((entry) => entry.name === "sub.update");
 
-        expect((call?.args[0] as { subscriptionUpdate?: { productId?: string } }).subscriptionUpdate?.productId).toBe("prod_enterprise");
+        expect(call?.args[0]).toStrictEqual({ id: "sub_1", subscriptionUpdate: { productId: "prod_enterprise" } });
         expect(subscription.priceId).toBe("prod_enterprise");
     });
 
@@ -417,6 +417,27 @@ describe("polar adapter", () => {
         expect(subscription.priceId).toBe("prod_pro");
     });
 
+    it("reads the seat count from a seat-based subscription webhook, and keeps a non-seat one at quantity 1", async () => {
+        expect.assertions(2);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const deliver = async (id: string, seats: number | null) => {
+            const payload = JSON.stringify({
+                data: { id: "sub_1", metadata: { referenceId: "user_1" }, product_id: "prod_pro", seats, status: "active" },
+                type: "subscription.updated",
+            });
+            const timestamp = String(Math.floor(Date.now() / 1000));
+
+            return adapter.parseWebhook({ headers: headersFor(id, timestamp, sign(id, timestamp, payload)), payload });
+        };
+
+        const seatBased = await deliver("evt_seats", 4);
+        const plain = await deliver("evt_plain", null);
+
+        expect(seatBased.quantity).toBe(4);
+        expect(plain.quantity).toBeUndefined();
+    });
+
     it("reads a non-seat subscription as quantity 1", async () => {
         expect.assertions(1);
 
@@ -433,7 +454,7 @@ describe("polar adapter", () => {
         const calls: RecordedCall[] = [];
         const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
 
-        await expect(adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", quantity: 5 })).rejects.toThrow("does not support");
+        await expect(adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", quantity: 5 })).rejects.toThrow(/plan and the seat count/);
         expect(calls.some((entry) => entry.name === "sub.update")).toBe(false);
     });
 
