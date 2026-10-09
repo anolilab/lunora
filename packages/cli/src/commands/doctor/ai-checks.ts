@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 
-import { AI_GATEWAY_ID_VAR, AI_GATEWAY_TOKEN_VAR, AI_PROXY_URL_VAR } from "../ai/variables";
+import { AI_GATEWAY_ID_VAR, AI_GATEWAY_TOKEN_VAR, AI_PROXY_URL_VAR } from "../cloudflare/ai-gateway/variables";
 import type { Finding } from "./handler";
 
 /**
@@ -97,7 +97,7 @@ const checkAi = (parsed: WranglerConfig | undefined, cwd: string, usesAi: boolea
     if (!hasProxy && !variables.has(AI_GATEWAY_ID_VAR)) {
         findings.push({
             code: "ai-gateway-default",
-            fix: `Run \`lunora ai gateway\` to create a gateway for this app and write ${AI_GATEWAY_ID_VAR} into wrangler vars.`,
+            fix: `Run \`lunora cloudflare ai-gateway\` to create a gateway for this app and write ${AI_GATEWAY_ID_VAR} into wrangler vars.`,
             level: "info",
             message: `no ${AI_GATEWAY_ID_VAR} in vars or ${DEV_VARS_FILE} — \`<provider>/<model>\` slugs route through the account's \`default\` AI Gateway.`,
         });

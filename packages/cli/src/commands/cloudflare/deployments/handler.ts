@@ -1,12 +1,9 @@
-import type { CommandHandler } from "../../util/command";
-import { defineHandler } from "../../util/command";
-import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
-import { EXIT_CODE } from "../../util/exit-code";
-import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import type { SpawnDescriptor, Spawner } from "../../util/spawn";
-import { defaultSpawner } from "../../util/spawn";
-import type { DeploymentsOptions } from "./index";
+import { detectPackageManager, execArgsFor } from "../../../util/detect-package-manager";
+import { EXIT_CODE } from "../../../util/exit-code";
+import type { Logger } from "../../../util/logger";
+import type { OutputFormat } from "../../../util/output-format";
+import type { SpawnDescriptor, Spawner } from "../../../util/spawn";
+import { defaultSpawner } from "../../../util/spawn";
 
 type DeploymentsSubcommand = "inspect" | "list" | "promote" | "rollback";
 
@@ -71,7 +68,7 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
     switch (options.subcommand) {
         case "inspect": {
             if (options.versionId === undefined) {
-                return { error: "deployments inspect requires a version id. Usage: lunora deployments inspect <version-id>" };
+                return { error: "deployments inspect requires a version id. Usage: lunora cloudflare deployments inspect <version-id>" };
             }
 
             return { args: withEnv(["versions", "view", options.versionId], options.env) };
@@ -81,7 +78,7 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
         }
         case "promote": {
             if (options.versionId === undefined) {
-                return { error: "deployments promote requires a version id. Usage: lunora deployments promote <version-id> --yes" };
+                return { error: "deployments promote requires a version id. Usage: lunora cloudflare deployments promote <version-id> --yes" };
             }
 
             if (!options.yes) {
@@ -166,30 +163,5 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
 const isDeploymentsSubcommand = (value: unknown): value is DeploymentsSubcommand =>
     value === "list" || value === "inspect" || value === "rollback" || value === "promote";
 
-/** `lunora deployments <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeploymentsOptions> = defineHandler<DeploymentsOptions>(({ argument, cwd, format, logger, options }) => {
-    const sub = argument[0];
-
-    if (!isDeploymentsSubcommand(sub)) {
-        const message = `deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`;
-
-        logger.error(message);
-
-        return { code: EXIT_CODE.USAGE, error: message };
-    }
-
-    return runDeploymentsCommand({
-        cwd,
-        env: options.env,
-        format,
-        logger,
-        message: options.message,
-        subcommand: sub,
-        versionId: argument[1],
-        yes: options.yes === true,
-    });
-});
-
-export { execute };
 export type { DeploymentsCommandOptions, DeploymentsCommandResult, DeploymentsSubcommand };
-export { runDeploymentsCommand };
+export { isDeploymentsSubcommand, runDeploymentsCommand };

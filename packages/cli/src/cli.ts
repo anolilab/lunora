@@ -6,15 +6,11 @@ import versionCommand from "@visulima/cerebro/command/version";
 
 import { addCommand } from "./commands/add";
 import { advisorCommand } from "./commands/advisor";
-import { aiCommand } from "./commands/ai";
-import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
 import { cloudflareCommand } from "./commands/cloudflare";
 import { codegenCommand } from "./commands/codegen";
-import { containersCommand } from "./commands/containers";
 import { deployCommand } from "./commands/deploy";
-import { deploymentsCommand } from "./commands/deployments";
 import { devCommand } from "./commands/dev";
 import documentationCommand from "./commands/docs";
 import { doctorCommand } from "./commands/doctor";
@@ -57,11 +53,8 @@ const COMMANDS = [
     "codegen",
     "build",
     "deploy",
-    "containers",
-    "ai",
     "prepare",
     "link",
-    "deployments",
     "cloudflare",
     "logs",
     "run",
@@ -78,7 +71,6 @@ const COMMANDS = [
     "info",
     "doctor",
     "env",
-    "analyze",
     "view",
     "docs",
     "registry",
@@ -99,11 +91,8 @@ const CLI_COMMANDS = [
     advisorCommand,
     buildCommand,
     deployCommand,
-    containersCommand,
-    aiCommand,
     prepareCommand,
     linkCommand,
-    deploymentsCommand,
     cloudflareCommand,
     logsCommand,
     runCommand,
@@ -121,7 +110,6 @@ const CLI_COMMANDS = [
     infoCommand,
     doctorCommand,
     envCommand,
-    analyzeCommand,
     viewCommand,
     documentationCommand,
     registryCommand,
@@ -257,11 +245,54 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 const UNKNOWN_COMMAND = /Command "(?<name>[^"]+)" not found/u;
 
 /**
- * Log a failed `cli.run` and resolve the exit code it should carry. For an
- * unknown command, upgrade cerebro's bare "not found" into a "did you mean …?"
- * suggestion plus a help/docs pointer; any other error is logged verbatim.
+ * Commands that moved, keyed by their old first word. Consulted only once
+ * cerebro has refused the name, so an old spelling is an error that says where
+ * the command went — never an alias that runs it. `absorbs` is an old
+ * subcommand word the new command no longer takes (`ai gateway` became one
+ * tool, `ai-gateway`).
  */
-const reportRunError = (error: unknown): number => {
+const MOVED_COMMANDS: Readonly<Record<string, { absorbs?: string; to: string }>> = {
+    ai: { absorbs: "gateway", to: "cloudflare ai-gateway" },
+    alerts: { to: "cloudflare alerts" },
+    analyze: { to: "cloudflare analyze" },
+    containers: { to: "cloudflare containers" },
+    deployments: { to: "cloudflare deployments" },
+};
+
+/**
+ * The "moved to" message for an unknown command whose first word moved, or
+ * `undefined`. The suggested command keeps the rest of what the user typed
+ * (flags included — cerebro's error carries only the positionals), so it can be
+ * re-run as printed.
+ */
+const movedCommandMessage = (name: string, argv: ReadonlyArray<string>): string | undefined => {
+    const word = name.split(" ")[0] ?? "";
+    const moved = MOVED_COMMANDS[word];
+
+    if (moved === undefined) {
+        return undefined;
+    }
+
+    const index = argv.indexOf(word);
+    let rest = index === -1 ? [] : [...argv.slice(0, index), ...argv.slice(index + 1)];
+
+    if (moved.absorbs !== undefined && rest[0] === moved.absorbs) {
+        rest = rest.slice(1);
+    }
+
+    const suggested = ["lunora", moved.to, ...rest].join(" ");
+    const old = moved.absorbs === undefined ? word : `${word} ${moved.absorbs}`;
+
+    return `\`lunora ${old}\` moved to \`lunora ${moved.to}\`. Run: ${suggested}`;
+};
+
+/**
+ * Log a failed `cli.run` and resolve the exit code it should carry. For an
+ * unknown command, say where a moved command went, or else upgrade cerebro's
+ * bare "not found" into a "did you mean …?" suggestion plus a help/docs
+ * pointer; any other error is logged verbatim.
+ */
+const reportRunError = (error: unknown, argv: ReadonlyArray<string>): number => {
     const logger = createLogger();
     const message = error instanceof Error ? error.message : String(error);
     const unknown = UNKNOWN_COMMAND.exec(message);
@@ -280,6 +311,14 @@ const reportRunError = (error: unknown): number => {
     }
 
     const name = unknown.groups.name ?? "";
+    const moved = movedCommandMessage(name, argv);
+
+    if (moved !== undefined) {
+        logger.error(moved);
+
+        return EXIT_CODE.USAGE;
+    }
+
     const suggestion = closestMatch(name, COMMANDS);
 
     logger.error(`Unknown command "${name}".${suggestion === undefined ? "" : ` Did you mean "${suggestion}"?`}`);
@@ -335,7 +374,7 @@ const runCli = async (options: RunCliOptions = {}): Promise<number> => {
     try {
         await cli.run({ shouldExitProcess: false });
     } catch (error: unknown) {
-        return reportRunError(error);
+        return reportRunError(error, options.argv ?? process.argv.slice(2));
     } finally {
         setCommandLogger(undefined);
     }

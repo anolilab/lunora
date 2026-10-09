@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { REGISTERED_COMMAND_NAMES } from "../../src/cli";
+import { CLOUDFLARE_TOOLS } from "../../src/commands/cloudflare/index";
 import { FRAMEWORK_CHOICES } from "../../src/commands/init/handler";
 import { STACK_FEATURE_OPTIONS } from "../../src/commands/init/offer-extras";
 
@@ -69,5 +70,20 @@ describe("cLI reference (docs/index.mdx)", () => {
         );
 
         expect(REGISTERED_COMMAND_NAMES.filter((name) => !BUILT_IN_COMMANDS.has(name) && !documented.has(name))).toStrictEqual([]);
+    });
+
+    it("gives every `lunora cloudflare` tool its own section under the group", () => {
+        expect.assertions(1);
+
+        // The heading check above sees only `cloudflare`, so a tool could lose
+        // its section and that test would not notice.
+        const group = DOCS.indexOf("### `lunora cloudflare`");
+        const end = DOCS.indexOf("\n### ", group + 1);
+        const section = DOCS.slice(group, end === -1 ? DOCS.length : end);
+        const documented = [...section.matchAll(/^#### `lunora cloudflare (?<tool>[a-z\d-]+)`/gmu)].map((match) => match.groups?.tool ?? "");
+
+        expect(documented.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            CLOUDFLARE_TOOLS.map((tool) => tool.name).toSorted((a, b) => a.localeCompare(b)),
+        );
     });
 });

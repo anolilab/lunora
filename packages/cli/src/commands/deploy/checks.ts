@@ -378,7 +378,7 @@ const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command:
     const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable, command, options.env);
 
     // Not a usage error: the project is fine and the machine is not. Same bucket
-    // `lunora containers build` already exits with for the same missing engine.
+    // `lunora cloudflare containers build` already exits with for the same missing engine.
     return dockerError === undefined ? undefined : { code: EXIT_CODE.MISSING_DEPENDENCY, error: dockerError };
 };
 

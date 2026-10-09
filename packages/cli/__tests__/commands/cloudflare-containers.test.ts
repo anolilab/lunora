@@ -4,8 +4,9 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { execute, runContainersCommand } from "../../src/commands/containers/handler";
-import type { ContainersOptions } from "../../src/commands/containers/index";
+import { runContainersCommand } from "../../src/commands/cloudflare/containers/handler";
+import { execute } from "../../src/commands/cloudflare/handler";
+import type { CloudflareOptions } from "../../src/commands/cloudflare/index";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -39,7 +40,7 @@ const npmProjectCwd = (): string => {
     return dir;
 };
 
-describe("lunora containers", () => {
+describe("lunora cloudflare containers", () => {
     it("forwards build with positional args and curated options to wrangler", async () => {
         expect.assertions(2);
 
@@ -122,17 +123,18 @@ describe("lunora containers", () => {
     });
 
     /**
-     * Through `execute`, because the envelope is `defineHandler`'s: every other
-     * test here calls `runContainersCommand`, which writes nothing, so a marker
-     * this handler failed to forward was invisible to all of them.
+     * Through the `lunora cloudflare` `execute`, because the envelope is
+     * `defineHandler`'s: every other test here calls `runContainersCommand`,
+     * which writes nothing, so a marker the dispatcher failed to forward was
+     * invisible to all of them.
      */
     describe("--format json envelope", () => {
         it("stays silent on a forwarded read — wrangler already wrote the document", async () => {
             expect.assertions(2);
 
-            const { stdout } = await runExecute<ContainersOptions>(execute, {
-                argument: ["images", "list"],
-                commandName: "containers",
+            const { stdout } = await runExecute<CloudflareOptions>(execute, {
+                argument: ["containers", "images", "list"],
+                commandName: "cloudflare",
                 cwd: npmProjectCwd(),
                 options: { format: "json" },
             });
@@ -147,9 +149,9 @@ describe("lunora containers", () => {
         it("carries the refusal reason for a subcommand that cannot answer as JSON", async () => {
             expect.assertions(3);
 
-            const { code, document } = await runExecute<ContainersOptions>(execute, {
-                argument: ["build", "."],
-                commandName: "containers",
+            const { code, document } = await runExecute<CloudflareOptions>(execute, {
+                argument: ["containers", "build", "."],
+                commandName: "cloudflare",
                 cwd: npmProjectCwd(),
                 options: { format: "json" },
             });

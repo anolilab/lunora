@@ -7,7 +7,6 @@
  * (an account-wide USD threshold) have no API, so every subcommand says so and
  * points at the dashboard rather than pretending to check one.
  */
-import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -38,9 +37,6 @@ interface AlertsCommandOptions extends SetupOptions {
     subcommand: AlertsSubcommand;
 }
 
-/** How the refusal names each non-Cloudflare host. */
-const TARGET_NAMES: Readonly<Record<string, string>> = { celld: "celld", node: "Node" };
-
 /** The `account_id` in the project's wrangler config, when it has a readable one. */
 const wranglerAccountId = (cwd: string): unknown => {
     const path = findWranglerFile(cwd);
@@ -48,18 +44,11 @@ const wranglerAccountId = (cwd: string): unknown => {
     return path === undefined ? undefined : readWranglerJsonc<WranglerConfig>(path).parsed?.account_id;
 };
 
-/** The client, or the failure that stops the command before any call. */
+/**
+ * The client, or the failure that stops the command before any call. The
+ * project's deploy target is checked by the `lunora cloudflare` dispatcher.
+ */
 const connect = (options: AlertsCommandOptions): AlertsResult | CloudflareClient => {
-    const target = readProjectTarget(options.cwd) ?? DEFAULT_TARGET;
-
-    if (target !== "cloudflare") {
-        return fail(
-            options.logger,
-            EXIT_CODE.USAGE,
-            `this project deploys to ${TARGET_NAMES[target] ?? `"${target}"`} — \`lunora cloudflare alerts\` only applies to Cloudflare accounts.`,
-        );
-    }
-
     const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, wranglerAccountId(options.cwd));
 
     if (token === undefined) {

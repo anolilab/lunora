@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -290,7 +290,7 @@ const billingPolicy = (overrides: Partial<Policy> & Pick<Policy, "id" | "name">)
     return { alert_type: "billing_usage_alert", enabled: true, filters: { limit: ["1"], product: ["worker_requests"] }, ...overrides };
 };
 
-describe("lunora alerts", () => {
+describe("lunora cloudflare alerts", () => {
     let cwd: string;
 
     beforeEach(() => {
@@ -345,40 +345,13 @@ describe("lunora alerts", () => {
             expect(output).toContain("`lunora cloudflare alerts` calls the Cloudflare API");
         });
 
-        it("refuses an unknown tool and an unknown alerts subcommand", async () => {
-            expect.assertions(4);
-
-            const tool = await cli(["cloudflare", "budget"]);
-            const sub = await cli(["cloudflare", "alerts", "delete"]);
-
-            expect(tool.code).toBe(EXIT_CODE.USAGE);
-            expect(tool.output).toContain('cloudflare: unknown tool "budget" — expected alerts');
-            expect(sub.code).toBe(EXIT_CODE.USAGE);
-            expect(sub.output).toContain('cloudflare alerts: unknown subcommand "delete"');
-        });
-
-        it("no longer answers to the top-level `lunora alerts`", async () => {
+        it("refuses an unknown alerts subcommand", async () => {
             expect.assertions(2);
 
-            const { code, output } = await cli(["alerts"]);
+            const sub = await cli(["cloudflare", "alerts", "delete"]);
 
-            expect(code).toBe(EXIT_CODE.USAGE);
-            expect(output).not.toContain("Cloudflare API");
-        });
-
-        it.each([
-            ["node", "Node"],
-            ["celld", "celld"],
-        ])("refuses a %s project, naming the host it deploys to", async (target, name) => {
-            expect.assertions(3);
-
-            writeFileSync(join(cwd, "lunora.config.ts"), `export default { target: "${target}" };\n`, "utf8");
-
-            const { calls, result } = await run(baseAccount(), { subcommand: "status" });
-
-            expect(result.code).toBe(EXIT_CODE.USAGE);
-            expect(result.error).toBe(`this project deploys to ${name} — \`lunora cloudflare alerts\` only applies to Cloudflare accounts.`);
-            expect(calls).toHaveLength(0);
+            expect(sub.code).toBe(EXIT_CODE.USAGE);
+            expect(sub.output).toContain('cloudflare alerts: unknown subcommand "delete"');
         });
     });
 

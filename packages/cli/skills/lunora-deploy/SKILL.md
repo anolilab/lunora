@@ -1,6 +1,6 @@
 ---
 name: lunora-deploy
-description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--preview`, `--migrate`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
+description: Deploys a Lunora app to Cloudflare Workers + Durable Objects and gets wrangler.jsonc, remote resources and secrets to line up. Covers `lunora deploy` (and `--env`, `--dry-run`, `--preview`, `--migrate`), the `lunora doctor` / `lunora verify` / `lunora prepare` preflights, Durable Object bindings (SHARD, SHARD_REGISTRY, SCHEDULER), the `DB` D1 binding and its placeholder id, R2 buckets, production secrets (`lunora env push`, `wrangler secret put`) versus `.dev.vars`, the schema-drift gate, the architecture diff, and rollback with `lunora cloudflare deployments`. Use when the user asks to "deploy", "ship to production", "set up a staging environment", wire CI deploys, or when a deploy fails on a binding, a placeholder `database_id`, an unexported Durable Object class, a missing secret, or "schema drift gate blocked deploy".
 ---
 
 # Lunora Deploy
@@ -184,9 +184,9 @@ See `lunora-migration-helper` for the full flow.
 ## Rollback
 
 ```bash
-lunora deployments list
-lunora deployments rollback --yes              # previous version
-lunora deployments promote <version-id> --yes  # send 100% of traffic to a version
+lunora cloudflare deployments list
+lunora cloudflare deployments rollback --yes              # previous version
+lunora cloudflare deployments promote <version-id> --yes  # send 100% of traffic to a version
 ```
 
 Rolling back code does not roll back data migrations or D1 DDL.

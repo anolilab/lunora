@@ -168,7 +168,7 @@ interface DeployCommandOptions {
  * `pnpm-workspace.yaml`) has no structured deploy output
  * and no flag that returns the version id — it only prints it in prose, and
  * scraping a second value out of prose is exactly what this shouldn't do. The
- * id is available from `lunora deployments list` after the fact.
+ * id is available from `lunora cloudflare deployments list` after the fact.
  */
 interface DeployedIdentity {
     /** ISO-8601 stamp taken when the wrangler invocation returned. */
