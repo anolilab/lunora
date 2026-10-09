@@ -119,7 +119,7 @@ export const storedTarget = (stored: null | string | undefined): TargetId | unde
 
 /** A capability a target lacks as a whole (not a binding), with the reason the studio shows. */
 export interface TargetLimitation {
-    id: "customDomains" | "edgeProtection" | "emergencyStop" | "logs" | "pitr" | "recursionProtection" | "runtimeLimits";
+    id: "customDomains" | "edgeProtection" | "emergencyStop" | "logs" | "pitr" | "recursionProtection" | "runtimeLimits" | "spendCap";
     label: string;
     reason: string;
 }
@@ -238,6 +238,11 @@ export const TARGETS = {
                 reason: "The CPU-time and subrequest caps your plan sets are applied by Lunora Cloud's dispatcher, which does not sit in front of a Worker in your account. Your account's own Workers limits apply instead.",
             },
             {
+                id: "spendCap",
+                label: "Spend cap",
+                reason: "Cloudflare bills your account directly, so your plan's spend cap never stops these projects. Set up Cloudflare's own usage alerts from the Cloudflare accounts tab — Cloudflare sends them, so they keep working even if Lunora Cloud is down — and add an account-wide budget alert in your Cloudflare dashboard (Manage Account → Billing → Billable Usage → Create budget alert), which Cloudflare offers only there.",
+            },
+            {
                 id: "customDomains",
                 label: "Custom domains",
                 reason: "Your Worker answers on your account's workers.dev subdomain. Attaching your own zone's hostnames to it from Lunora Cloud is not wired yet; add a Custom Domain to the Worker in your Cloudflare dashboard meanwhile.",
@@ -284,6 +289,14 @@ export const CLOUDFLARE_TOKEN_PERMISSIONS = {
     billing: { label: "Billing: Read", required: false, use: "the account's real spend on the Cloudflare costs tab (self-serve accounts only)" },
     d1: { label: "D1: Edit", required: false, use: "d1 bindings" },
     kv: { label: "Workers KV Storage: Edit", required: false, use: "kv bindings" },
+    notifications: {
+        // The connect probe and the alerts overview can only prove the token READS notification
+        // policies (Account Settings Read also allows that); a write is proven by the setup itself.
+        grantedLabel: "Notifications: read verified",
+        label: "Notifications: Edit",
+        required: false,
+        use: "setting up Cloudflare's own usage alerts on the account from the Cloudflare accounts tab",
+    },
     queues: { label: "Queues: Edit", required: false, use: "queue bindings" },
     r2: { label: "Workers R2 Storage: Edit", required: false, use: "r2 bindings" },
     workersScripts: {
@@ -291,7 +304,7 @@ export const CLOUDFLARE_TOKEN_PERMISSIONS = {
         required: true,
         use: "uploading the Worker, its cron triggers and queue consumers, and reading the workers.dev subdomain",
     },
-} as const satisfies Record<string, { label: string; required: boolean; use: string }>;
+} as const satisfies Record<string, { grantedLabel?: string; label: string; required: boolean; use: string }>;
 
 export type CloudflarePermission = keyof typeof CLOUDFLARE_TOKEN_PERMISSIONS;
 

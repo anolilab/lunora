@@ -180,6 +180,9 @@ const PROBES: Record<CloudflarePermission, (access: CloudflareAccountAccess) => 
     billing: async (access) => fetchBillableUsage(access),
     d1: async (access) => call(access, `/accounts/${access.accountId}/d1/database?per_page=1`),
     kv: async (access) => call(access, `/accounts/${access.accountId}/storage/kv/namespaces?per_page=1`),
+    // Reading policies needs Notifications Read (or Account Settings Read); writing them, which this cannot
+    // probe without creating one, needs Notifications: Edit. The setup reports a refused write by name.
+    notifications: async (access) => call(access, `/accounts/${access.accountId}/alerting/v3/policies`),
     queues: async (access) => call(access, `/accounts/${access.accountId}/queues?per_page=1`),
     r2: async (access) => call(access, `/accounts/${access.accountId}/r2/buckets?per_page=1`),
     workersScripts: async (access) => call(access, `/accounts/${access.accountId}/workers/scripts`),

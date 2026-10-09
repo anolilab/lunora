@@ -48,6 +48,10 @@ export const DisconnectCloudflareAccountDialog = ({ account, onClose, organizati
                     <li>Refused while a project deploys into this account: move those projects to another target first.</li>
                     <li>Nothing in the account is deleted; the Workers and data there stay yours.</li>
                     <li>The token itself stays valid until you revoke it in your Cloudflare dashboard.</li>
+                    <li>
+                        Lunora-managed Cloudflare usage alerts stay in the account and keep emailing. To stop them, use &quot;Remove Lunora-managed alerts&quot;
+                        on this account first, or delete them under Notifications in Cloudflare.
+                    </li>
                 </ul>
                 <FormError message={error} />
                 <DialogFooter>

@@ -343,6 +343,9 @@ export default createConfig(
             // cost overview (Billable Usage API) of a Cloudflare account an organization connected.
             "src/backup/control-plane-export.ts",
             "src/cloudflare-accounts/costs.ts",
+            // ...and its Usage Based Billing notifications (Notifications API), set up from the studio.
+            "src/cloudflare-accounts/alerts-api.ts",
+            "src/cloudflare-accounts/usage-alerts.ts",
         ],
         rules: {
             "@typescript-eslint/no-restricted-imports": "off",

@@ -238,6 +238,7 @@ Beyond bindings, this target does not have:
 - **Point-in-time recovery.** celld's Durable Object storage has no bookmark API (`getBookmarkForTime` / `onNextSessionRestoreBookmark`), so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. The fleet bucket's epoch-fenced replication is for durability and takeover, not an addressable history; `lunora backup` (objectStorageBackups) is the recovery tier here.
 - **Recursion protection.** Loop detection runs in Lunora Cloud's dispatcher and the Outbound Worker of its dispatch namespace. Requests to your server reach celld directly, so a Worker that calls its own hostname in a loop is bounded only by celld's own limits.
 - **Edge firewall events and rules.** Your server is reached directly, not through Lunora Cloud's Cloudflare zone, so there are no firewall events to show and no DDoS override or anomaly rate limit to apply. Usage anomalies still alert.
+- **Emergency stop.** An emergency stop does not reach a project on your own server. A suspension already stops its fleet on the box, keeping its data, and lifting the suspension starts it again; to stop it by hand meanwhile, stop the fleet on the machine.
 
 {/* /generated:capabilities:celld-vps */}
 

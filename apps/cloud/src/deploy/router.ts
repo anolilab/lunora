@@ -31,7 +31,7 @@ import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { handleAlertTestRoute } from "./routes/alerts";
 import { handleBoxConnectRoute, handleBoxDiagnoseRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
-import { handleCloudflareAccountConnectRoute } from "./routes/cloudflare-accounts";
+import { handleCloudflareAccountConnectRoute, handleCloudflareAlertRecipientsRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
 import { handleDomainAddRoute, handleDomainRemoveRoute, handleDomainVerifyRoute } from "./routes/domains";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
@@ -810,6 +810,14 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleBoxDiagnoseRoute, method: "POST", path: "/v1/boxes/diagnose", spec: { auth: "session" } },
         // session — a customer's own Cloudflare account (cloudflare-workers); the connect mutation asserts owner/admin.
         { handler: handleCloudflareAccountConnectRoute, method: "POST", path: "/v1/cloudflare-accounts", spec: { auth: "session" } },
+        // session — the default recipients of its Cloudflare usage alerts; the query asserts owner/admin.
+        {
+            // Wrapped: the table passes route parameters third, which would land in the lookup slot.
+            handler: async (request, environment) => handleCloudflareAlertRecipientsRoute(request, environment),
+            method: "POST",
+            path: "/v1/cloudflare-accounts/alert-recipients",
+            spec: { auth: "session" },
+        },
         // lunora-hostd releases (plan 458 G17): fetched by boxes; stored and rolled out through the admin table.
         { handler: handleHostdManifestRoute, method: "GET", path: HOSTD_MANIFEST_PATH, spec: { auth: "boxKey" } },
     ];

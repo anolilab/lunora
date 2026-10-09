@@ -38,6 +38,7 @@ this one account. Give it these permissions:
 | Account Analytics: Read  | Optional | request counts for the Usage tab                                                                   |
 | Billing: Read            | Optional | the account's real spend on the Cloudflare costs tab (self-serve accounts only)                    |
 | D1: Edit                 | Optional | d1 bindings                                                                                        |
+| Notifications: Edit      | Optional | setting up Cloudflare's own usage alerts on the account from the Cloudflare accounts tab           |
 | Queues: Edit             | Optional | queue bindings                                                                                     |
 | Workers KV Storage: Edit | Optional | kv bindings                                                                                        |
 | Workers R2 Storage: Edit | Optional | r2 bindings                                                                                        |
@@ -117,6 +118,49 @@ account for what your Workers use. Lunora Cloud charges for the control plane,
 which is your plan. Each plan caps how many Cloudflare accounts an organization
 can connect. The Free plan allows one.
 
+### Usage alerts from Cloudflare itself
+
+Because Cloudflare bills your account directly, your plan's spend cap never
+stops a project in it. Set up the alerts a careful Cloudflare customer sets up by
+hand instead. Cloudflare sends them, so they keep working even if Lunora Cloud is
+down.
+
+On the **Cloudflare accounts** tab, an owner or admin selects **Set up Cloudflare
+usage alerts** on an account. Lunora Cloud reads which products Cloudflare's
+**Usage Based Billing** notifications can watch on that account. Cloudflare
+offers them for Workers requests and for Durable Objects. It has none for D1 or
+for Workers CPU time: only the budget alert below covers those.
+
+For Workers requests, Lunora Cloud proposes three times what your Lunora Cloud
+projects there used last month, rounded up, and never below what the Workers
+Paid plan includes. If it has no full month of usage for the account, it
+suggests the included amount and leaves the product unticked. For the other
+products, you enter the threshold yourself. Cloudflare does not document the
+unit of these thresholds, so after saving, the studio shows what Cloudflare
+stored. Check one in the Cloudflare dashboard before you rely on it.
+
+Recipients default to your organization's owners and admins. You can change
+every value before anything is saved. Running the setup again updates the alerts
+it created, and never duplicates them. It keeps what you changed on them in
+Cloudflare: an alert you switched off stays off, and extra addresses, webhooks
+and PagerDuty destinations stay. Alerts you made yourself are listed, and left
+alone.
+
+- The token needs **Notifications: Edit**. You can add it to the token in
+  Cloudflare. The connection keeps working without being rotated.
+- Usage Based Billing notifications are for **Pay-as-you-go** accounts. Most
+  Enterprise contracts are not supported. The studio shows Cloudflare's own
+  message when it refuses.
+- Cloudflare counts the whole account. If other Workers run there, raise the
+  thresholds.
+- The alerts live in your account. Disconnecting it does not delete them. To
+  stop them, select **Remove Lunora-managed alerts** on the account first, or
+  delete them under **Notifications** in Cloudflare.
+
+An account-wide **budget alert**, which emails you when your total usage-based
+spend passes an amount in US dollars, exists only in Cloudflare's dashboard. Add
+one under **Manage Account → Billing → Billable Usage → Create budget alert**.
+
 ## What works, and what doesn't
 
 When you deploy, Lunora Cloud checks the bindings in your `wrangler.jsonc`
@@ -157,10 +201,12 @@ from that same check, so it shows what the deploy actually enforces.
 Beyond bindings, this target does not have:
 
 - **Per-plan runtime limits.** The CPU-time and subrequest caps your plan sets are applied by Lunora Cloud's dispatcher, which does not sit in front of a Worker in your account. Your account's own Workers limits apply instead.
+- **Spend cap.** Cloudflare bills your account directly, so your plan's spend cap never stops these projects. Set up Cloudflare's own usage alerts from the Cloudflare accounts tab — Cloudflare sends them, so they keep working even if Lunora Cloud is down — and add an account-wide budget alert in your Cloudflare dashboard (Manage Account → Billing → Billable Usage → Create budget alert), which Cloudflare offers only there.
 - **Custom domains.** Your Worker answers on your account's workers.dev subdomain. Attaching your own zone's hostnames to it from Lunora Cloud is not wired yet; add a Custom Domain to the Worker in your Cloudflare dashboard meanwhile.
 - **Runtime logs.** Lunora Cloud's tail consumer runs in its own account and cannot be attached to a Worker in yours, so runtime logs stay in your account's Workers Logs.
 - **Recursion protection.** Loop detection needs Lunora Cloud's dispatcher and an Outbound Worker on its dispatch namespace; a plain Worker in your account has neither. Only Cloudflare's per-invocation subrequest limit applies there.
 - **Edge firewall events and rules.** Your Worker is served from your account, not Lunora Cloud's zone, so its firewall events and DDoS settings live in your Cloudflare dashboard. Usage anomalies still alert.
+- **Emergency stop without a working token.** An emergency stop replaces the Worker in your account through the token you connected, so it fails — and is retried — while that token is revoked or lacks Workers Scripts: Edit. The stub keeps every Durable Object's data and parks its alarms an hour at a time (one invocation and one storage write each), and drops the Worker's cron triggers and queue consumers until the resume restores them; messages sent meanwhile wait on the queue for its retention period.
 
 {/* /generated:capabilities:cloudflare-workers */}
 

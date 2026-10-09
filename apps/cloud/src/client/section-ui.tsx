@@ -1,4 +1,5 @@
 import { SquareLockPasswordIcon } from "@hugeicons/core-free-icons";
+import type { IconSvgElement } from "@hugeicons/react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ClientOnly } from "@tanstack/react-router";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
@@ -141,6 +142,36 @@ export const Upsell = ({ children, title }: { children: ReactNode; title: string
             </Empty>
         </CardContent>
     </Card>
+);
+
+/**
+ * The empty state of a tab listing hosts an organization brings (its boxes, its
+ * Cloudflare accounts): what the host is for, and the action that adds one — or,
+ * for a member who may not, who can.
+ */
+export const HostEmpty = ({
+    action,
+    children,
+    fallback,
+    icon,
+    title,
+}: {
+    action: ReactNode;
+    children: ReactNode;
+    fallback: string;
+    icon: IconSvgElement;
+    title: string;
+}): ReactElement => (
+    <Empty className="border-0 py-10">
+        <EmptyHeader>
+            <EmptyMedia variant="icon">
+                <HugeiconsIcon icon={icon} strokeWidth={2} />
+            </EmptyMedia>
+            <EmptyTitle>{title}</EmptyTitle>
+            <EmptyDescription>{children}</EmptyDescription>
+        </EmptyHeader>
+        <div className="flex justify-center">{action ?? <p className="m-0 text-sm text-muted-foreground">{fallback}</p>}</div>
+    </Empty>
 );
 
 /**
