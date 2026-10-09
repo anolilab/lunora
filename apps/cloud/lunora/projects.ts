@@ -373,9 +373,10 @@ export const updateBuildSettings = mutation
  * live dispatch script, tenant D1 and R2. Deleting the row first orphans all
  * three, which is a resource leak with a monthly bill attached. `aliasOwnership`
  * is absent too: an alias stays claimed until its tenant is gone
- * (`releaseIdleAliases`).
+ * (`releaseIdleAliases`). `halts` goes: a halt left behind would hold whichever
+ * project claims the alias next.
  */
-const PROJECT_SCOPED_TABLES = ["buildLogs", "builds", "domains", "secrets"] as const;
+const PROJECT_SCOPED_TABLES = ["buildLogs", "builds", "domains", "halts", "secrets"] as const;
 
 /**
  * Delete a project and everything scoped to it (owners/admins).

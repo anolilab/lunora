@@ -169,6 +169,14 @@ export const teardownPorts = (
                 // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
                 await database.delete(row._id, "aliasOwnership");
             }
+
+            // An emergency stop of the torn-down tenant holds nothing any more, and must not hold whoever claims the alias next.
+            const { page: halts } = await database.findMany("halts", { where: { alias, projectId } });
+
+            for (const row of halts as { _id: string }[]) {
+                // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
+                await database.delete(row._id, "halts");
+            }
         },
     };
 };

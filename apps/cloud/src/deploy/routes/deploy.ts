@@ -17,7 +17,8 @@ import { captureServerEvent } from "../../analytics/capture";
 import { dispatchBuilds, runBuildStage } from "../../builds/control-plane";
 import type { BuildJob, BuildStage } from "../../builds/runner-job";
 import type { DeployKind } from "../../provision-contract";
-import { decryptSecret } from "../../secrets/crypto";
+import { decryptSecrets } from "../../secrets/select";
+import type { TargetDriver } from "../../targets/driver";
 import type { Placement, StoredPlacement } from "../../targets/placement";
 import { resolvePlacement, targetOf } from "../../targets/placement";
 import { resolveTargetDriver } from "../../targets/registry";
@@ -26,12 +27,15 @@ import type { ProvisionStep } from "../../telemetry/platform-metrics";
 import { recordProvisionFailure } from "../../telemetry/platform-metrics";
 import type { StoredAdminToken } from "../admin-token";
 import { resolveAdminToken, sealAdminToken } from "../admin-token";
+import { HALTED_REFUSAL } from "../halt";
 import { handleDeployRequest } from "../handler";
 import type { DeployPacer } from "../pacing";
 import type { ReleaseDeps } from "../release";
 import { rollbackRelease } from "../release";
 import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../release-core";
 import { createReleaseStore } from "../release-store";
+import type { ConvergeRecorder } from "../worker-classes";
+import { recordingDriver } from "../worker-classes";
 import type { LunoraActionContext, RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext, strictBearer } from "./shared";
 
@@ -48,38 +52,61 @@ const thisCell = (environment: RouterEnv): string => environment.LUNORA_CELL ?? 
 export const placementFor = async (context: LunoraActionContext, environment: RouterEnv, organizationId: string, projectId: string): Promise<Placement> =>
     resolvePlacement(await context.runQuery<StoredPlacement>(internal.projects.placement, { organizationId, projectId }), thisCell(environment));
 
-/**
- * Decrypt the project's stored secrets at the edge for the deploy spec.
- *
- * The rows are read FIRST, then the master key decides. Returning `{}` on a
- * missing key meant a control plane whose key was removed, rotated badly, or
- * never set in one cell shipped tenant Workers with none of their secrets —
- * silently, reported as a successful release. With no secrets stored there is
- * nothing to drop and the deploy is genuinely fine, so only the contradiction fails.
- */
+/** Decrypt the project's stored secrets at the edge for the deploy spec (`decryptSecrets`). */
 const resolveSecrets =
     (context: LunoraActionContext, environment: RouterEnv): NonNullable<ReleaseDeps["backend"]["resolveSecrets"]> =>
-    async ({ key, kind, organizationId, projectId }) => {
-        const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, { deployKey: key, environment: kind, organizationId, projectId });
-        const masterKey = environment.SECRET_ENCRYPTION_KEY;
-
-        if (!masterKey) {
-            if (rows.length > 0) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `this project has ${String(rows.length)} stored secret(s) but the control plane has no SECRET_ENCRYPTION_KEY to decrypt them — deploying would ship a Worker with none of them`,
-                );
-            }
-
-            return {};
-        }
-
-        const entries = await Promise.all(
-            rows.map(async (row): Promise<[string, string]> => [row.name, await decryptSecret(masterKey, { ciphertext: row.ciphertext, iv: row.iv })]),
+    async ({ key, kind, organizationId, projectId }) =>
+        decryptSecrets(
+            await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, { deployKey: key, environment: kind, organizationId, projectId }),
+            environment.SECRET_ENCRYPTION_KEY,
         );
 
-        return Object.fromEntries(entries);
+/**
+ * The deploy edge's converge recorder: the class record of each alias's Worker
+ * (`src/deploy/worker-classes.ts`), written through internal mutations.
+ */
+const mutationRecorder = (context: LunoraActionContext): ConvergeRecorder => {
+    return {
+        begin: async (input) => {
+            await context.runMutation(internal.halts.beginConverge, { ...input });
+        },
+        end: async (input) => {
+            await context.runMutation(internal.halts.endConverge, { ...input });
+        },
     };
+};
+
+/**
+ * Every converge the deploy edge runs — deploys, a failed health check's
+ * revert, rollbacks, git-build releases — goes through this driver:
+ *
+ * - The last check before anything lands on an alias's Worker: refuse to
+ *   converge onto a halted alias. Deploys, rollbacks and reverts are refused up
+ *   front (`deployments.create`, `releaseTarget`, `rollback`), but one already
+ *   queued on the pacer when the halt was asked for would otherwise land on top
+ *   of the emergency stop's stub.
+ * - The converge is recorded, so the classes on the alias's Worker are known to
+ *   a later halt and its resume (`recordingDriver`). A record that cannot be
+ *   written refuses the converge: it fails closed, so a control-plane D1 write
+ *   now gates every converge on a target that drops unbound classes.
+ *
+ * The halt sweep converges stubs and resumes through its own drivers, never
+ * through this one.
+ */
+export const guardedDriver = (context: LunoraActionContext, driver: TargetDriver): TargetDriver => {
+    const recorded = recordingDriver(driver, mutationRecorder(context));
+
+    return {
+        ...recorded,
+        deploy: async (spec, options) => {
+            if (await context.runQuery<boolean>(internal.halts.aliasHalted, { alias: spec.alias })) {
+                throw new LunoraError("CONFLICT", HALTED_REFUSAL);
+            }
+
+            return recorded.deploy(spec, options);
+        },
+    };
+};
 
 /**
  * Everything re-provisioning a release needs, wired to this request's
@@ -126,7 +153,7 @@ const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, pacer
                     organizationId,
                 }),
         },
-        driverFor: (placement) => resolveTargetDriver(placement, environment),
+        driverFor: (placement) => guardedDriver(context, resolveTargetDriver(placement, environment)),
         releases: createReleaseStore(environment.RELEASES),
         // Provision (once per org) the scoped ingest key + hand the tenant its
         // OTLP endpoint/token (src/telemetry/ingest-key).

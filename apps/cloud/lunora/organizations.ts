@@ -294,6 +294,7 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "deployKeys",
         "domains",
         "githubInstallations",
+        "halts",
         "incidents",
         "invitations",
         "issues",

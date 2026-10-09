@@ -25,6 +25,10 @@ import { manifestUrlOf } from "../boxes/urls";
 import type { ControlPlaneEnv } from "../control-plane-env";
 import { controlPlaneDatabase } from "../d1-store";
 import { resolveAdminToken } from "../deploy/admin-token";
+import { deployRuleAlert, HALT_CONVERGE_WINDOW_MS, runHaltConverges, syncSuspensionHalts } from "../deploy/halt";
+import type { HaltConvergeDeps } from "../deploy/halt-converge";
+import { haltAlias, organizationsOnCell, resumeAlias } from "../deploy/halt-converge";
+import { createDeployPacer } from "../deploy/pacing";
 import { createReleaseStore } from "../deploy/release-store";
 import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
@@ -32,7 +36,7 @@ import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
 import { edgeBudget } from "../edge/protection";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
-import { readLiveDeployments, resourceRefOf } from "../fanout/live";
+import { readHalted, readLiveDeployments, resourceRefOf, withoutHalted } from "../fanout/live";
 import { runTenantCrons } from "../fanout/tenant-crons";
 import { deliverAlert } from "../mail/notify";
 import { storedTarget } from "../provision-contract";
@@ -43,6 +47,7 @@ import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriv
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
 import { runAnomalySweep } from "../telemetry/anomaly-sweep";
+import { resolveBoxTelemetryConfig } from "../telemetry/ingest-key";
 import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
@@ -530,6 +535,61 @@ const sweepEdgeBlocks = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Emergency stop (`src/deploy/halt.ts`): converge halts onto suspensions
+ * (`haltOnSuspension`), then converge a bounded number of halted or resumed
+ * aliases' Workers — onto their stub, or back onto their live release — each
+ * under a lease, paced like a deploy. Every minute, so a manual stop lands
+ * within one or two. No-ops without the `RELEASES` bucket: a stub is generated
+ * from the stored manifests, and without them the classes it must keep are unknown.
+ */
+const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB || !env.RELEASES) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const cell = env.LUNORA_CELL ?? "default";
+    // Every cell's control plane runs this sweep over the same rows: each acts on its own cell's organizations.
+    const owns = organizationsOnCell(database, cell);
+    const log = (line: string): void => {
+        // eslint-disable-next-line no-console -- a failed sync or converge is only visible here and on the halt row
+        console.warn(line);
+    };
+    // A sync that fails as a whole must not stop the converges: halts asked for by hand still land.
+    const synced = await syncSuspensionHalts(database, now, owns, log).catch((error: unknown) => {
+        log(`[halt] suspension sync failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        return { failed: 1, halted: 0, resumed: 0 };
+    });
+    const deps: HaltConvergeDeps = {
+        cell,
+        database,
+        driverFor: (placement) => resolveTargetDriver(placement, env),
+        ...(env.SECRET_ENCRYPTION_KEY === undefined ? {} : { masterKey: env.SECRET_ENCRYPTION_KEY }),
+        pacer: createDeployPacer(),
+        read: storeRowReader(database),
+        releases: createReleaseStore(env.RELEASES),
+        telemetry: async (organizationId) => resolveBoxTelemetryConfig(database, env, organizationId, now),
+    };
+    const result = await runHaltConverges(database, {
+        alert: deployRuleAlert(database, now),
+        halt: async (row) => haltAlias(row, deps),
+        log,
+        now,
+        owns,
+        resume: async (row) => resumeAlias(row, deps),
+        // A scheduled invocation's work is cut off after 15 minutes: start no converge past this.
+        startBefore: now + HALT_CONVERGE_WINDOW_MS,
+    });
+
+    if (synced.failed + synced.halted + synced.resumed + result.halted + result.resumed + result.failed + result.deferred > 0) {
+        // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+        console.log("[halt]", JSON.stringify({ ...result, requested: synced }));
+    }
+};
+
+/**
  * Sample the build and deploy queues into the platform's own metrics (GAPS.md
  * E1). Skipped — no D1 read at all — without the `PLATFORM_METRICS` binding.
  */
@@ -652,9 +712,12 @@ const fanOutTenantCrons = async (env: ControlPlaneEnv): Promise<void> => {
         return;
     }
 
+    const [live, halted] = await Promise.all([readLiveDeployments(env), readHalted(env)]);
+
     await runTenantCrons({
         fleets,
-        live: await readLiveDeployments(env),
+        // A halted alias's Worker runs the emergency stop's stub: its crons wait for the resume.
+        live: withoutHalted(live, halted),
         now: new Date(),
         secretEncryptionKey: env.SECRET_ENCRYPTION_KEY,
         store: controlPlaneDatabase(env.DB as D1DatabaseLike),
@@ -724,6 +787,22 @@ export const runScheduled = async (
             context.waitUntil(drained);
         } else {
             await drained;
+        }
+    }
+
+    // Emergency stops and resumes (`sweepHalts`). Handed to `waitUntil` rather
+    // than run with the sweeps above: a converge is a provision job that can take
+    // minutes, and the tenant cron fan-out below must not wait behind it.
+    if (controller.cron === EVERY_MINUTE) {
+        const halts = sweepHalts(env).catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
+            console.error("[halt] halt sweep failed", error);
+        });
+
+        if (context.waitUntil) {
+            context.waitUntil(halts);
+        } else {
+            await halts;
         }
     }
 

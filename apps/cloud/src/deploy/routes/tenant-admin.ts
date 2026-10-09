@@ -16,7 +16,7 @@ import type { TargetId } from "../../provision-contract";
 import { isTargetId, TARGET_IDS, TARGETS } from "../../provision-contract";
 import { constantTimeEqual } from "../../security/constant-time-equal";
 import type { RouterEnv } from "./shared";
-import { jsonError, otlpBearer, requireContext, strictBearer } from "./shared";
+import { jsonError, otlpBearer, rejected, requireContext, strictBearer } from "./shared";
 
 /** Whether `token` is the platform admin token. Fails closed: an unset token matches nothing. */
 const isAdminToken = (token: string, environment: RouterEnv): boolean =>
@@ -205,4 +205,48 @@ export const handleCellRegisterRoute = async (request: Request, environment: Rou
     });
 
     return Response.json({ cellId }, { status: 201 });
+};
+
+/**
+ * `POST /v1/halts` — support's emergency stop and resume of an organization's
+ * projects (`{ organizationId, action: "halt" | "resume", deploymentId? }`),
+ * admin-token gated. `deploymentId` resumes that release's alias onto it
+ * instead of its live release — refused unless it binds every class that may
+ * be on the Worker.
+ * Writes the intent only; the every-minute halt sweep converges it
+ * (`src/deploy/halt.ts`, RUNBOOK "Emergency stop"). A resume is refused while
+ * a suspension `haltOnSuspension` covers still holds, exactly as an owner's is.
+ */
+export const handleHaltRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = requireContext(environment);
+    let body: { action?: unknown; deploymentId?: unknown; organizationId?: unknown };
+
+    try {
+        body = await request.json();
+    } catch {
+        return jsonError(400, "invalid JSON body");
+    }
+
+    const { action, deploymentId, organizationId } = body;
+
+    if (typeof organizationId !== "string" || (action !== "halt" && action !== "resume")) {
+        return jsonError(400, 'organizationId and action ("halt" or "resume") are required');
+    }
+
+    if (deploymentId !== undefined && (typeof deploymentId !== "string" || action !== "resume")) {
+        return jsonError(400, "deploymentId is a release id, and only a resume takes one");
+    }
+
+    try {
+        return Response.json({
+            ok: true,
+            ...(await context.runMutation<Record<string, unknown>>(internal.halts.operatorHalt, {
+                action,
+                ...(deploymentId === undefined ? {} : { deploymentId }),
+                organizationId,
+            })),
+        });
+    } catch (error) {
+        return rejected(error, "halt request failed");
+    }
 };
