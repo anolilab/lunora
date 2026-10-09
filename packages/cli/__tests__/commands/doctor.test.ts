@@ -138,8 +138,8 @@ describe("runDoctor", () => {
         expect(result.findings.some((finding) => finding.level === "warn")).toBe(false);
     });
 
-    it("warns about a bound service still public on workers.dev, per environment, but not one with a route", async () => {
-        expect.assertions(1);
+    it("warns about a bound service still serving on workers.dev, per environment, but not one with a route", async () => {
+        expect.assertions(3);
 
         seed(workdir, CLEAN_WRANGLER);
         writeFileSync(
@@ -160,9 +160,16 @@ describe("runDoctor", () => {
         const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
         expect(result.findings.filter((finding) => finding.code === "service-workers-dev").map((finding) => finding.message)).toStrictEqual([
-            "service gateway (gateway) is bound by the app but still public on workers.dev (env.staging).",
-            "service parser (parser) is bound by the app but still public on workers.dev.",
+            "service gateway (gateway) has no route in its wrangler config and still serves on workers.dev (env.staging); a custom domain set elsewhere would also be public.",
+            "service parser (parser) has no route in its wrangler config and still serves on workers.dev; a custom domain set elsewhere would also be public.",
         ]);
+
+        // A custom domain can sit outside the wrangler file, so the advice must
+        // never tell the author to drop internal auth.
+        const fixes = result.findings.filter((finding) => finding.code === "service-workers-dev").map((finding) => finding.fix);
+
+        expect(fixes.every((fix) => !fix.includes("internal auth (HMAC) can go"))).toBe(true);
+        expect(fixes.every((fix) => fix.includes("Keep its internal auth"))).toBe(true);
     });
 
     describe("blast-radius guardrails", () => {
