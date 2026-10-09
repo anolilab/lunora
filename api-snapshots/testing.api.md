@@ -115,6 +115,24 @@ interface EvaluationSpanHandle {
 }
 ```
 
+### `FakeNotifyControls` (interface)
+
+```ts
+interface FakeNotifyControls {
+    clear: () => void;
+    sent: (channel?: NotifyChannel) => SentNotification[];
+}
+```
+
+### `FakeQueueControls` (interface)
+
+```ts
+interface FakeQueueControls {
+    clear: () => void;
+    sent: (queue?: string) => SentQueueMessage[];
+}
+```
+
 ### `FakeScheduledJob` (interface)
 
 ```ts
@@ -186,9 +204,17 @@ interface LunoraTestOptions {
     env?: Record<string, unknown>;
     fetch?: typeof globalThis.fetch;
     functions?: FunctionRegistry;
+    notify?: NotifyDefinition;
     now?: number;
+    queues?: ReadonlyArray<string>;
     services?: Record<string, object>;
 }
+```
+
+### `NotifyChannel` (type)
+
+```ts
+type NotifyChannel = "chat" | "inapp" | "push" | "webhook";
 ```
 
 ### `ProducedOutput` (interface)
@@ -261,6 +287,28 @@ interface ScorerSample {
 }
 ```
 
+### `SentNotification` (type)
+
+```ts
+type SentNotification = {
+    [C in NotifyChannel]: {
+        channel: C;
+        payload: ChannelPayloadMap[C];
+    };
+}[NotifyChannel];
+```
+
+### `SentQueueMessage` (interface)
+
+```ts
+interface SentQueueMessage {
+    body: unknown;
+    contentType?: QueueSendOptions["contentType"];
+    delaySeconds?: number;
+    queue: string;
+}
+```
+
 ### `SweepOptions` (interface)
 
 ```ts
@@ -282,10 +330,12 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineMutationFunction<R>): Promise<R>;
     };
+    notify: FakeNotifyControls;
     query: {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
+    queues: FakeQueueControls;
     run: <R>(function_: InlineMutationFunction<R>) => Promise<R>;
     scheduler: FakeSchedulerControls;
     subscribe: {

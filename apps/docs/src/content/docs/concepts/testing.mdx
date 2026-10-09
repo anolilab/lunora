@@ -215,12 +215,14 @@ does fails with a descriptive error the first time it reaches for it (e.g.
 HTTP actions, real R2 storage, `.global()` / D1 tables, and Vectorize are
 deferred to a follow-up; exercise those over a running worker instead.
 
-Two are **not** stubs. `ctx.scheduler` is a working fake with a virtual clock —
+Several are **not** stubs. `ctx.scheduler` is a working fake with a virtual clock —
 `t.scheduler.list()` / `advance(ms)` / `runPending()` / `failures()` drive it, so
 scheduled work is testable here (see
-[`@lunora/testing`](/docs/packages/testing)). An action's `ctx.fetch` is the stub
-only when you do not supply one: pass `lunoraTest(schema, { fetch })` to inject
-your own.
+[`@lunora/testing`](/docs/packages/testing)). `ctx.queues` and `ctx.notify` /
+`ctx.push` record what a handler sends once you pass `lunoraTest(schema, { queues:
+["jobs"], notify })`; read it back with `t.queues.sent("jobs")` and
+`t.notify.sent("push")`. An action's `ctx.fetch` is the stub only when you do
+not supply one: pass `lunoraTest(schema, { fetch })` to inject your own.
 
 `QueryCtx`'s read-only-ness is a **TypeScript** property. At runtime an inline
 `t.query` holds the same writer `t.mutation` gets, so a cast (or plain JS) can

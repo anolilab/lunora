@@ -1,4 +1,6 @@
 import { LunoraError } from "@lunora/errors";
+import type { LunoraNotify, LunoraPush, NotifyDefinition } from "@lunora/notify";
+import type { Queues } from "@lunora/queue";
 import type {
     ActionCtx,
     ArgsValidator,
@@ -17,6 +19,10 @@ import { createInProcessRuntime, registeredFunctionKind, resolveInProcessIdentit
 
 import type { RecordedWideEvent } from "./context-fakes";
 import { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy } from "./context-fakes";
+import type { FakeNotifyControls } from "./fake-notify";
+import { createFakeNotify } from "./fake-notify";
+import type { FakeQueueControls } from "./fake-queues";
+import { createFakeQueues } from "./fake-queues";
 import { createFakeScheduler } from "./fake-scheduler";
 import { createSqlExec } from "./node-sqlite";
 
@@ -148,6 +154,25 @@ interface LunoraTestOptions {
     functions?: FunctionRegistry;
 
     /**
+     * The app's `lunora/notify.ts` default export. Enables `ctx.notify` and its
+     * `ctx.push` alias on every context, built by `@lunora/notify`'s own
+     * `createNotify` — so register / list / unregister / broadcast behave as in
+     * production — but with deliveries recorded instead of sent (each reports
+     * accepted) and subscriptions kept in an in-memory store, never the
+     * definition's `store`. Assert on deliveries with `harness.notify.sent()`.
+     * Left unset, touching `ctx.notify` / `ctx.push` throws, naming this option.
+     * @example
+     * ```ts
+     * import notify from "../lunora/notify";
+     *
+     * const t = lunoraTest(schema, { notify });
+     * await t.action(alertOwner, { orderId });
+     * expect(t.notify.sent("push")).toHaveLength(1);
+     * ```
+     */
+    notify?: NotifyDefinition;
+
+    /**
      * Fixed value for `ctx.now` (epoch ms) in every context. Production captures
      * `Date.now()` once per execution; in tests a fixed `now` makes time-dependent
      * handlers deterministic. Defaults to the wall clock at harness creation.
@@ -157,6 +182,22 @@ interface LunoraTestOptions {
      * ```
      */
     now?: number;
+
+    /**
+     * The export names of the queues in `lunora/queues.ts` (the keys of
+     * `ctx.queues`). Each gets a recording producer on mutation and action
+     * contexts, behind `@lunora/queue`'s own validation (batch cap, delay
+     * ceiling), so a send the platform would refuse rejects here too. A name not
+     * listed rejects on use, as an undeclared queue does in production. Assert
+     * on sends with `harness.queues.sent(name)`.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { queues: ["jobs"] });
+     * await t.mutation(enqueueJob, { id: "a" });
+     * expect(t.queues.sent("jobs")).toEqual([{ body: { id: "a" }, queue: "jobs" }]);
+     * ```
+     */
+    queues?: ReadonlyArray<string>;
 
     /**
      * Fakes for `ctx.services` (the `lunora.config` `services` an app calls),
@@ -193,11 +234,26 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineMutationFunction<R>): Promise<R>;
     };
+
+    /**
+     * What handlers delivered through `ctx.notify` / `ctx.push` (enabled by
+     * `options.notify`): `sent(channel?)` in send order, `clear()` to reset.
+     * Shared with any `withIdentity` view.
+     */
+    notify: FakeNotifyControls;
     /** Run a registered `query` (or an inline `async (context) => …`) against the harness. */
     query: {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
+
+    /**
+     * What handlers enqueued through `ctx.queues` (declared by `options.queues`):
+     * `sent(name?)` in send order, `clear()` to reset. Sends are not
+     * transactional in production, so one made by a mutation that then threw is
+     * recorded too. Shared with any `withIdentity` view.
+     */
+    queues: FakeQueueControls;
 
     /**
      * Direct db access at mutation-level (read + write), mirroring `convexTest`'s
@@ -272,6 +328,33 @@ interface TestHarness {
 }
 
 type RunRegisteredFunction = typeof runRegisteredFunction;
+
+/** `ctx.notify` / `ctx.push`: not on the base contexts — codegen adds them to every context when `lunora/notify.ts` exists. */
+interface NotifySurfaces {
+    notify: LunoraNotify;
+    push: LunoraPush;
+}
+
+/** `ctx.queues`: codegen adds it to mutation and action contexts when `lunora/queues.ts` declares queues. */
+interface QueueSurface {
+    queues: Queues;
+}
+
+const NOTIFY_HINT = "ctx.notify / ctx.push need the app's notify definition — pass lunoraTest(schema, { notify }) with the lunora/notify.ts default export";
+
+/** The recording `ctx.notify` / `ctx.push` when `options.notify` is set; otherwise stubs that throw naming the option. */
+const notifyFor = (options: LunoraTestOptions | undefined): { controls: FakeNotifyControls; surfaces: NotifySurfaces } => {
+    if (options?.notify === undefined) {
+        return {
+            controls: { clear: () => undefined, sent: () => [] },
+            surfaces: { notify: stubProxy("notify", NOTIFY_HINT) as LunoraNotify, push: stubProxy("push", NOTIFY_HINT) as LunoraPush },
+        };
+    }
+
+    const { controls, notify, push } = createFakeNotify(options.notify, options.env ?? {}, { log: noopLog, metrics: noopMetrics });
+
+    return { controls, surfaces: { notify, push } };
+};
 
 /**
  * Build the `subscribe` method for a harness view. Extracted to keep
@@ -517,6 +600,10 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  * control via `harness.scheduler.advance(ms)` / `runPending()` / `list()`. As in
  * production it is transactional inside a mutation: a job scheduled by a mutation
  * that then throws never becomes pending.
+ * - `ctx.queues` (mutations + actions): recording producers for `options.queues`;
+ * inspect via `harness.queues.sent(name)`.
+ * - `ctx.notify` / `ctx.push` (all contexts): built from `options.notify` with
+ * recorded deliveries and in-memory subscriptions; inspect via `harness.notify.sent()`.
  * - `harness.subscribe(query, args)`: async iterable that re-emits after mutations.
  *
  * **v1 stubs (still throwing):** `ctx.storage`, `ctx.vectors`, `ctx.workflows`.
@@ -581,6 +668,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // `ctx.runMutation` from a query accumulates onto the same wide event the real
     // runtime would — a composed call reuses the outer dispatch's span).
     const dispatchSpan = createRecordingSpan();
+    // Recorders shared by every view, like the scheduler: what one identity's
+    // handler sends is visible from any `withIdentity` scope.
+    const { controls: queueControls, queues } = createFakeQueues(options?.queues ?? []);
+    const { controls: notifyControls, surfaces: notifySurfaces } = notifyFor(options);
 
     /** Guard for the lazily-wired scheduler references: fail loudly if a sweep runs before harness construction completed. */
     const requireReference = <T>(value: T | undefined, name: string): T => {
@@ -628,7 +719,8 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         };
         const { database, rawDatabase } = createWriters(resolved);
 
-        const queryContext: QueryCtx = {
+        const queryContext: NotifySurfaces & QueryCtx = {
+            ...notifySurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -646,7 +738,8 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             vectors: stubProxy("vectors") as QueryCtx["vectors"],
         };
 
-        const mutationContext: MutationCtx = {
+        const mutationContext: MutationCtx & NotifySurfaces & QueueSurface = {
+            ...notifySurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -663,6 +756,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             runQuery: ((reference: never, args: never) =>
                 // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runQuery, after construction completes
                 runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
+            queues,
             scheduler,
             secrets: stubProxy("secrets") as MutationCtx["secrets"],
             storage: stubProxy("storage") as MutationCtx["storage"],
@@ -683,11 +777,12 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // Backs `harness.run` only — `query`/`mutation`/`action` dispatch (both the
         // registered-procedure and inline-callback forms) stays on the guarded
         // `queryContext`/`mutationContext`/`actionContext` above.
-        const rawMutationContext: MutationCtx = { ...mutationContext, db: rawDatabase };
+        const rawMutationContext: MutationCtx & NotifySurfaces & QueueSurface = { ...mutationContext, db: rawDatabase };
 
         // `services` is not on the base ActionCtx: codegen adds it to the app's own
         // action context when `lunora.config` declares services.
-        const actionContext: ActionCtx & { services: Record<string, object> } = {
+        const actionContext: ActionCtx & NotifySurfaces & QueueSurface & { services: Record<string, object> } = {
+            ...notifySurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -720,6 +815,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             runQuery: ((reference: never, args: never) =>
                 // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runQuery, after construction completes
                 runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
+            queues,
             scheduler,
             secrets: stubProxy("secrets") as ActionCtx["secrets"],
             services: servicesContext(options?.services),
@@ -800,7 +896,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             action,
             close: closeDatabase,
             mutation,
+            notify: notifyControls,
             query,
+            queues: queueControls,
             run: (function_) => runInTransaction(() => function_(rawMutationContext)).then(notifyAfter),
             scheduler: schedulerControls,
             subscribe,
@@ -819,5 +917,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
 export { lunoraTest };
 export type { RecordedWideEvent } from "./context-fakes";
+export type { FakeNotifyControls, NotifyChannel, SentNotification } from "./fake-notify";
+export type { FakeQueueControls, SentQueueMessage } from "./fake-queues";
 export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SweepOptions } from "./fake-scheduler";
 export type { FunctionRegistry, LunoraTestOptions, TestHarness, TestIdentity, TestSubscription };
