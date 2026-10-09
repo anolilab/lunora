@@ -1,5 +1,5 @@
 import type { Diagnostic, Node, SourceFile, Type } from "ts-morph";
-import { DiagnosticCategory } from "ts-morph";
+import { DiagnosticCategory, SyntaxKind } from "ts-morph";
 
 import { recordErasedReturn } from "../erased-returns";
 import isAnyDegraded from "./internal/any-token";
@@ -37,13 +37,26 @@ const DERIVATIVE_ERROR = /is of type 'unknown'|on type '\{\}'/;
 
 const isDerivativeError = (message: string): boolean => DERIVATIVE_ERROR.test(message);
 
+/** A type error inside a handler: its message, and whether it is only a consequence of an `unknown` value. */
+interface TypeError {
+    derivative: boolean;
+    message: string;
+}
+
+/** The missing export a `has no exported member` error names. */
+const MISSING_EXPORT = /has no exported member '([^']+)'/;
+
 /**
- * The reason a handler's type is `unknown`, or `undefined` when it has no error.
- * The first error inside the handler is usually a consequence, such as
- * `'userThreads' is of type 'unknown'`. The cause is often elsewhere in the file:
- * an import of an export that no longer exists, which is then named as the cause.
+ * The first type error located inside `handler`, or `undefined`. A handler the
+ * checker could not type usually has one: an import of an export that no longer
+ * exists, an unresolved name, a wrong argument.
+ *
+ * The first error is often a consequence, such as `'userThreads' is of type
+ * 'unknown'`, and then `derivative` is set. The cause is named only when it is
+ * an error for a name the handler itself uses: an unrelated missing export in the
+ * same file is not attached.
  */
-const typeErrorWithin = (handler: Node): string | undefined => {
+const typeErrorWithin = (handler: Node): TypeError | undefined => {
     const start = handler.getStart();
     const end = handler.getEnd();
     const errors = errorsOf(handler.getSourceFile());
@@ -60,12 +73,17 @@ const typeErrorWithin = (handler: Node): string | undefined => {
     const first = messageOf(earliest);
 
     if (!isDerivativeError(first)) {
-        return first;
+        return { derivative: false, message: first };
     }
 
-    const cause = errors.find((diagnostic) => messageOf(diagnostic).includes("has no exported member"));
+    const usedNames = new Set(handler.getDescendantsOfKind(SyntaxKind.Identifier).map((identifier) => identifier.getText()));
+    const cause = errors.find((diagnostic) => {
+        const name = MISSING_EXPORT.exec(messageOf(diagnostic))?.[1];
 
-    return cause ? `${first}; caused by: ${messageOf(cause)}` : first;
+        return name !== undefined && usedNames.has(name);
+    });
+
+    return { derivative: true, message: cause ? `${first}; caused by: ${messageOf(cause)}` : first };
 };
 
 /**
@@ -111,8 +129,10 @@ const unwrapHandlerReturn = (handler: Node): string => {
     if (!rendered || rendered === "any" || rendered === "never" || rendered === "unknown") {
         const error = typeErrorWithin(handler);
 
-        if (error !== undefined) {
-            recordErasedReturn(handler, `${rendered || "any"} (${error})`);
+        // A bare `unknown` can be the handler's own declared type. It is erased only when
+        // the error is the reason for it, so an unrelated error alone does not report.
+        if (error !== undefined && (rendered !== "unknown" || error.derivative)) {
+            recordErasedReturn(handler, `${rendered || "any"} (${error.message})`);
         }
 
         return "unknown";
@@ -130,7 +150,7 @@ const unwrapHandlerReturn = (handler: Node): string => {
         const error = typeErrorWithin(handler);
 
         if (error !== undefined) {
-            recordErasedReturn(handler, `${rendered} (${error})`);
+            recordErasedReturn(handler, `${rendered} (${error.message})`);
         }
 
         return "unknown";

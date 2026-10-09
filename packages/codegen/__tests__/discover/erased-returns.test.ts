@@ -185,6 +185,18 @@ const UNRESOLVED_OBJECT_FIELD = `
     export const getWrapped = query({ args: {}, handler: async () => { const x = missingRef; return { a: x.b }; } });
 `;
 
+/**
+ * A handler that returns `unknown` on purpose, with an unrelated error inside it. The
+ * `unknown` is the handler's own type, not the result of the error, so nothing is erased.
+ */
+const UNKNOWN_WITH_UNRELATED_ERROR = `
+    import { query } from "@lunora/server";
+
+    declare const opaque: unknown;
+
+    export const getOpaque = query({ args: {}, handler: async () => { const unused = missingReference; return opaque; } });
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -251,6 +263,14 @@ describe("procedure_return_type_erased", () => {
 
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({ metadata: { exportName: "getWrapped", filePath: "wrapped" } });
+    }, 300_000);
+
+    it("does not report a handler whose own `unknown` return is unrelated to an error inside it", () => {
+        expect.assertions(1);
+
+        const findings = advisoriesFor({ "opaque.ts": UNKNOWN_WITH_UNRELATED_ERROR }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(0);
     }, 300_000);
 
     it("does not report a handler erasure a declared `.output(...)` replaces", () => {
