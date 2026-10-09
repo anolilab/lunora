@@ -16,15 +16,16 @@ import { LunoraError } from "@lunora/errors";
 
 import type { ControlPlaneStore } from "../d1-store";
 import type { DeployKind, DeployManifest, TargetId } from "../provision-contract";
+import { storedTarget } from "../provision-contract";
 import type { EncryptedSecret } from "../secrets/select";
 import { decryptSecrets, secretsForKind } from "../secrets/select";
 import { drainTable } from "../store";
 import type { TargetDriver } from "../targets/driver";
-import type { Placement, RowReader } from "../targets/placement";
-import { placementOfDeployment, targetOf } from "../targets/placement";
+import type { Placement, RowReader, StoredPlacement } from "../targets/placement";
+import { hostsOf, isCellPlaced, placementOfDeployment, resolvePlacement, targetOf } from "../targets/placement";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken } from "./admin-token";
-import type { HaltConvergeOutcome, HaltDeploymentRow, HaltRow } from "./halt";
+import type { HaltConvergeOutcome, HaltDeploymentRow, HaltRow, OwnsOrganization } from "./halt";
 import { liveByAlias } from "./halt";
 import { assertStubKeepsClasses, buildHaltStub } from "./halt-stub";
 import type { DeployPacer } from "./pacing";
@@ -34,6 +35,8 @@ import type { ReleaseStore } from "./release-store";
 
 /** Everything both converges need. */
 export interface HaltConvergeDeps {
+    /** The cell this control plane serves (`LUNORA_CELL`): a resume places the project against it, as a deploy does. */
+    cell: string;
     database: ControlPlaneStore;
     driverFor: (placement: Placement) => TargetDriver;
     /** `SECRET_ENCRYPTION_KEY`: unseals admin tokens and the project's secrets on resume. */
@@ -97,6 +100,44 @@ const placementOf = async (deployment: DeploymentRow, read: RowReader): Promise<
     return placed.placement;
 };
 
+/** The name of the cell an organization is placed on, or `undefined` for none. */
+const organizationCell = async (database: ControlPlaneStore, organizationId: string): Promise<string | undefined> => {
+    const organization = (await database.get(organizationId, "organizations")) as null | { cellId?: null | string };
+    const cell = organization?.cellId == null ? null : ((await database.get(organization.cellId, "cells")) as null | { name?: null | string });
+
+    return cell?.name ?? undefined;
+};
+
+/** The halt sweep's `owns` for a control plane of cell `cell`: the organizations placed on it. */
+export const organizationsOnCell =
+    (database: ControlPlaneStore, cell: string): OwnsOrganization =>
+    async (organizationId) =>
+        (await organizationCell(database, organizationId)) === cell;
+
+/**
+ * A project's placement exactly as a deploy resolves it (`internal.projects.placement`
+ * then `resolvePlacement`): its target and host, refused unless its
+ * organization is placed on this control plane's cell.
+ */
+const projectPlacement = async (deps: HaltConvergeDeps, organizationId: string, projectId: string): Promise<Placement> => {
+    const project = (await deps.database.get(projectId, "projects")) as null | { organizationId: string; placementRef?: null | string; target?: null | string };
+
+    if (project?.organizationId !== organizationId) {
+        throw new LunoraError("NOT_FOUND", "project not found in this organization");
+    }
+
+    const target = storedTarget(project.target);
+    const host =
+        target === undefined || project.placementRef == null || isCellPlaced(target) ? null : await hostsOf(target).lookup(deps.read, project.placementRef);
+    const stored: StoredPlacement = {
+        cellName: (await organizationCell(deps.database, organizationId)) ?? null,
+        ...(host?.organizationId === organizationId ? { host: host.host, hostRevoked: host.revoked } : {}),
+        ...(project.target == null ? {} : { target: project.target }),
+    };
+
+    return resolvePlacement(stored, deps.cell);
+};
+
 /**
  * Converge an alias onto its stub. The stub binds the classes of the live
  * release and of every newer release that may be on the Worker, and the guard
@@ -136,14 +177,14 @@ export const haltAlias = async (row: HaltRow, deps: HaltConvergeDeps): Promise<H
 
 /**
  * The release backend a resume converges through: the rows read off the store,
- * authorized by being the sweep. `placement` places the deployment off its own
- * row, as the teardown does, so `reprovision`'s same-target check compares
- * like with like.
+ * authorized by being the sweep. `placement` resolves the project's placement
+ * as a deploy does, so `reprovision` refuses a release whose project moved to
+ * another target since, exactly as a rollback would.
  */
 const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, target: TargetId): ReleaseDeps => {
     return {
         backend: {
-            placement: async () => placementOf(deployment, deps.read),
+            placement: async ({ organizationId, projectId }) => projectPlacement(deps, organizationId, projectId),
             releaseTarget: async () => {
                 const adminToken = await resolveAdminToken(
                     {

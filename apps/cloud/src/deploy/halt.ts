@@ -96,7 +96,9 @@ export interface HaltDeploymentRow {
     _id: string;
     alias?: null | string;
     createdAt: number;
+    failedAt?: null | number;
     kind: string;
+    liveAt?: null | number;
     organizationId: string;
     placementRef?: null | string;
     projectId: string;
@@ -106,6 +108,7 @@ export interface HaltDeploymentRow {
     target?: null | string;
     teardownAt?: null | number;
     updatedAt?: null | number;
+    verifyingAt?: null | number;
 }
 
 /** An `organizations` row, as far as the halt reads it. */
@@ -292,6 +295,35 @@ export const requestOrganizationResume = async (
 };
 
 /**
+ * Whether this control plane converges an organization's tenants: its
+ * organization is placed on this control plane's cell. Every cell runs the
+ * halt sweep over the same rows, so a sweep acts only on its own cell's
+ * organizations and leaves the rest, silently, to theirs.
+ */
+export type OwnsOrganization = (organizationId: string) => Promise<boolean>;
+
+/** A single-cell deployment's answer: every organization is this control plane's. */
+const everyOrganization: OwnsOrganization = () => Promise.resolve(true);
+
+/** The organizations among `ids` that `owns` answers for, each asked once. */
+const ownedBy = async (owns: OwnsOrganization, ids: ReadonlyArray<string>): Promise<Set<string>> => {
+    const unique = [...new Set(ids)];
+    const answers = await Promise.all(unique.map(async (id) => ((await owns(id)) ? id : undefined)));
+
+    return new Set(answers.filter((id): id is string => id !== undefined));
+};
+
+/**
+ * When a deployment's converge finished, as far as its row says: the phase it
+ * reached after the converge (`verifying`, `failed`, `live`), else its last write.
+ */
+const convergeFinishedAt = (deployment: HaltDeploymentRow): number => {
+    const phases = [deployment.verifyingAt, deployment.failedAt, deployment.liveAt].filter((at): at is number => at != null);
+
+    return phases.length > 0 ? Math.max(...phases) : (deployment.updatedAt ?? deployment.createdAt);
+};
+
+/**
  * Converge halts onto suspensions (`haltOnSuspension`), idempotently: halt the
  * live aliases of every organization whose suspension halts it, and resume the
  * suspension halts of every organization whose suspension no longer does —
@@ -299,12 +331,17 @@ export const requestOrganizationResume = async (
  * turned off. Manual halts are never resumed here. Reads the suspension, never
  * writes it.
  */
-export const syncSuspensionHalts = async (database: ControlPlaneStore, now: number): Promise<{ halted: number; resumed: number }> => {
+export const syncSuspensionHalts = async (
+    database: ControlPlaneStore,
+    now: number,
+    owns: OwnsOrganization = everyOrganization,
+): Promise<{ halted: number; resumed: number }> => {
     const [suspended, halts] = await Promise.all([
         drainTable<HaltOrganizationRow>(database, "organizations", { where: { suspendedAt: { gt: 0 } } }),
         drainTable<HaltRow>(database, "halts", { where: { source: "suspension" } }),
     ]);
-    const halting = suspended.filter((organization) => haltsOnSuspension(organization));
+    const owned = await ownedBy(owns, [...suspended.map((organization) => organization._id), ...halts.map((row) => row.organizationId)]);
+    const halting = suspended.filter((organization) => owned.has(organization._id) && haltsOnSuspension(organization));
     const haltingIds = new Set(halting.map((organization) => organization._id));
     let halted = 0;
 
@@ -321,7 +358,11 @@ export const syncSuspensionHalts = async (database: ControlPlaneStore, now: numb
         halted += result.halted.length;
     }
 
-    const lifted = new Set(halts.filter((row) => row.state !== "resuming" && !haltingIds.has(row.organizationId)).map((row) => row.organizationId));
+    const lifted = new Set(
+        halts
+            .filter((row) => row.state !== "resuming" && owned.has(row.organizationId) && !haltingIds.has(row.organizationId))
+            .map((row) => row.organizationId),
+    );
     let resumed = 0;
 
     for (const organizationId of lifted) {
@@ -349,6 +390,8 @@ export interface HaltConvergePorts {
     limit?: number;
     log: (line: string) => void;
     now: number;
+    /** Whether this control plane converges an organization's tenants ({@link OwnsOrganization}); all of them by default. */
+    owns?: OwnsOrganization;
     /** Converge the alias back onto its live release. */
     resume: (row: HaltRow) => Promise<HaltConvergeOutcome>;
     /** Start no converge once the clock passes this (epoch ms); absent → no bound. */
@@ -369,19 +412,27 @@ const IN_FLIGHT = new Set(["provisioning", "verifying"]);
  * Which rows to converge this tick, and which wait for an in-flight deploy:
  *
  * - `halting` and `resuming` rows whose backoff is over and whose lease is free;
- * - `halted` rows a release may have converged on top of — a deploy of the
- *   alias that started provisioning after the stub's converge started (one in
- *   flight when the halt was asked for) — which get their stub again;
+ * - `halted` rows a release may have converged on top of — a converge of the
+ *   alias that finished after the stub's started (one already running when the
+ *   stub went on, past the in-flight wait) — which get their stub again;
  * - a stub waits while a deploy of its alias is still in flight, so it lands
  *   after the deploy rather than under it.
  */
 const planConverges = async (
     database: ControlPlaneStore,
     rows: ReadonlyArray<HaltRow>,
-    now: number,
+    options: { now: number; owns: OwnsOrganization },
 ): Promise<{ deferred: number; due: { mode: "halt" | "resume"; row: HaltRow }[] }> => {
+    const { now } = options;
+    const owned = await ownedBy(
+        options.owns,
+        rows.map((row) => row.organizationId),
+    );
     const candidates = rows.filter(
-        (row) => (row.convergingAt == null || now - row.convergingAt >= HALT_LEASE_MS) && (row.nextAttemptAt == null || row.nextAttemptAt <= now),
+        (row) =>
+            owned.has(row.organizationId) &&
+            (row.convergingAt == null || now - row.convergingAt >= HALT_LEASE_MS) &&
+            (row.nextAttemptAt == null || row.nextAttemptAt <= now),
     );
     const projects = [...new Set(candidates.filter((row) => row.state !== "resuming").map((row) => row.projectId))];
     const deployments = new Map<string, HaltDeploymentRow[]>();
@@ -405,7 +456,8 @@ const planConverges = async (
             (deployment) => IN_FLIGHT.has(deployment.status) && now - (deployment.updatedAt ?? deployment.createdAt) < IN_FLIGHT_DEFER_MS,
         );
         const landedOnTop =
-            row.state === "halted" && ofAlias.some((deployment) => deployment.provisioningAt != null && deployment.provisioningAt >= (row.stubStartedAt ?? 0));
+            row.state === "halted" &&
+            ofAlias.some((deployment) => deployment.provisioningAt != null && convergeFinishedAt(deployment) >= (row.stubStartedAt ?? 0));
 
         if (row.state === "halted" && !landedOnTop) {
             continue;
@@ -534,7 +586,7 @@ const settleResumed = async (database: ControlPlaneStore, ports: HaltConvergePor
  */
 export const runHaltConverges = async (database: ControlPlaneStore, ports: HaltConvergePorts): Promise<HaltSweepResult> => {
     const rows = await drainTable<HaltRow>(database, "halts");
-    const { deferred, due } = await planConverges(database, rows, ports.now);
+    const { deferred, due } = await planConverges(database, rows, { now: ports.now, owns: ports.owns ?? everyOrganization });
     const result: HaltSweepResult = { deferred, failed: 0, halted: 0, resumed: 0 };
 
     const clock = ports.clock ?? Date.now;

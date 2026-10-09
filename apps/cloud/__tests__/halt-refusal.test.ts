@@ -66,6 +66,7 @@ describe("a stub that drops a class", () => {
 
         await expect(
             haltAlias(row, {
+                cell: "cell-1",
                 database,
                 driverFor: () => fakeDriver({ deploy }),
                 pacer: createDeployPacer(),

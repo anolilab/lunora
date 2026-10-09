@@ -27,7 +27,7 @@ import { controlPlaneDatabase } from "../d1-store";
 import { resolveAdminToken } from "../deploy/admin-token";
 import { deployRuleAlert, HALT_CONVERGE_WINDOW_MS, runHaltConverges, syncSuspensionHalts } from "../deploy/halt";
 import type { HaltConvergeDeps } from "../deploy/halt-converge";
-import { haltAlias, resumeAlias } from "../deploy/halt-converge";
+import { haltAlias, organizationsOnCell, resumeAlias } from "../deploy/halt-converge";
 import { createDeployPacer } from "../deploy/pacing";
 import { createReleaseStore } from "../deploy/release-store";
 import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
@@ -549,8 +549,12 @@ const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
-    const synced = await syncSuspensionHalts(database, now);
+    const cell = env.LUNORA_CELL ?? "default";
+    // Every cell's control plane runs this sweep over the same rows: each acts on its own cell's organizations.
+    const owns = organizationsOnCell(database, cell);
+    const synced = await syncSuspensionHalts(database, now, owns);
     const deps: HaltConvergeDeps = {
+        cell,
         database,
         driverFor: (placement) => resolveTargetDriver(placement, env),
         ...(env.SECRET_ENCRYPTION_KEY === undefined ? {} : { masterKey: env.SECRET_ENCRYPTION_KEY }),
@@ -567,6 +571,7 @@ const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
             console.warn(line);
         },
         now,
+        owns,
         resume: async (row) => resumeAlias(row, deps),
         // A scheduled invocation's work is cut off after 15 minutes: start no converge past this.
         startBefore: now + HALT_CONVERGE_WINDOW_MS,

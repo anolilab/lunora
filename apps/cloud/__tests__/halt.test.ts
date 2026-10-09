@@ -11,7 +11,7 @@ import {
     syncSuspensionHalts,
 } from "../src/deploy/halt";
 import type { HaltConvergeDeps } from "../src/deploy/halt-converge";
-import { haltAlias, resumeAlias } from "../src/deploy/halt-converge";
+import { haltAlias, organizationsOnCell, resumeAlias } from "../src/deploy/halt-converge";
 import { buildHaltStub } from "../src/deploy/halt-stub";
 import { createDeployPacer } from "../src/deploy/pacing";
 import type { StoredRelease } from "../src/deploy/release-store";
@@ -86,10 +86,11 @@ const world = async (organization: Row = {}, extra: { deployments?: Row[] } = {}
             deployment("d_edge", { alias: "edge", placementRef: "box_1", projectId: "p_edge", target: "celld-vps" }),
             ...(extra.deployments ?? []),
         ],
-        organizations: [{ _id: "org_1", name: "Acme", ...organization }],
+        cells: [{ _id: "cell_1", name: "cell-1" }],
+        organizations: [{ _id: "org_1", cellId: "cell_1", name: "Acme", ...organization }],
         projects: [
-            { _id: "p_acme", name: "Acme", organizationId: "org_1" },
-            { _id: "p_shop", name: "Shop", organizationId: "org_1" },
+            { _id: "p_acme", name: "Acme", organizationId: "org_1", target: "cloudflare-wfp" },
+            { _id: "p_shop", name: "Shop", organizationId: "org_1", placementRef: "acct_1", target: "cloudflare-workers" },
             { _id: "p_edge", name: "Edge", organizationId: "org_1" },
         ],
         secrets: [
@@ -111,6 +112,7 @@ const world = async (organization: Row = {}, extra: { deployments?: Row[] } = {}
 
     const converged: TenantDeploymentSpec[] = [];
     const deps: HaltConvergeDeps = {
+        cell: "cell-1",
         database,
         driverFor: () =>
             fakeDriver({
@@ -135,6 +137,7 @@ const ports = (deps: HaltConvergeDeps, now = NOW, overrides: Partial<HaltConverg
         halt: async (row) => haltAlias(row, deps),
         log: () => undefined,
         now,
+        owns: organizationsOnCell(deps.database, deps.cell),
         resume: async (row) => resumeAlias(row, deps),
         ...overrides,
     };
@@ -363,18 +366,20 @@ describe(runHaltConverges, () => {
         expect(haltOf(database, "acme")?.deploymentId).toBe("d_acme2");
     });
 
-    it("puts the stub back over a release that converged after it", async () => {
+    it("puts the stub back over a converge that was already running when it went on and finished after it", async () => {
+        // Stuck in provisioning for an hour, so past the in-flight wait: the stub goes on while its converge still runs.
         const { converged, database, deps, releases } = await world(
             {},
             {
                 deployments: [
                     deployment("d_late", {
                         alias: "acme",
-                        createdAt: NOW - 30,
+                        createdAt: NOW - 3_600_000,
                         projectId: "p_acme",
-                        provisioningAt: NOW - 20,
-                        status: "failed",
+                        provisioningAt: NOW - 3_500_000,
+                        status: "provisioning",
                         target: "cloudflare-wfp",
+                        updatedAt: NOW - 3_500_000,
                     }),
                 ],
             },
@@ -383,18 +388,28 @@ describe(runHaltConverges, () => {
         await releases.store.put("d_late", release(LIVE_MANIFEST));
         await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
         await runHaltConverges(database, ports(deps));
-        // Nothing landed since: the next tick leaves the stub alone.
-        await runHaltConverges(database, ports(deps, NOW + 30_000));
+        // Nothing has finished since: the next tick leaves the stub alone.
+        await runHaltConverges(database, ports(deps, NOW + 5000));
 
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["acme", "shop"]);
 
-        // A converge that started after the stub's (one already queued when the halt was asked for) lands on top of it.
-        await database.patch("d_late", { provisioningAt: NOW + 5 });
+        // The old converge lands on top of the stub and goes on to verify: the stub waits while it is in flight…
+        await database.patch("d_late", { status: "verifying", updatedAt: NOW + 10_000, verifyingAt: NOW + 10_000 });
+
+        await expect(runHaltConverges(database, ports(deps, NOW + 15_000))).resolves.toMatchObject({ deferred: 1, halted: 0 });
+
+        // …and goes back on once it settled.
+        await database.patch("d_late", { failedAt: NOW + 20_000, status: "failed", updatedAt: NOW + 20_000 });
         await runHaltConverges(database, ports(deps, NOW + 60_000));
 
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["acme", "shop", "acme"]);
         expect(sourceOf(converged.at(-1) as TenantDeploymentSpec)).toContain("project halted: manual");
         expect(haltOf(database, "acme")?.stubStartedAt).toBe(NOW + 60_000);
+
+        // Settled: no further stub.
+        await runHaltConverges(database, ports(deps, NOW + 120_000));
+
+        expect(converged).toHaveLength(3);
     });
 
     it("converges at most `limit` rows a tick, and none once the tick's window has passed", async () => {
@@ -469,6 +484,41 @@ describe(runHaltConverges, () => {
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop"]);
         expect(haltOf(database, "acme")?.lastError).toMatch(/would delete the data of Durable Object class\(es\) Presence/u);
         expect(actions(database)).toContain("halt.resume_failed");
+    });
+
+    it("leaves another cell's organizations to that cell's sweep, without a failure to report", async () => {
+        const { converged, database, deps } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
+        const elsewhere = organizationsOnCell(database, "cell-2");
+
+        await expect(syncSuspensionHalts(database, NOW, elsewhere)).resolves.toStrictEqual({ halted: 0, resumed: 0 });
+
+        await requestOrganizationHalt(database, { actor: "support", now: NOW, organizationId: "org_1", reason: "support", source: "manual" });
+
+        await expect(runHaltConverges(database, ports(deps, NOW, { owns: elsewhere }))).resolves.toStrictEqual({
+            deferred: 0,
+            failed: 0,
+            halted: 0,
+            resumed: 0,
+        });
+        expect(converged).toStrictEqual([]);
+        expect(halts(database).map((row) => [row.state, row.lastError])).toStrictEqual([
+            ["halting", undefined],
+            ["halting", undefined],
+        ]);
+    });
+
+    it("refuses a resume once the project moved to another target, as a rollback would", async () => {
+        const { converged, database, deps } = await world();
+
+        await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
+        await runHaltConverges(database, ports(deps));
+        await database.patch("p_acme", { placementRef: "acct_1", target: "cloudflare-workers" });
+        await requestOrganizationResume(database, { actor: "usr_1", now: NOW, organizationId: "org_1" });
+        converged.length = 0;
+        await runHaltConverges(database, ports(deps, NOW + 60_000));
+
+        expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop"]);
+        expect(haltOf(database, "acme")?.lastError).toMatch(/now deploys to cloudflare-workers/u);
     });
 
     it("forgets a halt whose alias has no live release left, converging nothing", async () => {

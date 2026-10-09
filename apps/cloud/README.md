@@ -700,7 +700,8 @@ consumers keep firing in the customer's account. A halt stops that code:
   right before it converges (`refuseHaltedConverge`), so a deploy, rollback or
   failed health check's revert that was already in flight cannot land on the
   stub. The sweep waits for an in-flight deploy of the alias before stubbing,
-  and puts the stub back over any release that converged after it. The cron
+  and puts the stub back over any converge of the alias that finished after
+  the stub's started (one already running past that wait). The cron
   fan-out skips halted aliases. The platform queue consumer holds their batches
   undelivered, retrying them every 12 hours, so a message outlives a halt only
   as long as the queue's retry limit allows. On `cloudflare-workers` the stub
@@ -722,8 +723,10 @@ never writes it.
 
 Each `halts` row (one per alias) is intent plus progress: `halting`, then
 `halted` once the stub converged, and `resuming` until the release is back,
-when the row is deleted. The sweep converges at most three rows per tick, each
-under a 20-minute lease and paced like a deploy. It runs on the tick's
+when the row is deleted. Every cell's control plane runs the sweep, and each
+acts only on the organizations placed on its own cell, where a resume also
+resolves the project's placement as a deploy does. The sweep converges at most
+three rows per tick, each under a 20-minute lease and paced like a deploy. It runs on the tick's
 `waitUntil`, so tenant crons never wait behind it. A failed converge keeps the
 row, records `lastError` and backs off from a minute up to an hour. It is
 logged as `[halt]` every time, and audit-logged and alerted (the org's `deploy`
