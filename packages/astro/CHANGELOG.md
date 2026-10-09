@@ -1,3 +1,9 @@
+## @lunora/astro [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.221...@lunora/astro@1.0.0-alpha.222) (2026-10-09)
+
+### Bug Fixes
+
+* **packages:** align stale @lunora/client pins to 1.0.0-alpha.193 ([#1089](https://github.com/anolilab/lunora/issues/1089)) ([46da632](https://github.com/anolilab/lunora/commit/46da632bc18dfd87f7dceb4522d1d35b6e9f2066))
+
 ## @lunora/astro [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.220...@lunora/astro@1.0.0-alpha.221) (2026-10-08)
 
 
