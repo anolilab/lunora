@@ -6,11 +6,12 @@ import {
     readDurableObjectDurationByScript,
     readDurableObjectRequestsByScript,
     readWorkersCpuByScript,
+    resetDispatchNamespaces,
     WORKERS_CPU,
 } from "../src/cloudflare/compute-usage";
 import { probeDataset, probeDurableObjectsDataset, resetDurableObjectsProbe } from "../src/cloudflare/storage-usage";
 import { UsageUnavailableError } from "../src/metering/unavailable";
-import { access, fakeCloudflare, fakeGraphql, HOURLY_FILTER, namespace, NAMESPACES, WINDOW } from "./support/cloudflare-api-fake";
+import { access, ACCOUNT, fakeCloudflare, fakeGraphql, HOURLY_FILTER, namespace, NAMESPACES, WINDOW } from "./support/cloudflare-api-fake";
 
 /** The CPU dataset as a cell account describes it: µs by name, and a dispatch-namespace dimension. */
 const CPU_DATASET = {
@@ -24,6 +25,7 @@ const CPU_DATASET = {
 describe(readWorkersCpuByScript, () => {
     afterEach(() => {
         resetDurableObjectsProbe();
+        resetDispatchNamespaces();
     });
 
     it("reads CPU time in µs by its name, converts to ms, and keeps only this environment's dispatch namespace", async () => {
@@ -56,6 +58,88 @@ describe(readWorkersCpuByScript, () => {
         expect(data).toContain('datetimeHour_geq: "2026-06-15T09:00:00.000Z", datetimeHour_leq: "2026-06-15T10:00:00.000Z"');
     });
 
+    /** The account's dispatch namespaces, as `GET …/workers/dispatch/namespaces` lists them. */
+    const DISPATCH_NAMESPACES = {
+        [`/accounts/${ACCOUNT}/workers/dispatch/namespaces`]: () => {
+            return {
+                result: [
+                    { namespace_id: "ns-123", namespace_name: "lunora-production" },
+                    { namespace_id: "ns-456", namespace_name: "lunora-staging" },
+                ],
+            };
+        },
+    };
+
+    it("takes the dispatchNamespaceName dimension over a dispatchNamespaceId the schema lists first", async () => {
+        const seen: string[] = [];
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql(
+                {
+                    workersInvocationsAdaptive: {
+                        dimensions: ["scriptName", "dispatchNamespaceId", "dispatchNamespaceName"],
+                        filter: HOURLY_FILTER,
+                        sum: ["cpuTimeUs"],
+                    },
+                },
+                [{ dimensions: { dispatchNamespaceName: "lunora-production", scriptName: "shop" }, sum: { cpuTimeUs: 6000 } }],
+                seen,
+            ),
+            rest: DISPATCH_NAMESPACES,
+        });
+
+        await expect(readWorkersCpuByScript(access(fetch), WINDOW, { dispatchNamespace: "lunora-production" })).resolves.toStrictEqual(
+            new Map([["shop", { cpuMs: 6 }]]),
+        );
+        expect(seen.find((query) => query.includes("LunoraWorkerCpu"))).toContain("dimensions { scriptName dispatchNamespaceName }");
+    });
+
+    it("matches a dimension that carries the namespace id, through the account's namespace listing", async () => {
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql(
+                { workersInvocationsAdaptive: { dimensions: ["scriptName", "dispatchNamespaceId"], filter: HOURLY_FILTER, sum: ["cpuTimeUs"] } },
+                [
+                    { dimensions: { dispatchNamespaceId: "ns-123", scriptName: "shop" }, sum: { cpuTimeUs: 2000 } },
+                    { dimensions: { dispatchNamespaceId: "ns-456", scriptName: "shop" }, sum: { cpuTimeUs: 9000 } },
+                ],
+            ),
+            rest: DISPATCH_NAMESPACES,
+        });
+
+        await expect(readWorkersCpuByScript(access(fetch), WINDOW, { dispatchNamespace: "lunora-production" })).resolves.toStrictEqual(
+            new Map([["shop", { cpuMs: 2 }]]),
+        );
+    });
+
+    it("is unavailable, never zero, when every row carries a namespace value it cannot place", async () => {
+        // No listing to resolve the id: the rows carry ids, so none matches the name.
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql(
+                { workersInvocationsAdaptive: { dimensions: ["scriptName", "dispatchNamespaceId"], filter: HOURLY_FILTER, sum: ["cpuTimeUs"] } },
+                [
+                    { dimensions: { dispatchNamespaceId: "ns-123", scriptName: "shop" }, sum: { cpuTimeUs: 2000 } },
+                    { dimensions: { dispatchNamespaceId: "ns-789", scriptName: "blog" }, sum: { cpuTimeUs: 1000 } },
+                    { dimensions: { dispatchNamespaceId: "", scriptName: "lunora-dispatcher" }, sum: { cpuTimeUs: 1000 } },
+                ],
+            ),
+        });
+
+        const failure = await readWorkersCpuByScript(access(fetch), WINDOW, { dispatchNamespace: "lunora-production" }).catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(UsageUnavailableError);
+        expect(String(failure)).toContain(
+            'no workersInvocationsAdaptive row\'s dispatchNamespaceId matches the dispatch namespace "lunora-production" or its id; seen: "ns-123", "ns-789"',
+        );
+    });
+
+    it("reads an idle hour as zero when the only rows are another listed environment's", async () => {
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql(CPU_DATASET, [{ dimensions: { dispatchNamespaceName: "lunora-staging", scriptName: "shop" }, sum: { cpuTimeUs: 9000 } }]),
+            rest: DISPATCH_NAMESPACES,
+        });
+
+        await expect(readWorkersCpuByScript(access(fetch), WINDOW, { dispatchNamespace: "lunora-production" })).resolves.toStrictEqual(new Map());
+    });
+
     it("is unavailable on the cell when the dataset cannot say which dispatch namespace a row is from", async () => {
         const fetch = fakeCloudflare({
             graphql: fakeGraphql({ workersInvocationsAdaptive: { dimensions: ["scriptName"], filter: HOURLY_FILTER, sum: ["cpuTimeUs"] } }),
@@ -77,6 +161,14 @@ describe(readWorkersCpuByScript, () => {
         });
 
         await expect(readWorkersCpuByScript(access(fetch), WINDOW)).resolves.toStrictEqual(new Map([["web", { cpuMs: 2 }]]));
+    });
+
+    it("on a connected account whose Workers all run in its own dispatch namespace, reads zero rather than unavailable", async () => {
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql(CPU_DATASET, [{ dimensions: { dispatchNamespaceName: "their-platform", scriptName: "web" }, sum: { cpuTimeUs: 50_000 } }]),
+        });
+
+        await expect(readWorkersCpuByScript(access(fetch), WINDOW)).resolves.toStrictEqual(new Map());
     });
 
     it("never reads a CPU sum in an unstated unit: a bare cpuTime is unavailable, and says why", async () => {
@@ -160,6 +252,7 @@ const DO_NAMESPACES = {
 describe(readDurableObjectRequestsByScript, () => {
     afterEach(() => {
         resetDurableObjectsProbe();
+        resetDispatchNamespaces();
     });
 
     it("reads requests from the dataset that has them, placed through the namespace list", async () => {
@@ -207,6 +300,7 @@ describe(readDurableObjectRequestsByScript, () => {
 describe(readDurableObjectDurationByScript, () => {
     afterEach(() => {
         resetDurableObjectsProbe();
+        resetDispatchNamespaces();
     });
 
     it("reads duration only where the schema says it is GB-seconds, the unit the rate card prices", async () => {

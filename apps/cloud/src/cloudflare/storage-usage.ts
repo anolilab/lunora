@@ -75,7 +75,7 @@ const LIST_PAGE_SIZE = 100;
  * @throws {UsageUnavailableError} past {@link MAX_LIST_PAGES} full pages — a
  * partial list would silently drop tenants, so it is reported instead.
  */
-const listAll = async <T>(access: CloudflareAccountAccess, path: string): Promise<T[]> => {
+export const listAll = async <T>(access: CloudflareAccountAccess, path: string): Promise<T[]> => {
     const call = cloudflareFetch(access);
     const items: T[] = [];
 
@@ -225,10 +225,11 @@ export interface DatasetSpec<TSum extends string = string, TBy extends string = 
 
     /**
      * A dimension that names the dispatch namespace of a row, when the dataset
-     * has one. Reported as {@link ProbedDataset.namespace}; never required by the
-     * probe — the reader decides whether it can do without it.
+     * has one: `name` exactly when the schema has it, else the first that
+     * matches `pattern`. Reported as {@link ProbedDataset.namespace}; never
+     * required by the probe — the reader decides whether it can do without it.
      */
-    namespaceDimension?: RegExp;
+    namespaceDimension?: { name: string; pattern: RegExp };
     /** The datasets tried first, in this order. Any other `prefix*` field follows, alphabetically. */
     preferred: ReadonlyArray<string>;
     prefix: string;
@@ -393,6 +394,21 @@ const timeFilterOf = (filters: Described): ProbedDataset["filter"] | undefined =
     return filters.has("datetime_geq") && filters.has("datetime_leq") ? "instant" : undefined;
 };
 
+/**
+ * The dispatch-namespace dimension of a dataset: the exact name the spec
+ * prefers (`dispatchNamespaceName`) over any other that matches its pattern,
+ * so a `dispatchNamespaceId` listed first is not taken for the name.
+ */
+const namespaceDimensionOf = (spec: DatasetSpec, dimensions: Described): string | undefined => {
+    const wanted = spec.namespaceDimension;
+
+    if (wanted === undefined) {
+        return undefined;
+    }
+
+    return dimensions.has(wanted.name) ? wanted.name : [...dimensions.keys()].find((dimension) => wanted.pattern.test(dimension));
+};
+
 /** Pick the dataset to meter from what the schema describes, or say why none fits. */
 const chooseDataset = async <TSum extends string, TBy extends string>(
     access: CloudflareAccountAccess,
@@ -439,8 +455,7 @@ const chooseDataset = async <TSum extends string, TBy extends string>(
         const filter = timeFilterOf(fieldsOf(index * 3 + 2));
         const { present, unstated } = wantedSums(spec, sums);
         const by = spec.by.find((dimension) => dimensions.has(dimension));
-        const pattern = spec.namespaceDimension;
-        const namespace = pattern === undefined ? undefined : [...dimensions.keys()].find((dimension) => pattern.test(dimension));
+        const namespace = namespaceDimensionOf(spec, dimensions);
 
         if (present.length > 0 && filter !== undefined && by !== undefined) {
             return { by, field: shape.field, filter, ...(namespace === undefined ? {} : { namespace }), sums: present };

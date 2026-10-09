@@ -549,18 +549,21 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
   unstated unit is unavailable, with its description in the reason. Durable
   Object requests and duration are placed through the namespace list like
   rows. CPU rows are placed by script name: on `cloudflare-wfp` the CPU dataset
-  must have a dispatch-namespace dimension (`dispatchNamespace*`), and only
-  rows of this environment's dispatch namespace count, otherwise CPU is
-  unavailable on the cell. Analytics Engine has no CPU time (a Worker cannot
-  measure another's), so the cell reads CPU from its account's GraphQL like
-  the storage meters. On a connected account, rows of any dispatch namespace
-  are dropped. The dispatcher's and outbound Worker's CPU, which Cloudflare
-  bills with the user Worker's as one chain, belongs to no tenant and is not
-  metered: `cpuMs` under-counts the chain, never over-counts it. Unverified:
-  that the namespace dimension's values are dispatch-namespace names. If they
-  were ids, every cell row would drop and CPU would read as zero with no
-  unavailable status, so check the first readback's `cpuMs` rows against the
-  Workers for Platforms dashboard.
+  must have a dispatch-namespace dimension (`dispatchNamespaceName` when the
+  schema has it, else the first `dispatchNamespace*`), and only rows of this
+  environment's dispatch namespace count, otherwise CPU is unavailable on the
+  cell. A row matches by the namespace's name or by its id, resolved through
+  the account's dispatch-namespace listing (`GET …/workers/dispatch/namespaces`,
+  cached six hours). When rows carry namespace values that are neither ours
+  nor any namespace the listing knows, and none is ours, the read is
+  unavailable and names the values it saw: dropping them all would read as
+  zero and move the checkpoint past usage that happened. Analytics Engine has
+  no CPU time (a Worker cannot measure another's), so the cell reads CPU from
+  its account's GraphQL like the storage meters. On a connected account, rows
+  of any dispatch namespace are dropped. The dispatcher's and outbound
+  Worker's CPU, which Cloudflare bills with the user Worker's as one chain,
+  belongs to no tenant and is not metered: `cpuMs` under-counts the chain,
+  never over-counts it.
 - **Unavailable is shown, never zero.** When a source cannot read at all — the
   schema has no dataset to meter, the token lacks Account Analytics: Read, or
   Cloudflare rejects the query itself (a 200 with `errors`) — the sweep
