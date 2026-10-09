@@ -108,7 +108,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
 2. Pass the queue binding to `createMailerFromEnv` in the copied `mailer()` (`lunora/mail/index.ts`):
 
     ```ts
-    import type { QueueLike } from "@lunora/mail";
+    import type { Mailer, QueueLike } from "@lunora/mail";
 
     const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend, queue: env["MAIL_QUEUE"] as QueueLike });
     ```
@@ -116,6 +116,8 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     A producer-only Worker (it enqueues, the consumer delivers) needs no delivery transport: `queue()` works without one, and only `send()` throws `no transport configured`.
 
 3. In your Worker's `queue()` handler, build the mailer with `createMailerFromEnv` as well and drain the batch with `consumeQueuedSend` from `@lunora/mail`:
+
+    `cloudflareSend` is the module-private helper in the copied `lunora/mail/index.ts`, so a `queue()` handler in another module can't see it: copy it into that module (it reads the `SEND_EMAIL` binding from `cloudflare:workers`).
 
     ```ts
     import { consumeQueuedSend, createMailerFromEnv } from "@lunora/mail";
