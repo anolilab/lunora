@@ -73,6 +73,17 @@ describe("the cloudflare-workers account API", () => {
         });
     });
 
+    it("records Notifications when the token may read the account's notification policies, and names it when not", async () => {
+        const fetch = healthyAccount({ [`/accounts/${ACCOUNT}/alerting/v3/policies`]: ok([]) });
+
+        await expect(inspectAccount({ accountId: ACCOUNT, apiToken: TOKEN, fetch })).resolves.toMatchObject({
+            permissions: ["d1", "notifications", "workersScripts"],
+        });
+        await expect(
+            inspectAccount({ accountId: ACCOUNT, apiToken: TOKEN, fetch: healthyAccount({ [`/accounts/${ACCOUNT}/alerting/v3/policies`]: refused }) }),
+        ).resolves.toMatchObject({ permissions: ["d1", "workersScripts"] });
+    });
+
     it("falls back to the account-owned verify endpoint", async () => {
         const fetch = fakeCloudflare({ [`/accounts/${ACCOUNT}/tokens/verify`]: ok({ status: "active" }), "/user/tokens/verify": refused });
 
