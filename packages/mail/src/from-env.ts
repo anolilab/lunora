@@ -35,9 +35,10 @@ const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as 
 /** Options for {@link createMailerFromEnv}. */
 interface FromEnvOptions {
     /**
-     * RFC 822 send callback bound to the Worker's `send_email` binding (Cloudflare
-     * default transport). Used only when `env.SEND_EMAIL` is set, so it can be
-     * passed unconditionally.
+     * RFC 822 send callback bound to the Worker's Cloudflare Email binding (the
+     * default transport). Honoured whenever it is passed, whatever the binding is
+     * named: passing it is the caller's choice of transport, so pass it only when
+     * the binding exists.
      */
     cloudflareSend?: CloudflareSend;
 
@@ -176,7 +177,7 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
 /**
  * Build a {@link Mailer} from a Worker `env`. In a dev environment every send is
  * captured into the studio's Mail inbox; otherwise it delivers via the supplied
- * `cloudflareSend` (used only when the `SEND_EMAIL` binding is present) or,
+ * `cloudflareSend` (when passed) or,
  * failing that, `RESEND_API_KEY`. With no real transport `send()` rejects, so a
  * misconfigured production deploy fails loudly instead of silently dropping mail
  * — while `queue()` still works for a producer-only worker.
@@ -193,10 +194,7 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
         return createMailer({ from, queue: options.queue, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
     }
 
-    // `cloudflareSend` wraps the `SEND_EMAIL` binding, so honour it only when that
-    // binding exists — otherwise a Resend-only deploy would throw inside it
-    // instead of falling back to `RESEND_API_KEY`.
-    const cloudflareSend = env["SEND_EMAIL"] === undefined ? undefined : options.cloudflareSend;
+    const { cloudflareSend } = options;
     const apiKey = typeof env["RESEND_API_KEY"] === "string" && env["RESEND_API_KEY"] !== "" ? env["RESEND_API_KEY"] : undefined;
 
     // With neither, a producer-only mailer (it has a `queue`) is still built and
