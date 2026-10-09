@@ -12,8 +12,9 @@ import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { AlertTarget } from "../telemetry/alerts";
-import { ANOMALY_TARGETS, EVENT_TARGETS, METRIC_TARGETS } from "../telemetry/alerts";
+import { ANOMALY_TARGETS, EVENT_TARGETS, METRIC_TARGETS, USAGE_TARGETS } from "../telemetry/alerts";
 import { ORG_ADMINS_DESTINATION } from "../telemetry/recipients";
+import { isUsageAlertMeter } from "../telemetry/usage-alerts";
 import { AsyncList } from "./AsyncList";
 import { ColumnHeader } from "./ColumnHeader";
 import { formatDateTime } from "./format";
@@ -21,6 +22,8 @@ import { COLUMN_LABEL } from "./section-styles";
 import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge, Upsell } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";
+import { usageCondition, usageProgressLine } from "./usage-alert";
+import { UsageRuleFields, useUsageRuleDraft } from "./UsageRuleFields";
 
 /** Every alert-rule target, from the one place the taxonomy is declared (`src/telemetry/alerts.ts`). */
 type RuleTarget = AlertTarget;
@@ -49,6 +52,7 @@ const TARGET_LABELS: Record<RuleTarget, string> = {
     storage_anomaly: "Storage anomaly (σ)",
     uptime: "Uptime failures",
     usage_anomaly: "Usage anomaly (σ)",
+    usage_threshold: "Monthly usage (Workers, D1, Durable Objects)",
 };
 
 /**
@@ -89,6 +93,39 @@ type AlertRule = ReturnOf<typeof api.alerts.rules>[number];
 
 /** A fired alert, as the alerts query returns it. */
 type FiredAlert = ReturnOf<typeof api.alerts.list>[number];
+
+/** Each usage rule's month-to-date usage, as the progress query returns it. */
+type UsageProgress = ReturnOf<typeof api.alerts.usageProgress>;
+
+/**
+ * A rule's condition, the one value shown at size. An event rule has no
+ * quantity, and rendering "deploy ≥ 0" would invite somebody to go looking for
+ * the number it means; a usage rule reads as its meter and monthly quantity,
+ * with this month's usage beneath.
+ */
+const RuleCondition = ({ monthToDate, rule }: { monthToDate: number | undefined; rule: AlertRule }): ReactElement => {
+    if (EVENT_TARGETS.has(rule.target)) {
+        return <>on {rule.target}</>;
+    }
+
+    if (USAGE_TARGETS.has(rule.target) && isUsageAlertMeter(rule.meter)) {
+        return (
+            <span className="flex flex-col items-end gap-0.5">
+                <span>{usageCondition(rule.meter, rule.threshold)}</span>
+                {monthToDate === undefined ? null : (
+                    <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>{usageProgressLine(monthToDate, rule.threshold)}</span>
+                )}
+            </span>
+        );
+    }
+
+    return (
+        <>
+            {rule.target} {comparatorGlyph(rule.target, rule.comparator)} {rule.threshold}
+            {rule.windowMinutes ? ` / ${String(rule.windowMinutes)}m` : ""}
+        </>
+    );
+};
 
 /** The configured rules, with the per-row enable/disable and remove actions. */
 /** How a rule's destination reads: "owners & admins" for the org-wide address, the destination itself otherwise. */
@@ -149,7 +186,15 @@ const TestRuleButton = ({ organizationId, ruleId }: { organizationId: OrgId; rul
     );
 };
 
-const AlertRulesCard = ({ organizationId, rules }: { organizationId: OrgId; rules: AlertRule[] | undefined }): ReactElement => {
+const AlertRulesCard = ({
+    organizationId,
+    progress,
+    rules,
+}: {
+    organizationId: OrgId;
+    progress: UsageProgress | undefined;
+    rules: AlertRule[] | undefined;
+}): ReactElement => {
     const setRuleEnabled = useMutation(api.alerts.setRuleEnabled);
     const deleteRule = useMutation(api.alerts.deleteRule);
 
@@ -175,17 +220,7 @@ const AlertRulesCard = ({ organizationId, rules }: { organizationId: OrgId; rule
                                     </span>
                                     {/* The one value shown at size: a rule is its condition. */}
                                     <span className="font-mono text-base whitespace-nowrap tabular-nums">
-                                        {EVENT_TARGETS.has(rule.target) ? (
-                                            // No comparator, no threshold: an event rule has no
-                                            // quantity, and rendering "deploy ≥ 0" would invite
-                                            // somebody to go looking for the number it means.
-                                            <>on {rule.target}</>
-                                        ) : (
-                                            <>
-                                                {rule.target} {comparatorGlyph(rule.target, rule.comparator)} {rule.threshold}
-                                                {rule.windowMinutes ? ` / ${String(rule.windowMinutes)}m` : ""}
-                                            </>
-                                        )}
+                                        <RuleCondition monthToDate={progress?.find((row) => row.ruleId === rule._id)?.monthToDate} rule={rule} />
                                     </span>
                                     <StatusBadge tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "on" : "off"}</StatusBadge>
                                     <RowActions>
@@ -240,6 +275,8 @@ const NewRuleForm = ({ organizationId }: { organizationId: OrgId }): ReactElemen
     const isMetric = METRIC_TARGETS.has(target);
     const isAnomaly = ANOMALY_TARGETS.has(target);
     const isEvent = EVENT_TARGETS.has(target);
+    const isUsage = USAGE_TARGETS.has(target);
+    const usageDraft = useUsageRuleDraft(organizationId, isUsage);
 
     return (
         <Card>
@@ -270,6 +307,8 @@ const NewRuleForm = ({ organizationId }: { organizationId: OrgId }): ReactElemen
                                     : {}),
                                 // An anomaly rule thresholds a score: a comparator, no window.
                                 ...(isAnomaly ? { comparator } : {}),
+                                // A usage rule: its meter, scope and monthly quantity (over the generic threshold).
+                                ...(isUsage ? usageDraft.args : {}),
                             });
                             setName("");
                             setDestination("");
@@ -334,7 +373,8 @@ const NewRuleForm = ({ organizationId }: { organizationId: OrgId }): ReactElemen
                             </Select>
                         </Field>
                     ) : null}
-                    {isEvent ? null : (
+                    {isUsage ? <UsageRuleFields draft={usageDraft} /> : null}
+                    {isEvent || isUsage ? null : (
                         <Field htmlFor="alert-threshold" label={isAnomaly ? "Threshold (standard deviations)" : "Threshold"}>
                             <Input
                                 className="font-mono tabular-nums"
@@ -671,6 +711,7 @@ export const AlertsSection = ({ organizationId, preloaded }: SectionProps<Return
     const alerts = useQuery(api.alerts.list, gated ? "skip" : { organizationId });
     const baselines = useQuery(api.alerts.anomalyBaselines, gated ? "skip" : { organizationId });
     const silences = useQuery(api.alerts.silences, gated ? "skip" : { organizationId });
+    const usageProgress = useQuery(api.alerts.usageProgress, gated ? "skip" : { organizationId });
 
     if (gated) {
         return <Upsell title="Alerts">Alerting is a Pro feature — upgrade your plan to enable Observability.</Upsell>;
@@ -678,7 +719,7 @@ export const AlertsSection = ({ organizationId, preloaded }: SectionProps<Return
 
     return (
         <div className="flex flex-col gap-6">
-            <AlertRulesCard organizationId={organizationId} rules={rules} />
+            <AlertRulesCard organizationId={organizationId} progress={usageProgress} rules={rules} />
             <NewRuleForm organizationId={organizationId} />
             <AnomalyCard baselines={baselines} organizationId={organizationId} silences={silences} />
             <RecentAlertsCard alerts={alerts} />

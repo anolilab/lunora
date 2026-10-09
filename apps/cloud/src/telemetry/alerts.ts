@@ -51,8 +51,16 @@ export type EventAlertTarget = "deploy" | "spend";
  */
 export type AnomalyTarget = "error_anomaly" | "storage_anomaly" | "usage_anomaly";
 
-/** What a rule watches — a count-crossing counter, a metric window, an anomaly score, or a one-off event. */
-export type AlertTarget = AnomalyTarget | CountTarget | EventAlertTarget | MetricTarget;
+/**
+ * Usage targets — a meter's month-to-date usage in the ledger against a
+ * quantity (`./usage-alerts`): "this month's Workers requests passed 2M". The
+ * rule names the meter (`alertRules.meter`) and, optionally, a project; it
+ * fires once per month (`alertRuleState.firedPeriod`) and re-arms on the 1st.
+ */
+export type UsageAlertTarget = "usage_threshold";
+
+/** What a rule watches — a count-crossing counter, a metric window, an anomaly score, a one-off event, or monthly usage. */
+export type AlertTarget = AnomalyTarget | CountTarget | EventAlertTarget | MetricTarget | UsageAlertTarget;
 
 /**
  * Which family a target belongs to, and the membership tests that decide it.
@@ -72,8 +80,11 @@ export const EVENT_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["de
 /** Anomaly targets threshold the hourly score the anomaly sweep derives, never a raw window. */
 export const ANOMALY_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_anomaly", "storage_anomaly", "usage_anomaly"]);
 
-/** A rule target's family — the four shapes a rule's condition can take. */
-export type AlertFamily = "anomaly" | "count" | "event" | "metric";
+/** Usage targets threshold a meter's month-to-date usage, once per month. */
+export const USAGE_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["usage_threshold"]);
+
+/** A rule target's family — the five shapes a rule's condition can take. */
+export type AlertFamily = "anomaly" | "count" | "event" | "metric" | "usage";
 
 /**
  * Classify a target into its family.
@@ -89,6 +100,10 @@ export const alertFamily = (target: AlertTarget): AlertFamily => {
 
     if (ANOMALY_TARGETS.has(target)) {
         return "anomaly";
+    }
+
+    if (USAGE_TARGETS.has(target)) {
+        return "usage";
     }
 
     return EVENT_TARGETS.has(target) ? "event" : "count";

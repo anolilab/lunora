@@ -815,13 +815,50 @@ write) and every admin-token route stay off the MCP surface.
 
 ### Alerts & anomaly detection (`lunora/alerts.ts`, `src/telemetry/`)
 
-Alert rules fire on four kinds of condition (`alertFamily` in
+Alert rules fire on five kinds of condition (`alertFamily` in
 `src/telemetry/alerts.ts`): a count crossing a threshold (`issue`, `incident`,
 `uptime`), a metric window (`error_rate`, `latency_p95`, `llm_cost`, as a
-threshold or as a deviation from a trailing baseline), an event (`deploy`), and
-an **anomaly score** (`usage_anomaly`, `error_anomaly`, `storage_anomaly`, plan 365 W4). Every
-family is delivered the same way (email, webhook, Slack, PagerDuty) and latches
-in `alertRuleState`, so a sustained breach alerts once and clears on recovery.
+threshold or as a deviation from a trailing baseline), an event (`deploy`), an
+**anomaly score** (`usage_anomaly`, `error_anomaly`, `storage_anomaly`, plan 365 W4),
+and **monthly usage** (`usage_threshold`). Every family is delivered the same
+way (email, webhook, Slack, PagerDuty) and latches in `alertRuleState`, so a
+sustained breach alerts once and clears on recovery.
+
+**Monthly usage alerts** (`src/telemetry/usage-alerts.ts`,
+`src/telemetry/usage-alert-sweep.ts`) answer "tell me when this month's Workers
+requests pass 2M". A `usage_threshold` rule names a meter (`alertRules.meter`),
+a monthly quantity in that meter's unit (`threshold`) and, optionally, a
+project (`alertRules.projectId`). The hourly sweep sums the meter's
+`platformUsage` rows of the current UTC month for the organization, or for the
+project's deployments only, and fires the rule the first sweep that sum
+reaches the threshold. It is latched for the month (`alertRuleState.firedPeriod`)
+and re-arms on the 1st, when the new month's rows start from zero. A rule
+created when the month is already past its threshold fires on the next sweep.
+Display-only rows (a connected account's, a box's) count, so the alert works
+for every target; it is about usage, not the invoice. The sweep runs beside the
+readback on the same tick, so with the readback's closed-hour lag an alert
+arrives up to about two hours after the crossing.
+
+| Meter           | Label                        | Unit     | Suggestion floor | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
+| --------------- | ---------------------------- | -------- | ---------------- | ---------------- | -------------------------- | ----------------------- |
+| `requests`      | Workers requests             | requests | 1,000,000        | AE readback      | readback of the account    | the box's usage reports |
+| `cpuMs`         | Workers CPU time             | CPU ms   | 10,000,000       | GraphQL readback | readback of the account    | not metered             |
+| `d1RowsRead`    | D1 rows read                 | rows     | 100,000,000      | GraphQL readback | readback of the account    | not metered             |
+| `d1RowsWritten` | D1 rows written              | rows     | 1,000,000        | GraphQL readback | readback of the account    | not metered             |
+| `doRequests`    | Durable Objects requests     | requests | 1,000,000        | GraphQL readback | readback of the account    | not metered             |
+| `doDurationGbS` | Durable Objects duration     | GB-s     | 100,000          | GraphQL readback | readback of the account    | not metered             |
+| `doRowsRead`    | Durable Objects rows read    | rows     | 100,000,000      | GraphQL readback | readback of the account    | not metered             |
+| `doRowsWritten` | Durable Objects rows written | rows     | 1,000,000        | GraphQL readback | readback of the account    | not metered             |
+
+`alerts.suggestUsageThreshold({ organizationId, meter })` answers last full
+month's usage of the meter and a threshold well above it: three times last
+month, rounded to two significant figures, never below the meter's floor. With
+no row of the meter last month it answers `lastMonth: null` and the floor. It
+is organization-wide even when the rule will name a project, because ledger
+compaction folds a closed month per organization and meter, not per
+deployment. The studio's create form pre-fills it (a typed number always wins)
+and shows last month under the field; the rule list shows each usage rule's
+month-to-date against its threshold (`alerts.usageProgress`).
 
 An `email` rule may send to `org:admins` instead of an address: the
 organization's owners and admins, resolved when the alert is sent (members →
