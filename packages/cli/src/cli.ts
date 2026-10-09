@@ -10,6 +10,7 @@ import { aiCommand } from "./commands/ai";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
+import { cloudflareCommand } from "./commands/cloudflare";
 import { codegenCommand } from "./commands/codegen";
 import { containersCommand } from "./commands/containers";
 import { deployCommand } from "./commands/deploy";
@@ -61,6 +62,7 @@ const COMMANDS = [
     "prepare",
     "link",
     "deployments",
+    "cloudflare",
     "logs",
     "run",
     "insights",
@@ -102,6 +104,7 @@ const CLI_COMMANDS = [
     prepareCommand,
     linkCommand,
     deploymentsCommand,
+    cloudflareCommand,
     logsCommand,
     runCommand,
     insightsCommand,
