@@ -671,17 +671,30 @@ suspended, and on `cloudflare-workers` the Worker's own crons and queue
 consumers keep firing in the customer's account. A halt stops that code:
 
 - Each live alias of the org is converged onto a **stub release**
-  (`src/deploy/halt-stub.ts`) generated from its stored manifest, never from
-  tenant code. Every request, to the Worker and to each Durable Object, gets
+  (`src/deploy/halt-stub.ts`) generated from the classes recorded for its
+  Worker, never from tenant code. Every request, to the Worker and to each Durable Object, gets
   `503 {"error":"project halted: <reason>"}`. The stub has no `scheduled` or
   `queue` handler, no assets, no secrets, crons or queue consumers.
 - **Data is kept.** On both Cloudflare targets a converge deletes the data of a
-  Durable Object class the script stops binding (`dropsUnboundClasses`), so the
-  stub exports and binds every Durable Object and Workflow class of every
-  release that may be on the Worker, under the same binding name, class name
-  and storage backend. `assertStubKeepsClasses` refuses any other stub before
-  anything converges, and runs the rollback's own drop guard
-  (`droppedDurableObjectClasses`). The project stack is additive, so storage the
+  Durable Object class the script stops binding (`dropsUnboundClasses`). So the
+  classes that hold data are those of the script on the Worker now, and every
+  converge records them on the alias's ownership row
+  (`src/deploy/worker-classes.ts`). This covers the deploy edge's deploys,
+  reverts, rollbacks and git-build releases, and the halt sweep's own
+  converges. The record is written before the provision job runs: a pending
+  entry, refused along with the converge if the write fails. On success it is
+  confirmed as `workerClasses`. A failure is dropped only when it provably
+  uploaded nothing (the box was busy, or the project stack failed before the
+  Worker stack ran). Otherwise it is kept, because the job may have uploaded
+  the script before failing. The stub binds exactly `workerClasses` and every
+  pending entry, keyed by class name, under their own binding names where
+  free (`HALTED_CLASS_<n>` otherwise), limited to the types the target
+  provisions. `assertStubKeepsClasses` refuses any other stub before anything
+  converges, and runs the rollback's own drop guard
+  (`droppedDurableObjectClasses`). The `sqlite` flag is never compared: the
+  provision box never sends it, and a class keeps its storage. An alias
+  deployed before the record falls back to its live release and the newer
+  releases that reached its Worker (`verifyingAt` set). The project stack is additive, so storage the
   stub does not bind (D1, R2, KV, queues) is kept and bound again on resume.
 - **Alarms are parked, not dropped.** A stub object's `alarm()` re-arms itself an
   hour out (`PARK_ALARM_MS`) instead of running anything, so the tenant's own
@@ -691,18 +704,19 @@ consumers keep firing in the customer's account. A halt stops that code:
 - **Resume** re-converges the alias's live release, retained in `RELEASES`
   because `pruneSuperseded` never prunes it, through `reprovision` with
   `keepClasses`: crons, queue consumers, assets and secrets come back as on a
-  deploy. A resume onto a live release that would drop a class a newer
-  release on the Worker binds is refused and keeps the alias halted (RUNBOOK §
-  6c).
+  deploy. Support may resume an alias onto another retained release instead.
+  Either way the resume is refused, and the alias stays halted, unless the
+  release binds every class the record says may be on the Worker. That check
+  is independent of the deployment rows (RUNBOOK § 6c).
 - **While halted**, deploys (`deployments.create`), git-build releases,
   rollbacks and re-provisions (`releaseTarget`, `rollback`) of the project are
   refused with "project halted — resume it first". The deploy edge checks again
-  right before it converges (`refuseHaltedConverge`), so a deploy, rollback or
+  right before it converges (`guardedDriver`), so a deploy, rollback or
   failed health check's revert that was already in flight cannot land on the
   stub. The sweep waits for an in-flight deploy of the alias before stubbing,
   and puts the stub back over any converge of the alias that finished after
   the stub's started (one already running past that wait). The cron
-  fan-out skips halted aliases. The platform queue consumer holds their batches
+  fan-out skips halted releases. The platform queue consumer holds their batches
   undelivered, retrying them every 12 hours, so a message outlives a halt only
   as long as the queue's retry limit allows. On `cloudflare-workers` the stub
   removes the consumers, and messages wait on the queue for its retention
@@ -710,23 +724,34 @@ consumers keep firing in the customer's account. A halt stops that code:
   until the resume.
 
 Triggers. Owners and admins halt or resume all their org's projects from the
-Usage tab's **Emergency stop** card, and support does it over `POST /v1/halts`
-(admin token, RUNBOOK § 6c). Both are **manual** halts, which are only lifted
-by a person. `organizations.haltOnSuspension` (absent means on; owners turn it
+Usage tab's **Emergency stop** card. That is a **manual** halt, which only a
+person lifts. Support halts over `POST /v1/halts` (admin token, RUNBOOK § 6c).
+A **support** halt holds the whole organization (`supportHaltedAt`), so a
+deploy of an alias that has no live release yet is refused too. Owners and
+admins cannot lift it, and only support's resume does. `organizations.haltOnSuspension` (absent means on; owners turn it
 off) makes a `spend-cap` or `overage` suspension halt the org too, never
 `dunning` or `support`. The every-minute halt sweep converges halts to
 suspensions idempotently: it halts an eligible suspended org's live aliases and
 resumes them when the suspension lifts, its reason changes, or the setting is
-turned off. It never resumes a manual halt, and a resume asked for while an
+turned off. It never resumes a manual or support halt, and a resume asked for while an
 eligible suspension holds is refused. The sweep only reads the suspension and
 never writes it.
 
 Each `halts` row (one per alias) is intent plus progress: `halting`, then
 `halted` once the stub converged, and `resuming` until the release is back,
-when the row is deleted. Every cell's control plane runs the sweep, and each
+when the row is deleted. The halts and fan-out holds belong to the alias's
+owning project. Deleting the project, or the teardown releasing its alias,
+deletes them, and a halt left on an alias another project claimed since holds
+nothing of that project. Every cell's control plane runs the sweep, and each
 acts only on the organizations placed on its own cell, where a resume also
 resolves the project's placement as a deploy does. The sweep converges at most
-three rows per tick, each under a 20-minute lease and paced like a deploy. It runs on the tick's
+three rows per tick, each under a 20-minute lease and paced like a deploy. A
+claim is re-read before it is used and every write checks the lease is still
+this tick's. The store has no conditional update, so two ticks can still both
+claim in a narrow interleaving. That costs the same idempotent stub converged
+twice, never a lost class. A busy provision box (409) is a one-minute wait,
+not a failure. One organization that cannot be synced, or one row that cannot
+be converged, never stops the rest. It runs on the tick's
 `waitUntil`, so tenant crons never wait behind it. A failed converge keeps the
 row, records `lastError` and backs off from a minute up to an hour. It is
 logged as `[halt]` every time, and audit-logged and alerted (the org's `deploy`
