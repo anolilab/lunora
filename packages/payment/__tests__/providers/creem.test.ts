@@ -295,8 +295,12 @@ describe("creem adapter", () => {
             const client = makeClient();
 
             (client as { subscriptions: unknown }).subscriptions = {
-                get: async (id: string) => {return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" }},
-                update: async (id: string) => {return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" }},
+                get: async (id: string) => {
+                    return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" };
+                },
+                update: async (id: string) => {
+                    return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" };
+                },
             };
             const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
 
