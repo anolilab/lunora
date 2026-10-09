@@ -6,6 +6,36 @@
 
 ### Miscellaneous Chores
 
+* **release:** lunorash@1.0.0-alpha.366 [skip ci] ([f5c30dd](https://github.com/anolilab/lunora/commit/f5c30dd6e96891a02f3481ba52c6a159d285227e))
+* **release:** lunorash@1.0.0-alpha.366 [skip ci] ([0d32a44](https://github.com/anolilab/lunora/commit/0d32a4431279e584d80f47149d12c65f198c8baf))
+* **release:** lunorash@1.0.0-alpha.366 [skip ci] ([82dbf61](https://github.com/anolilab/lunora/commit/82dbf61b2f1c2007b62278d150417055c87fdfe4))
+* **release:** lunorash@1.0.0-alpha.366 [skip ci] ([1d1111a](https://github.com/anolilab/lunora/commit/1d1111acff381f1f5878c63ab0e906ca4f2baede))
+
+## lunorash [1.0.0-alpha.366](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.365...lunorash@1.0.0-alpha.366) (2026-10-09)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+### Miscellaneous Chores
+
+* **release:** lunorash@1.0.0-alpha.366 [skip ci] ([0d32a44](https://github.com/anolilab/lunora/commit/0d32a4431279e584d80f47149d12c65f198c8baf))
+* **release:** lunorash@1.0.0-alpha.366 [skip ci] ([82dbf61](https://github.com/anolilab/lunora/commit/82dbf61b2f1c2007b62278d150417055c87fdfe4))
+* **release:** lunorash@1.0.0-alpha.366 [skip ci] ([1d1111a](https://github.com/anolilab/lunora/commit/1d1111acff381f1f5878c63ab0e906ca4f2baede))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.367
+
+## lunorash [1.0.0-alpha.366](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.365...lunorash@1.0.0-alpha.366) (2026-10-09)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+### Miscellaneous Chores
+
 * **release:** lunorash@1.0.0-alpha.366 [skip ci] ([82dbf61](https://github.com/anolilab/lunora/commit/82dbf61b2f1c2007b62278d150417055c87fdfe4))
 * **release:** lunorash@1.0.0-alpha.366 [skip ci] ([1d1111a](https://github.com/anolilab/lunora/commit/1d1111acff381f1f5878c63ab0e906ca4f2baede))
 

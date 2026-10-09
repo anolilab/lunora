@@ -202,6 +202,139 @@ describe("creem adapter", () => {
         expect((calls.find((call) => call.name === "upgrade")?.args[1] as Record<string, unknown>).productId).toBe("prod_enterprise");
     });
 
+    describe("seat (quantity) and plan updates", () => {
+        /** A client whose subscription exposes its items the way the SDK does (`items[].productId` / `units`). */
+        const makeSeatClient = (calls: RecordedCall[], items: Record<string, unknown>[]): CreemClientLike => {
+            const client = makeClient(calls);
+
+            (client as { subscriptions: unknown }).subscriptions = {
+                get: async (id: string) => {
+                    return { id, items, product: "prod_pro", status: "active" };
+                },
+                update: async (id: string, request: Record<string, unknown>) => {
+                    calls.push({ args: [id, request], name: "update" });
+
+                    return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 3 }], product: "prod_pro", status: "active" };
+                },
+                upgrade: async (id: string, request: Record<string, unknown>) => {
+                    calls.push({ args: [id, request], name: "upgrade" });
+
+                    return { id, product: "prod_enterprise", status: "active" };
+                },
+            };
+
+            return client;
+        };
+
+        it("sets the units on the subscription item for the current product, not on an add-on", async () => {
+            expect.assertions(3);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createCreemAdapter({
+                client: makeSeatClient(calls, [
+                    { id: "item_addon", productId: "prod_addon", units: 1 },
+                    { id: "item_pro", productId: "prod_pro", units: 1 },
+                ]),
+                webhookSecret: SECRET,
+            });
+
+            const subscription = await adapter.updateSubscription("sub_1", { quantity: 3 });
+
+            expect(calls.find((call) => call.name === "update")?.args).toStrictEqual([
+                "sub_1",
+                { items: [{ id: "item_pro", units: 3 }], updateBehavior: "proration-charge-immediately" },
+            ]);
+            expect(subscription.quantity).toBe(3);
+            expect(calls.some((call) => call.name === "upgrade")).toBe(false);
+        });
+
+        it("maps the caller's proration choice onto the units update", async () => {
+            expect.assertions(1);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createCreemAdapter({
+                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                webhookSecret: SECRET,
+            });
+
+            await adapter.updateSubscription("sub_1", { proration: "next-invoice", quantity: 3 });
+
+            expect((calls.find((call) => call.name === "update")?.args[1] as Record<string, unknown>).updateBehavior).toBe("proration-charge");
+        });
+
+        it("throws instead of reporting success when no item matches the current product", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createCreemAdapter({
+                client: makeSeatClient(calls, [{ id: "item_addon", productId: "prod_addon", units: 1 }]),
+                webhookSecret: SECRET,
+            });
+
+            await expect(adapter.updateSubscription("sub_1", { quantity: 3 })).rejects.toThrow("does not support");
+            expect(calls.some((call) => call.name === "update")).toBe(false);
+        });
+
+        it("refuses a unit count that is not a non-negative safe integer, before any call", async () => {
+            expect.assertions(3);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createCreemAdapter({
+                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                webhookSecret: SECRET,
+            });
+
+            await expect(adapter.updateSubscription("sub_1", { quantity: -1 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            await expect(adapter.updateSubscription("sub_1", { quantity: 1.5 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            expect(calls.some((call) => call.name === "update")).toBe(false);
+        });
+
+        it("throws when Creem answers with a different unit count than was requested, rather than reporting success", async () => {
+            expect.assertions(1);
+
+            const client = makeClient();
+
+            (client as { subscriptions: unknown }).subscriptions = {
+                get: async (id: string) => {
+                    return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" };
+                },
+                update: async (id: string) => {
+                    return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" };
+                },
+            };
+            const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+
+            await expect(adapter.updateSubscription("sub_1", { quantity: 5 })).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
+        });
+
+        it("refuses a plan change and a seat change in one patch, since they cannot be applied atomically", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createCreemAdapter({
+                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                webhookSecret: SECRET,
+            });
+
+            await expect(adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", quantity: 3 })).rejects.toThrow("does not support");
+            expect(calls).toStrictEqual([]);
+        });
+
+        it("passes the caller's proration choice through on a plan upgrade", async () => {
+            expect.assertions(1);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createCreemAdapter({
+                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                webhookSecret: SECRET,
+            });
+
+            await adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", proration: "none" });
+
+            expect((calls.find((call) => call.name === "upgrade")?.args[1] as Record<string, unknown>).updateBehavior).toBe("proration-none");
+        });
+    });
+
     it("reads a paid checkout as a captured payment", async () => {
         expect.assertions(3);
 

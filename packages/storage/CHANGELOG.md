@@ -1,3 +1,9 @@
+## @lunora/storage [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.122...@lunora/storage@1.0.0-alpha.123) (2026-10-09)
+
+### Features
+
+* **storage:** scope the r2 upload state per caller with stateScope ([#1061](https://github.com/anolilab/lunora/issues/1061)) ([470e8b0](https://github.com/anolilab/lunora/commit/470e8b044bf39fba10cc2d18d5a5827b679bf997))
+
 ## @lunora/storage [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.121...@lunora/storage@1.0.0-alpha.122) (2026-10-08)
 
 
