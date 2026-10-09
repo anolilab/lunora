@@ -444,6 +444,13 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
                 return notSupported("changing the plan and the quantity in one update; apply them as two updates");
             }
 
+            if (patch.quantity !== undefined && (!Number.isSafeInteger(patch.quantity) || patch.quantity < 0)) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `updateSubscription(): \`quantity\` must be a non-negative safe integer (got ${String(patch.quantity)})`,
+                );
+            }
+
             const updateBehavior = UPDATE_BEHAVIOR_BY_PRORATION[patch.proration ?? "immediate"];
 
             // A plan change is an `upgrade` to the new product. `upgrade` is un-deduped on purpose, for
@@ -468,9 +475,20 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
                     return notSupported("a seat change for a subscription with no item for its current product");
                 }
 
-                return subscriptionFromCreem(
+                const subscription = subscriptionFromCreem(
                     await client.subscriptions.update(subscriptionId, { items: [{ id: itemId, units: patch.quantity }], updateBehavior }),
                 );
+
+                // Confirm the unit count landed rather than trusting the call: a silent no-op would read back
+                // as the old count and look like success.
+                if (subscription.quantity !== patch.quantity) {
+                    throw new LunoraPaymentError(
+                        "PROVIDER_ERROR",
+                        `creem did not apply the unit count ${String(patch.quantity)} to subscription ${subscriptionId}`,
+                    );
+                }
+
+                return subscription;
             }
 
             return subscriptionFromCreem(await client.subscriptions.get(subscriptionId));

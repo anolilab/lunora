@@ -275,6 +275,34 @@ describe("creem adapter", () => {
             expect(calls.some((call) => call.name === "update")).toBe(false);
         });
 
+        it("refuses a unit count that is not a non-negative safe integer, before any call", async () => {
+            expect.assertions(3);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createCreemAdapter({
+                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                webhookSecret: SECRET,
+            });
+
+            await expect(adapter.updateSubscription("sub_1", { quantity: -1 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            await expect(adapter.updateSubscription("sub_1", { quantity: 1.5 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            expect(calls.some((call) => call.name === "update")).toBe(false);
+        });
+
+        it("throws when Creem answers with a different unit count than was requested, rather than reporting success", async () => {
+            expect.assertions(1);
+
+            const client = makeClient();
+
+            (client as { subscriptions: unknown }).subscriptions = {
+                get: async (id: string) => {return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" }},
+                update: async (id: string) => {return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" }},
+            };
+            const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+
+            await expect(adapter.updateSubscription("sub_1", { quantity: 5 })).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
+        });
+
         it("refuses a plan change and a seat change in one patch, since they cannot be applied atomically", async () => {
             expect.assertions(2);
 
