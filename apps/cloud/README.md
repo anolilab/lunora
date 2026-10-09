@@ -1009,7 +1009,9 @@ A connected repository deploys without the CLI. The flow, end to end:
    action's `ctx` does not carry.
 3. **Build.** The source tarball is fetched with the GitHub App's installation
    token and posted to the build box, which installs, runs the project's own
-   `lunora build`, then `lunora cloud deploy --out` with the same pinned CLI. The
+   `lunora build`, then `lunora cloud deploy --out` with the same pinned CLI
+   (a Cloudflare Worker project: its own `wrangler`, see _Plain Cloudflare
+   Workers_ below). The
    last NDJSON line is the whole release: bundle, hash, binding manifest, crons
    and static assets, held to the deploy caps (100 MiB body, 50 MiB / 20,000
    asset files) so an oversized project fails its build, not its release.
@@ -1059,6 +1061,58 @@ the list itself loads per build (`builds.advisories`) under the build logs.
 What still needs credentials (🌐): `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`
 for the source fetch and commit statuses, `LUNORA_ADMIN_TOKEN` for the drain, a
 `RELEASES` bucket, and a built and pushed build-box image.
+
+## Plain Cloudflare Workers (push-to-deploy)
+
+A project does not have to be a Lunora app. Set its **runtime** to
+**Cloudflare Worker** when creating or importing it, or later under **Build
+settings** (`projects.create` / `projects.updateBuildSettings`, stored as
+`projects.runtime`; absent is a Lunora app, so every existing project is
+unchanged). Such a project is a `wrangler.json`, `wrangler.jsonc` or
+`wrangler.toml` with its own `wrangler` in its lockfile, and no Lunora CLI.
+
+**What the push does.** The runtime is snapshotted onto the build row (part of
+the dedup key, so a bundle built one way is never re-released as the other) and
+sent to the build box as `?runtime=worker`. The box reads the config with the
+project's own wrangler (TOML and JSON alike, top-level environment), translates
+it with the same `buildBindingManifest` / `collectAssets` code a Lunora deploy
+uses, and bundles the Worker with `wrangler deploy --dry-run` behind an entry
+shim; the bundle is scanned like any other. Details, and every refusal, are in
+`containers/build/README.md`, _The Cloudflare Worker runtime_. Custom build steps
+belong in wrangler's `build.command`, which `wrangler deploy` runs; a
+`@cloudflare/vite-plugin` project is refused (its output comes from
+`vite build`). A project still set to Lunora whose build finds a wrangler config
+but no Lunora CLI fails with a message saying to switch the runtime.
+
+**What deploys.** The release is recorded with `runtime: "worker"` on the
+deployment row. The deploy core does not add the `ShardDO` binding every Lunora
+app needs, binds wrangler `vars` as plain text (`manifest.vars`: strings only — a
+number or object var is refused by name rather than silently stringified — not
+named like a binding, a secret of the project or `LUNORA_*`, each under
+Cloudflare's 5 KiB), and keeps them in the stored release so a rollback re-binds
+them. Static assets are bound as `ASSETS`, the one name the provision box binds:
+a config with no assets binding gets it, one naming another binding is refused.
+
+**Crons and queues on `cloudflare-wfp`.** A dispatch-namespace Worker gets no
+`triggers.crons` and cannot consume a queue, so the control plane fans both out
+over HTTP (`/_lunora/scheduled`, `/_lunora/queue`) — the routes `@lunora/runtime`
+serves for a Lunora app. The build box's entry shim serves the same two routes
+for a plain Worker, from its own `scheduled()` and `queue()`, behind the
+deployment's admin bearer, with Cloudflare's ack/retry semantics and the queue's
+own name in `batch.queue`. On `cloudflare-workers` crons and consumers are
+native, and the shim only passes Cloudflare's events through. The same is true
+of a `POST /v1/deploy` that says `"runtime": "worker"` in its body (absent is a
+Lunora app; anything else is a `400`), though it must bring its own bundle.
+
+**What it does not get.** Everything that reads a Lunora app's
+`/_lunora/admin/*` or its `ctx.log` events: backups and restore (the sweep skips
+a worker deployment and a manual backup is refused), eject, the studio admin
+proxy (`/v1/admin` refuses rather than forwarding to the Worker's own routes),
+and structured log fields. Logs still work on `cloudflare-wfp`: a worker
+deployment carries the `runtime:worker` script tag, and the tail worker keeps
+that script's ordinary console lines (level, message, time) besides any
+`ctx.log` events. The project page lists these gaps where a Lunora app shows its
+backups.
 
 ## Monorepos (push-to-deploy)
 
