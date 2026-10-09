@@ -330,6 +330,57 @@ describe("build box worker runtime", () => {
         expect(records.at(-1)?.["error"]).toMatch(/these are not strings: LIMIT \(number\), ON \(boolean\)/u);
     }, 30_000);
 
+    it.each([
+        [
+            { dead_letter_queue: "dlq", max_retries: 5, queue: "jobs" },
+            /^the consumer of queue jobs sets dead_letter_queue, max_retries, which Lunora Cloud does not apply yet/u,
+        ],
+        [{ queue: "jobs", type: "http_pull" }, /^the consumer of queue jobs is an HTTP pull consumer/u],
+    ])(
+        "refuses queue-consumer settings it would otherwise drop: %j",
+        async (consumer, error) => {
+            expect.assertions(1);
+
+            const records = await build(
+                await tarball("consumer-settings", { wrangler: { ...WORKER_CONFIG, queues: { ...WORKER_CONFIG.queues, consumers: [consumer] } } }),
+            );
+
+            expect(records.at(-1)?.["error"]).toMatch(error);
+        },
+        30_000,
+    );
+
+    it.each([
+        [
+            "renamed_classes",
+            { renamed_classes: [{ from: "Old", to: "Counter" }], tag: "v2" },
+            /^migration v2 cannot be applied on Lunora Cloud: renamed_classes renames a class/u,
+        ],
+        [
+            "transferred_classes",
+            { tag: "v2", transferred_classes: [{ from: "C", from_script: "other", to: "Counter" }] },
+            /transferred_classes moves a class's data/u,
+        ],
+        ["deleted_classes", { deleted_classes: ["Old"], tag: "v2" }, /deleted_classes deletes the class's data/u],
+        [
+            "new_classes",
+            { new_classes: ["Counter"], tag: "v1" },
+            /new_classes creates a KV-backed class, but Lunora Cloud runs SQLite-backed Durable Objects only/u,
+        ],
+    ])(
+        "refuses a %s migration rather than drop it",
+        async (_label, step, error) => {
+            expect.assertions(1);
+
+            const records = await build(
+                await tarball("migration", { wrangler: { ...WORKER_CONFIG, migrations: [{ new_sqlite_classes: ["Counter"], tag: "v1" }, step] } }),
+            );
+
+            expect(records.at(-1)?.["error"]).toMatch(error);
+        },
+        30_000,
+    );
+
     it("refuses an assets binding the platform cannot honour", async () => {
         expect.assertions(1);
 

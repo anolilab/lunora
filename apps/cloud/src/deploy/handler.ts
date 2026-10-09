@@ -11,7 +11,21 @@ import { startRelease } from "./release-core";
 
 const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
 
+/** A Durable Object class name, as `manifest-parse` holds bindings' class names to. */
+const CLASS_NAME = /^[A-Za-z_]\w{0,63}$/u;
+
+/** `allowDeleteClasses`: absent, or at most 25 class names. */
+const parseAllowDeleteClasses = (value: unknown): string[] | undefined | null => {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return Array.isArray(value) && value.length <= 25 && value.every((name) => typeof name === "string" && CLASS_NAME.test(name)) ? (value as string[]) : null;
+};
+
 interface DeployBody {
+    /** Durable Object classes this release may delete, by name (`ReleaseRequest.allowDeleteClasses`). Untrusted until parsed. */
+    allowDeleteClasses?: unknown;
     /** Static files behind the manifest's `assets` binding. Validated by `parsePayload` (`./manifest-parse`). */
     assets?: unknown;
     branch?: string;
@@ -171,8 +185,15 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
         return json(400, { error: `unknown runtime ${JSON.stringify(runtime).slice(0, 40)} — expected ${PROJECT_RUNTIMES.join(" or ")}` });
     }
 
+    const allowDeleteClasses = parseAllowDeleteClasses(body.allowDeleteClasses);
+
+    if (allowDeleteClasses === null) {
+        return json(400, { error: "allowDeleteClasses must be at most 25 Durable Object class names" });
+    }
+
     const started = await startRelease(
         {
+            ...(allowDeleteClasses === undefined ? {} : { allowDeleteClasses }),
             assets: body.assets,
             branch: body.branch,
             bundle: body.bundle,

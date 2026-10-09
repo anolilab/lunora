@@ -43,9 +43,13 @@ export interface DeployBackend extends ReleaseBackend {
     /** Record a queued deployment; `previousDeploymentId` is the release of the same alias live before it, if any. */
     createDeployment: (input: {
         adminToken: string;
+        /** Durable Object classes the caller agreed this release may delete (CLI/API only). */
+        allowDeleteClasses?: string[];
         branch?: string;
         /** The tenant's compiled cron expressions for the WfP cron fan-out (§2.4). */
         cronSpecs?: string[];
+        /** The Durable Object classes this release binds, which the next release of its alias must keep. */
+        durableObjectClasses: string[];
         key: string;
         kind: DeployKind;
         organizationId: string;
@@ -143,6 +147,12 @@ const settleFailedConverge = async (
 
 /** What a release ships: the deploy request body minus its credential, whichever transport carried it. */
 export interface ReleaseRequest {
+    /**
+     * Durable Object classes this release may stop binding — deleting their
+     * data — by name. Without it, a release that drops a class the alias's
+     * Worker binds is refused (`deployments.create`). CLI/API only; a git build never sends it.
+     */
+    allowDeleteClasses?: string[];
     /** Static files behind the manifest's `assets` binding. Validated by `parsePayload` (`./manifest-parse`). */
     assets?: unknown;
     branch?: string;
@@ -452,8 +462,10 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
     try {
         created = await deps.backend.createDeployment({
             adminToken,
+            ...(request.allowDeleteClasses === undefined ? {} : { allowDeleteClasses: request.allowDeleteClasses }),
             branch,
             ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
+            durableObjectClasses: manifest.bindings.flatMap((binding) => (binding.type === "durable_object" && binding.className ? [binding.className] : [])),
             key: caller.key,
             kind,
             organizationId: caller.organizationId,

@@ -141,6 +141,7 @@ export const deployments = sqliteTable("deployments", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
     resourceRef: text("resourceRef"),
+    durableObjectClasses: text("durableObjectClasses", { mode: "json" }).$type<Array<string>>(),
     runtime: text("runtime"),
     scriptName: text("scriptName").notNull(),
     status: text("status", { mode: "json" }).$type<"queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed">().notNull(),

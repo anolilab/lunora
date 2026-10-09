@@ -253,12 +253,127 @@ describe("deployments", () => {
         await expect(release([live("worker")])).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
-    it("releases the same runtime again, and either runtime onto an alias with no live release", async () => {
+    it("releases the same runtime again, and either runtime onto an alias nothing reached yet", async () => {
         expect.assertions(3);
 
         await expect(release([live("worker")], "worker")).resolves.toMatchObject({ document: { runtime: "worker" } });
         await expect(release([live()])).resolves.toMatchObject({ document: { scriptName: "web" } });
-        await expect(release([{ ...live(), status: "superseded" }], "worker")).resolves.toMatchObject({ document: { runtime: "worker" } });
+        // Queued, or failed before it was verified on the Worker: never on it.
+        await expect(
+            release(
+                [
+                    { ...live(), status: "queued" },
+                    { ...live(), _id: "dep_f", status: "failed" },
+                ],
+                "worker",
+            ),
+        ).resolves.toMatchObject({
+            document: { runtime: "worker" },
+        });
+    });
+
+    it("checks the alias's Worker whatever the kind, so a preview key cannot switch production's runtime", async () => {
+        expect.assertions(1);
+
+        const { ctx } = makeCtx({
+            aliasOwnership: [],
+            deployments: [live()],
+            members: [owner(ORG)],
+            projects: [{ _id: "prj_1", organizationId: ORG, slug: "web" }],
+        });
+
+        await expect(
+            createDeployment.handler(ctx, { kind: "preview", organizationId: ORG as never, projectId: "prj_1" as never, runtime: "worker", scriptName: "web" }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("does not trust a rewritten status: a superseded or verified-then-failed release still names the Worker's runtime", async () => {
+        expect.assertions(2);
+
+        await expect(release([{ ...live(), status: "superseded" }], "worker")).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(release([{ ...live(), status: "failed", verifyingAt: 2 }], "worker")).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+});
+
+describe("deployments keep the Worker's Durable Object data", () => {
+    const releaseClasses = async (current: Row[], classes: string[], allowDeleteClasses?: string[]) => {
+        const { ctx, ops } = makeCtx({
+            aliasOwnership: [],
+            auditLog: [],
+            deployments: current,
+            members: [owner(ORG)],
+            projects: [{ _id: "prj_1", organizationId: ORG, slug: "web" }],
+        });
+
+        await createDeployment.handler(ctx, {
+            ...(allowDeleteClasses === undefined ? {} : { allowDeleteClasses }),
+            durableObjectClasses: classes,
+            kind: "production",
+            organizationId: ORG as never,
+            projectId: "prj_1" as never,
+            runtime: "worker",
+            scriptName: "web",
+        });
+
+        return ops;
+    };
+    const onWorker = (classes: string[] | undefined, over: Row = {}): Row => {
+        return {
+            _id: "dep_live",
+            alias: "web",
+            createdAt: 1,
+            kind: "production",
+            organizationId: ORG,
+            projectId: "prj_1",
+            runtime: "worker",
+            scriptName: "web",
+            status: "live",
+            ...(classes === undefined ? {} : { durableObjectClasses: classes }),
+            ...over,
+        };
+    };
+
+    it("refuses a release that stops binding a class the Worker binds, naming the opt-in", async () => {
+        expect.assertions(1);
+
+        await expect(releaseClasses([onWorker(["Counter", "Room"])], ["Counter"])).rejects.toMatchObject({
+            code: "CONFLICT",
+            message:
+                'this release no longer binds the Durable Object class(es) Room that web runs, and deploying it would delete their data. Bind them again — or, to delete that data on purpose, deploy with "allowDeleteClasses": ["Room"] (POST /v1/deploy).',
+        });
+    });
+
+    it("deletes a class the caller named, and audits it", async () => {
+        expect.assertions(2);
+
+        const ops = await releaseClasses([onWorker(["Counter", "Room"])], ["Counter"], ["Room"]);
+
+        expect(ops.find((op) => op.kind === "insert" && op.table === "deployments")).toMatchObject({ document: { durableObjectClasses: ["Counter"] } });
+        expect(ops.find((op) => op.kind === "insert" && op.table === "auditLog")).toMatchObject({
+            document: { action: "deployment.delete_classes", target: "web: Room" },
+        });
+    });
+
+    it("checks every live release and the newest one on the Worker, whatever their kind", async () => {
+        expect.assertions(2);
+
+        // A preview release of the same alias, newest: its classes are on the Worker too.
+        await expect(
+            releaseClasses(
+                [onWorker(["Counter"]), onWorker(["Counter", "Room"], { _id: "dep_p", createdAt: 5, kind: "preview", status: "superseded" })],
+                ["Counter"],
+            ),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(
+            releaseClasses([onWorker(["Counter"]), onWorker(["Room"], { _id: "dep_q", createdAt: 9, status: "queued" })], ["Counter"]),
+        ).resolves.toBeDefined();
+    });
+
+    it("adds classes freely, and checks nothing against a row from before classes were recorded", async () => {
+        expect.assertions(2);
+
+        await expect(releaseClasses([onWorker(["Counter"])], ["Counter", "Room"])).resolves.toBeDefined();
+        await expect(releaseClasses([onWorker(undefined)], [])).resolves.toBeDefined();
     });
 });
 

@@ -98,7 +98,11 @@ A project whose `runtime` setting is `worker` is a plain Cloudflare Worker: a
    `manifest.vars`. Refused, by name: a non-string var (Cloudflare would bind
    it as JSON; Lunora Cloud deploys vars as plain text), an assets binding not
    named `ASSETS` (the provision box always binds assets as `ASSETS`; a config
-   that names no binding gets `ASSETS` added), no `main`, and `no_bundle`.
+   that names no binding gets `ASSETS` added), no `main`, `no_bundle`, any
+   Durable Object migration step but `new_sqlite_classes` (a rename or
+   transfer would end with the old data deleted; `new_classes` is KV-backed,
+   and Lunora Cloud runs SQLite-backed classes), and any queue-consumer
+   setting or `http_pull` consumer (nothing the platform attaches applies them).
    The static files themselves are collected after step 6 — the dry run runs
    the config's `build.command`, whose output they may be — and an assets
    directory that is missing then, or that leads (or holds a symlink that
@@ -148,20 +152,24 @@ ctx)` for a batch, with a `MessageBatch`-shaped object whose `ack()` /
   explicit per-message call wins, a returning handler acknowledges the rest, a
   throwing one retries everything not acknowledged explicitly — answered as
   `{"retry":[ids]}`;
-- maps the forwarded queue name (`{alias}--{producer binding}`, the platform's
-  per-project queue) back to the Worker's own (`jobs`), so `batch.queue` reads
+- maps the project's queue name (`{alias}--{producer binding}`) back to the
+  Worker's own (`jobs`) — on a forwarded batch and on a native one alike (a
+  native batch is the real one behind a proxy, so its `ack()` / `retry()` reach
+  Cloudflare) — so `batch.queue` reads
   what the Worker's config says;
 - passes every other request to the Worker's `fetch()` — on the Worker's own
   object, so `this` and prototype methods (a framework app instance) behave as
   before — and keeps its other handlers. A `WorkerEntrypoint` class default
-  becomes a subclass overriding `fetch()`. A service-worker script (no default
+  becomes a subclass that, once the Worker's constructor has run, replaces each
+  instance's `fetch` / `queue` with routing wrappers — so a handler declared as
+  a class field, which would shadow a subclass method, is routed too. A service-worker script (no default
   export) fails at upload with a message saying so.
 
 The shim is applied on every target: the box does not know the target, and a
 build is reused across a target change. Where crons and consumers are native
 (`cloudflare-workers`, `celld-vps`) the platform never calls the two routes, and
-the wrapper hands Cloudflare's own `scheduled` / `queue` events straight to the
-Worker.
+the wrapper hands Cloudflare's own `scheduled` / `queue` events to the Worker —
+a queue batch under the Worker's own queue name, as above.
 
 **The vendored translation.** `vendor/release-manifest.mjs` is an esbuild bundle
 of `buildBindingManifest` (`packages/config`) and `collectAssets`

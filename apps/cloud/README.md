@@ -1094,28 +1094,51 @@ named like a binding, a secret of the project or `LUNORA_*`, each under
 Cloudflare's 5 KiB), and keeps them in the stored release so a rollback re-binds
 them. Static assets are bound as `ASSETS`, the one name the provision box binds:
 a config with no assets binding gets it, one naming another binding is refused.
-A queue consumed with no producer binding for it in the same Worker is refused
-on both Cloudflare targets: the provision box creates a queue through its
-producer binding and attaches the consumer to that, so the consumer would
-deploy green and never receive a message.
 
-**Switching an existing project.** A release whose runtime differs from the live
-release of its alias is refused (`deployments.create`, `CONFLICT`): a Lunora
-app always binds `ShardDO`, a plain Worker never does, and on a target that
-drops unbound classes the switch would delete that class's data on the first
-push. A project can switch freely before its first release; after that, deploy
-the other runtime as a new project. The Build settings card says so when the
-runtime is changed.
+**What is refused, rather than dropped.** Every queue belongs to its project
+(`{alias}--{producer binding}`), so on both Cloudflare targets a queue a plain
+Worker consumes without producing to it, or produces to without consuming, is
+refused — nothing else could ever feed or read it. Queue-consumer settings
+(`max_batch_size`, `max_retries`, `dead_letter_queue`, `retry_delay`, …) are
+refused because neither consumer the platform attaches takes them yet, and an
+`http_pull` consumer is refused outright. Durable Object migrations other than
+`new_sqlite_classes` are refused: `renamed_classes` and `transferred_classes`
+would end with the old data deleted and the class empty, `deleted_classes` is
+what an unbound class already gets (see below), and `new_classes` declares a
+KV-backed class where Lunora Cloud runs SQLite-backed ones only.
 
-**Crons and queues on `cloudflare-wfp`.** A dispatch-namespace Worker gets no
+**Durable Object data is never deleted by accident.** Every release converges
+the alias's one Worker in place, and on a target that drops unbound classes a
+release that stops binding a class deletes its data. `deployments.create`
+compares a release with what the alias's Worker runs — every live release of the
+alias and the newest one that reached the Worker (live, superseded, or failed
+after verification), whatever their kind and whatever a status was rewritten
+to — and refuses (`CONFLICT`):
+
+- a different runtime: a Lunora app always binds `ShardDO`, a plain Worker never
+  does. A project can switch before its first release; after that, deploy the
+  other runtime as a new project (the Build settings card says so);
+- a release that stops binding a class the Worker binds, for either runtime,
+  unless the request names it: `"allowDeleteClasses": ["Room"]` in a
+  `POST /v1/deploy` body (CLI/API only; a git push never sends it). Each such
+  deletion is written to the audit log (`deployment.delete_classes`).
+
+Rows recorded before classes were (`deployments.durableObjectClasses`) count as
+binding `ShardDO` for a Lunora app and nothing for a plain Worker.
+
+**Crons and queues.** On `cloudflare-wfp` a dispatch-namespace Worker gets no
 `triggers.crons` and cannot consume a queue, so the control plane fans both out
 over HTTP (`/_lunora/scheduled`, `/_lunora/queue`) — the routes `@lunora/runtime`
 serves for a Lunora app. The build box's entry shim serves the same two routes
-for a plain Worker, from its own `scheduled()` and `queue()`, behind the
-deployment's admin bearer, with Cloudflare's ack/retry semantics and the queue's
-own name in `batch.queue`. On `cloudflare-workers` crons and consumers are
-native, and the shim only passes Cloudflare's events through. The same is true
-of a `POST /v1/deploy` that says `"runtime": "worker"` in its body (absent is a
+for a plain Worker, from its own `scheduled()` and `queue()` — methods or class
+fields alike — behind the deployment's admin bearer, with Cloudflare's ack/retry
+semantics. On `cloudflare-workers` crons and consumers are native, and the shim
+passes Cloudflare's events through. Either way `batch.queue` is the Worker's
+own queue name, not the project's. A forwarded message's body has travelled as
+JSON (`src/fanout/platform-queue.ts`), so on `cloudflare-wfp` a body sent as a
+`Date`, `Map`, `Uint8Array` or other structured-clone-only value arrives as its
+JSON form — send JSON-shaped bodies. The same contract holds for a
+`POST /v1/deploy` that says `"runtime": "worker"` in its body (absent is a
 Lunora app; anything else is a `400`), though it must bring its own bundle.
 
 **What it does not get.** Everything that reads a Lunora app's
@@ -1125,8 +1148,12 @@ proxy (`/v1/admin` refuses rather than forwarding to the Worker's own routes),
 and structured log fields. Logs still work on `cloudflare-wfp`: a worker
 deployment carries the `runtime:worker` script tag, and the tail worker keeps
 that script's ordinary console lines (level, message, time) besides any
-`ctx.log` events. The project page lists these gaps where a Lunora app shows its
-backups.
+`ctx.log` events — at most 400 plain lines per Worker per flush, plus one line
+counting the rest, in batches the ingest accepts; one script's failed ingest
+never drops another's. Each organization stores at most 6,000 tailed lines a
+minute (`src/tail/ingest-budget.ts`); past it a batch is dropped with a notice
+line saying how many. The project page lists these gaps where a Lunora app shows
+its backups.
 
 ## Monorepos (push-to-deploy)
 

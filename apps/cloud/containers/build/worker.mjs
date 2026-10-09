@@ -30,8 +30,10 @@
  * The shim is applied whatever the project's target: the box does not know it,
  * and a build is reused across a target change. On a target that runs crons and
  * queue consumers natively (`cloudflare-workers`, `celld-vps`), the platform
- * never calls the two routes and the Worker's handlers are invoked directly
- * through the wrapper, unchanged.
+ * never calls the two routes and Cloudflare's own events reach the Worker's
+ * handlers through the wrapper — with one change there too: the queue is the
+ * project's `{alias}--{binding}`, so a native batch is handed over under the
+ * Worker's own queue name, exactly as a forwarded one is.
  */
 import { readFileSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -281,6 +283,76 @@ const assetsBinding = (section) => {
     return section.binding === undefined ? { binding: "ASSETS", type: "assets" } : undefined;
 };
 
+/** Durable Object migration steps Lunora Cloud cannot carry out, and why each. */
+const REFUSED_MIGRATIONS = {
+    deleted_classes:
+        "deletes the class's data; Lunora Cloud deletes a class only when a deploy stops binding it and says so (allowDeleteClasses on POST /v1/deploy)",
+    new_classes:
+        "creates a KV-backed class, but Lunora Cloud runs SQLite-backed Durable Objects only — declare it in new_sqlite_classes (a new class has no data to carry over)",
+    renamed_classes: "renames a class with its data, which Lunora Cloud does not do: the old class would be deleted and the new one start empty",
+    transferred_classes: "moves a class's data from another Worker, which Lunora Cloud does not do: the class would start empty",
+};
+
+/**
+ * Refuse every Durable Object migration step but `new_sqlite_classes`. The
+ * release carries only which classes are bound and whether each is SQLite;
+ * the provision box creates a newly bound class SQLite-backed and deletes the
+ * data of one no longer bound, so any other step would be dropped — and a
+ * rename or a transfer would end with the old data deleted.
+ * @param {unknown} migrations The config's `migrations`.
+ * @returns {void}
+ */
+const assertMigrations = (migrations) => {
+    for (const step of Array.isArray(migrations) ? migrations : []) {
+        if (!isRecord(step)) {
+            continue;
+        }
+
+        const refused = Object.entries(REFUSED_MIGRATIONS)
+            .filter(([key]) => Array.isArray(step[key]) && step[key].length > 0)
+            .map(([key, reason]) => `${key} ${reason}`);
+
+        if (refused.length > 0) {
+            throw new BuildError(`migration ${String(step.tag ?? "(untagged)")} cannot be applied on Lunora Cloud: ${refused.join("; ")}`);
+        }
+    }
+};
+
+/**
+ * Refuse queue-consumer settings the platform cannot apply. Neither the
+ * platform's own consumer on `cloudflare-wfp` nor the one the provision box
+ * attaches on `cloudflare-workers` carries any of them today, so a dead-letter
+ * queue, a retry count or a batch size would be dropped without a word — and a
+ * pull consumer is not a Worker consumer at all.
+ * @param {unknown} queues The config's `queues` section.
+ * @returns {void}
+ */
+const assertConsumerSettings = (queues) => {
+    const consumers = isRecord(queues) && Array.isArray(queues.consumers) ? queues.consumers : [];
+
+    for (const consumer of consumers) {
+        if (!isRecord(consumer)) {
+            continue;
+        }
+
+        const queue = String(consumer.queue ?? "?");
+
+        if (consumer.type === "http_pull") {
+            throw new BuildError(
+                `the consumer of queue ${queue} is an HTTP pull consumer, which Lunora Cloud cannot provision: the queue belongs to the project and is consumed by this Worker — remove type = "http_pull"`,
+            );
+        }
+
+        const settings = Object.keys(consumer).filter((key) => key !== "queue" && !(key === "type" && consumer.type === "worker"));
+
+        if (settings.length > 0) {
+            throw new BuildError(
+                `the consumer of queue ${queue} sets ${settings.join(", ")}, which Lunora Cloud does not apply yet: the consumer it attaches takes no per-queue settings, so they would be silently ignored — remove them, or deploy this Worker yourself until they are supported`,
+            );
+        }
+    }
+};
+
 /**
  * Producer binding → the Worker's own queue name, for every queue the Worker
  * also consumes: what the shim maps a forwarded `{alias}--{binding}` queue
@@ -320,6 +392,9 @@ const releaseFromConfig = ({ config, configPath, log }) => {
     }
 
     const variables = plainTextVariables(config.vars);
+
+    assertConsumerSettings(config.queues);
+    assertMigrations(config.migrations);
     const manifest = buildBindingManifest(config);
 
     if (manifest.unknown.length > 0) {

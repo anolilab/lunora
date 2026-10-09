@@ -34,6 +34,8 @@ interface DeploymentRow {
     createdAt: number;
     createdBy: string;
     cronSpecs?: null | string[];
+    /** The Durable Object classes the release binds, recorded at create; absent on rows from before. */
+    durableObjectClasses?: null | string[];
     expiresAt?: number;
     kind: "dev" | "preview" | "production";
     organizationId: Id<"organizations">;
@@ -45,33 +47,84 @@ interface DeploymentRow {
     target?: string;
     updatedAt: number;
     url?: string;
+    /** Set when the release was put on its Worker to be verified (`updateStatus`). */
+    verifyingAt?: null | number;
     version?: number;
 }
 
 /**
- * Refuse a release whose runtime differs from the live release of its alias.
- *
- * Every release converges the alias's one Worker in place, and on a target
- * that drops unbound classes (`TARGETS[target].dropsUnboundClasses`) a release
- * that stops binding a Durable Object class deletes that class's data. A Lunora
- * app always binds `ShardDO` — its whole database — and a plain Worker never
- * does, so switching a live alias between the two is exactly that deletion, on
- * the first push after the setting changed. Refused on every target, which is
- * simpler to state than the targets where it would be safe. A project with no
- * live release yet may switch freely.
- * @throws {LunoraError} `CONFLICT` naming both runtimes and the way forward.
+ * The releases that tell what the alias's one Worker is running: the newest
+ * release of the alias that reached the Worker (`live`, `superseded`, or
+ * `failed` after it was verified, i.e. after it was put on the Worker), and
+ * every `live` one. Keyed by the alias alone — never the kind: a preview and a
+ * production release of one alias converge the same Worker — and by
+ * `createdAt` rather than trusting `status` alone, which a member can rewrite
+ * (`updateStatus`).
  */
-const assertSameRuntime = (previous: Pick<DeploymentRow, "runtime" | "scriptName"> | undefined, runtime: "worker" | undefined): void => {
-    if (previous === undefined || storedRuntime(previous.runtime) === storedRuntime(runtime)) {
-        return;
+const aliasWorkerReleases = (rows: ReadonlyArray<DeploymentRow>, alias: string): DeploymentRow[] => {
+    const reached = rows.filter(
+        (row) =>
+            (row.alias ?? row.scriptName) === alias &&
+            (row.status === "live" || row.status === "superseded" || (row.status === "failed" && row.verifyingAt != null)),
+    );
+    const newest = reached.toSorted((a, b) => b.createdAt - a.createdAt).at(0);
+
+    return [...new Set([...(newest === undefined ? [] : [newest]), ...reached.filter((row) => row.status === "live")])];
+};
+
+/** The Durable Object classes a release binds; a row from before they were recorded binds `ShardDO` if it is a Lunora app. */
+const classesOf = (row: Pick<DeploymentRow, "durableObjectClasses" | "runtime">): ReadonlyArray<string> =>
+    row.durableObjectClasses ?? (storedRuntime(row.runtime) === "lunora" ? ["ShardDO"] : []);
+
+/**
+ * Refuse a release that would delete Durable Object data on the alias's
+ * Worker: every release converges that Worker in place, and on a target that
+ * drops unbound classes (`TARGETS[target].dropsUnboundClasses`) a release that
+ * stops binding a class deletes the class's data.
+ *
+ * Two checks, against {@link aliasWorkerReleases}. The runtime must not change:
+ * a Lunora app always binds `ShardDO` — its whole database — and a plain Worker
+ * never does, so a switch is exactly that deletion (refused on every target,
+ * simpler to state than the targets where it would be safe). And no class the
+ * Worker binds may disappear unless the request names it in `allowDeleteClasses`
+ * — a CLI/API opt-in, audited by the caller. A project with no release on the
+ * Worker yet may do either. The rollback path has its own check (`keepClasses`).
+ * @returns The classes the release deletes with the caller's consent, for the audit log.
+ * @throws {LunoraError} `CONFLICT` naming what would be lost and the way forward.
+ */
+const assertKeepsWorkerData = (
+    current: ReadonlyArray<DeploymentRow>,
+    release: { allowDeleteClasses?: ReadonlyArray<string>; durableObjectClasses?: ReadonlyArray<string>; runtime?: "worker"; scriptName: string },
+): string[] => {
+    const runtime = storedRuntime(release.runtime);
+    const other = current.find((row) => storedRuntime(row.runtime) !== runtime);
+
+    if (other !== undefined) {
+        const live = RUNTIME_LABELS[storedRuntime(other.runtime)];
+
+        throw new LunoraError(
+            "CONFLICT",
+            `${release.scriptName} is running a ${live}; releasing a ${RUNTIME_LABELS[runtime]} onto the same Worker would drop its Durable Object classes and their data. Deploy it as a new project, or switch this project's runtime back to ${live}.`,
+        );
     }
 
-    const live = RUNTIME_LABELS[storedRuntime(previous.runtime)];
+    if (release.durableObjectClasses === undefined) {
+        return [];
+    }
 
-    throw new LunoraError(
-        "CONFLICT",
-        `${previous.scriptName} is running a ${live}; releasing a ${RUNTIME_LABELS[storedRuntime(runtime)]} onto the same Worker would drop its Durable Object classes and their data. Deploy it as a new project, or switch this project's runtime back to ${live}.`,
-    );
+    const kept = new Set(release.durableObjectClasses);
+    const dropped = [...new Set(current.flatMap((row) => classesOf(row)))].filter((className) => !kept.has(className)).toSorted((a, b) => a.localeCompare(b));
+    const allowed = new Set(release.allowDeleteClasses);
+    const refused = dropped.filter((className) => !allowed.has(className));
+
+    if (refused.length > 0) {
+        throw new LunoraError(
+            "CONFLICT",
+            `this release no longer binds the Durable Object class(es) ${refused.join(", ")} that ${release.scriptName} runs, and deploying it would delete their data. Bind them again — or, to delete that data on purpose, deploy with "allowDeleteClasses": [${refused.map((name) => JSON.stringify(name)).join(", ")}] (POST /v1/deploy).`,
+        );
+    }
+
+    return dropped;
 };
 
 /** The live deployment of one alias + kind — the release currently on that alias's Worker. */
@@ -501,8 +554,12 @@ export const create = mutation
         branch: v.optional(boundedString(LIMITS.gitRef)),
         // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
         cronSpecs: v.optional(v.array(boundedString(LIMITS.name))),
+        // Durable Object classes the release may delete, by name: a CLI/API opt-in, audited.
+        allowDeleteClasses: v.optional(v.array(boundedString(LIMITS.name))),
         // CI deploy path: a valid deploy key authorizes in lieu of a member session.
         deployKey: v.optional(boundedString(LIMITS.token)),
+        // The Durable Object classes the release binds — what a later release must keep.
+        durableObjectClasses: v.optional(v.array(boundedString(LIMITS.name))),
         kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
@@ -552,7 +609,7 @@ export const create = mutation
         const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
         const previous = await liveRelease(context, { alias: arguments_.scriptName, kind: arguments_.kind, projectId: arguments_.projectId }); // secret-scanner:allow -- domain field name
 
-        assertSameRuntime(previous, arguments_.runtime);
+        const deletedClasses = assertKeepsWorkerData(aliasWorkerReleases(existing, arguments_.scriptName), arguments_);
 
         const { now } = context;
         // A row predating targets answers NULL, which is the default target.
@@ -575,6 +632,7 @@ export const create = mutation
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             queuedAt: now,
             ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),
+            ...(arguments_.durableObjectClasses === undefined ? {} : { durableObjectClasses: arguments_.durableObjectClasses }),
             ...(arguments_.runtime === undefined ? {} : { runtime: arguments_.runtime }),
             ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
             scriptName: arguments_.scriptName,
@@ -586,6 +644,17 @@ export const create = mutation
             updatedAt: now,
             version,
         });
+
+        // A deliberate deletion of Durable Object data is on the record, with who asked.
+        if (deletedClasses.length > 0) {
+            await context.db.insert("auditLog", {
+                action: "deployment.delete_classes",
+                actorUserId: createdBy,
+                createdAt: now,
+                organizationId: project.organizationId,
+                target: `${arguments_.scriptName}: ${deletedClasses.join(", ")}`,
+            });
+        }
 
         return { deploymentId, ...(previous ? { previousDeploymentId: previous._id } : {}), version };
     });

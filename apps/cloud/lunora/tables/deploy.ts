@@ -67,6 +67,11 @@ export const deployTables = {
         // by (the dispatch script on `cloudflare-wfp`). Absent on rows that
         // predate it, where `scriptName` serves.
         resourceRef: v.optional(v.string()),
+        // The Durable Object classes the release binds, so the next release of
+        // its alias can be refused when it would stop binding one — and delete
+        // its data — without saying so (`deployments.create`). Absent on rows
+        // that predate it.
+        durableObjectClasses: v.optional(v.array(v.string())),
         // What the release's code is (`src/project-runtime.ts`), from the build or
         // the deploy request — absent is a Lunora app. Read by every step that
         // reaches into the tenant (rollback's script tags, backups, eject, the

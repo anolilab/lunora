@@ -2943,7 +2943,15 @@
                         "items": {},
                         "type": "array"
                       },
+                      "allowDeleteClasses": {
+                        "items": {},
+                        "type": "array"
+                      },
                       "deployKey": {},
+                      "durableObjectClasses": {
+                        "items": {},
+                        "type": "array"
+                      },
                       "kind": {
                         "anyOf": [
                           {

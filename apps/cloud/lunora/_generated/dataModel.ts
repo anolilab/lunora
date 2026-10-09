@@ -148,6 +148,7 @@ export interface Doc_deployments {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     resourceRef?: string;
+    durableObjectClasses?: Array<string>;
     runtime?: "worker";
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
@@ -1078,6 +1079,7 @@ export interface Insert_deployments {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     resourceRef?: string;
+    durableObjectClasses?: Array<string>;
     runtime?: "worker";
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";

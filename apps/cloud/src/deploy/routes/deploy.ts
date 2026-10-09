@@ -191,14 +191,28 @@ export const deployDeps = (context: LunoraActionContext, environment: RouterEnv,
         activateDeployment: async ({ deploymentId, key }) => {
             await context.runMutation(api.deployments.activate, { deployKey: key, id: deploymentId });
         },
-        createDeployment: async ({ adminToken, branch, cronSpecs, key, kind, organizationId, projectId, runtime, scriptName }) => {
+        createDeployment: async ({
+            adminToken,
+            allowDeleteClasses,
+            branch,
+            cronSpecs,
+            durableObjectClasses,
+            key,
+            kind,
+            organizationId,
+            projectId,
+            runtime,
+            scriptName,
+        }) => {
             // Seal the admin token at the edge — the control-plane D1 stores
             // ciphertext + IV (plaintext only in dev without a master key).
             const sealed = await sealAdminToken(adminToken, environment.SECRET_ENCRYPTION_KEY);
 
             return context.runMutation<{ deploymentId: string; previousDeploymentId?: string; version: number }>(api.deployments.create, {
                 ...sealed,
+                ...(allowDeleteClasses === undefined ? {} : { allowDeleteClasses }),
                 branch,
+                durableObjectClasses,
                 ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
                 deployKey: key,
                 kind,

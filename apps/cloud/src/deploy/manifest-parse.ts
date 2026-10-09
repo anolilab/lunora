@@ -137,8 +137,58 @@ const unfedQueues = (bindings: ReadonlyArray<BindingRequirement>, target: Target
     return bindings.filter((entry) => entry.type === "queue_consumer" && !produced.has(entry.resource)).map((entry) => entry.resource ?? entry.binding);
 };
 
-/** Checks across the (floored) binding list: unique names, per-type caps, and queues a consumer could actually receive from. */
-const bindingSetError = (bindings: BindingRequirement[], target: TargetId): string | undefined => {
+/**
+ * The queues a plain Worker produces to without consuming them, on a target
+ * where that is unreachable: every queue is the project's own
+ * (`{alias}--{binding}`), so no other Worker can consume it either, and the
+ * messages would pile up unread. Not applied to a Lunora app, whose queues its
+ * own pipeline declares.
+ */
+const unreadQueues = (bindings: ReadonlyArray<BindingRequirement>, target: TargetId, runtime: ProjectRuntime): string[] => {
+    if (runtime !== "worker" || !PRODUCER_FED_QUEUE_TARGETS.has(target)) {
+        return [];
+    }
+
+    const consumed = new Set(bindings.filter((entry) => entry.type === "queue_consumer").map((entry) => entry.resource));
+
+    return bindings
+        .filter((entry) => entry.type === "queue_producer" && !consumed.has(entry.resource))
+        .map((entry) => `${entry.binding} → ${entry.resource ?? "?"}`);
+};
+
+/** The queue a manifest can never deliver, as the refusal says it, or `undefined`. */
+const queueError = (bindings: ReadonlyArray<BindingRequirement>, target: TargetId, runtime: ProjectRuntime): string | undefined => {
+    const unfed = unfedQueues(bindings, target);
+
+    if (unfed.length > 0) {
+        return `this Worker consumes ${unfed.join(", ")} but binds no producer for ${unfed.length === 1 ? "it" : "them"}: Lunora Cloud creates a queue through its producer binding and attaches the consumer to that queue, so a consumer alone would deploy and never receive a message — add a producer binding for the same queue`;
+    }
+
+    const unread = unreadQueues(bindings, target, runtime);
+
+    if (unread.length > 0) {
+        return `this Worker produces to ${unread.join(", ")} but consumes ${unread.length === 1 ? "it" : "them"} nowhere: Lunora Cloud gives every queue to its own project (named after the project and the binding), so no other Worker can consume it and the messages would never be read — add a queues.consumers entry for the same queue in this Worker, or drop the producer`;
+    }
+
+    return undefined;
+};
+
+/**
+ * A plain Worker's KV-backed Durable Object class, refused: the provision box
+ * creates every class SQLite-backed, so the storage the Worker declared would
+ * not be the storage it got. The build box refuses the `new_classes`
+ * migration that declares one; this holds the same line for an API deploy.
+ */
+const kvClassError = (bindings: ReadonlyArray<BindingRequirement>, runtime: ProjectRuntime): string | undefined => {
+    const kv = runtime === "worker" ? bindings.filter((entry) => entry.type === "durable_object" && entry.sqlite === false) : [];
+
+    return kv.length === 0
+        ? undefined
+        : `Durable Object class(es) ${kv.map((entry) => entry.className ?? entry.binding).join(", ")} are KV-backed, but Lunora Cloud runs SQLite-backed Durable Objects only — declare them in new_sqlite_classes`;
+};
+
+/** Checks across the (floored) binding list: unique names, per-type caps, and queues that can actually deliver. */
+const bindingSetError = (bindings: BindingRequirement[], target: TargetId, runtime: ProjectRuntime): string | undefined => {
     const names = new Set<string>();
 
     for (const { binding } of bindings) {
@@ -162,10 +212,10 @@ const bindingSetError = (bindings: BindingRequirement[], target: TargetId): stri
     // Alchemy (and so the provision box) always binds uploaded assets as `ASSETS`.
     const assets = bindings.find((entry) => entry.type === "assets");
 
-    const unfed = unfedQueues(bindings, target);
+    const queues = queueError(bindings, target, runtime) ?? kvClassError(bindings, runtime);
 
-    if (unfed.length > 0) {
-        return `this Worker consumes ${unfed.join(", ")} but binds no producer for ${unfed.length === 1 ? "it" : "them"}: Lunora Cloud creates a queue through its producer binding and attaches the consumer to that queue, so a consumer alone would deploy and never receive a message — add a producer binding for the same queue`;
+    if (queues !== undefined) {
+        return queues;
     }
 
     if (assets && assets.binding !== "ASSETS") {
@@ -216,7 +266,9 @@ const parseVariables = (raw: unknown, bindings: ReadonlyArray<BindingRequirement
         return { error: `manifest declares ${String(entries.length)} vars; the limit is ${String(MAX_VARS)}` };
     }
 
-    const taken = new Set(bindings.map((entry) => entry.binding.toLowerCase()));
+    // The names on `env`, exactly as the Worker reads them: a queue consumer binds nothing (its
+    // `binding` is the queue's name), and env keys are case-sensitive.
+    const taken = new Set(bindings.filter((entry) => entry.type !== "queue_consumer").map((entry) => entry.binding));
     // Null prototype: a `__proto__` var stays an ordinary own key.
     const variables = Object.create(null) as Record<string, string>;
 
@@ -237,7 +289,7 @@ const parseVariables = (raw: unknown, bindings: ReadonlyArray<BindingRequirement
             return { error: `var ${name} exceeds Cloudflare's ${String(MAX_VAR_BYTES)}-byte limit for one variable` };
         }
 
-        if (taken.has(name.toLowerCase())) {
+        if (taken.has(name)) {
             return { error: `var ${name} has the name of a binding; a Worker's env holds one value per name` };
         }
 
@@ -297,7 +349,7 @@ const parseManifest = (raw: unknown, target: TargetId, runtime: ProjectRuntime):
         bindings.unshift({ ...SHARD_DO_BINDING });
     }
 
-    const setError = bindingSetError(bindings, target);
+    const setError = bindingSetError(bindings, target, runtime);
 
     if (setError !== undefined) {
         return { error: setError };

@@ -95,7 +95,7 @@ describe("manifest validation by runtime", () => {
     it.each([
         ["a non-string value", { LIMIT: 3 }, "var LIMIT must be a string; Lunora Cloud binds vars as plain text"],
         ["the platform's own namespace", { LUNORA_ADMIN_TOKEN: "x" }, "var LUNORA_ADMIN_TOKEN is in the LUNORA_ namespace Lunora Cloud sets itself; rename it"],
-        ["a binding's name", { counter: "x" }, "var counter has the name of a binding; a Worker's env holds one value per name"],
+        ["a binding's name", { COUNTER: "x" }, "var COUNTER has the name of a binding; a Worker's env holds one value per name"],
         ["a name that is no env key", { "my-var": "x" }, String.raw`var name "my-var" must match ^[A-Za-z_]\w{0,63}$ (it becomes an env key)`],
         ["a value over Cloudflare's limit", { BIG: "x".repeat(5121) }, "var BIG exceeds Cloudflare's 5120-byte limit for one variable"],
         ["an array", ["x"], "manifest.vars must be an object of name → string"],
@@ -116,6 +116,44 @@ describe("manifest validation by runtime", () => {
         });
         expect(parsePayload({ manifest: consumerOnly }, "app", "cloudflare-workers", "worker")).toHaveProperty("error");
         expect(parsePayload({ manifest: both }, "app", "cloudflare-wfp", "worker")).toHaveProperty("value");
+    });
+
+    it("refuses a plain Worker's queue produced but never consumed, which nothing could ever read", () => {
+        expect.assertions(3);
+
+        const producerOnly = { bindings: [{ binding: "EVENTS", resource: "events", type: "queue_producer" }] };
+
+        expect(parsePayload({ manifest: producerOnly }, "app", "cloudflare-wfp", "worker")).toMatchObject({
+            error: expect.stringMatching(/^this Worker produces to EVENTS → events but consumes it nowhere/u) as string,
+        });
+        expect(parsePayload({ manifest: producerOnly }, "app", "cloudflare-workers", "worker")).toHaveProperty("error");
+        // A Lunora app's queues are its pipeline's; unchanged.
+        expect(parsePayload({ manifest: producerOnly }, "app", "cloudflare-wfp", "lunora")).toHaveProperty("value");
+    });
+
+    it("compares a var with the env's real names only: exact case, and never a consumed queue's name", () => {
+        expect.assertions(1);
+
+        const bindings = [
+            DO_COUNTER,
+            { binding: "jobs", resource: "jobs", type: "queue_consumer" },
+            { binding: "JOB_QUEUE", resource: "jobs", type: "queue_producer" },
+        ];
+
+        expect(parsePayload({ manifest: { bindings, vars: { counter: "a", jobs: "b", JOBS: "c" } } }, "app", "cloudflare-wfp", "worker")).toMatchObject({
+            value: { manifest: { vars: { counter: "a", jobs: "b", JOBS: "c" } } },
+        });
+    });
+
+    it("refuses a plain Worker's KV-backed Durable Object class, which would run on SQLite", () => {
+        expect.assertions(2);
+
+        const manifest = { bindings: [{ ...DO_COUNTER, sqlite: false }] };
+
+        expect(parsePayload({ manifest }, "app", "cloudflare-wfp", "worker")).toStrictEqual({
+            error: "Durable Object class(es) Counter are KV-backed, but Lunora Cloud runs SQLite-backed Durable Objects only — declare them in new_sqlite_classes",
+        });
+        expect(parsePayload({ manifest }, "app", "cloudflare-wfp", "lunora")).toHaveProperty("value");
     });
 
     it("says why an assets binding must be ASSETS", () => {
@@ -185,6 +223,31 @@ describe("pOST /v1/deploy with runtime worker", () => {
         expect(created[0]?.runtime).toBe("lunora");
         expect(specs[0]?.manifest.bindings.map((binding) => binding.binding)).toStrictEqual(["SHARD"]);
         expect(specs[0]?.tags).not.toContain(WORKER_RUNTIME_TAG);
+    });
+
+    it("hands the classes it binds, and the ones the caller lets go, to the deployment record", async () => {
+        expect.assertions(3);
+
+        const created: Parameters<DeployBackend["createDeployment"]>[0][] = [];
+        const { provisioner } = capture();
+        const backend = backendWith({
+            createDeployment: (input) => {
+                created.push(input);
+
+                return Promise.resolve({ deploymentId: "dep_new" });
+            },
+        });
+
+        await deploy({ allowDeleteClasses: ["Room"], manifest: { bindings: [DO_COUNTER] }, runtime: "worker" }, deps(backend, provisioner));
+        await deploy({ manifest: { bindings: [] } }, deps(backend, provisioner));
+
+        expect(created[0]).toMatchObject({ allowDeleteClasses: ["Room"], durableObjectClasses: ["Counter"] });
+        // A Lunora app's floor is a class it binds.
+        expect(created[1]?.durableObjectClasses).toStrictEqual(["ShardDO"]);
+        await expect(deploy({ allowDeleteClasses: "Room", manifest: { bindings: [] } }, deps(backend, provisioner))).resolves.toStrictEqual({
+            status: 400,
+            text: JSON.stringify({ error: "allowDeleteClasses must be at most 25 Durable Object class names" }),
+        });
     });
 
     it("400s a runtime it does not know, before recording anything", async () => {
