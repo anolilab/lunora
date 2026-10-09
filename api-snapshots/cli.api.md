@@ -59,6 +59,7 @@ const COMMANDS: readonly [
     "prepare",
     "link",
     "deployments",
+    "alerts",
     "logs",
     "run",
     "insights",

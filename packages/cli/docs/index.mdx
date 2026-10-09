@@ -771,6 +771,52 @@ lunora deployments promote <version-id> --yes # send 100% of traffic to a versio
 
 `rollback` and `promote` change live traffic, so they require `--yes`.
 
+### `lunora alerts`
+
+Usage alerts for a self-hosted Cloudflare account, so a runaway Worker or a
+Durable Object loop shows up in your inbox instead of on next month's invoice.
+Walkthrough: [Protect yourself from a runaway bill](/docs/runaway-bill).
+
+```bash
+lunora alerts                                          # last month's usage + which products have an alert
+lunora alerts setup --email ops@example.com --dry-run  # the plan, nothing written
+lunora alerts setup --email ops@example.com --yes      # create / update the alerts
+lunora alerts test                                     # what Cloudflare has delivered so far
+```
+
+It calls the Cloudflare API with `CLOUDFLARE_API_TOKEN` (a `wrangler login`
+session is not reused) on the account from `CLOUDFLARE_ACCOUNT_ID` or
+wrangler's `account_id`. The token needs **Notifications Write** for the alerts
+and **Account Analytics Read** for the usage history; a refusal names the
+missing one.
+
+| Subcommand | What it does                                                                                                                                                                  |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`   | Default. Last calendar month's usage for Workers requests and CPU, Durable Objects requests, duration and rows, and D1 rows, and the usage alerts already on the account.     |
+| `setup`    | One Usage Based Billing notification per product at `--multiplier` (default 3) × last month, rounded up, never below the Workers Paid included allowance. Asks first.         |
+| `test`     | Each webhook destination's last delivery and failure, and the notifications Cloudflare sent for these policies. It sends nothing: Cloudflare's API has no test-send endpoint. |
+
+`setup` options: `--email <address>` and `--webhook <destination-id>` (each
+repeatable, at least one required), `--multiplier <n>`, `--dry-run`, and
+`--yes` (required when stdin is not a TTY). Its policies are named
+`Lunora usage: …`; a re-run updates them in place instead of adding
+duplicates, and leaves alone a product an alert you made yourself already
+covers.
+
+- **Product identifiers are discovered, never assumed.** Cloudflare does not
+  publish the `product` values a usage notification accepts, so `setup` reads
+  them from the account (the alert type's filter options, and existing usage
+  alerts). When it finds none, it creates nothing and prints the dashboard
+  path instead.
+- **Usage fields are introspected.** A metric whose field the analytics schema
+  does not expose is shown as unavailable rather than queried on a guess, and
+  gets the floor as its threshold.
+- **Budget alerts cannot be created or checked.** The account-wide USD budget
+  alert has no API; every subcommand prints where to make it: Manage Account >
+  Billing > Billable Usage > Create budget alert.
+- Usage notifications are offered to Pay-as-you-go accounts only; on an
+  ineligible account `setup` exits `4` without writing.
+
 ### `lunora prepare`
 
 Literally the same pipeline as `lunora deploy`, stopped before anything ships —
