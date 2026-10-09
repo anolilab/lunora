@@ -219,6 +219,8 @@ describe("deployments", () => {
     const release = async (deployments: Row[], runtime?: "worker") => {
         const { ctx, ops } = makeCtx({
             aliasOwnership: [],
+            halts: [],
+            organizations: [{ _id: ORG }],
             deployments,
             members: [owner(ORG)],
             projects: [{ _id: "prj_1", organizationId: ORG, slug: "web" }],
@@ -277,6 +279,8 @@ describe("deployments", () => {
 
         const { ctx } = makeCtx({
             aliasOwnership: [],
+            halts: [],
+            organizations: [{ _id: ORG }],
             deployments: [live()],
             members: [owner(ORG)],
             projects: [{ _id: "prj_1", organizationId: ORG, slug: "web" }],
@@ -299,6 +303,8 @@ describe("deployments keep the Worker's Durable Object data", () => {
     const releaseClasses = async (current: Row[], classes: string[], allowDeleteClasses?: string[]) => {
         const { ctx, ops } = makeCtx({
             aliasOwnership: [],
+            halts: [],
+            organizations: [{ _id: ORG }],
             auditLog: [],
             deployments: current,
             members: [owner(ORG)],
