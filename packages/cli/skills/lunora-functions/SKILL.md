@@ -398,7 +398,8 @@ const text = await ctx.services.llmGateway.complete(prompt); // typed from the G
   `services[]` binding (`SERVICE_<KEY>`), runs it in the same `lunora dev` /
   `vite dev` session, and deploys it before the app.
 - A bound service needs no URL, no `*_URL` var and no HMAC: set
-  `"workers_dev": false` on it (`lunora doctor` warns otherwise).
+  `"workers_dev": false` on it when it has no public route (`lunora doctor` warns
+  otherwise). Keep its HMAC check if it has a custom domain or route.
 
 ## HTTP endpoints
 
