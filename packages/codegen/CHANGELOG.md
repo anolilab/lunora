@@ -1,3 +1,19 @@
+## @lunora/codegen [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.289...@lunora/codegen@1.0.0-alpha.290) (2026-10-10)
+
+### Features
+
+* ctx.newId, a replay-stable id for mutations; one cyrb53 hash ([#1090](https://github.com/anolilab/lunora/issues/1090)) ([b59709a](https://github.com/anolilab/lunora/commit/b59709abba15f380fb2f8954b2f647d875d1fcfb))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.206
+* **@lunora/agent:** upgraded to 1.0.0-alpha.194
+* **@lunora/values:** upgraded to 1.0.0-alpha.62
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.74
+* **@lunora/do:** upgraded to 1.0.0-alpha.202
+* **@lunora/server:** upgraded to 1.0.0-alpha.190
+
 ## @lunora/codegen [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.288...@lunora/codegen@1.0.0-alpha.289) (2026-10-09)
 
 ### Features
