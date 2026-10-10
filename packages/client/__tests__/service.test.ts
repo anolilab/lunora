@@ -125,6 +125,25 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
+    it("keeps the server code when the error data cannot be wire-decoded", async () => {
+        expect.assertions(2);
+
+        // The worker's verdict is the coded envelope. A `data` the codec refuses
+        // must be dropped, as the HTTP path does. Thrown bare, the codec's own
+        // SyntaxError replaced the verdict, so a caller saw no `code` at all.
+        const service = binding(
+            { error: { code: "NOT_FOUND", data: ["$lunora.wire$", "bigint", "not-a-number"], message: "no such thread" } },
+            { status: 404 },
+        );
+
+        const failure = await createServiceClient(service)
+            .query(reference<"query", undefined, null>("threads:get"))
+            .catch((error: unknown) => error);
+
+        expect(failure).toMatchObject({ code: "NOT_FOUND", message: "no such thread" });
+        expect(failure).not.toHaveProperty("data");
+    });
+
     it("says the binding may be pointed at the wrong Worker when the reply is not JSON", async () => {
         expect.assertions(1);
 
