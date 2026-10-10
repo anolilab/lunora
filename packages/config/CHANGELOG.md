@@ -1,3 +1,15 @@
+## @lunora/config [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.335...@lunora/config@1.0.0-alpha.336) (2026-10-10)
+
+### Bug Fixes
+
+* **dev:** drop the ai binding without a cf login ([#1097](https://github.com/anolilab/lunora/issues/1097)) ([2844e76](https://github.com/anolilab/lunora/commit/2844e76e381effe33054018417ae392979a28da2))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.291
+* **@lunora/seed:** upgraded to 1.0.0-alpha.209
+
 ## @lunora/config [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.334...@lunora/config@1.0.0-alpha.335) (2026-10-10)
 
 ### Bug Fixes
