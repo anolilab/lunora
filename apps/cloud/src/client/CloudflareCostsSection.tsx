@@ -6,12 +6,12 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { CloudflareAccountView } from "./cloudflare-accounts";
 import { accountTitle } from "./cloudflare-accounts";
 import { formatNumber } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 import { Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";

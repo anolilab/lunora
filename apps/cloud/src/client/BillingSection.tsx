@@ -6,11 +6,11 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import { formatNumber } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 

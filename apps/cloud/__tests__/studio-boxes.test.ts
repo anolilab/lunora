@@ -15,7 +15,8 @@ import {
     roleOf,
 } from "../src/client/boxes";
 import { formatRelativeTime } from "../src/client/format";
-import { assessTargetDraft, projectNamesByHost, retargetDraft } from "../src/client/target-capabilities";
+import { projectNamesByHost } from "../src/client/host-projects";
+import { assessTargetDraft, retargetDraft } from "../src/client/target-capabilities";
 
 /**
  * The Boxes tab's decisions (plan 458 W9), tested without a DOM: how each box

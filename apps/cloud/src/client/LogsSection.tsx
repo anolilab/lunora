@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatTime } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 import { Field } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";

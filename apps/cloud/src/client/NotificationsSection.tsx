@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -14,7 +15,6 @@ import { NOTIFICATION_EVENTS, NOTIFICATION_KINDS } from "../notifications/events
 import { AsyncList } from "./AsyncList";
 import { formatDateTime } from "./format";
 import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
-import { COLUMN_LABEL } from "./section-classes";
 import type { OrgId } from "./types";
 
 /** Upper bound on the create request, so a wedged edge route can't leave the form spinning. */

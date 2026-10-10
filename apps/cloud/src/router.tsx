@@ -32,6 +32,10 @@ export const getRouter = () => {
         // not loader data.
         defaultPreloadStaleTime: 10_000,
         routeTree,
+        // The app window scrolls its inset content panel, not the document, and that
+        // panel persists across tab routes — so without this a tab opened from deep in
+        // another one starts scrolled to wherever the last tab was left.
+        scrollToTopSelectors: ['main[data-slot="sidebar-inset"]'],
     });
 };
 

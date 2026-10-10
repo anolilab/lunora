@@ -21,6 +21,8 @@ import type { CelldReleaseBindings } from "@lunora/config/celld";
 import { CELLD_RELEASE_BINDINGS, isReleaseAlias, releaseResourceName } from "@lunora/config/celld";
 import type { BindingRequirement } from "@lunora/config/cloudflare";
 
+export type { CloudflarePermission } from "./cloudflare-permissions";
+export { CLOUDFLARE_TOKEN_PERMISSIONS } from "./cloudflare-permissions";
 export type { BindingRequirement } from "@lunora/config/cloudflare";
 
 /** What the deploy request carries about the Worker's needs. */
@@ -273,40 +275,6 @@ export const TARGETS = {
         placedOn: "account",
     },
 } as const satisfies Record<TargetId, TargetDescriptor>;
-
-/**
- * The permissions a `cloudflare-workers` account token needs, least-privilege
- * (account-scoped, on the connected account only). Edit on each resource type
- * because the provision box creates the resources; only Workers Scripts is
- * required — the rest are needed once an app binds that type. Zone → Workers
- * Routes: Edit is deliberately absent: it is only needed for custom routes on
- * the customer's zone, which the target does not wire yet. Shared by the
- * connect route's probes (`src/targets/cloudflare-workers/api.ts`) and the
- * studio's instructions, so both name the same list.
- */
-export const CLOUDFLARE_TOKEN_PERMISSIONS = {
-    analytics: { label: "Account Analytics: Read", required: false, use: "request counts for the Usage tab" },
-    billing: { label: "Billing: Read", required: false, use: "the account's real spend on the Cloudflare costs tab (self-serve accounts only)" },
-    d1: { label: "D1: Edit", required: false, use: "d1 bindings" },
-    kv: { label: "Workers KV Storage: Edit", required: false, use: "kv bindings" },
-    notifications: {
-        // The connect probe and the alerts overview can only prove the token READS notification
-        // policies (Account Settings Read also allows that); a write is proven by the setup itself.
-        grantedLabel: "Notifications: read verified",
-        label: "Notifications: Edit",
-        required: false,
-        use: "setting up Cloudflare's own usage alerts on the account from the Cloudflare accounts tab",
-    },
-    queues: { label: "Queues: Edit", required: false, use: "queue bindings" },
-    r2: { label: "Workers R2 Storage: Edit", required: false, use: "r2 bindings" },
-    workersScripts: {
-        label: "Workers Scripts: Edit",
-        required: true,
-        use: "uploading the Worker, its cron triggers and queue consumers, and reading the workers.dev subdomain",
-    },
-} as const satisfies Record<string, { grantedLabel?: string; label: string; required: boolean; use: string }>;
-
-export type CloudflarePermission = keyof typeof CLOUDFLARE_TOKEN_PERMISSIONS;
 
 /** The targets whose projects are placed on a box. */
 export type BoxTargetId = { [T in TargetId]: (typeof TARGETS)[T]["placedOn"] extends "box" ? T : never }[TargetId];

@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
@@ -13,7 +14,6 @@ import { AsyncList } from "./AsyncList";
 import { ColumnHeader } from "./ColumnHeader";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatDateTime } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 import { FormError, StatusBadge, Upsell } from "./section-ui";
 import type { SectionProps } from "./tabs";
 

@@ -11,6 +11,9 @@ import { captureEvent } from "../client/analytics";
 import { useScreen } from "../client/tabs";
 import themeCss from "../client/theme.css?url";
 
+/** Drops the server-rendered `.dark` when the operator chose Ivory. Storage may be blocked, hence the try. */
+const THEME_BOOTSTRAP = `try{if(localStorage.getItem("theme")==="light")document.documentElement.classList.remove("dark")}catch(_){}`;
+
 interface RouterContext {
     queryClient: QueryClient;
 }
@@ -33,7 +36,11 @@ const RootComponent = (): ReactElement => {
     }, [screen]);
 
     return (
-        <html lang="en">
+        // Night is the default, so the server renders `.dark`. The pre-paint script in
+        // `head` drops it for an operator who picked Ivory; React never re-renders this
+        // constant className, and `suppressHydrationWarning` covers exactly that one
+        // attribute on this one element (it does not reach children).
+        <html className="dark" lang="en" suppressHydrationWarning>
             <head>
                 <HeadContent />
             </head>
@@ -61,6 +68,9 @@ export const Route = createRootRouteWithContext<RouterContext>()({
                 { href: authUiCss, rel: "stylesheet" },
             ],
             meta: [{ charSet: "utf8" }, { content: "width=device-width, initial-scale=1", name: "viewport" }, { title: "Lunora Cloud" }],
+            // Before first paint, so an Ivory operator never sees a Night flash. The
+            // header toggle writes the same `theme` key.
+            scripts: [{ children: THEME_BOOTSTRAP }],
         };
     },
     notFoundComponent: () => (

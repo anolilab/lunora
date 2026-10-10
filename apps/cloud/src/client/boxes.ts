@@ -116,3 +116,31 @@ export const describeDiagnose = (report: DiagnoseReport): string => {
 
 /** Megabytes as the studio prints sizes (`3.9 GB`). */
 export const formatMegabytes = (megabytes: number): string => formatBytes(megabytes * 1024 * 1024);
+
+/**
+ * The box the detail panel shows: the one picked, or — when none is picked, or the
+ * picked one has gone from the list — the first box that is not revoked, else the first.
+ */
+export const pickBox = (boxes: ReadonlyArray<BoxView>, selectedId: string | null): BoxView | undefined =>
+    boxes.find((box) => box._id === selectedId) ?? boxes.find((box) => box.status !== "revoked") ?? boxes[0];
+
+/**
+ * What `resources` actually is. hostd sends it once, in the `hello` that opens a
+ * session, so it is a reading from the last connect — not live, and not a history.
+ * `memMb` is the kernel's MemAvailable (memory still free for use), not memory used.
+ */
+export const RESOURCES_NOTE = "Reported by the agent when it last connected, not a live reading.";
+
+/**
+ * Host metrics the dashboard would chart that the agent does not collect today, so
+ * the Boxes tab shows them as an empty state rather than inventing a series.
+ */
+export const UNCOLLECTED_TELEMETRY: ReadonlyArray<string> = [
+    "CPU utilization",
+    "Memory used over time",
+    "Load average",
+    "Network throughput",
+    "Disk I/O",
+    "Per-mount disk usage",
+    "Uptime and kernel",
+];

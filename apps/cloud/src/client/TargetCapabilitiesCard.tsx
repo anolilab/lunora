@@ -1,10 +1,10 @@
 import type { ReactElement } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import type { TargetId } from "../provision-contract";
 import { TARGETS } from "../provision-contract";
-import { COLUMN_LABEL } from "./section-styles";
 import { StatusBadge } from "./section-ui";
 import { refusedBindings, TARGET_CAPABILITIES_INTRO, TARGET_PROPERTIES, targetLabel } from "./target-capabilities";
 

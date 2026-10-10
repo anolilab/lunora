@@ -103,19 +103,6 @@ export const TARGET_CAPABILITIES_INTRO: Readonly<Partial<Record<TargetId, string
     "cloudflare-workers": "This project runs as a plain Worker in your own Cloudflare account, outside Lunora Cloud's dispatcher.",
 };
 
-/** The names of the projects placed on each host (a box, a connected account), by the host's id — what the Boxes and Cloudflare accounts tabs list. */
-export const projectNamesByHost = (projects: ReadonlyArray<{ name: string; placementRef?: string }> | undefined): Map<string, string[]> => {
-    const byHost = new Map<string, string[]>();
-
-    for (const project of projects ?? []) {
-        if (project.placementRef !== undefined) {
-            byHost.set(project.placementRef, [...(byHost.get(project.placementRef) ?? []), project.name]);
-        }
-    }
-
-    return byHost;
-};
-
 /** The deploy-target form's draft: a target, and the host it names (`""` for none yet). */
 export interface TargetDraft {
     placementRef: string;

@@ -10,20 +10,21 @@ import { cn } from "@/lib/utils";
  * components there.
  */
 
-/**
- * Base data-row layout — a hairline-separated row. Exported so an interactive
- * whole-row button or link can reuse the exact metrics.
- */
-export const rowClassName = "flex w-full items-center gap-3 border-b border-border px-1 py-3 text-sm last:border-b-0";
-
-/** Interactive variant — a whole-row link/button that highlights on hover. */
-export const interactiveRowClassName = cn(rowClassName, "cursor-pointer text-left text-foreground transition-colors hover:bg-accent");
+/** Base data-row layout. Rows carry no border of their own; their list draws the dividers. */
+export const rowClassName = "flex w-full items-center gap-3 px-4 py-2.5 text-sm";
 
 /**
- * The label voice: Geist Mono, ALL CAPS, tight tracking, tertiary size.
- *
- * One constant rather than the same class string repeated per `&lt;TableHead>` — the
- * design system treats labels as a single role, so they should have a single
- * definition. Applies to column headers and any other structural label.
+ * Hairline dividers between a list's rows, applied to the list element. Putting the
+ * divider on the list means a whole-row button inside its `&lt;li>` needs no border
+ * workaround, and every row, interactive or not, gets the same rule.
  */
-export const COLUMN_LABEL = "font-mono text-[10px] tracking-[0.09em] uppercase";
+export const rowDividerClassName = "[&>li]:border-b [&>li]:border-border/70 [&>li:last-child]:border-b-0";
+
+/**
+ * Interactive variant: a whole-row link or button that highlights on hover. The focus
+ * ring is inset so the list's `overflow-hidden` cannot clip it at the edges.
+ */
+export const interactiveRowClassName = cn(
+    rowClassName,
+    "cursor-pointer text-left text-foreground transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none",
+);

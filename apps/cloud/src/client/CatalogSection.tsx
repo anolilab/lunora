@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api";
@@ -12,7 +13,6 @@ import type { CatalogForm } from "../catalog/artifact";
 import { AsyncList } from "./AsyncList";
 import { canManage } from "./boxes";
 import { CatalogInstallForm } from "./CatalogInstallForm";
-import { COLUMN_LABEL } from "./section-classes";
 import { FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { OrgId } from "./types";
 import { useMyRole } from "./use-boxes";

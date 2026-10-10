@@ -1,9 +1,8 @@
 import type { ReactElement } from "react";
 
 import { TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
-
-import { COLUMN_LABEL } from "./section-styles";
 
 /**
  * The header row every data table in the studio draws.

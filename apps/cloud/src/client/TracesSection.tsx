@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -15,7 +16,6 @@ import { buildTraceTree } from "../telemetry/trace-tree";
 import { ColumnHeader } from "./ColumnHeader";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatMs, formatTime } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 import { Field, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";

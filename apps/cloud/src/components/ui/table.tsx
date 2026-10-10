@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { COLUMN_LABEL } from "../../lib/typography";
 import { cn } from "../../lib/utils";
 
 function Table({ className, ...props }: React.ComponentProps<"table">): React.ReactElement {
@@ -13,7 +14,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">): React.Re
 }
 
 function TableHeader({ className, ...props }: React.ComponentProps<"thead">): React.ReactElement {
-    return <thead data-slot="table-header" className={cn("bg-muted/50 [&_tr]:border-b", className)} {...props} />;
+    return <thead data-slot="table-header" className={cn("[&_tr]:border-b [&_tr]:hover:bg-transparent", className)} {...props} />;
 }
 
 function TableBody({ className, ...props }: React.ComponentProps<"tbody">): React.ReactElement {
@@ -21,14 +22,17 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">): Reac
 }
 
 function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">): React.ReactElement {
-    return <tfoot data-slot="table-footer" className={cn("border-t bg-muted/50 font-medium [&>tr]:last:border-b-0", className)} {...props} />;
+    return <tfoot data-slot="table-footer" className={cn("border-t bg-muted/30 font-medium [&>tr]:last:border-b-0", className)} {...props} />;
 }
 
 function TableRow({ className, ...props }: React.ComponentProps<"tr">): React.ReactElement {
     return (
         <tr
             data-slot="table-row"
-            className={cn("border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted", className)}
+            className={cn(
+                "border-b border-border/70 transition-colors hover:bg-muted/40 has-aria-expanded:bg-muted/40 data-[state=selected]:bg-muted",
+                className,
+            )}
             {...props}
         />
     );
@@ -38,23 +42,14 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">): React.R
     return (
         <th
             data-slot="table-head"
-            className={cn(
-                "h-9 border-e border-border px-3 text-start align-middle font-mono text-[11px] font-medium tracking-wide whitespace-nowrap text-muted-foreground uppercase last:border-e-0 [&:has([role=checkbox])]:pe-0",
-                className,
-            )}
+            className={cn("h-9 px-3 text-start align-middle whitespace-nowrap text-muted-foreground [&:has([role=checkbox])]:pe-0", COLUMN_LABEL, className)}
             {...props}
         />
     );
 }
 
 function TableCell({ className, ...props }: React.ComponentProps<"td">): React.ReactElement {
-    return (
-        <td
-            data-slot="table-cell"
-            className={cn("border-e border-border px-3 py-1.5 align-middle whitespace-nowrap last:border-e-0 [&:has([role=checkbox])]:pe-0", className)}
-            {...props}
-        />
-    );
+    return <td data-slot="table-cell" className={cn("px-3 py-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pe-0", className)} {...props} />;
 }
 
 function TableCaption({ className, ...props }: React.ComponentProps<"caption">): React.ReactElement {
