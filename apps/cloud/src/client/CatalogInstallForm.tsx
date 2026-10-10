@@ -171,12 +171,16 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
             projectId: selectedProject._id,
             slug,
             values: { secrets: withoutBlanks(values.secrets), vars: withoutBlanks(values.vars) },
-        }).catch((error: unknown): InstallOutcome => {
-            return {
-                message: error instanceof Error ? error.message : "could not install the app",
-                ok: false,
-            };
-        });
+        })
+            .catch((error: unknown): InstallOutcome => {
+                return {
+                    message: error instanceof Error ? error.message : "could not install the app",
+                    ok: false,
+                };
+            })
+            .finally(() => {
+                setPending(false);
+            });
 
         setOutcome(result);
 
@@ -185,8 +189,6 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
             setKeptNames(result.kept);
             onInstalled();
         }
-
-        setPending(false);
     };
 
     const handleSubmit = (): void => {
