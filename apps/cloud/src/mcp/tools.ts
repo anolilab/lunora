@@ -42,6 +42,7 @@ export const MCP_DENY_PATHS: ReadonlySet<string> = new Set([
     "/v1/invitations/send",
     "/v1/logs/tail",
     "/v1/mcp",
+    "/v1/notification-channels",
     "/v1/secrets",
 ]);
 

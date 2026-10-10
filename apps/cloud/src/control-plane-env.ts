@@ -70,7 +70,9 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
         RELEASES?: ReleaseBucket;
         /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
-        SECRET_ENCRYPTION_KEY?: string;
+        /** The platform's app domain that a verified custom hostname must CNAME toward (defaults to `lunora.app`). */
+    LUNORA_APP_DOMAIN?: string;
+    SECRET_ENCRYPTION_KEY?: string;
         SHARD: ShardNamespaceLike;
 
         /**

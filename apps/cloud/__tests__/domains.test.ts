@@ -27,6 +27,7 @@ const world = (over: { domains?: Row[]; entitlements?: string[] } = {}) => {
     return {
         domains: over.domains ?? [],
         members: [owner(ORG)],
+        notificationChannels: [],
         organizations: [{ _id: ORG, plan: "pro", slug: "acme" }],
         projects: [{ _id: PROJECT, name: "Web", organizationId: ORG, slug: "web" }],
         // Entitlements resolve from the SYNCED SUBSCRIPTION, not the `plan` column,

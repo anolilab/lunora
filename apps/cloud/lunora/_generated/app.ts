@@ -430,6 +430,8 @@ class AppBuilder<Env extends object> {
             ["uptimeChecks", { mode: { kind: "global" } }],
             ["uptimeState", { mode: { kind: "global" } }],
             ["dashboards", { mode: { kind: "global" } }],
+            ["notificationChannels", { mode: { kind: "global" } }],
+            ["notificationDeliveries", { mode: { kind: "global" } }],
             ["overageDebits", { mode: { kind: "global" } }],
             ["platformUsage", { mode: { kind: "global" } }],
             ["usageCheckpoints", { mode: { kind: "global" } }],

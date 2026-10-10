@@ -4,6 +4,7 @@ import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
 import { randomSecret } from "../src/deploy/keys";
 import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
+import { domainNotificationDetail } from "../src/domains/check";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import type { TargetId } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
@@ -12,6 +13,7 @@ import { action, internalMutation, internalQuery, mutation, query, v } from "./_
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
+import { enqueueNotification } from "./notification-outbox";
 import { deployTarget } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
@@ -44,6 +46,8 @@ interface DomainRow {
     txtToken: string;
     updatedAt: number;
     verifiedAt?: number;
+    failedChecks?: number;
+    lastCheckedAt?: number;
 }
 
 interface ProjectRow {
@@ -282,12 +286,31 @@ export const markVerified = internalMutation
     .mutation(async ({ ctx: context, args: { id, organizationId, verified } }): Promise<void> => {
         await assertRowInOrg(context, id, organizationId, "domain");
 
+        const existing = (await context.db.get(id)) as DomainRow | null;
+
         await context.db.patch(id, {
+            lastCheckedAt: context.now,
             updatedAt: context.now,
             // `null`, not `undefined`: the store refuses an explicitly-undefined patch
             // outright, so a FAILED re-verification threw instead of clearing the stamp.
             verifiedAt: verified ? context.now : null,
         });
+
+        // Announce a transition only: the first verification, or a verified domain that stops validating.
+        if (existing === null) {
+            return;
+        }
+
+        const event = verified && existing.verifiedAt == null ? "domain.verified" : !verified && existing.verifiedAt != null ? "domain.failed" : null;
+
+        if (event !== null) {
+            const project = (await context.db.get(existing.projectId)) as null | { name?: string };
+
+            await enqueueNotification(context, existing.organizationId, event, {
+                detail: domainNotificationDetail(event, existing.hostname),
+                project: project?.name ?? "project",
+            });
+        }
     });
 
 /**

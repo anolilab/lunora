@@ -16,6 +16,7 @@ import { fireDeployAlerts } from "./alerts";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
+import { enqueueNotification } from "./notification-outbox";
 import { assertProjectNotHalted } from "./halts";
 import { collectAll } from "./paginate";
 import { storedProjectRuntime } from "./tables/shared";
@@ -663,6 +664,21 @@ export const create = mutation
         return { deploymentId, ...(previous ? { previousDeploymentId: previous._id } : {}), version };
     });
 
+/** The release line a live notification carries: the version and its public URL, nothing else. */
+const releaseDetail = (deployment: DeploymentRow, url: string | undefined): string => {
+    const version = deployment.version === undefined ? undefined : `Version ${String(deployment.version)}`;
+    const liveUrl = url ?? deployment.url;
+
+    return [version, liveUrl ? `is live at ${liveUrl}.` : "is live."].filter(Boolean).join(" ");
+};
+
+/** The project's display name for a notification, falling back when the row is gone. */
+const projectNameOf = async (context: MutationContext, projectId: Id<"projects">): Promise<string> => {
+    const project = (await context.db.get(projectId)) as null | { name?: string };
+
+    return project?.name ?? "project";
+};
+
 /**
  * Record a health-checked deployment as its alias's live release (GAPS.md A1).
  * The Worker already runs it — this is bookkeeping, not a cutover. Marks every
@@ -700,6 +716,9 @@ export const activate = mutation
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
         }
 
+        const project = (await context.db.get(deployment.projectId)) as null | { activeDeploymentId?: string; name?: string };
+        const movesPointer = deployment.kind === "production" && project?.activeDeploymentId !== id;
+
         await pointProjectAt(context, deployment);
         // `activate` is the CI path — the most frequent pointer swap on the
         // platform — and it was the only one of the five that wrote no audit row.
@@ -713,6 +732,14 @@ export const activate = mutation
             organizationId: deployment.organizationId,
             target: deployment.scriptName,
         });
+
+        // Announce when the stable URL moves to this release, so a retried activation stays quiet.
+        if (movesPointer) {
+            await enqueueNotification(context, deployment.organizationId, "deployment.live", {
+                detail: releaseDetail(deployment, undefined),
+                project: project?.name ?? "project",
+            });
+        }
     });
 
 /**
@@ -768,6 +795,11 @@ export const rollback = internalMutation
             createdAt: now,
             organizationId,
             target: target.scriptName,
+        });
+
+        await enqueueNotification(context, organizationId, "deployment.rolled_back", {
+            ...(target.version === undefined ? {} : { detail: `Version ${String(target.version)} is live again.` }),
+            project: await projectNameOf(context, target.projectId),
         });
 
         return { scriptName: target.scriptName, version: target.version };
@@ -895,6 +927,11 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
     for (const deployment of expired) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
         await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await enqueueNotification(context, deployment.organizationId, "preview.expired", {
+            detail: `Preview ${deployment.alias ?? deployment.scriptName} was removed after its expiry time.`,
+            project: await projectNameOf(context, deployment.projectId),
+        });
     }
 
     return { destroyed: expired.length };
@@ -965,6 +1002,11 @@ export const updateStatus = mutation
                 kind: "deployment",
                 project: project?.name ?? "project",
                 reference: existing.scriptName,
+            });
+
+            await enqueueNotification(context, existing.organizationId, "deployment.failed", {
+                detail: "Open the deployment in the dashboard for its log.",
+                project: await projectNameOf(context, existing.projectId),
             });
         }
     });
