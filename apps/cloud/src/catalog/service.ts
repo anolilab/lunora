@@ -356,13 +356,12 @@ export const listCatalog = async (deps: CatalogListDeps, organizationId: string)
         return { error: config.error, ok: false };
     }
 
-    const index = await loadIndex(deps, config);
+    const [index, installs] = await Promise.all([loadIndex(deps, config), deps.installs(organizationId)]);
 
     if (!index.ok) {
         return { error: index.error, ok: false };
     }
 
-    const installs = await deps.installs(organizationId);
     const checked = await Promise.all(
         index.entries.map((entry) =>
             fetchAndCheck(deps, config.keys, entry).then((result) => {
