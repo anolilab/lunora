@@ -317,6 +317,12 @@ const acceptsAbsent: <TNode>(node: TNode, reader: SchemaNodeReader<TNode>) => bo
 const argsToJsonSchema: (args: Record<string, Validator>) => JsonSchema;
 ```
 
+### `cyrb53` (const)
+
+```ts
+const cyrb53: (text: string, seed?: number) => number;
+```
+
 ### `describeValue` (const)
 
 ```ts

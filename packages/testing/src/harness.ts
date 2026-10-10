@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { LunoraError } from "@lunora/errors";
 import type { NotifyDefinition } from "@lunora/notify";
 import type {
@@ -622,6 +624,9 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  * **v1 stubs (still throwing):** `ctx.storage`, `ctx.vectors`, `ctx.workflows`.
  * These are clearly documented follow-ups.
  */
+/** The clock the current top-level harness call reads through `ctx.now`. */
+const runClock = new AsyncLocalStorage<number>();
+
 const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarness => {
     const { close, sql } = createSqlExec();
 
@@ -680,30 +685,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     const currentNow = (): number => options?.now ?? Date.now();
     const schedulerSeedNow = currentNow();
 
-    // The clock one top-level run reads. Production captures `ctx.now` once per
-    // execution, so a top-level call takes the clock when it starts and holds it until
-    // it settles. A nested `ctx.run*` inherits the outer run's clock, and the previous
-    // value is restored afterwards.
-    let runClock: number | undefined;
-    // Generic over the function type, so the harness keeps each overload's signature.
+    // Each top-level call runs under its own clock (see `runClock`). Nested calls inherit
+    // it, overlapping calls keep their own, and a synchronous throw restores it.
     const inRun = <F extends (...args: never[]) => unknown>(run: F): F =>
-        ((...args: never[]) => {
-            const previous = runClock;
-
-            runClock = currentNow();
-
-            const result = (run as (...callArgs: never[]) => unknown)(...args);
-
-            if (result instanceof Promise) {
-                return result.finally(() => {
-                    runClock = previous;
-                });
-            }
-
-            runClock = previous;
-
-            return result;
-        }) as F;
+        ((...args: never[]) => runClock.run(currentNow(), () => (run as (...callArgs: never[]) => unknown)(...args))) as F;
     // One recorder per harness (shared by the query/mutation/action contexts, so a
     // `ctx.runMutation` from a query accumulates onto the same wide event the real
     // runtime would — a composed call reuses the outer dispatch's span).
@@ -768,7 +753,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             log: noopLog,
             metrics: noopMetrics,
             get now(): number {
-                return runClock ?? currentNow();
+                return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
@@ -792,7 +777,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             log: noopLog,
             metrics: noopMetrics,
             get now(): number {
-                return runClock ?? currentNow();
+                return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
@@ -825,7 +810,14 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // Backs `harness.run` only — `query`/`mutation`/`action` dispatch (both the
         // registered-procedure and inline-callback forms) stays on the guarded
         // `queryContext`/`mutationContext`/`actionContext` above.
-        const rawMutationContext: HarnessMutationContext = { ...mutationContext, db: rawDatabase };
+        // Copy the descriptors, not the values: a spread would evaluate the `now` getter once.
+        const rawMutationContext = Object.defineProperties(
+            {},
+            {
+                ...Object.getOwnPropertyDescriptors(mutationContext),
+                db: { enumerable: true, value: rawDatabase },
+            },
+        ) as HarnessMutationContext;
 
         // `services` is not on the base ActionCtx: codegen adds it to the app's own
         // action context when `lunora.config` declares services.
@@ -841,7 +833,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             log: noopLog,
             metrics: noopMetrics,
             get now(): number {
-                return runClock ?? currentNow();
+                return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,

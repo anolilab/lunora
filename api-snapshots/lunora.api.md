@@ -2709,6 +2709,10 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
+### `createStableIdFactory` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
@@ -8124,6 +8128,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `argsToJsonSchema` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `cyrb53` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

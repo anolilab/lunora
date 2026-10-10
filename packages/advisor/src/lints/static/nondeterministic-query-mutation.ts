@@ -19,7 +19,7 @@ const remedyFor = (callee: string, exportName: string, kind: "query" | "mutation
     }
 
     return kind === "query"
-        ? "Compute it in an `action` and pass the value into the mutation as an argument."
+        ? "Compute it in an `action` and pass the value in as an argument. The query then reads a fixed input, so a re-run with the same arguments returns the same result."
         : `No action needed unless \`${exportName}\` is invoked from a workflow step or queue consumer that can itself replay.`;
 };
 
@@ -64,7 +64,7 @@ const nondeterministicQueryMutation: Lint = {
     level: "WARN",
     name: "nondeterministic_query_mutation",
     remediation:
-        "For `Date.now()`: use `ctx.now` in the query or mutation handler. It is the wall-clock instant (epoch ms) the handler began, captured once, so every evaluation and replay sees the same value. For other non-deterministic calls in a `query`: move them into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
+        "For `Date.now()`: use `ctx.now` in the query or mutation handler. It is the wall-clock instant (epoch ms) the handler began. A re-evaluation or a replay captures it again, so a value that must stay fixed belongs in an argument. For other non-deterministic calls in a `query`: move them into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
     run: (context) => {
         // No call evidence supplied → nothing to assert (mirrors auth_api_call_without_headers).
         if (context.nondeterministicCalls === undefined) {
