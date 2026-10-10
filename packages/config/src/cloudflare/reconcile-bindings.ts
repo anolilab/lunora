@@ -582,6 +582,22 @@ const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileS
 };
 
 /**
+ * Upload source maps on deploy when the key is entirely absent, so production
+ * stack traces and on-demand profiles (`lunora cloudflare profile`) show source
+ * function names instead of mangled bundle names. Cloudflare retrieves the map
+ * after the invocation completes, so it adds nothing to request CPU; it only
+ * runs at `wrangler deploy` time. An explicit `false` is left untouched.
+ * Cloudflare-only: celld and Node ignore the key. Pure.
+ */
+const reconcileUploadSourceMaps = (text: string, parsed: WranglerShape): ReconcileStep => {
+    if (parsed.upload_source_maps !== undefined) {
+        return { added: [], text };
+    }
+
+    return { added: ["upload_source_maps"], text: applyModify(text, ["upload_source_maps"], true) };
+};
+
+/**
  * The oldest toolchain that declares and runs Workflows in `exports`: wrangler
  * 4.142.0 and `@cloudflare/vite-plugin` 1.61.0. An older one ignores the field,
  * so moving a `workflows[]` binding into `exports` under it unregisters the
@@ -801,7 +817,7 @@ const reconcileWorkflows = (
  * attempt — `lunora deploy --env <name>` now VALIDATES the env-scoped view
  * (closing the reported gap), it just doesn't yet auto-provision it.
  */
-const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings, environment?: string): ReconcileBindingsResult => {
+const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings, environment?: string, target?: string): ReconcileBindingsResult => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     const exportGaps = collectExportGaps(inferred);
@@ -936,6 +952,8 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         },
         { enabled: inferred.usesWorkerLoader, run: (text) => reconcileWorkerLoaders(text, parsed) },
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
+        // Cloudflare-only; an omitted target is the default, Cloudflare.
+        { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileUploadSourceMaps(text, parsed) },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {
             enabled: exportedWorkflows.length > 0 || exportedAgents.length > 0,

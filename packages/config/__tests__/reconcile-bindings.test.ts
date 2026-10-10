@@ -68,6 +68,7 @@ const MINIMAL_WRANGLER = `{
     // A fully-synced config carries observability (reconcile turns it on when
     // absent), so the no-op tests below start from a config that already has it.
     "observability": { "enabled": true },
+    "upload_source_maps": true,
 }
 `;
 
@@ -179,6 +180,50 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().observability).toEqual({ enabled: true, head_sampling_rate: 1 });
     });
 
+    describe("upload_source_maps", () => {
+        const plain = `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
+}
+`;
+
+        it.each([[undefined], ["cloudflare"]])("turns source maps on when the key is absent (target %s)", (target) => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), plain, "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred(), undefined, target);
+
+            expect(result.added).toContain("upload_source_maps");
+            expect(readConfig().upload_source_maps).toBe(true);
+        });
+
+        it.each([["celld"], ["node"]])("leaves wrangler.jsonc alone on the %s target", (target) => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), plain, "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred(), undefined, target);
+
+            expect(result.added).not.toContain("upload_source_maps");
+            expect(readConfig().upload_source_maps).toBeUndefined();
+        });
+
+        it("keeps an explicit false", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), plain.replace('"observability"', '"upload_source_maps": false,\n    "observability"'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.added).not.toContain("upload_source_maps");
+            expect(readConfig().upload_source_maps).toBe(false);
+        });
+    });
+
     it("binds a newly-exported SCHEDULER DO and registers its migration class", () => {
         expect.assertions(4);
 
@@ -207,6 +252,7 @@ describe("reconcileWranglerBindings", () => {
     "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "upload_source_maps": true,
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["OldShardDO"] },
@@ -232,6 +278,7 @@ describe("reconcileWranglerBindings", () => {
     "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "upload_source_maps": true,
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
@@ -261,6 +308,7 @@ describe("reconcileWranglerBindings", () => {
     "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "upload_source_maps": true,
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [
         null,
@@ -311,6 +359,7 @@ describe("reconcileWranglerBindings", () => {
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true },
+    "upload_source_maps": true,
     "ai": { "binding": "AI" },
 }
 `,
@@ -333,6 +382,7 @@ describe("reconcileWranglerBindings", () => {
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true },
+    "upload_source_maps": true,
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id" }],
 }
 `,
@@ -636,6 +686,7 @@ describe("reconcileWranglerBindings", () => {
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true },
+    "upload_source_maps": true,
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id" }],
 }
 `,
@@ -1007,6 +1058,7 @@ describe("reconcileWranglerBindings", () => {
     "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "observability": { "enabled": false },
+    "upload_source_maps": true,
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
 }

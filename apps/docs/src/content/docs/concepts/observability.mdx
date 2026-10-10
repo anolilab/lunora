@@ -733,6 +733,19 @@ trusting the upstream, the upstream's trace id is used, which is what keeps a
 distributed trace whole across services.
 :::
 
+## Source maps
+
+On the Cloudflare target, Lunora writes `"upload_source_maps": true` into
+`wrangler.jsonc` when the key is absent, so production stack traces and
+[on-demand profiles](/packages/cli#lunora-cloudflare-profile) show your source
+function names instead of mangled bundle names. Wrangler generates and uploads
+the maps at `wrangler deploy`; Cloudflare reads them after the invocation
+finishes, so they add no request CPU. Cloudflare documents no separate charge
+for them, but each map is capped at 15 MB gzipped, and the maps carry your
+source, stored in your own account. Set `"upload_source_maps": false` to opt
+out; an explicit value is never changed. The celld and Node targets don't read
+the key, and Lunora does not write it for them.
+
 ## Application metrics with `ctx.metrics`
 
 The third signal, alongside logs and traces. A trace tells you what one request
