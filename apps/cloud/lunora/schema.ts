@@ -438,6 +438,10 @@ export default defineSchema({
         // Redirect-only domains (e.g. apex → www): no routing, just a redirect.
         redirectStatusCode: v.optional(v.number()),
         redirectTo: v.optional(v.string()),
+        // Consecutive failed scheduled checks while verified (see src/domains/check.ts).
+        failedChecks: v.optional(v.number()),
+        // When the domain was last checked, by the scheduled sweep or the Verify button.
+        lastCheckedAt: v.optional(v.number()),
         // Expected value of the `_lunora.<hostname>` TXT record.
         txtToken: v.string(),
         updatedAt: v.number(),

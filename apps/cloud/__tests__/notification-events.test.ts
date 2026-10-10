@@ -63,8 +63,8 @@ const makeCtx = (options: FakeOptions = {}) => {
 const ORG = "org" as Id<"organizations">;
 
 describe("domain notifications", () => {
-    it("announces a domain's first verification", async () => {
-        const { ctx, inserted } = makeCtx({
+    it("announces a domain's first verification and stamps when it was checked", async () => {
+        const { ctx, inserted, patched } = makeCtx({
             channels: [{ _id: "chan", enabled: true, events: ["domain.verified"], kind: "slack", organizationId: "org" }],
             domains: [{ _id: "dom_1", hostname: "app.example.com", organizationId: "org", projectId: "proj" }],
         });
@@ -73,6 +73,7 @@ describe("domain notifications", () => {
 
         expect(inserted).toHaveLength(1);
         expect(inserted[0]?.doc).toMatchObject({ event: "domain.verified", status: "pending" });
+        expect(patched.find((entry) => entry.id === "dom_1")?.patch).toMatchObject({ lastCheckedAt: ctx.now });
     });
 
     it("announces domain.failed once when a verified domain stops validating", async () => {

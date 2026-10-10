@@ -270,6 +270,8 @@ export const domains = sqliteTable("domains", {
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
     redirectStatusCode: real("redirectStatusCode"),
     redirectTo: text("redirectTo"),
+    failedChecks: real("failedChecks"),
+    lastCheckedAt: real("lastCheckedAt"),
     txtToken: text("txtToken").notNull(),
     updatedAt: real("updatedAt").notNull(),
     verifiedAt: real("verifiedAt"),

@@ -246,6 +246,8 @@ export interface Doc_domains {
     projectId: Id<"projects">;
     redirectStatusCode?: number;
     redirectTo?: string;
+    failedChecks?: number;
+    lastCheckedAt?: number;
     txtToken: string;
     updatedAt: number;
     verifiedAt?: number;
@@ -955,6 +957,8 @@ export interface Insert_domains {
     projectId: Id<"projects">;
     redirectStatusCode?: number;
     redirectTo?: string;
+    failedChecks?: number;
+    lastCheckedAt?: number;
     txtToken: string;
     updatedAt: number;
     verifiedAt?: number;

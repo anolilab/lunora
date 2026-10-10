@@ -7,9 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
+import { FAILURES_BEFORE_UNVERIFIED } from "../domains/check";
+import { formatDateTime } from "./format";
 import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import { COLUMN_LABEL } from "./section-classes";
 import type { SectionProps } from "./tabs";
@@ -158,6 +161,10 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                                             {domain.redirectTo ? (
                                                 <span className="text-muted-foreground truncate font-mono text-xs">→ {domain.redirectTo}</span>
                                             ) : null}
+                                            <span className={cn(COLUMN_LABEL, "text-muted-foreground truncate")}>
+                                                {domain.lastCheckedAt === undefined ? "not checked yet" : `checked ${formatDateTime(domain.lastCheckedAt)}`}
+                                                {domain.failedChecks ? ` · ${String(domain.failedChecks)} of ${String(FAILURES_BEFORE_UNVERIFIED)} checks failed` : ""}
+                                            </span>
                                             <StatusBadge tone={domain.verifiedAt ? "success" : "warning"}>
                                                 {domain.verifiedAt ? "verified" : "pending"}
                                             </StatusBadge>

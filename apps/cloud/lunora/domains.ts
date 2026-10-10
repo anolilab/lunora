@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret } from "../src/deploy/keys";
+import { domainNotificationDetail } from "../src/domains/check";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
@@ -21,7 +22,9 @@ interface DomainRow {
     _id: Id<"domains">;
     createdAt: number;
     customHostnameId?: string;
+    failedChecks?: number;
     hostname: string;
+    lastCheckedAt?: number;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     redirectStatusCode?: number;
@@ -146,6 +149,7 @@ export const markVerified = mutation
 
         await context.db.patch(id, {
             ...(customHostnameId === undefined ? {} : { customHostnameId }),
+            lastCheckedAt: context.now,
             updatedAt: context.now,
             verifiedAt: verified ? context.now : undefined,
         });
@@ -155,18 +159,18 @@ export const markVerified = mutation
             const project = (await context.db.get(existing.projectId)) as ProjectRow | null;
 
             await enqueueNotification(context, organizationId, "domain.verified", {
-                detail: `${existing.hostname} now serves the app.`,
+                detail: domainNotificationDetail("domain.verified", existing.hostname),
                 project: project?.name ?? "project",
             });
         }
 
         // A verified domain that stops validating is announced once. The next successful
         // verification sets `verifiedAt` again, which re-arms the announcement.
-        if (!verified && existing && existing.verifiedAt !== undefined) {
+        if (!verified && existing?.verifiedAt !== undefined) {
             const project = (await context.db.get(existing.projectId)) as ProjectRow | null;
 
             await enqueueNotification(context, organizationId, "domain.failed", {
-                detail: `${existing.hostname} no longer validates. Check its DNS records in the domain settings.`,
+                detail: domainNotificationDetail("domain.failed", existing.hostname),
                 project: project?.name ?? "project",
             });
         }

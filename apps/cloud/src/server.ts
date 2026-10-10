@@ -35,6 +35,8 @@ import { fanOutQueue, groupByTenant } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
 import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
+import { runDomainSweep } from "./domains/sweep";
+import { createDohResolver } from "./domains/verify";
 import { runNotificationSweep } from "./notifications/sweep";
 import type { ControlPlaneDb } from "./store";
 import type { AlertDelivery } from "./telemetry/alerts";
@@ -196,6 +198,7 @@ interface Env {
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
     /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
+    LUNORA_APP_DOMAIN?: string;
     SECRET_ENCRYPTION_KEY?: string;
     SHARD: ShardNamespaceLike;
     /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
@@ -482,6 +485,24 @@ const sweepNotifications = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Re-verify custom domains (DNS TXT + CNAME) on the hourly tick, the same check the
+ * Verify button runs. A domain that stops validating is announced once it has
+ * failed repeatedly, so a DNS record removed after go-live is noticed without
+ * anyone clicking Verify.
+ */
+const sweepDomains = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    await runDomainSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
+        now: Date.now(),
+        resolve: createDohResolver(),
+    });
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -502,6 +523,7 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // rides the existing every-minute trigger (no new cron, stays within the cap).
     { cron: EVERY_MINUTE, run: sweepAlerts },
     { cron: EVERY_MINUTE, run: sweepNotifications },
+    { cron: EVERY_HOUR, run: sweepDomains },
 ];
 
 /** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */

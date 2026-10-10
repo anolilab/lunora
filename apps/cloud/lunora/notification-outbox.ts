@@ -1,5 +1,6 @@
 import type { NotificationEvent, NotificationFacts, NotificationKind, NotificationMessage } from "../src/notifications/events";
 import { channelsForEvent, renderNotification } from "../src/notifications/events";
+import { pendingDeliveryRow } from "../src/notifications/outbox";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 
@@ -24,20 +25,7 @@ export const queueDelivery = (
     channel: ChannelRow,
     message: NotificationMessage,
     organizationId: Id<"organizations">,
-): Promise<Id<"notificationDeliveries">> =>
-    context.db.insert("notificationDeliveries", {
-        attempts: 0,
-        body: message.body,
-        channelId: channel._id,
-        createdAt: context.now,
-        event: message.event,
-        kind: channel.kind,
-        nextAttemptAt: context.now,
-        organizationId,
-        status: "pending",
-        subject: message.subject,
-        updatedAt: context.now,
-    });
+): Promise<Id<"notificationDeliveries">> => context.db.insert("notificationDeliveries", pendingDeliveryRow(channel, message, organizationId, context.now));
 
 /**
  * Queue `event` for every enabled channel in the org that subscribes to it.
