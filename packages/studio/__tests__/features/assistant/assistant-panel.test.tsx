@@ -822,4 +822,53 @@ describe("assistantPanel", () => {
 
         expect(screen.queryByTestId("assistant-suggestions")).toBeNull();
     });
+
+    it("unmounts cleanly when a reply latches the assistant unavailable while it is mounted", async () => {
+        expect.hasAssertions();
+
+        /*
+         * The early return (`ops.unavailable || session === undefined`) sits below
+         * every hook in the panel, and its condition changes AFTER mount. A hook
+         * placed below it runs only while the panel is still available, so the
+         * hook count shifts between two renders of the same mounted instance and
+         * React throws. The panel's other tests mount it only once it is already
+         * available, so none of them crosses this transition.
+         *
+         * Here the first reply reports the binding gone, which latches
+         * `unavailable` underneath a panel that stays mounted.
+         */
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+            streamRpc: (reference): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.aiChat) {
+                    return { available: true };
+                }
+
+                return { degraded: true, reason: "no-ai-binding" };
+            },
+        });
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("how many messages?");
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("assistant-panel")).toBeNull();
+        });
+
+        // The render did not throw: a hook-order break unmounts the whole tree, so
+        // the console the panel sits beside would be gone too.
+        expect(screen.getByTestId("lunora-sql-editor")).toBeDefined();
+    });
 });

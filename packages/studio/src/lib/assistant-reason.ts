@@ -1,9 +1,10 @@
-import type { TFunction } from "../../i18n/i18n-context";
-import type { GenerateSqlDegradedReason } from "../../lib/admin";
+import type { TFunction } from "../i18n/i18n-context";
+import type { GenerateSqlDegradedReason } from "./admin";
 
 /**
- * Operator-facing copy for a degraded `aiGenerateSql` reply, shared by the SQL
- * console's two drafting surfaces (the prompt bar and the inline rewrite).
+ * Operator-facing copy for a degraded assistant reply, shared by every surface
+ * that asks the model for something (the SQL console's prompt bar and inline
+ * rewrite, and the assistant panel).
  *
  * `no-ai-binding` and `ai-disabled` never reach here — both latch `unavailable`
  * on the RPC hook and every affordance disappears — so this only words the
