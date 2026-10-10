@@ -1030,11 +1030,11 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             const wranglerPath = join(workdir, "wrangler.jsonc");
 
             // Baseline already carries every binding startup would infer (DB +
-            // observability) plus a crons array — so buildStart's reconcile is a
+            // observability + upload_source_maps) plus a crons array — so buildStart's reconcile is a
             // no-op and the settled baseline is exactly this file (minus crons).
             writeFileSync(
                 wranglerPath,
-                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "observability": { "enabled": true }, "triggers": { "crons": ["0 9 * * *"] } }\n',
+                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "observability": { "enabled": true }, "upload_source_maps": true, "triggers": { "crons": ["0 9 * * *"] } }\n',
                 "utf8",
             );
 
@@ -1049,7 +1049,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             // Simulate `reconcileWranglerCrons` rewriting ONLY triggers.crons.
             writeFileSync(
                 wranglerPath,
-                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "observability": { "enabled": true }, "triggers": { "crons": ["*/30 * * * *", "0 9 * * *"] } }\n',
+                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "observability": { "enabled": true }, "upload_source_maps": true, "triggers": { "crons": ["*/30 * * * *", "0 9 * * *"] } }\n',
                 "utf8",
             );
             onConfigChange(wranglerPath);

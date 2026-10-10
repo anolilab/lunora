@@ -173,7 +173,7 @@ const provisionBindings = async (
         resolveDeployDriver(target);
 
         const inferred = await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
-        const reconciled = reconcileWranglerBindings(cwd, inferred, environment);
+        const reconciled = reconcileWranglerBindings(cwd, inferred, environment, target);
 
         const writtenTo = reconciled.wranglerPath ?? "wrangler.jsonc";
 

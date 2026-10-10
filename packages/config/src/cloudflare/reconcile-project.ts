@@ -21,6 +21,9 @@ interface ReconcileProject {
 
     /** The schema directory, relative to `projectRoot` (usually `"lunora"`). */
     schemaDir: string;
+
+    /** The deploy target; wrangler settings only Cloudflare reads are written only for `"cloudflare"` (or when omitted). */
+    target?: string;
 }
 
 /** The two logger methods every reconciler here needs; `info` is optional on Vite's. */
@@ -47,7 +50,7 @@ const reconcileBindingsSafely = async (
 ): Promise<void> => {
     try {
         const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
-        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred);
+        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred, undefined, options.target);
 
         const target = reconciled.wranglerPath ?? "wrangler.jsonc";
 

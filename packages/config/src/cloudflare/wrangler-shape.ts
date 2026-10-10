@@ -107,6 +107,7 @@ interface WranglerShape {
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
     // Read-only: checked against the secrets detected packages need (see collectWarnings).
     secrets?: { required?: unknown } | null;
+    upload_source_maps?: boolean;
     // Self-describing: `[{ binding }]` with nothing remote to mint (see reconcileWorkerLoaders).
     worker_loaders?: ReadonlyArray<{ binding?: string }>;
     workflows?: ReadonlyArray<WorkflowEntry>;
