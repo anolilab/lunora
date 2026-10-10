@@ -1,0 +1,4 @@
+/* Demo asset: shipped alongside the Worker so the artifact carries more than one file. */
+body {
+    font-family: system-ui, sans-serif;
+}

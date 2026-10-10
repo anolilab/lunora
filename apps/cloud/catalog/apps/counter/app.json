@@ -1,0 +1,13 @@
+{
+    "slug": "counter",
+    "version": "1.0.0",
+    "name": "Counter",
+    "summary": "A demo Worker that counts requests. It exists to exercise the catalog pipeline.",
+    "main": "worker.js",
+    "runtime": "worker",
+    "bindings": [{ "binding": "ASSETS", "type": "assets" }],
+    "form": {
+        "vars": [{ "name": "GREETING", "label": "Greeting", "default": "Hello", "required": false, "description": "Shown on the first page." }],
+        "secrets": []
+    }
+}
