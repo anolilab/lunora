@@ -922,7 +922,7 @@ redeploy, and save it as a gzip-compressed pprof file:
 ```bash
 lunora cloudflare profile                                   # 10s CPU profile of the latest version
 lunora cloudflare profile --type heap --duration-ms 30000   # 30s allocation profile
-lunora cloudflare profile --version <version-id> --out cpu.pprof.gz
+lunora cloudflare profile --version-id <version-id> --out cpu.pprof.gz
 lunora cloudflare profile --namespace-id <id> --actor-id <64-hex>   # one Durable Object instance
 go tool pprof -http=: cpu.pprof.gz                          # view the flamegraph
 ```

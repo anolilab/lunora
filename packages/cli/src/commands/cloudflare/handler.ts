@@ -184,7 +184,7 @@ const runProfile = async ({ cwd, logger, options, rest }: ToolRun): Promise<Comm
         namespaceId: options.namespaceId,
         out: options.out,
         type: options.type,
-        version: options.version,
+        version: options.versionId,
         worker: rest[0],
     });
 };

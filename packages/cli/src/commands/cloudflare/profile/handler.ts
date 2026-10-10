@@ -44,6 +44,9 @@ const DEFAULT_DURATION_MS = 10_000;
 /** Slack on top of the capture window for the API to serialise and return the profile. */
 const RESPONSE_MARGIN_MS = 30_000;
 
+/** The first two bytes of every gzip stream, which is what the API returns on success. */
+const GZIP_MAGIC = [0x1f, 0x8b] as const;
+
 const PROFILE_TYPES = ["cpu", "heap"] as const;
 
 type ProfileType = (typeof PROFILE_TYPES)[number];
@@ -255,6 +258,18 @@ const runProfileCommand = async (options: ProfileCommandOptions): Promise<Profil
 
     // Binary gzip — never `.text()` / JSON-parse a success body.
     const bytes = new Uint8Array(await response.arrayBuffer());
+
+    // A 200 can still carry a `{ success: false }` JSON envelope; only a gzip stream is a profile.
+    if (bytes[0] !== GZIP_MAGIC[0] || bytes[1] !== GZIP_MAGIC[1]) {
+        const reason = describeBody(new TextDecoder().decode(bytes));
+
+        return fail(
+            logger,
+            EXIT_CODE.FAILURE,
+            `profile failed: the API answered 200 with something that is not a gzip profile${reason.length > 0 ? `: ${reason}` : ""}.`,
+        );
+    }
+
     const stamp = (options.now ?? new Date()).toISOString().replaceAll(/[:.]/gu, "-");
     const file = resolve(options.cwd, options.out ?? `${worker}-${profileType}-${stamp}.pprof.gz`);
 

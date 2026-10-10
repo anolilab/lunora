@@ -116,7 +116,7 @@ const cloudflareCommand: Command = {
         { description: "containers / deployments / profile: Cloudflare environment name", name: "env", type: String },
         { description: "profile: capture window in ms, 1000–50000 (default 10000)", name: "duration-ms", type: String },
         { description: "profile: cpu (default) or heap", name: "type", type: String },
-        { description: "profile: Worker version id to profile (default latest)", name: "version", type: String },
+        { description: "profile: Worker version id to profile (default latest)", name: "version-id", type: String },
         { description: "profile: file to write the gzip pprof to (default <worker>-<type>-<time>.pprof.gz)", name: "out", type: String },
         { description: "profile: Durable Object namespace id (with --actor-id)", name: "namespace-id", type: String },
         { description: "profile: Durable Object instance id, 64 hex characters (with --namespace-id)", name: "actor-id", type: String },
@@ -152,7 +152,7 @@ export type CloudflareOptions = CreateOptions<{
     target: string | undefined;
     threshold: string[] | undefined;
     type: string | undefined;
-    version: string | undefined;
+    "version-id": string | undefined;
     webhook: string[] | undefined;
     yes: boolean | undefined;
 }>;

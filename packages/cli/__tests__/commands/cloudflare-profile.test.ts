@@ -160,6 +160,17 @@ describe("lunora cloudflare profile", () => {
         expect(existsSync(join(cwd, "x.gz"))).toBe(false);
     });
 
+    it("fails, and writes nothing, when a 200 carries a JSON envelope instead of a profile", async () => {
+        expect.assertions(3);
+
+        const { fetch } = fakeFetch(() => Response.json({ errors: [{ message: "Worker profiling is unavailable in this environment." }], success: false }));
+        const result = await runProfileCommand({ cwd, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, out: "j.gz" });
+
+        expect(result.code).toBe(EXIT_CODE.FAILURE);
+        expect(result.error).toContain("unavailable in this environment");
+        expect(existsSync(join(cwd, "j.gz"))).toBe(false);
+    });
+
     it("warns when source maps are not uploaded", async () => {
         expect.assertions(1);
 
