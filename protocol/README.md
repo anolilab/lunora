@@ -455,6 +455,24 @@ is the server's verdict and terminal on both paths, a `503` carrying
 `SHARD_UNAVAILABLE` transient on both. Only a reply with no envelope falls back
 to its status (below).
 
+The table below names the codes a replay classifies explicitly, so a port does not
+have to infer them from the prose above. Any code not listed is a verdict and
+terminal, which is the default for every coded error.
+
+| Outcome                             | Codes or condition                                                                                                                                                | Replay behaviour                                                                                                                                                          |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transient, retry with backoff       | `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`, `TOO_MANY_REQUESTS`; a `429`/`5xx` with no envelope                                                           | Keep the write queued; honour `retryAfterMs` / `Retry-After` when present, otherwise a bounded jittered backoff                                                           |
+| Hold for a credential               | `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`                                                                                                                | Hold until a new token is set, then replay under the current token. Never settle                                                                                          |
+| Split and retry                     | `413` on a chunk of more than one entry                                                                                                                           | Split the chunk and resend; do not settle the writes                                                                                                                      |
+| Terminal, the write is dropped      | `CONFLICT` (unique-index breach, or an optimistic-concurrency conflict), `WIRE_DECODE_FAILED`, `PAYLOAD_TOO_LARGE` on a single entry, and every other coded error | Settle rejected with the server's code. The write is not retried. Re-running it with different arguments is the application's job, because the client never rewrites args |
+| Committed, the result is unreadable | Success whose `result` does not decode                                                                                                                            | Settle committed with the decode error attached. Never retry                                                                                                              |
+
+`CONFLICT` is listed because it is the most common terminal outcome an application
+will meet on replay. The server re-runs the handler against current state, so a
+duplicate create replays into the same `CONFLICT` it would have raised live. The
+handler can avoid this itself with `skipDuplicates` or `upsert`, which is the
+documented merge path.
+
 A slot — or a single-call reply — that SUCCEEDED but whose `result` does not
 decode is COMMITTED. It settles committed (its optimistic layer confirmed, its
 durable record removed) with the decode error attached, and is never retried:

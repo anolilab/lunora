@@ -425,6 +425,50 @@ and `error`. Causally dependent writes that the server rejects in turn each
 surface their own event, in FIFO order. The [`@lunora/db`](/docs/packages/db)
 collection layer exposes the same idea as `onWriteRejected`.
 
+## Conflicts on replay
+
+A queued write replays by calling its mutation again on the shard, against the
+data as it is **now**, not as it was when the write was queued. So the handler is
+where a conflict gets resolved, and the client does not rewrite arguments.
+
+A replay that the handler rejects with a `CONFLICT` (a unique-index breach or an
+optimistic-concurrency conflict) is terminal. The write is dropped, its optimistic
+value rolls back, and the caller's promise rejects with `code: "CONFLICT"`. The
+client does not retry it. The `onMutationSettled` event in
+[Surfacing rejected writes](#surfacing-rejected-writes) reports the same code.
+
+To keep an offline create from failing on a duplicate, make the handler merge
+instead of conflicting. Two calls cover most cases:
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+// Keep the existing row when the email is already taken. The replay resolves
+// to null instead of CONFLICT, so the queued write settles as committed.
+export const addUser = mutation.input({ email: v.string(), name: v.string() }).mutation(async ({ args, ctx }) => {
+    return ctx.db.users.insert({ email: args.email, name: args.name }, { skipDuplicates: true });
+});
+
+// Create or update by a unique field. Returns { created, id }.
+export const saveUser = mutation.input({ email: v.string(), name: v.string() }).mutation(async ({ args, ctx }) => {
+    return ctx.db.users.upsert({
+        create: { email: args.email, name: args.name },
+        target: "email",
+    });
+});
+```
+
+`skipDuplicates` keeps the row that is already there. `upsert` lets the write
+overwrite it, through the `update` field, when that is the intent. Pick one per
+mutation and state it in the handler, because a replayed write cannot ask the user
+which one they wanted.
+
+A merge that depends on what the user typed offline, such as a draft that should be
+kept next to the server copy, is not something the handler can express. The handler
+sees only the arguments it was queued with. Such a case needs the application to
+catch the rejection and re-issue the write, and the client has no built-in path for
+that yet.
+
 ## See also
 
 - [@lunora/db](/docs/packages/db): the same outbox + optimistic model as a
