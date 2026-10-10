@@ -9,7 +9,8 @@
  */
 import { isLunoraError } from "@lunora/errors";
 
-import { api, internal } from "../../../lunora/_generated/api.js";
+import { api } from "../../../lunora/_generated/api";
+import { internal } from "../../../lunora/_generated/internal";
 import { currentAuth } from "../../auth";
 import type { InstallPorts, SealedSecret } from "../../catalog/install";
 import type { CatalogDeps, CatalogEnv, CatalogInstallRow, InstallAdapters, InstallFailureKind, InstallRequest, InstallTarget } from "../../catalog/service";
