@@ -270,12 +270,12 @@
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
                   if ! printf '%s\n' "$declared" | grep -qx "$WORKSPACE"; then
                     echo "$WORKSPACE/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     exit 1
                   fi
                   if [ "$count" != "$LEGS" ]; then
                     echo "$count workspaces declare a workerd project but the matrix has $LEGS legs." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
                     exit 1
                   fi
