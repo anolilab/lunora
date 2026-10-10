@@ -10,8 +10,9 @@
 
 import type { TargetId } from "../provision-contract";
 import { TARGETS } from "../provision-contract";
+import type { FAMILY_METERS, UsageFamily } from "../targets/driver";
 import type { PeriodUsage, UsageMeter } from "./spend";
-import { isUsageMeter, USAGE_METERS } from "./spend";
+import { isUsageMeter, RATE_CARD, USAGE_METERS } from "./spend";
 
 export type UsageKind = UsageMeter;
 
@@ -98,6 +99,87 @@ export const UNVERIFIED_METERS: ReadonlySet<UsageMeter> = new Set<UsageMeter>(["
  * ({@link UNVERIFIED_METERS}).
  */
 export const isBilledReadback = (target: TargetId, meter: UsageMeter): boolean => isBilledTarget(target) && !UNVERIFIED_METERS.has(meter);
+
+/** A meter some readback family measures ({@link FAMILY_METERS}). */
+export type MeasuredMeter = (typeof FAMILY_METERS)[UsageFamily][number];
+
+/**
+ * Meters the platform does not measure, each with the reason. A meter lands here
+ * when no readback family writes it. Most need a reader whose GraphQL or Analytics
+ * Engine fields are not yet verified against a live account (the introspection
+ * probes in `src/cloudflare/`). The storage gauges (`*StorageGbMonths`,
+ * `vectorizeStoredDimensions`, `imagesStored`) are point-in-time sizes, not
+ * counters, so they need a periodic sample and a ledger decision first.
+ *
+ * Nothing reads them back, so their usage is absent from the spend cap. A tenant
+ * can still self-report one through `usage.ingest`; that row is priced and counted
+ * like any other, and the platform does not verify it.
+ */
+export const UNMEASURED_METERS = {
+    aeDataPoints: "Analytics Engine data points are not read back per tenant",
+    aeReadQueries: "Analytics Engine read queries are not read back per tenant",
+    browserHours: "Browser Rendering hours are not read back",
+    containerCpuSeconds: "Container CPU is not read back",
+    containerDiskGbSeconds: "Container disk is not read back",
+    containerMemoryGibSeconds: "Container memory is not read back",
+    d1StorageGbMonths: "D1 storage is a gauge; it needs a periodic sample, not a counter",
+    doStorageGbMonths: "Durable Object storage is a gauge; it needs a periodic sample, not a counter",
+    imagesDelivered: "Images deliveries are not read back",
+    imagesStored: "Stored images are a gauge; they need a periodic sample, not a counter",
+    imagesTransformations: "Image transformations are not read back",
+    kvDeletes: "Workers KV operations are not read back",
+    kvLists: "Workers KV operations are not read back",
+    kvReads: "Workers KV operations are not read back",
+    kvStorageGbMonths: "Workers KV storage is a gauge; it needs a periodic sample, not a counter",
+    kvWrites: "Workers KV operations are not read back",
+    logEvents: "Workers Logs events are not read back",
+    logpushRequests: "Logpush requests are not read back",
+    queueOperations: "Queue operations are not read back",
+    r2ClassAOps: "R2 operations are not read back",
+    r2ClassBOps: "R2 operations are not read back",
+    r2StorageGbMonths: "R2 storage is a gauge; it needs a periodic sample, not a counter",
+    vectorizeQueriedDimensions: "Vectorize queries are not read back",
+    vectorizeStoredDimensions: "Vectorize storage is a gauge; it needs a periodic sample, not a counter",
+    workersAiNeurons: "Workers AI usage is not read back",
+    workflowSteps: "Workflow steps are not read back",
+    workflowStorageGbMonths: "Workflow storage is a gauge; it needs a periodic sample, not a counter",
+} as const satisfies Record<Exclude<UsageMeter, MeasuredMeter>, string>;
+
+/** Whether a readback family measures `meter`. */
+export const isMeasuredMeter = (meter: UsageMeter): meter is MeasuredMeter => !(meter in UNMEASURED_METERS);
+
+/**
+ * How a meter's usage reaches the bill: `enforced` counts toward the spend cap
+ * and the overage debit; `alert-only` is written but never billed
+ * ({@link UNVERIFIED_METERS}); `unmeasured` has no readback at all
+ * ({@link UNMEASURED_METERS}).
+ */
+export type MeterCoverage = "alert-only" | "enforced" | "unmeasured";
+
+export const meterCoverage = (meter: UsageMeter): MeterCoverage => {
+    if (!isMeasuredMeter(meter)) {
+        return "unmeasured";
+    }
+
+    return UNVERIFIED_METERS.has(meter) ? "alert-only" : "enforced";
+};
+
+/** One unmeasured meter, as the summary and the Usage tab show it. */
+export interface UnmeasuredMeter {
+    meter: UsageMeter;
+    product: string;
+    reason: string;
+}
+
+/** Every unmeasured meter in rate-card order, with its product and reason. */
+export const unmeasuredMeters = (): UnmeasuredMeter[] =>
+    Object.entries(UNMEASURED_METERS).map(([meter, reason]) => {
+        return {
+            meter: meter as UsageMeter,
+            product: RATE_CARD[meter as UsageMeter].product,
+            reason,
+        };
+    });
 
 /** Drop the zero meters — the sparse form the cost model and breakdown take. */
 export const toPeriodUsage = (totals: UsageTotals): PeriodUsage => {

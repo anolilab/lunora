@@ -12,7 +12,7 @@ import { api } from "../../lunora/_generated/api.js";
 import { includedUsageFor } from "../billing/overage";
 import { estimatedSpendMinor, spendBreakdown } from "../billing/spend";
 import type { UsageTotals } from "../billing/usage";
-import { toPeriodUsage } from "../billing/usage";
+import { meterCoverage, toPeriodUsage, unmeasuredMeters } from "../billing/usage";
 import { formatDate, formatNumber } from "./format";
 import { COLUMN_LABEL } from "./section-styles";
 import { Field, FieldForm, FormError, StatusBadge } from "./section-ui";
@@ -45,9 +45,10 @@ const formatNanoCents = (nanoCents: number): string => {
  * prices — so a period whose spend was all Durable Object duration would
  * otherwise show nothing at all.
  */
-const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
+export const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
     const usage = toPeriodUsage(totals);
     const breakdown = spendBreakdown(usage);
+    const unmeasuredProducts = [...new Set(unmeasuredMeters().map((line) => line.product))];
 
     return (
         <div className="border-border flex flex-col gap-2 border-t pt-4">
@@ -61,6 +62,7 @@ const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
                         <li className="flex items-baseline justify-between gap-4" key={line.meter}>
                             <span className="text-muted-foreground font-mono text-[11px]">
                                 {line.product} · {formatNumber(line.quantity)} {line.unit}
+                                {meterCoverage(line.meter) === "alert-only" ? " · alert only" : ""}
                             </span>
                             <span className="font-mono text-[11px] tabular-nums">{formatNanoCents(line.nanoCents)}</span>
                         </li>
@@ -70,6 +72,14 @@ const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
             <p className="text-muted-foreground m-0 font-mono text-[11px]">
                 Estimated at Cloudflare&apos;s marginal rates — your invoice is the authoritative number.
             </p>
+            <div className="flex flex-col gap-0.5">
+                <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Not measured</span>
+                <span className="text-muted-foreground font-mono text-[11px]">{unmeasuredProducts.join(" · ")}</span>
+                <p className="text-muted-foreground m-0 font-mono text-[11px]">
+                    Lunora Cloud does not measure these products, so their usage is missing from the figures above and from your spend cap unless you report it
+                    yourself. A zero here is not a zero bill.
+                </p>
+            </div>
         </div>
     );
 };

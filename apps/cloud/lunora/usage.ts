@@ -11,8 +11,8 @@ import {
     periodStartOf,
     spendBreakdown,
 } from "../src/billing/spend";
-import type { UsageTotals } from "../src/billing/usage";
-import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
+import type { UnmeasuredMeter, UsageTotals } from "../src/billing/usage";
+import { aggregateUsage, isBillableUsage, unmeasuredMeters } from "../src/billing/usage";
 import type { SourceStatusRow } from "../src/metering/status";
 import { meteringNotices } from "../src/metering/status";
 import type { UsageFamily } from "../src/targets/driver";
@@ -384,6 +384,13 @@ export interface BillingSummary extends SpendLimits {
     projectedSpendMinor: number;
     spendMinor: number;
     suspended: boolean;
+
+    /**
+     * Meters the platform does not measure, so they are absent from `breakdown`
+     * and from the spend cap unless a tenant self-reports them. Zero in
+     * `breakdown` does not mean zero spend for these.
+     */
+    unmeasured: UnmeasuredMeter[];
 }
 
 /**
@@ -439,6 +446,7 @@ export const billingSummary = internalQuery
             projectedSpendMinor,
             spendMinor: decision.spendMinor,
             suspended: organization.suspendedAt != null,
+            unmeasured: unmeasuredMeters(),
             warnMinor: decision.warnMinor,
         };
     });
