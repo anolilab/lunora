@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.334...@lunora/config@1.0.0-alpha.335) (2026-10-10)
+
+### Bug Fixes
+
+* **cli,config:** harden cloudflare profile and tidy reconcile target ([#1096](https://github.com/anolilab/lunora/issues/1096)) ([17dea79](https://github.com/anolilab/lunora/commit/17dea79aba2b64a748374d54a84812b9cb410ecf))
+
 ## @lunora/config [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.333...@lunora/config@1.0.0-alpha.334) (2026-10-10)
 
 ### Features
