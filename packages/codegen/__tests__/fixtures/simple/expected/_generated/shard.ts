@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, DispatchBookmark, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, QueryReadScope, RelatedPage, RunShardApplyCdcArgs, RunShardExportArgs, RunShardFindRelatedArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SearchBackfillProgress, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SubscriptionIdentity, SystemReaderStorageLike, TelemetrySink } from "@lunora/do";
-import { applyCdcChanges, backfillSearchIndexes, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
+import { applyCdcChanges, createStableIdFactory, backfillSearchIndexes, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
 import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 import { createNotify } from "@lunora/notify";
@@ -1118,6 +1118,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     userId: userId ?? null,
                 },
                 db,
+                // `ctx.newId()`: a replay of the same top-level mutation gets the same ids. A nested or
+                // subscription-driven build (`options.identity`) is not a replay.
+                newId: createStableIdFactory(options.identity ? undefined : this.getCurrentMutationId(), JSON.stringify([this.currentShardKey(), options.functionPath ?? "", userId ?? ""])),
                 // Instrumented `fetch`: a CLIENT span per outbound call plus W3C
                 // `traceparent` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare

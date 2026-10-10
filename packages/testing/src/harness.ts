@@ -670,13 +670,40 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     let mutationContextRef: unknown;
     let actionContextRef: unknown;
 
-    // `ctx.now` for every context: captured once so a harness sees one stable
-    // instant (production captures it per execution). Overridable via `options.now`.
-    // Computed BEFORE the scheduler so the fake scheduler's virtual clock starts
-    // from the same instant — otherwise a handler that does
-    // `ctx.scheduler.runAt(ctx.now + delay, …)` schedules against a clock that
-    // disagrees with `ctx.now`.
-    const harnessNow = options?.now ?? Date.now();
+    // `ctx.now` for every context. Production captures it once per execution, so
+    // the harness reads the clock when a handler touches `ctx.now` — not once when
+    // the harness is built, which left a test that moved the clock with
+    // `vi.setSystemTime` after setup reading a stale instant. A fixed
+    // `options.now` still wins. The fake scheduler's virtual clock is seeded
+    // from the same starting instant, so `ctx.scheduler.runAt(ctx.now + delay, …)`
+    // schedules against the clock `ctx.now` reports.
+    const currentNow = (): number => options?.now ?? Date.now();
+    const schedulerSeedNow = currentNow();
+
+    // The clock one top-level run reads. Production captures `ctx.now` once per
+    // execution, so a top-level call takes the clock when it starts and holds it until
+    // it settles. A nested `ctx.run*` inherits the outer run's clock, and the previous
+    // value is restored afterwards.
+    let runClock: number | undefined;
+    // Generic over the function type, so the harness keeps each overload's signature.
+    const inRun = <F extends (...args: never[]) => unknown>(run: F): F =>
+        ((...args: never[]) => {
+            const previous = runClock;
+
+            runClock = currentNow();
+
+            const result = (run as (...callArgs: never[]) => unknown)(...args);
+
+            if (result instanceof Promise) {
+                return result.finally(() => {
+                    runClock = previous;
+                });
+            }
+
+            runClock = previous;
+
+            return result;
+        }) as F;
     // One recorder per harness (shared by the query/mutation/action contexts, so a
     // `ctx.runMutation` from a query accumulates onto the same wide event the real
     // runtime would — a composed call reuses the outer dispatch's span).
@@ -701,7 +728,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         () => requireReference(mutationContextRef, "mutationContext"),
         () => requireReference(actionContextRef, "actionContext"),
         () => functionRegistryMap,
-        harnessNow,
+        schedulerSeedNow,
     );
 
     // `ctx.scheduler` as production installs it on a mutation/action ctx: the
@@ -740,7 +767,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             env: options?.env,
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -761,7 +791,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             env: options?.env,
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -807,7 +840,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             fetch: options?.fetch ?? (stubProxy("fetch") as ActionCtx["fetch"]),
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -908,14 +944,18 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             mutationListeners,
         );
 
+        // The inline `t.run` body, hoisted so the harness object stays shallow.
+        const runTopLevelInline = (function_: InlineMutationFunction<unknown>): Promise<unknown> =>
+            runInTransaction(() => function_(rawMutationContext)).then(notifyAfter);
+
         const harness: TestHarness = {
-            action,
+            action: inRun(action),
             close: closeDatabase,
-            mutation,
+            mutation: inRun(mutation),
             notify: notifyControls,
-            query,
+            query: inRun(query),
             queues: queueControls,
-            run: (function_) => runInTransaction(() => function_(rawMutationContext)).then(notifyAfter),
+            run: inRun(runTopLevelInline) as TestHarness["run"],
             scheduler: schedulerControls,
             subscribe,
             topics: topicControls,

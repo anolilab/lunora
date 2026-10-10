@@ -36,6 +36,7 @@ export type {
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
+export { createStableIdFactory } from "./stable-id";
 // Cloudflare implementations of the `@lunora/platform` host contracts. These
 // are what `@lunora/platform-cloudflare` will re-export as the default host.
 export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/platform-cloudflare";
@@ -43,7 +44,6 @@ export { createShardAlarms, createShardDirectory, createShardHost, createShardKv
 // from the two lifetimes a Worker has (DO state, worker env).
 export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "@lunora/platform-cloudflare";
 export { createShardPlatform, createWorkerPlatform } from "@lunora/platform-cloudflare";
-
 // Every re-export below must have a named consumer (the codegen emitter's
 // import builders, or an import site in this repo). Additions require one;
 // drive-by re-exports are how 230 unused names got frozen here (plan 286).

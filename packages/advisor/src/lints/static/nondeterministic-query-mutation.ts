@@ -2,6 +2,28 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
+ * The fix depends on the call. `Date.now()` and `new Date()` read `ctx.now`, which
+ * is captured when a run begins. A replay of the run captures it again, so a value
+ * that must survive a replay still belongs in an argument. In a mutation,
+ * `crypto.randomUUID()` can use `ctx.newId()`, which reproduces its ids on a replay
+ * of the same call. Those ids are derived, not random, so a token or secret keeps
+ * `crypto.randomUUID()`. Anything else needs an action.
+ */
+const remedyFor = (callee: string, exportName: string, kind: "query" | "mutation"): string => {
+    if (callee === "Date.now" || callee === "new Date") {
+        return "Read the time through `ctx.now` instead: it is captured once when this run begins. A replay of the run captures it again, so a value that must survive a replay should come in as an argument.";
+    }
+
+    if (callee === "crypto.randomUUID" && kind === "mutation") {
+        return "Use `ctx.newId()` instead: a replay of the same call reproduces its ids. The ids are derived, not random, so a token or secret keeps `crypto.randomUUID()`.";
+    }
+
+    return kind === "query"
+        ? "Compute it in an `action` and pass the value into the mutation as an argument."
+        : `No action needed unless \`${exportName}\` is invoked from a workflow step or queue consumer that can itself replay.`;
+};
+
+/**
  * Flags a non-deterministic API call inside a `query(...)` or `mutation(...)`
  * handler body.
  *
@@ -37,12 +59,12 @@ import type { Lint } from "../../types";
 const nondeterministicQueryMutation: Lint = {
     categories: ["SCHEMA"],
     description:
-        "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
+        "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay. For `Date.now()`, read the time through `ctx.now` instead: it is the instant the handler began, captured once, so it is stable across re-evaluations and replays.",
     facing: "EXTERNAL",
     level: "WARN",
     name: "nondeterministic_query_mutation",
     remediation:
-        "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
+        "For `Date.now()`: use `ctx.now` in the query or mutation handler. It is the wall-clock instant (epoch ms) the handler began, captured once, so every evaluation and replay sees the same value. For other non-deterministic calls in a `query`: move them into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
     run: (context) => {
         // No call evidence supplied → nothing to assert (mirrors auth_api_call_without_headers).
         if (context.nondeterministicCalls === undefined) {
@@ -76,7 +98,7 @@ const nondeterministicQueryMutation: Lint = {
                 findings.push(
                     emit(nondeterministicQueryMutation, {
                         cacheKey: `nondeterministic_query_mutation:${baseKey}${occurrenceSuffix}`,
-                        detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless \`${call.exportName}\` is invoked from a workflow step or queue consumer that can itself replay.`,
+                        detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational. ${remedyFor(call.callee, call.exportName, "mutation")}`,
                         facing: "INTERNAL",
                         level: "INFO",
                         metadata,
@@ -89,7 +111,7 @@ const nondeterministicQueryMutation: Lint = {
             findings.push(
                 emit(nondeterministicQueryMutation, {
                     cacheKey: `nondeterministic_query_mutation:${baseKey}${occurrenceSuffix}`,
-                    detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a query handler — a live subscription may re-run this query, so the result can differ between evaluations. Compute it in an \`action\` and pass the value into the mutation as an argument.`,
+                    detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a query handler — a live subscription may re-run this query, so the result can differ between evaluations. ${remedyFor(call.callee, call.exportName, "query")}`,
                     metadata,
                 }),
             );

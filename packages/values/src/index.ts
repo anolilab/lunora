@@ -1,5 +1,6 @@
 export type { ValidationPath } from "./errors";
 export { describeValue, formatPath, ValidationError } from "./errors";
+export { cyrb53 } from "./hash";
 export type { JsonSchema, SchemaNodeReader } from "./json-schema-core";
 export { acceptsAbsent, jsonSchemaFromNode, objectSchemaFromNodes } from "./json-schema-core";
 export { argsToJsonSchema, toJsonSchema } from "./to-json-schema";

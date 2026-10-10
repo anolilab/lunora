@@ -237,6 +237,9 @@ ${notifyBuild}
                     userId: userId ?? null,
                 },
                 db,
+                // \`ctx.newId()\`: a replay of the same top-level mutation gets the same ids. A nested or
+                // subscription-driven build (\`options.identity\`) is not a replay.
+                newId: createStableIdFactory(options.identity ? undefined : this.getCurrentMutationId(), JSON.stringify([this.currentShardKey(), options.functionPath ?? "", userId ?? ""])),
                 // Instrumented \`fetch\`: a CLIENT span per outbound call plus W3C
                 // \`traceparent\` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare

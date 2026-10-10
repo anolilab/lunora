@@ -32,6 +32,30 @@ describe("nondeterministic_query_mutation", () => {
     // pattern. Dropped to INFO (not silenced — a mutation dispatched from a
     // workflow step/queue consumer that itself replays is still a real
     // caveat, and the finding is the breadcrumb to it).
+    it("points Date.now() at ctx.now in both query and mutation findings", () => {
+        expect.assertions(3);
+
+        const findings = run([
+            { callee: "Date.now", exportName: "listPresence", file: "presence", kind: "query", line: 5 },
+            { callee: "Date.now", exportName: "sendMessage", file: "messages", kind: "mutation", line: 9 },
+        ]);
+
+        expect(findings).toHaveLength(2);
+
+        for (const finding of findings) {
+            expect(finding.detail).toContain("ctx.now");
+        }
+    });
+
+    it("keeps the action guidance for non-deterministic calls that have no ctx equivalent", () => {
+        expect.assertions(2);
+
+        const [finding] = run([{ callee: "Math.random", exportName: "pickSample", file: "samples", kind: "query", line: 3 }]);
+
+        expect(finding?.detail).toContain("action");
+        expect(finding?.detail).not.toContain("ctx.now");
+    });
+
     it("drops Date.now() inside a mutation handler to INFO", () => {
         expect.assertions(2);
 

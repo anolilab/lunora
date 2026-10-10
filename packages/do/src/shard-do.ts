@@ -3695,6 +3695,15 @@ abstract class ShardDO {
     }
 
     /**
+     * The replay key the caller sent (`x-lunora-mutation-id`) for this dispatch, or
+     * `undefined`. `ctx.newId()` derives its ids from it, so only the top-level
+     * dispatch may read it: a nested call shares the request and must not.
+     */
+    protected getCurrentMutationId(): string | undefined {
+        return this.currentRequestMutationId;
+    }
+
+    /**
      * Whether the in-flight `/rpc` call is a trusted server-initiated dispatch
      * (scheduler/cron). A concrete `handleRpc` consults this to decide whether
      * `internal` functions may run — they may for system dispatch, never for a
