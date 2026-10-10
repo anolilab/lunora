@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { LunoraError } from "@lunora/errors";
 import type { NotifyDefinition } from "@lunora/notify";
 import type {
@@ -379,7 +381,15 @@ type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & Topi
  * - Intermediate snapshots between two `next()` calls are coalesced (the next `next()` sees
  * the most-recent state).
  */
-const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: QueryCtx, mutationListeners: Set<() => void>): TestHarness["subscribe"] => {
+/** The clock the current top-level harness call reads through `ctx.now`. */
+const runClock = new AsyncLocalStorage<number>();
+
+const buildSubscribe = (
+    runRegistered: RunRegisteredFunction,
+    queryContext: QueryCtx,
+    mutationListeners: Set<() => void>,
+    clock: () => number,
+): TestHarness["subscribe"] => {
     const factory = (referenceOrInline: unknown, args?: unknown): TestSubscription<unknown> => {
         let done = false;
         // Parked `next()` callers awaiting the next emit. An array (not a single
@@ -402,13 +412,15 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
         let latestSeq = 0;
         let appliedSeq = 0;
 
-        const runQuery = (): Promise<unknown> => {
-            if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("query", referenceOrInline as never, queryContext, args, false);
-            }
+        // Every (re-)evaluation is its own run: it reads the clock as of that run.
+        const runQuery = (): Promise<unknown> =>
+            runClock.run(clock(), () => {
+                if (registeredFunctionKind(referenceOrInline)) {
+                    return runRegistered("query", referenceOrInline as never, queryContext, args, false);
+                }
 
-            return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
-        };
+                return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
+            });
 
         const emit = (seq: number, value: unknown): void => {
             // Drop a snapshot a newer notification has already superseded.
@@ -670,13 +682,20 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     let mutationContextRef: unknown;
     let actionContextRef: unknown;
 
-    // `ctx.now` for every context: captured once so a harness sees one stable
-    // instant (production captures it per execution). Overridable via `options.now`.
-    // Computed BEFORE the scheduler so the fake scheduler's virtual clock starts
-    // from the same instant — otherwise a handler that does
-    // `ctx.scheduler.runAt(ctx.now + delay, …)` schedules against a clock that
-    // disagrees with `ctx.now`.
-    const harnessNow = options?.now ?? Date.now();
+    // `ctx.now` for every context. Production captures it once per execution, so
+    // the harness reads the clock when a handler touches `ctx.now` — not once when
+    // the harness is built, which left a test that moved the clock with
+    // `vi.setSystemTime` after setup reading a stale instant. A fixed
+    // `options.now` still wins. The fake scheduler's virtual clock is seeded
+    // from the same starting instant, so `ctx.scheduler.runAt(ctx.now + delay, …)`
+    // schedules against the clock `ctx.now` reports.
+    const currentNow = (): number => options?.now ?? Date.now();
+    const schedulerSeedNow = currentNow();
+
+    // Each top-level call runs under its own clock (see `runClock`). Nested calls inherit
+    // it, overlapping calls keep their own, and a synchronous throw restores it.
+    const inRun = <F extends (...args: never[]) => unknown>(run: F): F =>
+        ((...args: never[]) => runClock.run(currentNow(), () => (run as (...callArgs: never[]) => unknown)(...args))) as F;
     // One recorder per harness (shared by the query/mutation/action contexts, so a
     // `ctx.runMutation` from a query accumulates onto the same wide event the real
     // runtime would — a composed call reuses the outer dispatch's span).
@@ -701,7 +720,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         () => requireReference(mutationContextRef, "mutationContext"),
         () => requireReference(actionContextRef, "actionContext"),
         () => functionRegistryMap,
-        harnessNow,
+        schedulerSeedNow,
     );
 
     // `ctx.scheduler` as production installs it on a mutation/action ctx: the
@@ -740,7 +759,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             env: options?.env,
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock.getStore() ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -761,7 +783,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             env: options?.env,
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock.getStore() ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -792,7 +817,14 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // Backs `harness.run` only — `query`/`mutation`/`action` dispatch (both the
         // registered-procedure and inline-callback forms) stays on the guarded
         // `queryContext`/`mutationContext`/`actionContext` above.
-        const rawMutationContext: HarnessMutationContext = { ...mutationContext, db: rawDatabase };
+        // Copy the descriptors, not the values: a spread would evaluate the `now` getter once.
+        const rawMutationContext = Object.defineProperties(
+            {},
+            {
+                ...Object.getOwnPropertyDescriptors(mutationContext),
+                db: { enumerable: true, value: rawDatabase },
+            },
+        ) as HarnessMutationContext;
 
         // `services` is not on the base ActionCtx: codegen adds it to the app's own
         // action context when `lunora.config` declares services.
@@ -807,7 +839,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             fetch: options?.fetch ?? (stubProxy("fetch") as ActionCtx["fetch"]),
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock.getStore() ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -906,16 +941,21 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             },
             queryContext,
             mutationListeners,
+            () => options?.now ?? Date.now(),
         );
 
+        // The inline `t.run` body, hoisted so the harness object stays shallow.
+        const runTopLevelInline = (function_: InlineMutationFunction<unknown>): Promise<unknown> =>
+            runInTransaction(() => function_(rawMutationContext)).then(notifyAfter);
+
         const harness: TestHarness = {
-            action,
+            action: inRun(action),
             close: closeDatabase,
-            mutation,
+            mutation: inRun(mutation),
             notify: notifyControls,
-            query,
+            query: inRun(query),
             queues: queueControls,
-            run: (function_) => runInTransaction(() => function_(rawMutationContext)).then(notifyAfter),
+            run: inRun(runTopLevelInline) as TestHarness["run"],
             scheduler: schedulerControls,
             subscribe,
             topics: topicControls,

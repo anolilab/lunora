@@ -24,6 +24,7 @@ const fakeStringSchema = {
 const makeMutationContext = (): MutationContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
+        newId: () => "test-id",
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },

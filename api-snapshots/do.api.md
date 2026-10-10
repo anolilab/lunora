@@ -410,6 +410,7 @@ abstract class ShardDO {
     protected getCurrentSampleErrors(): boolean | undefined;
     protected getCurrentTrace(): TraceAnchor | undefined;
     protected getCurrentIdentity(): Record<string, unknown> | undefined;
+    protected getCurrentMutationId(): string | undefined;
     protected isSystemDispatch(): boolean;
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult>;
     protected runShardSearchBackfill(_options: {
@@ -775,6 +776,12 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 ### `createSocketHost` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
+
+### `createStableIdFactory` (const)
+
+```ts
+const createStableIdFactory: (mutationId: string | undefined, scope: string) => (() => string);
+```
 
 ### `createWorkerPlatform` (const)
 

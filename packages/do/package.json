@@ -66,6 +66,7 @@
         "@lunora/platform": "1.0.0-alpha.58",
         "@lunora/platform-cloudflare": "1.0.0-alpha.79",
         "@lunora/shard-engine": "1.0.0-alpha.119",
+        "@lunora/values": "1.0.0-alpha.61",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {

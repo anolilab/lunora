@@ -4332,7 +4332,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work) });");
             expect(output).not.toContain("namespace:");
             expect(output).not.toContain("ROOT_SHARD_NAME");
-            expect(output).not.toContain("currentShardKey");
+            // `ctx.newId()` reads the shard key to scope its ids (the only shard read a
+            // root-mode shard makes); the vector wiring itself must stay shard-free.
+            expect(output).not.toContain("vectorShardKey");
         });
 
         it("scopes the createVectorSyncHook auto-sync by the DO's shard key when the vectorized table is .shardBy()'d", () => {

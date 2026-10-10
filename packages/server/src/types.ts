@@ -2340,7 +2340,6 @@ interface LunoraMetrics {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface QueryCtx {
     readonly auth: AuthState;
-
     readonly db: DatabaseReader;
 
     /**
@@ -2371,8 +2370,6 @@ interface QueryCtx {
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
-    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
-
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
      * across calls and deep-frozen. Present so middleware can read the policy it
@@ -2381,7 +2378,12 @@ interface QueryCtx {
      * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
     readonly metrics: LunoraMetrics;
+    /** `ctx.newId()`: see `createStableIdFactory`. Derived, not random, when the call carries a replay key. */
+    readonly newId: () => string;
 
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
@@ -2415,7 +2417,6 @@ interface QueryCtx {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface MutationCtx {
     readonly auth: AuthState;
-
     readonly db: DatabaseWriter;
 
     /**
@@ -2437,8 +2438,6 @@ interface MutationCtx {
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
-    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
-
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
      * across calls and deep-frozen. Present so middleware can read the policy it
@@ -2447,7 +2446,12 @@ interface MutationCtx {
      * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
     readonly metrics: LunoraMetrics;
+    /** `ctx.newId()`: see `createStableIdFactory`. Derived, not random, when the call carries a replay key. */
+    readonly newId: () => string;
 
     /**
      * Wall-clock time (epoch ms) the function began, captured once so the whole
@@ -2545,8 +2549,6 @@ interface ActionCtx {
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
-    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
-
     /**
      * Static metadata declared on this procedure with `.meta(...)`, merged
      * across calls and deep-frozen. Present so middleware can read the policy it
@@ -2555,7 +2557,12 @@ interface ActionCtx {
      * `.meta()`.
      */
     readonly meta?: Readonly<Record<string, unknown>>;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
     readonly metrics: LunoraMetrics;
+    /** `ctx.newId()`: see `createStableIdFactory`. Derived, not random, when the call carries a replay key. */
+    readonly newId: () => string;
 
     /**
      * Wall-clock time (epoch ms) the action began, captured once for convenience

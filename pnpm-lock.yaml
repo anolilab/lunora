@@ -3470,6 +3470,9 @@ importers:
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../values
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)
