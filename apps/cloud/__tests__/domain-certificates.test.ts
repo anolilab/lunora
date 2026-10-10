@@ -54,6 +54,8 @@ const PURGED_TABLES = [
     "invitations",
     "issues",
     "members",
+    "notificationChannels",
+    "notificationDeliveries",
     "metricPoints",
     "observations",
     "overageDebits",

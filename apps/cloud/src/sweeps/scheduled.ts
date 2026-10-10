@@ -54,6 +54,9 @@ import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics"
 import { orgAdminEmails } from "../telemetry/recipients";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUsageAlertSweep } from "../telemetry/usage-alert-sweep";
+import { createDohResolver } from "../domains/verify";
+import { runDomainSweep } from "../domains/sweep";
+import { runNotificationSweep } from "../notifications/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
 
 /** The Worker's own entry, as far as a scheduled run reaches it. */
@@ -613,6 +616,41 @@ const sampleQueueDepth = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Deliver the lifecycle-notification outbox (deploy, domain and preview events)
+ * over each channel's destination. Rows are queued by the lifecycle mutations;
+ * this sweep is the only place they leave the control plane.
+ */
+const sweepNotifications = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    await runNotificationSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        fetch: globalThis.fetch,
+        now: Date.now(),
+        secretKey: env.SECRET_ENCRYPTION_KEY,
+    });
+};
+
+/**
+ * Re-verify custom domains (DNS TXT + CNAME) on the hourly tick, the same check the
+ * Verify button runs. A domain that stops validating is announced once it has
+ * failed repeatedly, so a DNS record removed after go-live is noticed without
+ * anyone clicking Verify.
+ */
+const sweepDomains = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    await runDomainSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
+        now: Date.now(),
+        resolve: createDohResolver(),
+    });
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -647,6 +685,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
         },
     },
     // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
+    { cron: EVERY_MINUTE, run: sweepNotifications },
+    { cron: EVERY_HOUR, run: sweepDomains },
     { cron: EVERY_HOUR, run: sweepHostdRollouts },
     // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
     { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
