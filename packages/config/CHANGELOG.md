@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.333...@lunora/config@1.0.0-alpha.334) (2026-10-10)
+
+### Features
+
+* **config:** enable upload_source_maps on the cloudflare target ([#1094](https://github.com/anolilab/lunora/issues/1094)) ([4a22914](https://github.com/anolilab/lunora/commit/4a22914343d6464b2c84e9a3b68fd6e3234db006))
+
 ## @lunora/config [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.332...@lunora/config@1.0.0-alpha.333) (2026-10-10)
 
 
