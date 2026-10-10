@@ -20,15 +20,20 @@ const TIME_ZONE = "UTC";
 /** Duration as a compact `12ms` / `1.4s`. */
 export const formatMs = (ms: number): string => (ms < 1000 ? `${String(Math.round(ms))}ms` : `${(ms / 1000).toFixed(1)}s`);
 
+// Built once: constructing an Intl formatter is far slower than calling one.
+const dateTimeFormat = new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium", timeStyle: "medium", timeZone: TIME_ZONE });
+const timeFormat = new Intl.DateTimeFormat(LOCALE, { timeStyle: "medium", timeZone: TIME_ZONE });
+const dateFormat = new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium", timeZone: TIME_ZONE });
+const numberFormat = new Intl.NumberFormat(LOCALE);
+
 /** Date + time in UTC, e.g. `28 Jul 2026, 14:03:11 UTC`. */
-export const formatDateTime = (epochMs: number): string =>
-    `${new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium", timeStyle: "medium", timeZone: TIME_ZONE }).format(new Date(epochMs))} UTC`;
+export const formatDateTime = (epochMs: number): string => `${dateTimeFormat.format(new Date(epochMs))} UTC`;
 
 /** Time of day in UTC, e.g. `14:03:11` — for dense per-row timestamps. */
-export const formatTime = (epochMs: number): string => new Intl.DateTimeFormat(LOCALE, { timeStyle: "medium", timeZone: TIME_ZONE }).format(new Date(epochMs));
+export const formatTime = (epochMs: number): string => timeFormat.format(new Date(epochMs));
 
 /** Date in UTC, e.g. `28 Jul 2026` — for axis labels. */
-export const formatDate = (epochMs: number): string => new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium", timeZone: TIME_ZONE }).format(new Date(epochMs));
+export const formatDate = (epochMs: number): string => dateFormat.format(new Date(epochMs));
 
 /** Thousands-separated integer, e.g. `1,234,567`. */
-export const formatNumber = (value: number): string => new Intl.NumberFormat(LOCALE).format(value);
+export const formatNumber = (value: number): string => numberFormat.format(value);

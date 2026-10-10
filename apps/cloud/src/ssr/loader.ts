@@ -89,9 +89,11 @@ export const loadSession = createServerFn({ method: "GET" }).handler(async (): P
  * this leaks nothing the caller could not fetch itself.
  */
 export const loadMyOrganizationIds = createServerFn({ method: "GET" }).handler(async (): Promise<string[]> => {
-    const { createServerClient } = await import("@lunora/client/ssr");
-    const { getRequest, getRequestUrl } = await import("@tanstack/react-start/server");
-    const { api } = await import("../../lunora/_generated/api.js");
+    const [{ createServerClient }, { getRequest, getRequestUrl }, { api }] = await Promise.all([
+        import("@lunora/client/ssr"),
+        import("@tanstack/react-start/server"),
+        import("../../lunora/_generated/api.js"),
+    ]);
 
     const cookie = getRequest().headers.get("cookie") ?? "";
     const { origin } = getRequestUrl();
@@ -174,9 +176,11 @@ export const requireSession = async (target: string): Promise<StudioSession> => 
 const preloadOnServer = createServerFn({ method: "POST" })
     .validator((input: { args: Record<string, unknown>; functionPath: string }) => input)
     .handler(async ({ data }): Promise<string> => {
-        const { createServerClient, preloadQuery } = await import("@lunora/client/ssr");
-        const { getRequest, getRequestUrl } = await import("@tanstack/react-start/server");
-        const { LUNORA_FUNCTIONS } = await import("../../lunora/_generated/functions.js");
+        const [{ createServerClient, preloadQuery }, { getRequest, getRequestUrl }, { LUNORA_FUNCTIONS }] = await Promise.all([
+            import("@lunora/client/ssr"),
+            import("@tanstack/react-start/server"),
+            import("../../lunora/_generated/functions.js"),
+        ]);
 
         const registered = LUNORA_FUNCTIONS[data.functionPath];
 

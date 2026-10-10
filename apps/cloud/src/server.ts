@@ -35,6 +35,7 @@ import { fanOutQueue, groupByTenant } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
 import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
+import { runNotificationSweep } from "./notifications/sweep";
 import type { ControlPlaneDb } from "./store";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
@@ -464,6 +465,23 @@ const sweepAlerts = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Deliver the lifecycle-notification outbox (deploy, domain and preview events)
+ * over each channel's destination. Rows are queued by the lifecycle mutations;
+ * this sweep is the only place they leave the control plane.
+ */
+const sweepNotifications = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    await runNotificationSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        fetch: globalThis.fetch,
+        now: Date.now(),
+        secretKey: env.SECRET_ENCRYPTION_KEY,
+    });
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -483,6 +501,7 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // minute so quiet windows the ingest never re-examines still fire/clear —
     // rides the existing every-minute trigger (no new cron, stays within the cap).
     { cron: EVERY_MINUTE, run: sweepAlerts },
+    { cron: EVERY_MINUTE, run: sweepNotifications },
 ];
 
 /** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */

@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import { formatNumber } from "./format";
-import { COLUMN_LABEL, Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
+import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
+import { COLUMN_LABEL } from "./section-classes";
 import type { SectionProps } from "./tabs";
 
 /**

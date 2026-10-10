@@ -13,7 +13,8 @@ import { api } from "../../lunora/_generated/api.js";
 import { DeploymentsSection } from "./DeploymentsSection";
 import type { GitProvider } from "./ImportProjectDialog";
 import { ImportProjectDialog } from "./ImportProjectDialog";
-import { Field, FieldForm, FormError, interactiveRowClassName, RowList } from "./section-ui";
+import { Field, FieldForm, FormError, RowList } from "./section-ui";
+import { interactiveRowClassName } from "./section-classes";
 import type { OrgId, ProjectId } from "./types";
 
 interface ProjectsSectionProps {

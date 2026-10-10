@@ -21,7 +21,8 @@ const PLAN_META: Record<PlanId, { name: string; tagline: string }> = {
     pro: { name: "Pro", tagline: "For teams shipping to production." },
 };
 
-const compact = (value: number): string => new Intl.NumberFormat("en", { notation: "compact" }).format(value);
+const compactFormat = new Intl.NumberFormat("en", { notation: "compact" });
+const compact = (value: number): string => compactFormat.format(value);
 const plural = (count: number, noun: string): string => `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
 
 export interface PlanCard {

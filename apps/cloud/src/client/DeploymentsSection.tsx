@@ -12,7 +12,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReturnOf } from "@lunora/client";
 import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import { formatDateTime, formatTime } from "./format";
 import { ProjectGraph } from "./ProjectGraph";
 import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
@@ -89,7 +90,30 @@ const formatDuration = (ms: number): string => {
     return `${String(Math.floor(seconds / 60))}m ${String(seconds % 60)}s`;
 };
 
-const formatTime = (ms: number): string => new Date(ms).toLocaleString();
+/**
+ * The wall clock, re-read every second while `active`. Starts at `since` so the
+ * first render is a zero duration; it never reads the clock during render, which
+ * keeps the component pure.
+ */
+const useClock = (since: number, active: boolean): number => {
+    const [now, setNow] = useState(since);
+
+    useEffect(() => {
+        if (!active) {
+            return;
+        }
+
+        const id = setInterval(() => {
+            setNow(Date.now());
+        }, 1000);
+
+        return () => {
+            clearInterval(id);
+        };
+    }, [active]);
+
+    return now;
+};
 
 /** The mono-uppercase back affordance shared by the hero and the empty state. */
 const BackLink = ({ onBack }: { onBack: () => void }): ReactElement => (
@@ -123,7 +147,8 @@ const ProjectHero = ({
 }): ReactElement => {
     const meta = statusMeta(deployment.status);
     const settled = deployment.status === "live" || deployment.status === "superseded";
-    const readyMs = settled ? deployment.updatedAt - deployment.createdAt : Date.now() - deployment.createdAt;
+    const now = useClock(deployment.createdAt, !settled);
+    const readyMs = settled ? deployment.updatedAt - deployment.createdAt : Math.max(0, now - deployment.createdAt);
 
     return (
         <div className="flex flex-col gap-5 border-b border-border pb-6">
@@ -324,7 +349,7 @@ const BuildLogsCard = ({ buildId, organizationId }: { buildId: BuildId; organiza
                     <pre className="bg-muted/40 max-h-96 overflow-auto p-4 font-mono text-xs leading-relaxed">
                         {shown.map((entry) => (
                             <span className={logLineClass(entry)} key={`${String(entry.createdAt)}-${entry.line}`}>
-                                [{new Date(entry.createdAt).toLocaleTimeString()}] {entry.line}
+                                [{formatTime(entry.createdAt)}] {entry.line}
                                 {"\n"}
                             </span>
                         ))}
@@ -397,7 +422,7 @@ const DeploymentsTable = ({
                                 )}
                             </TableCell>
                             <TableCell>{deployment.branch ?? <span className="text-muted-foreground">—</span>}</TableCell>
-                            <TableCell className="text-muted-foreground">{formatTime(deployment.createdAt)}</TableCell>
+                            <TableCell className="text-muted-foreground">{formatDateTime(deployment.createdAt)}</TableCell>
                             <TableCell>
                                 {deployment.status === "superseded" ? (
                                     <Button

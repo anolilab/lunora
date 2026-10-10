@@ -6,6 +6,7 @@ import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
+import { enqueueNotification } from "./notification-outbox";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -33,6 +34,7 @@ interface DomainRow {
 interface ProjectRow {
     _id: Id<"projects">;
     activeScriptName?: string;
+    name?: string;
 }
 
 const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
@@ -140,11 +142,34 @@ export const markVerified = mutation
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "domain");
 
+        const existing = (await context.db.get(id)) as DomainRow | null;
+
         await context.db.patch(id, {
             ...(customHostnameId === undefined ? {} : { customHostnameId }),
             updatedAt: context.now,
             verifiedAt: verified ? context.now : undefined,
         });
+
+        // Announce only the first verification; a re-check of an already verified domain stays quiet.
+        if (verified && existing && existing.verifiedAt === undefined) {
+            const project = (await context.db.get(existing.projectId)) as ProjectRow | null;
+
+            await enqueueNotification(context, organizationId, "domain.verified", {
+                detail: `${existing.hostname} now serves the app.`,
+                project: project?.name ?? "project",
+            });
+        }
+
+        // A verified domain that stops validating is announced once. The next successful
+        // verification sets `verifiedAt` again, which re-arms the announcement.
+        if (!verified && existing && existing.verifiedAt !== undefined) {
+            const project = (await context.db.get(existing.projectId)) as ProjectRow | null;
+
+            await enqueueNotification(context, organizationId, "domain.failed", {
+                detail: `${existing.hostname} no longer validates. Check its DNS records in the domain settings.`,
+                project: project?.name ?? "project",
+            });
+        }
     });
 
 /**

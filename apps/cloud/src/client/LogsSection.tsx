@@ -11,7 +11,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { api } from "../../lunora/_generated/api.js";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatTime } from "./format";
-import { COLUMN_LABEL, Field } from "./section-ui";
+import { Field } from "./section-ui";
+import { COLUMN_LABEL } from "./section-classes";
 import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { ProjectId } from "./types";
@@ -231,8 +232,11 @@ export const LogsSection = ({ focusTraceId, organizationId, preloaded }: Section
                     <CardContent>
                         {/* The screen's primary layer: the stream itself, at size, on one surface step. */}
                         <pre className="bg-muted/40 max-h-[36rem] overflow-auto p-4 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap">
-                            {(logs ?? []).map((entry, index) => (
-                                <span className={`block ${LEVEL_CLASS[entry.level]}`} key={`${String(entry.createdAt)}-${String(index)}`}>
+                            {(logs ?? []).map((entry) => (
+                                <span
+                                    className={`block ${LEVEL_CLASS[entry.level]}`}
+                                    key={`${String(entry.createdAt)}-${entry.level}-${entry.spanId ?? ""}-${entry.message}`}
+                                >
                                     <span className="text-muted-foreground">{formatTime(entry.createdAt)}</span>{" "}
                                     {/* The severity word inherits the line's tint — it IS the signal. */}
                                     <span>{entry.level.toUpperCase().padEnd(LEVEL_WIDTH)}</span>{" "}

@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { authClient } from "../../lunora/auth-ui/client";
 import type { AuthClient } from "../../lunora/auth-ui/core";
 import { AuthUIProvider, SignInCard, SignUpCard } from "../../lunora/auth-ui/react";
-import { COLUMN_LABEL } from "./section-ui";
+import { COLUMN_LABEL } from "./section-classes";
 
 /**
  * Sign-in / sign-up for the hosted studio.

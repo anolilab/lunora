@@ -4715,6 +4715,501 @@
         "x-lunora-function-kind": "query"
       }
     },
+    "/_lunora/rpc#notifications:channels": {
+      "post": {
+        "description": "Invoke the `query` `notifications:channels` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "notifications:channels",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "notifications:channels",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: notifications:channels",
+        "tags": [
+          "notifications"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#notifications:createChannel": {
+      "post": {
+        "description": "Invoke the `mutation` `notifications:createChannel` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "notifications:createChannel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "destination": {},
+                      "events": {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "const": "deployment.live",
+                              "type": "string"
+                            },
+                            {
+                              "const": "deployment.failed",
+                              "type": "string"
+                            },
+                            {
+                              "const": "deployment.rolled_back",
+                              "type": "string"
+                            },
+                            {
+                              "const": "domain.verified",
+                              "type": "string"
+                            },
+                            {
+                              "const": "domain.failed",
+                              "type": "string"
+                            },
+                            {
+                              "const": "preview.expired",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "kind": {
+                        "anyOf": [
+                          {
+                            "const": "discord",
+                            "type": "string"
+                          },
+                          {
+                            "const": "slack",
+                            "type": "string"
+                          },
+                          {
+                            "const": "telegram",
+                            "type": "string"
+                          },
+                          {
+                            "const": "webhook",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "name": {},
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "secretCiphertext": {},
+                      "secretIv": {}
+                    },
+                    "required": [
+                      "destination",
+                      "kind",
+                      "name",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "notifications:createChannel",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: notifications:createChannel",
+        "tags": [
+          "notifications"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#notifications:deleteChannel": {
+      "post": {
+        "description": "Invoke the `mutation` `notifications:deleteChannel` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "notifications:deleteChannel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"notificationChannels\">",
+                        "type": "string",
+                        "x-lunora-table": "notificationChannels"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "notifications:deleteChannel",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: notifications:deleteChannel",
+        "tags": [
+          "notifications"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#notifications:deliveries": {
+      "post": {
+        "description": "Invoke the `query` `notifications:deliveries` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "notifications:deliveries",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "notifications:deliveries",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: notifications:deliveries",
+        "tags": [
+          "notifications"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#notifications:sendTest": {
+      "post": {
+        "description": "Invoke the `mutation` `notifications:sendTest` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "notifications:sendTest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"notificationChannels\">",
+                        "type": "string",
+                        "x-lunora-table": "notificationChannels"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "notifications:sendTest",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: notifications:sendTest",
+        "tags": [
+          "notifications"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#notifications:updateChannel": {
+      "post": {
+        "description": "Invoke the `mutation` `notifications:updateChannel` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "notifications:updateChannel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "events": {
+                        "items": {
+                          "anyOf": [
+                            {
+                              "const": "deployment.live",
+                              "type": "string"
+                            },
+                            {
+                              "const": "deployment.failed",
+                              "type": "string"
+                            },
+                            {
+                              "const": "deployment.rolled_back",
+                              "type": "string"
+                            },
+                            {
+                              "const": "domain.verified",
+                              "type": "string"
+                            },
+                            {
+                              "const": "domain.failed",
+                              "type": "string"
+                            },
+                            {
+                              "const": "preview.expired",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "id": {
+                        "description": "Id<\"notificationChannels\">",
+                        "type": "string",
+                        "x-lunora-table": "notificationChannels"
+                      },
+                      "name": {},
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "notifications:updateChannel",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: notifications:updateChannel",
+        "tags": [
+          "notifications"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
     "/_lunora/rpc#organizations:cancelDeletion": {
       "post": {
         "description": "Invoke the `mutation` `organizations:cancelDeletion` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -6785,6 +7280,10 @@
     {
       "description": "Operations declared in `lunora/metrics`.",
       "name": "metrics"
+    },
+    {
+      "description": "Operations declared in `lunora/notifications`.",
+      "name": "notifications"
     },
     {
       "description": "Operations declared in `lunora/organizations`.",

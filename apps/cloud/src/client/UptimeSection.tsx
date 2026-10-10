@@ -7,7 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
-import { COLUMN_LABEL, StatusBadge, Upsell } from "./section-ui";
+import { StatusBadge, Upsell } from "./section-ui";
+import { COLUMN_LABEL } from "./section-classes";
 import type { SectionProps } from "./tabs";
 
 /** Format a `[0,1]` uptime fraction as a percentage, to two decimals. */

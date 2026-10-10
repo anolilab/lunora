@@ -27,6 +27,7 @@ import { Route as AuthedOrgsOrganizationIdKeysRouteImport } from './routes/_auth
 import { Route as AuthedOrgsOrganizationIdLogsRouteImport } from './routes/_authed.orgs.$organizationId.logs'
 import { Route as AuthedOrgsOrganizationIdMembersRouteImport } from './routes/_authed.orgs.$organizationId.members'
 import { Route as AuthedOrgsOrganizationIdMetricsRouteImport } from './routes/_authed.orgs.$organizationId.metrics'
+import { Route as AuthedOrgsOrganizationIdNotificationsRouteImport } from './routes/_authed.orgs.$organizationId.notifications'
 import { Route as AuthedOrgsOrganizationIdProjectsRouteImport } from './routes/_authed.orgs.$organizationId.projects'
 import { Route as AuthedOrgsOrganizationIdSecretsRouteImport } from './routes/_authed.orgs.$organizationId.secrets'
 import { Route as AuthedOrgsOrganizationIdSessionsRouteImport } from './routes/_authed.orgs.$organizationId.sessions'
@@ -138,6 +139,12 @@ const AuthedOrgsOrganizationIdMetricsRoute =
     path: '/metrics',
     getParentRoute: () => AuthedOrgsOrganizationIdRoute,
   } as any)
+const AuthedOrgsOrganizationIdNotificationsRoute =
+  AuthedOrgsOrganizationIdNotificationsRouteImport.update({
+    id: '/notifications',
+    path: '/notifications',
+    getParentRoute: () => AuthedOrgsOrganizationIdRoute,
+  } as any)
 const AuthedOrgsOrganizationIdProjectsRoute =
   AuthedOrgsOrganizationIdProjectsRouteImport.update({
     id: '/projects',
@@ -192,6 +199,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationId/logs': typeof AuthedOrgsOrganizationIdLogsRoute
   '/orgs/$organizationId/members': typeof AuthedOrgsOrganizationIdMembersRoute
   '/orgs/$organizationId/metrics': typeof AuthedOrgsOrganizationIdMetricsRoute
+  '/orgs/$organizationId/notifications': typeof AuthedOrgsOrganizationIdNotificationsRoute
   '/orgs/$organizationId/projects': typeof AuthedOrgsOrganizationIdProjectsRoute
   '/orgs/$organizationId/secrets': typeof AuthedOrgsOrganizationIdSecretsRoute
   '/orgs/$organizationId/sessions': typeof AuthedOrgsOrganizationIdSessionsRoute
@@ -216,6 +224,7 @@ export interface FileRoutesByTo {
   '/orgs/$organizationId/logs': typeof AuthedOrgsOrganizationIdLogsRoute
   '/orgs/$organizationId/members': typeof AuthedOrgsOrganizationIdMembersRoute
   '/orgs/$organizationId/metrics': typeof AuthedOrgsOrganizationIdMetricsRoute
+  '/orgs/$organizationId/notifications': typeof AuthedOrgsOrganizationIdNotificationsRoute
   '/orgs/$organizationId/projects': typeof AuthedOrgsOrganizationIdProjectsRoute
   '/orgs/$organizationId/secrets': typeof AuthedOrgsOrganizationIdSecretsRoute
   '/orgs/$organizationId/sessions': typeof AuthedOrgsOrganizationIdSessionsRoute
@@ -243,6 +252,7 @@ export interface FileRoutesById {
   '/_authed/orgs/$organizationId/logs': typeof AuthedOrgsOrganizationIdLogsRoute
   '/_authed/orgs/$organizationId/members': typeof AuthedOrgsOrganizationIdMembersRoute
   '/_authed/orgs/$organizationId/metrics': typeof AuthedOrgsOrganizationIdMetricsRoute
+  '/_authed/orgs/$organizationId/notifications': typeof AuthedOrgsOrganizationIdNotificationsRoute
   '/_authed/orgs/$organizationId/projects': typeof AuthedOrgsOrganizationIdProjectsRoute
   '/_authed/orgs/$organizationId/secrets': typeof AuthedOrgsOrganizationIdSecretsRoute
   '/_authed/orgs/$organizationId/sessions': typeof AuthedOrgsOrganizationIdSessionsRoute
@@ -270,6 +280,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationId/logs'
     | '/orgs/$organizationId/members'
     | '/orgs/$organizationId/metrics'
+    | '/orgs/$organizationId/notifications'
     | '/orgs/$organizationId/projects'
     | '/orgs/$organizationId/secrets'
     | '/orgs/$organizationId/sessions'
@@ -294,6 +305,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationId/logs'
     | '/orgs/$organizationId/members'
     | '/orgs/$organizationId/metrics'
+    | '/orgs/$organizationId/notifications'
     | '/orgs/$organizationId/projects'
     | '/orgs/$organizationId/secrets'
     | '/orgs/$organizationId/sessions'
@@ -320,6 +332,7 @@ export interface FileRouteTypes {
     | '/_authed/orgs/$organizationId/logs'
     | '/_authed/orgs/$organizationId/members'
     | '/_authed/orgs/$organizationId/metrics'
+    | '/_authed/orgs/$organizationId/notifications'
     | '/_authed/orgs/$organizationId/projects'
     | '/_authed/orgs/$organizationId/secrets'
     | '/_authed/orgs/$organizationId/sessions'
@@ -462,6 +475,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedOrgsOrganizationIdMetricsRouteImport
       parentRoute: typeof AuthedOrgsOrganizationIdRoute
     }
+    '/_authed/orgs/$organizationId/notifications': {
+      id: '/_authed/orgs/$organizationId/notifications'
+      path: '/notifications'
+      fullPath: '/orgs/$organizationId/notifications'
+      preLoaderRoute: typeof AuthedOrgsOrganizationIdNotificationsRouteImport
+      parentRoute: typeof AuthedOrgsOrganizationIdRoute
+    }
     '/_authed/orgs/$organizationId/projects': {
       id: '/_authed/orgs/$organizationId/projects'
       path: '/projects'
@@ -521,6 +541,7 @@ interface AuthedOrgsOrganizationIdRouteChildren {
   AuthedOrgsOrganizationIdLogsRoute: typeof AuthedOrgsOrganizationIdLogsRoute
   AuthedOrgsOrganizationIdMembersRoute: typeof AuthedOrgsOrganizationIdMembersRoute
   AuthedOrgsOrganizationIdMetricsRoute: typeof AuthedOrgsOrganizationIdMetricsRoute
+  AuthedOrgsOrganizationIdNotificationsRoute: typeof AuthedOrgsOrganizationIdNotificationsRoute
   AuthedOrgsOrganizationIdProjectsRoute: typeof AuthedOrgsOrganizationIdProjectsRoute
   AuthedOrgsOrganizationIdSecretsRoute: typeof AuthedOrgsOrganizationIdSecretsRoute
   AuthedOrgsOrganizationIdSessionsRoute: typeof AuthedOrgsOrganizationIdSessionsRoute
@@ -549,6 +570,8 @@ const AuthedOrgsOrganizationIdRouteChildren: AuthedOrgsOrganizationIdRouteChildr
     AuthedOrgsOrganizationIdLogsRoute: AuthedOrgsOrganizationIdLogsRoute,
     AuthedOrgsOrganizationIdMembersRoute: AuthedOrgsOrganizationIdMembersRoute,
     AuthedOrgsOrganizationIdMetricsRoute: AuthedOrgsOrganizationIdMetricsRoute,
+    AuthedOrgsOrganizationIdNotificationsRoute:
+      AuthedOrgsOrganizationIdNotificationsRoute,
     AuthedOrgsOrganizationIdProjectsRoute:
       AuthedOrgsOrganizationIdProjectsRoute,
     AuthedOrgsOrganizationIdSecretsRoute: AuthedOrgsOrganizationIdSecretsRoute,

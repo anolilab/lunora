@@ -8,6 +8,7 @@ import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
+import { enqueueNotification } from "./notification-outbox";
 import { boundedString, LIMITS } from "./validators";
 
 type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
@@ -38,6 +39,7 @@ interface ProjectRow {
     _id: Id<"projects">;
     activeDeploymentId?: Id<"deployments">;
     activeScriptName?: string;
+    name?: string;
 }
 
 interface AliasOwnershipRow {
@@ -279,6 +281,14 @@ export const create = mutation
         return { deploymentId, scriptName: `${arguments_.scriptName}-v${String(version)}`, version };
     });
 
+/** The release line a live notification carries: the version and its public URL, nothing else. */
+const releaseDetail = (deployment: DeploymentRow, url: string | undefined): string => {
+    const version = deployment.version === undefined ? undefined : `Version ${String(deployment.version)}`;
+    const liveUrl = url ?? deployment.url;
+
+    return [version, liveUrl ? `is live at ${liveUrl}.` : "is live."].filter(Boolean).join(" ");
+};
+
 /**
  * Point the project's stable URL at a health-checked live deployment (the
  * blue/green pointer swap, GAPS.md A1). Marks every other live deployment of
@@ -315,7 +325,18 @@ export const activate = mutation
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
         }
 
+        const project = (await context.db.get(deployment.projectId)) as ProjectRow | null;
+        const isNewRelease = project?.activeDeploymentId !== id;
+
         await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName });
+
+        // Announce the release the first time the stable URL points at it, so a retried activation stays quiet.
+        if (isNewRelease) {
+            await enqueueNotification(context, deployment.organizationId, "deployment.live", {
+                detail: releaseDetail(deployment, undefined),
+                project: project?.name ?? "project",
+            });
+        }
     });
 
 /**
@@ -365,6 +386,11 @@ export const rollback = mutation
             createdAt: now,
             organizationId,
             target: target.scriptName,
+        });
+
+        await enqueueNotification(context, organizationId, "deployment.rolled_back", {
+            ...(target.version === undefined ? {} : { detail: `Version ${String(target.version)} is live again.` }),
+            project: project?.name ?? "project",
         });
 
         return { scriptName: target.scriptName, version: target.version };
@@ -460,10 +486,28 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
     for (const deployment of expired) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
         await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const project = (await context.db.get(deployment.projectId)) as ProjectRow | null;
+
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await enqueueNotification(context, deployment.organizationId, "preview.expired", {
+            detail: `Preview ${deployment.alias ?? deployment.scriptName} was removed after its expiry time.`,
+            project: project?.name ?? "project",
+        });
     }
 
     return { destroyed: expired.length };
 });
+
+/** Queue the failure notification. The error text is never quoted: it can carry secrets. */
+const announceFailure = async (context: MutationContext, deployment: DeploymentRow): Promise<void> => {
+    const project = (await context.db.get(deployment.projectId)) as ProjectRow | null;
+
+    await enqueueNotification(context, deployment.organizationId, "deployment.failed", {
+        detail: "Open the deployment in the dashboard for its log.",
+        project: project?.name ?? "project",
+    });
+};
 
 /**
  * Advance a deployment's lifecycle (queued → provisioning → building → live, or
@@ -516,4 +560,11 @@ export const updateStatus = mutation
             status,
             updatedAt: now,
         });
+
+        // Announce the change into `failed` once. `live` is announced by `activate`,
+        // where the stable URL actually moves; the orchestrator reports `live` earlier,
+        // and an activation that then fails would announce a release that never went live.
+        if (existing.status !== status && status === "failed") {
+            await announceFailure(context, existing);
+        }
     });

@@ -38,6 +38,7 @@ export const TABS = [
     { id: "secrets", label: "Secrets", to: "/orgs/$organizationId/secrets", group: "Deploy", icon: SquareLockPasswordIcon },
     { id: "domains", label: "Domains", to: "/orgs/$organizationId/domains", group: "Deploy", icon: Globe02Icon },
     { id: "builds", label: "Builds", to: "/orgs/$organizationId/builds", group: "Deploy", icon: PackageProcessIcon },
+    { id: "notifications", label: "Notifications", to: "/orgs/$organizationId/notifications", group: "Deploy", icon: Notification03Icon },
     { id: "logs", label: "Logs", to: "/orgs/$organizationId/logs", group: "Observability", icon: File01Icon },
     { id: "traces", label: "Traces", to: "/orgs/$organizationId/traces", group: "Observability", icon: Route01Icon },
     { id: "sessions", label: "Sessions", to: "/orgs/$organizationId/sessions", group: "Observability", icon: Clock01Icon },

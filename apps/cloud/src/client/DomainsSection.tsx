@@ -10,7 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
-import { COLUMN_LABEL, Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
+import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
+import { COLUMN_LABEL } from "./section-classes";
 import type { SectionProps } from "./tabs";
 import type { ProjectId } from "./types";
 
@@ -92,11 +93,17 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                 // with no way back except a reload.
                 signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             });
+            if (!response.ok) {
+                const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+
+                setError(failure?.error ?? `verify failed (${String(response.status)})`);
+
+                return;
+            }
+
             const payload = (await response.json().catch(() => null)) as { txtOk?: boolean; verified?: boolean } | null;
 
-            if (!response.ok) {
-                setError((payload as { error?: string } | null)?.error ?? `verify failed (${String(response.status)})`);
-            } else if (!payload?.verified) {
+            if (!payload?.verified) {
                 setError(
                     payload?.txtOk ? "TXT ok — but the hostname does not point at the platform yet" : "TXT record not found yet — DNS may still be propagating",
                 );

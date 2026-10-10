@@ -186,7 +186,7 @@ const BindingSheet = ({ binding, onClose }: { binding: Binding | null; onClose: 
                             rel="noreferrer"
                             target="_blank"
                         >
-                            Learn more
+                            Documentation for {binding.type}
                             <HugeiconsIcon className="size-3.5" icon={ArrowUpRight01Icon} strokeWidth={2} />
                         </a>
                     </SheetFooter>

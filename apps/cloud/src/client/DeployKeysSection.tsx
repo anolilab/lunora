@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils";
 import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import { formatDateTime } from "./format";
-import { COLUMN_LABEL, Field, FieldForm, FormError, StatusBadge } from "./section-ui";
+import { Field, FieldForm, FormError, StatusBadge } from "./section-ui";
+import { COLUMN_LABEL } from "./section-classes";
 import type { SectionProps } from "./tabs";
 
 const KEY_TYPES = ["production", "preview", "dev"] as const;

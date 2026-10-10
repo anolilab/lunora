@@ -23,7 +23,14 @@ const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["adminToken", 
  * (a tool that re-enters the surface would be a scope-escape vector — the same
  * reason Openship hard-denies `tokens`/`auth`/`mcp`).
  */
-export const MCP_DENY_PATHS: ReadonlySet<string> = new Set(["/v1/admin", "/v1/invitations/send", "/v1/logs/tail", "/v1/mcp", "/v1/secrets"]);
+export const MCP_DENY_PATHS: ReadonlySet<string> = new Set([
+    "/v1/admin",
+    "/v1/invitations/send",
+    "/v1/logs/tail",
+    "/v1/mcp",
+    "/v1/notification-channels",
+    "/v1/secrets",
+]);
 
 /** An MCP tool descriptor derived from a route. */
 export interface McpTool {

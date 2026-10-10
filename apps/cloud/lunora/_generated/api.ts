@@ -100,6 +100,14 @@ export interface ApiTypes {
         list: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
         series: FunctionReference<"query", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
+    notifications: {
+        channels: FunctionReference<"query", { organizationId: Id<"organizations"> }, { canManage: boolean; channels: { _id: Id<"notificationChannels">; createdAt: number; destination: string; enabled: boolean; events: ("deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired")[]; hasSecret: boolean; kind: "webhook" | "slack" | "discord" | "telegram"; name: string }[] }>;
+        createChannel: FunctionReference<"mutation", { destination: unknown; events?: Array<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired">; kind: "discord" | "slack" | "telegram" | "webhook"; name: unknown; organizationId: Id<"organizations">; secretCiphertext?: unknown; secretIv?: unknown }, Id<"notificationChannels">>;
+        deleteChannel: FunctionReference<"mutation", { id: Id<"notificationChannels">; organizationId: Id<"organizations"> }, Id<"notificationChannels">>;
+        deliveries: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"notificationDeliveries">; channelId: Id<"notificationChannels">; channelName: string; createdAt: number; deliveredAt?: number; error?: string; event: "deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired" | "test"; kind: "webhook" | "slack" | "discord" | "telegram"; status: "failed" | "pending" | "delivered"; subject: string }[]>;
+        sendTest: FunctionReference<"mutation", { id: Id<"notificationChannels">; organizationId: Id<"organizations"> }, Id<"notificationDeliveries">>;
+        updateChannel: FunctionReference<"mutation", { enabled?: boolean; events?: Array<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired">; id: Id<"notificationChannels">; name?: unknown; organizationId: Id<"organizations"> }, Id<"notificationChannels">>;
+    };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
         create: FunctionReference<"mutation", { cellId?: Id<"cells">; jurisdiction?: unknown; name: unknown; plan?: "free" | "pro" | "enterprise"; slug: unknown }, Id<"organizations">>;

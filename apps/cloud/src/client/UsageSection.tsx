@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { api } from "../../lunora/_generated/api.js";
 import { includedUsageFor } from "../billing/overage";
 import { formatDate, formatNumber } from "./format";
-import { COLUMN_LABEL } from "./section-ui";
+import { COLUMN_LABEL } from "./section-classes";
 import type { SectionProps } from "./tabs";
 import { monthStart } from "./usage-period";
 

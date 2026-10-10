@@ -563,8 +563,7 @@ const postSignedWebhook = async (path: string, body: unknown, secret: string, he
 
 /** Read one key out of `.dev.vars` via the same resolver the admin token uses. */
 const readDevVariable = async (key: string): Promise<string | undefined> => {
-    const { parseDevVariable } = await import("@lunora/config/studio-host");
-    const { readFile } = await import("node:fs/promises");
+    const [{ parseDevVariable }, { readFile }] = await Promise.all([import("@lunora/config/studio-host"), import("node:fs/promises")]);
 
     try {
         return parseDevVariable(await readFile(fileURLToPath(new URL("../.dev.vars", import.meta.url)), "utf8"), key);
@@ -751,8 +750,7 @@ const seedBuildLogs = async (cookie: string, organizationId: string, projectId: 
         `UPDATE builds SET status='successful', successfulAt=${String(now)}, updatedAt=${String(now)} WHERE id='${build._id}';`,
     ].join(" ");
 
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
+    const [{ execFile }, { promisify }] = await Promise.all([import("node:child_process"), import("node:util")]);
 
     try {
         await promisify(execFile)("node", ["node_modules/wrangler/bin/wrangler.js", "d1", "execute", "lunora-cloud", "--local", "--command", sql], {
