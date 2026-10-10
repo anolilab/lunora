@@ -661,6 +661,67 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("10b. requeues a queued write whose batch slot body is unreadable instead of throwing the flush", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        // Slot 0 has a null body and slot 2 has an empty object. Neither is an
+        // envelope, so the server never answered those writes and they must stay
+        // queued. Slot 1 is a real result and must settle committed. Before the
+        // fix, the null body threw out of the batch settlement and no slot settled.
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            const url = input as string;
+
+            if (url.endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({
+                    results: [
+                        { body: null, id: 0 },
+                        { body: { commitCursor: 102, result: { id: "b" } }, id: 1 },
+                        { body: {}, id: 2 },
+                    ],
+                });
+            }
+
+            throw new Error(`unexpected single-call fetch to ${url}`);
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { functionPath: string; status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const writes = [
+            client.mutation(fnRef("posts:create"), { title: "a" }).catch(() => "rejected"),
+            client.mutation(fnRef("posts:create"), { title: "b" }),
+            client.mutation(fnRef("posts:create"), { title: "c" }).catch(() => "rejected"),
+        ];
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        // Bounded advance, not runAllTimers: a requeued write must not spin the test.
+        await vi.advanceTimersByTimeAsync(50);
+
+        expect(fetchMock.mock.calls.filter(([url]) => (url as string).endsWith("/_lunora/rpc-batch"))).toHaveLength(1);
+        expect(settled.map((event) => event.status)).toStrictEqual(["committed"]);
+        expect(client.pendingCount()).toBe(2);
+        await expect(writes[1]).resolves.toStrictEqual({ id: "b" });
+
+        client.close();
+    });
+
     it("10. coalesces a multi-write outbox flush into ONE rpc-batch round trip (plan 088 follow-on)", async () => {
         expect.assertions(7);
 
