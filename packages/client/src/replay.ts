@@ -11,6 +11,7 @@ import type { LunoraErrorCode } from "@lunora/errors";
 import { LunoraError } from "@lunora/errors";
 
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
+import { retryAfterHeaderMs } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -24,7 +25,7 @@ import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./erro
  * REST limiter mints the first). "Not now" is not "no": dropping a durable write
  * because the client reconnected into a rate-limit window is exactly what the
  * outbox exists to prevent, and the retry hint rides back through
- * {@link replayRetryDelayMs}.
+ * `replayRetryDelayMs`.
  *
  * Every other coded error is a server verdict (terminal) — replaying it would
  * re-trigger the same failure (a poison-message loop).
@@ -60,43 +61,9 @@ const MAX_REPLAY_RETRY_DELAY_MS = 60_000;
 const BASE_REPLAY_RETRY_DELAY_MS = 1000;
 
 /**
- * Parse a `Retry-After` header into milliseconds. RFC 9110 defines TWO forms and
- * a proxy in front of the worker sends the one the runtime's own REST limiter
- * never does: `delta-seconds`, or an HTTP-date.
- *
- * `undefined` when the header is absent, unparseable, or already in the past —
- * an unusable hint has to read as NO hint (the caller then backs off on its own),
- * never as `NaN`, which every downstream comparison silently answers `false` to
- * and which would ride into `data.retryAfterMs` for an app to render. A date is
- * only clamped at the bottom here; the top is {@link replayRetryDelayMs}'s job,
- * which bounds both forms alike so an absurd date cannot strand the queue.
- */
-const retryAfterHeaderMs = (header: null | string): number | undefined => {
-    if (header === null) {
-        return undefined;
-    }
-
-    const seconds = Number(header);
-
-    if (Number.isFinite(seconds)) {
-        return seconds > 0 ? seconds * 1000 : undefined;
-    }
-
-    const at = Date.parse(header);
-
-    if (Number.isNaN(at)) {
-        return undefined;
-    }
-
-    const delta = at - Date.now();
-
-    return delta > 0 ? delta : undefined;
-};
-
-/**
  * Coded error a response the client could NOT read a `{ error }` envelope out of
  * is reported as, keyed by HTTP status. Anything else 4xx falls back to
- * `BAD_REQUEST` — see {@link unparseableResponseError} for which statuses reach
+ * `BAD_REQUEST` — see `unparseableResponseError` for which statuses reach
  * this table at all.
  */
 const UNPARSEABLE_STATUS_CODES: Record<number, LunoraErrorCode> = {
@@ -141,83 +108,6 @@ const unparseableResponseError = (status: number, statusText: string, retryAfter
 };
 
 /**
- * A §4.2 / §4.3 response body as it ARRIVES — every slot optional, and `error`
- * `unknown`, because the sender is a peer and a proxy sits between.
- *
- * The exported `RpcResponseBody` is the union the protocol documents, and
- * `"error" in body` narrows it — which is exactly how seven read sites came to
- * hand a slot no one had checked was an object to `reconstructError`.
- */
-type RpcEnvelopeBody = { commitCursor?: number; error?: unknown; lastMutationId?: number; result?: unknown };
-
-/**
- * The `{ code, message, data?, … }` envelope a response carries, or `undefined`
- * when it carries none.
- *
- * `protocol/README.md` §4.2: only an OBJECT in the `error` slot is an envelope.
- * A proxy's `{"error": "bad gateway"}` page, a `{"error": null}`, an array — the
- * key is present and there is no verdict in it, so the response is classified by
- * HTTP status like a body with no `error` key at all ({@link
- * unparseableResponseError}), never read as one.
- *
- * That matters past the crash an unchecked read produces: an uncoded `Error` is
- * what `LunoraClient.settleWholeBatchError` rejects a whole chunk of durable
- * writes on, where the same response classified as transport re-queues them. All
- * eight `sdks/*` ports narrow the slot this way and are held to
- * `responseTransportError` in `protocol/fixtures/rpc.json`; so is this one.
- */
-const errorEnvelopeOf = (body: unknown): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string } | undefined => {
-    const slot = (body as RpcEnvelopeBody | null | undefined)?.error;
-
-    return typeof slot === "object" && slot !== null && !Array.isArray(slot) ? slot : undefined;
-};
-
-/**
- * The failure a BATCH SLOT whose `error` slot holds no envelope arrives as.
- *
- * A slot carries no HTTP status of its own, so there is no
- * {@link unparseableResponseError} verdict to reach for: nothing readable came
- * back about this entry, which is the same position as a slot the server never
- * returned at all, and §4.3 retries that one. A {@link TransportError} is how
- * the replay classifier spells "no verdict, keep the write".
- */
-const unreadableSlotError = (): TransportError => new TransportError("LunoraClient: batch slot carried no error envelope");
-
-/**
- * The `data` an error should carry once a `Retry-After` response header is
- * folded in as `data.retryAfterMs` — the ONE channel a retry hint travels on.
- * `undefined` when the header adds nothing, so the caller leaves the error
- * untouched.
- *
- * The runtime's REST limiter sends whole seconds in the header where an
- * application limiter puts milliseconds in the error envelope's `data`. This
- * normalises the header form into the envelope form at the response boundary, so
- * `data.retryAfterMs` is the only place anything downstream has to look —
- * including `@lunora/client`'s public {@link getRetryAfterMs}, which an app calls
- * to render "try again in N seconds" and which never saw the header form.
- *
- * An envelope hint the server actually sent wins: it is the limiter's own
- * number, where the header is rounded to whole seconds. A non-object `data` is
- * left alone rather than overwritten — losing an unusual payload is worse than
- * losing a hint.
- */
-const retryAfterData = (error: { data?: unknown }, header: null | string): Record<string, unknown> | undefined => {
-    const hint = retryAfterHeaderMs(header);
-
-    if (hint === undefined || getRetryAfterMs(error) !== undefined) {
-        return undefined;
-    }
-
-    if (error.data === undefined) {
-        return { retryAfterMs: hint };
-    }
-
-    return typeof error.data === "object" && error.data !== null && !Array.isArray(error.data)
-        ? { ...(error.data as Record<string, unknown>), retryAfterMs: hint }
-        : undefined;
-};
-
-/**
  * Backoff for a retryable failure that named no time to come back: exponential
  * in `attempt` from {@link BASE_REPLAY_RETRY_DELAY_MS}, capped at
  * {@link MAX_REPLAY_RETRY_DELAY_MS}, then jittered across the top half of that
@@ -236,7 +126,7 @@ const defaultReplayRetryDelayMs = (attempt: number, random: () => number = Math.
 
 /**
  * Whether a transient failure came back FROM a server or an edge — a retryable
- * code, or a status {@link unparseableResponseError} had to classify itself —
+ * code, or a status `unparseableResponseError` had to classify itself —
  * rather than from a `fetch` that never landed.
  *
  * The two need different treatment: the socket stays open through a 429 or a
@@ -252,7 +142,7 @@ const isAnsweredReplayFailure = (error: unknown): boolean =>
  * consecutive flushes of this shard key have now failed.
  *
  * A hint the server sent wins: the `data.retryAfterMs` the error carries — its
- * own, or a `Retry-After` header folded on via {@link retryAfterData} — clamped
+ * own, or a `Retry-After` header folded on via `retryAfterData` — clamped
  * to {@link MAX_REPLAY_RETRY_DELAY_MS}. Without one, a failure that was still
  * ANSWERED gets {@link defaultReplayRetryDelayMs}, because a hintless 429 or 503
  * arrives over a socket that stays open: with nothing scheduled the queued write
@@ -315,19 +205,15 @@ const undecodableResultError = (cause: unknown): LunoraError => {
 /** Whether `error` reports a committed reply whose result did not decode (see {@link undecodableResultError}). */
 const isUndecodableResult = (error: unknown): error is LunoraError => error instanceof Error && undecodableResults.has(error);
 
-export type { RpcEnvelopeBody };
-
 export {
     defaultReplayRetryDelayMs,
-    errorEnvelopeOf,
     isTransientReplayFailure,
     isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
     replayRetryDelayMs,
-    retryAfterData,
-    retryAfterHeaderMs,
     undecodableResultError,
     unparseableResponseError,
-    unreadableSlotError,
     utf8ByteLength,
 };
+
+export { errorEnvelopeOf, retryAfterData, retryAfterHeaderMs, type RpcEnvelopeBody, unreadableSlotError } from "./wire-errors";

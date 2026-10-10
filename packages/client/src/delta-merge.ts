@@ -157,3 +157,11 @@ const applyDelta = (current: unknown, delta: MutationDelta): Record<string, unkn
 
 export { applyDelta, isMutationDelta };
 export type { MutationDelta };
+
+/**
+ * Sentinel returned by `resolveDataPayload` for a frame the client RECOGNISED as
+ * a row delta but could not merge. Distinct from any real payload (a symbol can
+ * never come off the wire), so the caller can re-snapshot instead of publishing
+ * the raw `{ key, op, table, row }` envelope as the query's value.
+ */
+export const UNMERGEABLE_DELTA: unique symbol = Symbol("lunora.unmergeableDelta");
