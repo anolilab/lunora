@@ -40,8 +40,8 @@
 import { LunoraError } from "@lunora/errors";
 
 import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
-import { errorEnvelopeOf } from "./replay";
 import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
+import { errorEnvelopeOf } from "./wire-errors";
 
 /**
  * The wire endpoint every Lunora Worker serves. Matches `createWorker`'s RPC

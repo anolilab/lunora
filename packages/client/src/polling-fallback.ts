@@ -191,3 +191,37 @@ export const createPollingFallback = (options: PollingFallbackOptions): PollingF
         stop,
     };
 };
+
+/**
+ * How long one polling-fallback request may take before it counts as unreachable.
+ * Without it a network that accepts the connection and never answers ("Wi-Fi
+ * without internet") holds the poll in flight forever, and the in-flight guard
+ * blocks every later tick, so the status stays `"polling"` and writes keep
+ * skipping the queue.
+ */
+export const POLL_TIMEOUT_MS = 10_000;
+
+/**
+ * Run a poll request with {@link POLL_TIMEOUT_MS}. The timeout aborts it and
+ * rejects with a `TypeError`, the same error an unreachable origin gives, even
+ * when a `fetch` double ignores the signal.
+ */
+export const withinPollTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            controller.abort();
+            reject(new TypeError("LunoraClient: poll timed out"));
+        }, POLL_TIMEOUT_MS);
+    });
+
+    try {
+        return await Promise.race([run(controller.signal), timeout]);
+    } catch (error) {
+        // The aborted fetch's own `AbortError` is the timeout, not a response.
+        throw controller.signal.aborted ? new TypeError("LunoraClient: poll timed out") : error;
+    } finally {
+        clearTimeout(timer);
+    }
+};

@@ -3,10 +3,10 @@ import type { ReconnectCalculator } from "./reconnect";
 import type { SubscriptionState } from "./subscription";
 import type { ClientMessage } from "./types";
 
-export type WSState = "idle" | "connecting" | "open" | "closed";
+type WSState = "idle" | "connecting" | "open" | "closed";
 
 /** Whether writes reach the origin: over the socket, or over HTTP while polling. */
-export const isLiveStatus = (status: ConnectionStatus): boolean => status === "connected" || status === "polling";
+const isLiveStatus = (status: ConnectionStatus): boolean => status === "connected" || status === "polling";
 
 /**
  * One WebSocket per shard key. Subscriptions and the writes they observe must
@@ -15,7 +15,7 @@ export const isLiveStatus = (status: ConnectionStatus): boolean => status === "c
  * Reconnect backoff, offline-flush state, and the pending-unsubscribe buffer
  * are all per-connection so one shard dropping doesn't disturb the others.
  */
-export interface ShardConnection {
+interface ShardConnection {
     /**
      * Fail-fast timer armed while the socket is `connecting`; cleared on `open`.
      * If the handshake doesn't complete within `connectTimeoutMs` (a hung proxy /
@@ -142,12 +142,12 @@ export interface ShardConnection {
  * The subset of a connection's own state `LunoraClient.openManagedSocket`
  * manages directly: the live socket (the identity-guard's comparand), the
  * fail-fast connect-timeout, and the keepalive heartbeat with its half-open
- * watchdog (plan 217). `ShardConnection` satisfies this structurally, so the
+ * watchdog. `ShardConnection` satisfies this structurally, so the
  * shard socket passes itself straight through; `subscribeScheduledJobs`
  * constructs a small matching record so it inherits the same guarantees
- * instead of hand-rolling a second, divergent implementation (CLIENT-05).
+ * instead of hand-rolling a second, divergent implementation.
  */
-export interface ManagedSocketState {
+interface ManagedSocketState {
     connectTimer: ReturnType<typeof setTimeout> | undefined;
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     lastFrameAt: number;
@@ -155,14 +155,14 @@ export interface ManagedSocketState {
 }
 
 /** Map a shard key to its connection-map key (the default shard uses `""`). */
-export const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
+const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
 
 /**
  * Best-effort send over a shard's WS. Returns `true` when the message was
  * handed to the socket, `false` when the caller should queue it for the
  * next reconnect.
  */
-export const sendOn = (conn: ShardConnection, message: ClientMessage): boolean => {
+const sendOn = (conn: ShardConnection, message: ClientMessage): boolean => {
     if (!conn.socket || conn.wsState !== "open") {
         return false;
     }
@@ -178,7 +178,7 @@ export const sendOn = (conn: ShardConnection, message: ClientMessage): boolean =
 };
 
 /** Send the stream-start frames queued while the socket was (re)connecting. */
-export const flushPendingStreams = (conn: ShardConnection): void => {
+const flushPendingStreams = (conn: ShardConnection): void => {
     if (!conn.pendingStreams || conn.pendingStreams.length === 0) {
         return;
     }
@@ -207,4 +207,28 @@ export const flushPendingStreams = (conn: ShardConnection): void => {
  * still armed in the background, and reporting that attempt would flicker the
  * indicator between two states while data is in fact arriving on the slow path.
  */
-export type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
+type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
+
+/**
+ * Shared one-shot decoder for binary WS frames. `TextDecoder` is stateless for a
+ * single `decode()` call, so a module-level singleton avoids allocating a fresh
+ * decoder per inbound binary frame.
+ */
+const sharedDecoder: TextDecoder = new TextDecoder();
+
+/** Decode a raw WS frame (string or binary) into text, or `undefined` if unsupported. */
+const decodeServerFrame = (raw: unknown): string | undefined => {
+    if (typeof raw === "string") {
+        return raw;
+    }
+
+    if (raw instanceof ArrayBuffer) {
+        return sharedDecoder.decode(raw);
+    }
+
+    return undefined;
+};
+
+export { connectionKey, decodeServerFrame,flushPendingStreams, isLiveStatus, sendOn };
+
+export type { ConnectionStatus,ManagedSocketState, ShardConnection, WSState };

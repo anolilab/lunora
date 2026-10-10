@@ -222,3 +222,14 @@ export const dropAcknowledgedLayers = (state: SubscriptionState, mark: number): 
     // eslint-disable-next-line no-param-reassign -- in-place update of the shared subscription state
     state.optimisticLayers = state.optimisticLayers.filter((layer) => layer.acknowledgedAt === undefined || layer.acknowledgedAt > mark);
 };
+
+/**
+ * Unwind a LIFO stack of optimistic-update rollbacks, most-recent first, so a
+ * stacked update on the same subscription restores the immediately-prior value
+ * rather than clobbering a newer still-pending optimistic value.
+ */
+export const rollbackOptimistic = (optimisticRollbacks: (() => void)[]): void => {
+    for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
+        optimisticRollbacks[index]?.();
+    }
+};

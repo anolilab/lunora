@@ -1,17 +1,8 @@
-/**
- * Keepalive frame sent on the heartbeat. MUST match the request payload the
- * server registers via `setWebSocketAutoResponse` (`@lunora/do`'s ShardDO
- * `WS_KEEPALIVE_PING`): the runtime answers it with `lunora-pong` WITHOUT
- * waking the Durable Object. The pong is a plain (non-JSON) string and is
- * silently dropped by `handleServerMessage`'s `JSON.parse` guard.
- */
-export const WS_KEEPALIVE_PING = "lunora-ping";
-
 /** Default heartbeat cadence (ms) — see `LunoraClientOptions.heartbeatIntervalMs`. */
-export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 /** Default WS connect timeout (ms) — see `LunoraClientOptions.connectTimeoutMs`. */
-export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
  * How often the HTTP polling fallback re-runs the live queries on a shard whose
@@ -20,21 +11,21 @@ export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
  * shortcut it, so a tighter interval multiplies real query cost on a link that is
  * already degraded.
  */
-export const DEFAULT_POLLING_FALLBACK_INTERVAL_MS = 5000;
+const DEFAULT_POLLING_FALLBACK_INTERVAL_MS = 5000;
 
 /**
  * Consecutive connect attempts that must fail to reach `open` before the polling
  * fallback engages. Three, so a cold Worker start, a deploy bounce, or one
  * unlucky `connectTimeoutMs` does not move a healthy client onto the slow path.
  */
-export const DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS = 3;
+const DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS = 3;
 
 /**
  * Debounce window (ms) for durable read-cache writes (Pillar 2). A burst of
  * deltas on one subscription coalesces into a single `put` per key after the
  * socket settles, keeping IndexedDB off the per-frame hot path.
  */
-export const QUERY_CACHE_DEBOUNCE_MS = 250;
+const QUERY_CACHE_DEBOUNCE_MS = 250;
 
 /**
  * How long a socket must stay open before its reconnect backoff is reset.
@@ -44,14 +35,14 @@ export const QUERY_CACHE_DEBOUNCE_MS = 250;
  * and closes 4001 — all within a round trip. Anything still open after this has
  * demonstrably been accepted.
  */
-export const SOCKET_STABLE_MS = 5000;
+const SOCKET_STABLE_MS = 5000;
 
 /**
  * How long a non-default shard's socket stays open after the last thing using
  * it lets go. Long enough that re-pointing a subscription away from a shard and
  * straight back (A→B→A) reuses the socket instead of reconnecting.
  */
-export const IDLE_SHARD_CLOSE_MS = 5000;
+const IDLE_SHARD_CLOSE_MS = 5000;
 
 /**
  * Maximum number of stream-start frames queued per connection while the
@@ -59,7 +50,7 @@ export const IDLE_SHARD_CLOSE_MS = 5000;
  * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
  * reconnect can never grow the queue unbounded.
  */
-export const MAX_PENDING_STREAMS = 64;
+const MAX_PENDING_STREAMS = 64;
 
 /**
  * How many `subscribe` frames a reconnect may have on the wire at once, per
@@ -72,7 +63,7 @@ export const MAX_PENDING_STREAMS = 64;
  * burst of ~11 crash-looped it (issue #796); it costs at most a round trip per
  * three subscriptions to restore live data.
  */
-export const RESUBSCRIBE_CONCURRENCY = 3;
+const RESUBSCRIBE_CONCURRENCY = 3;
 
 /**
  * How long one sent-but-unanswered `subscribe` holds its slot in the drain
@@ -83,7 +74,7 @@ export const RESUBSCRIBE_CONCURRENCY = 3;
  * Any frame bearing the subscription's id releases its slot immediately, so
  * this deadline only fires when the server answered nothing at all.
  */
-export const RESUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
+const RESUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
 
 /**
  * How many identities keep a cached mutator watermark. The nesting exists so
@@ -92,13 +83,18 @@ export const RESUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
  * wedge), so this can't be 1 — but it is unbounded without a cap, and only the
  * few most recent identities of a session are ever signed back into.
  */
-export const MAX_WATERMARK_IDENTITIES = 8;
+const MAX_WATERMARK_IDENTITIES = 8;
 
-/**
- * How long one polling-fallback request may take before it counts as unreachable.
- * Without it a network that accepts the connection and never answers ("Wi-Fi
- * without internet") holds the poll in flight forever, and the in-flight guard
- * blocks every later tick, so the status stays `"polling"` and writes keep
- * skipping the queue.
- */
-export const POLL_TIMEOUT_MS = 10_000;
+export {
+    DEFAULT_CONNECT_TIMEOUT_MS,
+    DEFAULT_HEARTBEAT_INTERVAL_MS,
+    DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS,
+    DEFAULT_POLLING_FALLBACK_INTERVAL_MS,
+    IDLE_SHARD_CLOSE_MS,
+    MAX_PENDING_STREAMS,
+    MAX_WATERMARK_IDENTITIES,
+    QUERY_CACHE_DEBOUNCE_MS,
+    RESUBSCRIBE_ACK_TIMEOUT_MS,
+    RESUBSCRIBE_CONCURRENCY,
+    SOCKET_STABLE_MS,
+};

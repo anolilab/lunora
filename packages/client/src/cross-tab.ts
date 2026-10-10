@@ -10,7 +10,7 @@
  * React Native, Node.js).
  */
 
-import type { ConnectionStatus } from "./lunora-client";
+import type { ConnectionStatus } from "./connection-state";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -685,5 +685,5 @@ class TabCoordinator {
     }
 }
 
-export type { TabCoordinatorOptions };
 export { TabCoordinator };
+export type { TabCoordinatorOptions };

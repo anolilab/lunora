@@ -9,6 +9,8 @@ import { onSessionChanged } from "../../../shared/session-change";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
+import type { BatchSlot } from "./call-wire";
+import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./call-wire";
 import {
     ARCHITECTURE_PATH,
     AUTH_ACCOUNTS_PATH,
@@ -87,6 +89,7 @@ import {
     WORKFLOWS_INSTANCE_PATH,
     WORKFLOWS_INSTANCES_PATH,
     WORKFLOWS_STATUS_PATH,
+    WS_KEEPALIVE_PING,
     WS_PATH,
 } from "./client-paths";
 import type { ClientQueryRef } from "./client-query-store";
@@ -99,18 +102,16 @@ import {
     IDLE_SHARD_CLOSE_MS,
     MAX_PENDING_STREAMS,
     MAX_WATERMARK_IDENTITIES,
-    POLL_TIMEOUT_MS,
     QUERY_CACHE_DEBOUNCE_MS,
     RESUBSCRIBE_ACK_TIMEOUT_MS,
     RESUBSCRIBE_CONCURRENCY,
     SOCKET_STABLE_MS,
-    WS_KEEPALIVE_PING,
 } from "./client-tuning";
 import { bucketQuery, deriveWsUrl, joinUrl, withQuery } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
-import { connectionKey, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
+import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
-import { applyDelta, isMutationDelta } from "./delta-merge";
+import { applyDelta, isMutationDelta, UNMERGEABLE_DELTA } from "./delta-merge";
 import { isAuthReplayFailure, TransportError } from "./errors";
 import { httpStream } from "./http-stream";
 import Listeners from "./listeners";
@@ -126,16 +127,16 @@ import {
     dropConfirmedLayers,
     foldOptimistic,
     notifySubscription,
+    rollbackOptimistic,
 } from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
 import { resolvePersistenceAdapter } from "./persistence";
-import { createPollingFallback } from "./polling-fallback";
+import { createPollingFallback, withinPollTimeout } from "./polling-fallback";
 import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import { createReconnect } from "./reconnect";
 import type { RpcEnvelopeBody } from "./replay";
 import {
     defaultReplayRetryDelayMs,
-    errorEnvelopeOf,
     isTransientReplayFailure,
     isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
@@ -144,15 +145,13 @@ import {
     unparseableResponseError,
     utf8ByteLength,
 } from "./replay";
-import type { BatchSlot } from "./replay-batch";
-import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./replay-batch";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
 import { applyRowOpsToView } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
-import type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
-import { SubscriptionRegistry } from "./subscription";
+import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
+import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -212,26 +211,7 @@ import type {
     WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, reconstructError, reconstructErrorWithRetryAfter, slotError } from "./wire-errors";
-
-/**
- * Unwind a LIFO stack of optimistic-update rollbacks, most-recent first, so a
- * stacked update on the same subscription restores the immediately-prior value
- * rather than clobbering a newer still-pending optimistic value.
- */
-const rollbackOptimistic = (optimisticRollbacks: (() => void)[]): void => {
-    for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
-        optimisticRollbacks[index]?.();
-    }
-};
-
-/**
- * Sentinel returned by `resolveDataPayload` for a frame the client RECOGNISED as
- * a row delta but could not merge. Distinct from any real payload (a symbol can
- * never come off the wire), so the caller can re-snapshot instead of publishing
- * the raw `{ key, op, table, row }` envelope as the query's value.
- */
-const UNMERGEABLE_DELTA = Symbol("lunora.unmergeableDelta");
+import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter, slotError } from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -467,85 +447,6 @@ type ReplayIdentityVerdict = { credential: ReplayCredential; verdict: "match" } 
  * being retyped here, so a mismatch with the server's gate is impossible.
  */
 const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
-
-/**
- * Wrap a subscriber's callback in a fresh closure, so registering it in a
- * `Set` gives THIS subscriber its own slot.
- *
- * Registering the caller's own function directly deduped two consumers that
- * passed the SAME reference — a module-level handler, a `useCallback`-stable
- * one — down to a single Set entry, so the first `unsubscribe()` emptied the
- * set and tore the shared registration out from under the second consumer.
- * Passes `undefined` through so an unset `onError`/`onCheckpoint` stays unset.
- */
-function wrapSubscriber<A>(callback: (argument: A) => void): (argument: A) => void;
-function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined;
-function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined {
-    if (callback === undefined) {
-        return undefined;
-    }
-
-    return (argument: A): void => {
-        callback(argument);
-    };
-}
-
-/** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
-const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
-    for (const errorCallback of callbacks) {
-        try {
-            errorCallback(error);
-        } catch {
-            /* user callback threw — ignore */
-        }
-    }
-};
-
-/**
- * Shared one-shot decoder for binary WS frames. `TextDecoder` is stateless for a
- * single `decode()` call, so a module-level singleton avoids allocating a fresh
- * decoder per inbound binary frame.
- */
-const sharedDecoder = new TextDecoder();
-
-/** Decode a raw WS frame (string or binary) into text, or `undefined` if unsupported. */
-
-const decodeServerFrame = (raw: unknown): string | undefined => {
-    if (typeof raw === "string") {
-        return raw;
-    }
-
-    if (raw instanceof ArrayBuffer) {
-        return sharedDecoder.decode(raw);
-    }
-
-    return undefined;
-};
-
-/**
- * Run a poll request with {@link POLL_TIMEOUT_MS}. The timeout aborts it and
- * rejects with a `TypeError`, the same error an unreachable origin gives, even
- * when a `fetch` double ignores the signal.
- */
-const withinPollTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-            controller.abort();
-            reject(new TypeError("LunoraClient: poll timed out"));
-        }, POLL_TIMEOUT_MS);
-    });
-
-    try {
-        return await Promise.race([run(controller.signal), timeout]);
-    } catch (error) {
-        // The aborted fetch's own `AbortError` is the timeout, not a response.
-        throw controller.signal.aborted ? new TypeError("LunoraClient: poll timed out") : error;
-    } finally {
-        clearTimeout(timer);
-    }
-};
 
 /**
  * Undo the scheduler's `encodeWire(args)` on a record read back off the admin
@@ -9351,8 +9252,3 @@ export type {
     ReplayCredential,
     ReplayIdentityVerdict,
 };
-
-export { type ConnectionStatus } from "./connection-state";
-export { type BatchSlot } from "./replay-batch";
-export { type SyncWatermark } from "./subscription";
-export { type LunoraClientError } from "./wire-errors";

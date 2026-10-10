@@ -15,7 +15,7 @@ import { slotError } from "./wire-errors";
  * labels a whisper payload and a shape's args, neither of which is a function's
  * `args`, so it keeps its own free-form `label`.
  */
-export const encodeCallArgs = (payload: unknown, label: string): unknown => {
+const encodeCallArgs = (payload: unknown, label: string): unknown => {
     try {
         return encodeWire(payload);
     } catch (error) {
@@ -26,7 +26,7 @@ export const encodeCallArgs = (payload: unknown, label: string): unknown => {
 };
 
 /** Whether `payload` survives the wire codec; its failure is a `TypeError`, like a network failure. */
-export const isEncodable = (payload: unknown): boolean => {
+const isEncodable = (payload: unknown): boolean => {
     try {
         encodeWire(payload);
 
@@ -47,7 +47,7 @@ export const isEncodable = (payload: unknown): boolean => {
  * `{ ok: true, value: undefined }` — a failed call reported to the caller as a
  * committed one.
  */
-export const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count: number): BatchSlot[] => {
+const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count: number): BatchSlot[] => {
     const slots = Array.from<BatchSlot | undefined>({ length: count });
 
     for (const entry of rawResults) {
@@ -81,7 +81,7 @@ export const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[],
  * credential explicitly and the gate already matched it; a token-hash or
  * missing stamp names no user.
  */
-export const replayExpectation = (stamp: null | string | undefined, authToken: null | string): { expectSubject?: null | string } => {
+const replayExpectation = (stamp: null | string | undefined, authToken: null | string): { expectSubject?: null | string } => {
     if (authToken !== null) {
         return {};
     }
@@ -93,5 +93,16 @@ export const replayExpectation = (stamp: null | string | undefined, authToken: n
 
     return stamp?.startsWith("subj:") === true ? { expectSubject: stamp.slice("subj:".length) } : {};
 };
-/** One demuxed result slot of a `LunoraClient.batch` call (plan 088). */
-export type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
+/** One demuxed result slot of a `LunoraClient.batch` call. */
+type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
+
+export {
+    demuxBatchResults,
+    encodeCallArgs,
+    isEncodable,
+    replayExpectation,
+};
+
+export type {
+    BatchSlot,
+};
