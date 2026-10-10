@@ -9,7 +9,7 @@ import type { AppSource, AppSpec } from "../scripts/catalog/publish-core";
 import { compareVersions, generateKeyPair, importPrivateKey, packApp, publishCatalog, readAppSource, writeCatalog } from "../scripts/catalog/publish-core";
 import { verifyArtifact } from "../src/catalog/artifact";
 import { verifyCatalogIndex } from "../src/catalog/index";
-import type { TrustedCatalogKey } from "../src/catalog/signature";
+import type { DetachedSignature, TrustedCatalogKey } from "../src/catalog/signature";
 import { parseDetachedSignature, sha256Hex } from "../src/catalog/signature";
 import okOf from "./catalog-helpers";
 
@@ -53,6 +53,17 @@ const signer = async () => {
 };
 
 const bytesOf = (path: string): Uint8Array => new Uint8Array(readFileSync(path));
+
+/** A detached signature file read from disk. Throws when it is not one. */
+const signatureOf = (bytes: Uint8Array): DetachedSignature => {
+    const parsed = parseDetachedSignature(bytes);
+
+    if (parsed === undefined) {
+        throw new Error("not a detached signature");
+    }
+
+    return parsed;
+};
 
 describe("catalog publishing", () => {
     let directory: string;
@@ -125,23 +136,15 @@ describe("catalog publishing", () => {
         writeCatalog(directory, catalog);
 
         const indexBytes = bytesOf(join(directory, "index.json"));
-        const indexSignature = parseDetachedSignature(bytesOf(join(directory, "index.sig")));
-
-        if (indexSignature === undefined) {
-            throw new Error("index.sig is not a detached signature");
-        }
+        const indexSignature = signatureOf(bytesOf(join(directory, "index.sig")));
 
         const index = await verifyCatalogIndex({ indexBytes, keys: [trusted], now: NOW.getTime(), signature: indexSignature });
 
-        expect(index.ok).toBe(true);
+        const listed = okOf(index);
 
-        if (!index.ok) {
-            return;
-        }
+        expect(listed.entries.map((entry) => entry.slug)).toStrictEqual(["counter", "notes"]);
 
-        expect(index.entries.map((entry) => entry.slug)).toStrictEqual(["counter", "notes"]);
-
-        const counter = index.entries.find((entry) => entry.slug === "counter");
+        const counter = listed.entries.find((entry) => entry.slug === "counter");
 
         expect(counter).toMatchObject({
             artifactUrl: "https://catalog.example.com/apps/counter-1.10.0.zip",
@@ -151,11 +154,11 @@ describe("catalog publishing", () => {
             summary: "Counts requests.",
             version: "1.10.0",
         });
-        expect(index.entries.find((entry) => entry.slug === "notes")).not.toHaveProperty("summary");
+        expect(listed.entries.find((entry) => entry.slug === "notes")).not.toHaveProperty("summary");
 
         // Each listed release verifies from its files on disk, and its manifest hashes to the index's digest.
         const checks = await Promise.all(
-            index.entries.map(async (entry) => {
+            listed.entries.map(async (entry) => {
                 const stem = join(directory, `${entry.slug}-${entry.version}`);
                 const manifestBytes = bytesOf(`${stem}.manifest.json`);
                 const signature = parseDetachedSignature(bytesOf(`${stem}.manifest.sig`));
@@ -228,11 +231,7 @@ describe("catalog publishing", () => {
 
         expect(catalog.releases).toHaveLength(1);
 
-        const release = catalog.releases.at(0);
-
-        if (release === undefined) {
-            throw new Error("the sample app was not packed");
-        }
+        const [release] = catalog.releases;
 
         const verified = await verifyArtifact({
             archive: release.archive,

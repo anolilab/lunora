@@ -43,7 +43,7 @@ const installRequest = async (body: Record<string, unknown>): Promise<InstallOut
     });
     const payload = (await response.json().catch(() => null)) as { error?: string; field?: string; generated?: string[]; kept?: string[] } | null;
 
-    if (!response.ok || !payload?.generated) {
+    if (!response.ok || !payload?.generated || !payload.kept) {
         return {
             ...(payload?.field === undefined ? {} : { field: payload.field }),
             message: payload?.error ?? `could not install the app (HTTP ${String(response.status)})`,
@@ -51,8 +51,7 @@ const installRequest = async (body: Record<string, unknown>): Promise<InstallOut
         };
     }
 
-    // `kept` is not in every response yet; its absence means nothing was kept.
-    return { generated: payload.generated, kept: payload.kept ?? [], ok: true };
+    return { generated: payload.generated, kept: payload.kept, ok: true };
 };
 
 /** The one line an install failure is shown on: the server's error, and the field it names if any. */
