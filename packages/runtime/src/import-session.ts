@@ -615,7 +615,7 @@ const commitImport = async (context: ImportSessionContext, session: string): Pro
     }
 
     try {
-        manifest = await runCommitSteps(context, manifest, { globalScope, shardScope, targets });
+        await runCommitSteps(context, manifest, { globalScope, shardScope, targets });
     } catch (error: unknown) {
         if (error instanceof StepFailure) {
             return { errors: error.errors, failed: error.failed, session, status: "partial" };
