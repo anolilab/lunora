@@ -139,7 +139,7 @@ interface ShardConnection {
 }
 
 /**
- * The subset of a connection's own state `LunoraClient.openManagedSocket`
+ * The subset of a connection's own state `openManagedSocket` (managed-socket.ts)
  * manages directly: the live socket (the identity-guard's comparand), the
  * fail-fast connect-timeout, and the keepalive heartbeat with its half-open
  * watchdog. `ShardConnection` satisfies this structurally, so the
@@ -229,6 +229,6 @@ const decodeServerFrame = (raw: unknown): string | undefined => {
     return undefined;
 };
 
-export { connectionKey, decodeServerFrame,flushPendingStreams, isLiveStatus, sendOn };
+export { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn };
 
-export type { ConnectionStatus,ManagedSocketState, ShardConnection, WSState };
+export type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState };
