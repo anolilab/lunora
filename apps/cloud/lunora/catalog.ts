@@ -110,6 +110,16 @@ export const finishInstall = internalMutation
         }
 
         await context.db.patch(installId, { deploymentId, status: "live" });
+
+        // A project runs one production release, so the new live row replaces every earlier one.
+        const { page } = await context.db.catalogInstalls.findMany({ where: { projectId: row.projectId } });
+
+        for (const other of page as unknown as InstallRow[]) {
+            if (other._id !== installId && other.status === "live") {
+                // eslint-disable-next-line no-await-in-loop -- a handful of superseded releases per project
+                await context.db.delete(other._id);
+            }
+        }
     });
 
 /** Give up a claim whose install did not go live (SYSTEM). */
