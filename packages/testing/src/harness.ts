@@ -381,7 +381,15 @@ type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & Topi
  * - Intermediate snapshots between two `next()` calls are coalesced (the next `next()` sees
  * the most-recent state).
  */
-const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: QueryCtx, mutationListeners: Set<() => void>): TestHarness["subscribe"] => {
+/** The clock the current top-level harness call reads through `ctx.now`. */
+const runClock = new AsyncLocalStorage<number>();
+
+const buildSubscribe = (
+    runRegistered: RunRegisteredFunction,
+    queryContext: QueryCtx,
+    mutationListeners: Set<() => void>,
+    clock: () => number,
+): TestHarness["subscribe"] => {
     const factory = (referenceOrInline: unknown, args?: unknown): TestSubscription<unknown> => {
         let done = false;
         // Parked `next()` callers awaiting the next emit. An array (not a single
@@ -404,13 +412,15 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
         let latestSeq = 0;
         let appliedSeq = 0;
 
-        const runQuery = (): Promise<unknown> => {
-            if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("query", referenceOrInline as never, queryContext, args, false);
-            }
+        // Every (re-)evaluation is its own run: it reads the clock as of that run.
+        const runQuery = (): Promise<unknown> =>
+            runClock.run(clock(), () => {
+                if (registeredFunctionKind(referenceOrInline)) {
+                    return runRegistered("query", referenceOrInline as never, queryContext, args, false);
+                }
 
-            return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
-        };
+                return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
+            });
 
         const emit = (seq: number, value: unknown): void => {
             // Drop a snapshot a newer notification has already superseded.
@@ -624,9 +634,6 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  * **v1 stubs (still throwing):** `ctx.storage`, `ctx.vectors`, `ctx.workflows`.
  * These are clearly documented follow-ups.
  */
-/** The clock the current top-level harness call reads through `ctx.now`. */
-const runClock = new AsyncLocalStorage<number>();
-
 const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarness => {
     const { close, sql } = createSqlExec();
 
@@ -934,6 +941,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             },
             queryContext,
             mutationListeners,
+            () => options?.now ?? Date.now(),
         );
 
         // The inline `t.run` body, hoisted so the harness object stays shallow.
