@@ -26,7 +26,7 @@
  * `__tests__/support/memory-driver.ts`.
  */
 import type { TenantSend } from "../backup/tenant-transport";
-import type { PeriodUsage } from "../billing/spend";
+import type { PeriodUsage, UsageMeter } from "../billing/spend";
 import type { ControlPlaneStore } from "../d1-store";
 import type { EdgeProtection } from "../edge/protection";
 import type { TargetId, TenantDeploymentSpec } from "../provision-contract";
@@ -82,6 +82,20 @@ export type UsageFamily = "d1" | "durableObjectDuration" | "durableObjectRequest
 
 /** Every family, in the order a sweep reads them. */
 export const USAGE_FAMILIES: ReadonlyArray<UsageFamily> = ["requests", "d1", "durableObjects", "workersCpu", "durableObjectRequests", "durableObjectDuration"];
+
+/**
+ * The rate-card meters each family writes: the one declared map from a metering
+ * source to what it measures. A meter in no family is not measured by the
+ * platform, and `UNMEASURED_METERS` (`billing/usage.ts`) must list it with a reason.
+ */
+export const FAMILY_METERS = {
+    d1: ["d1RowsRead", "d1RowsWritten"],
+    durableObjectDuration: ["doDurationGbS"],
+    durableObjectRequests: ["doRequests"],
+    durableObjects: ["doRowsRead", "doRowsWritten"],
+    requests: ["requests"],
+    workersCpu: ["cpuMs"],
+} as const satisfies Record<UsageFamily, ReadonlyArray<UsageMeter>>;
 
 /**
  * A read window.
