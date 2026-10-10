@@ -14,7 +14,7 @@
  * wrangler config's `account_id`.
  * @see https://developers.cloudflare.com/workers/observability/profiling-in-production/
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
@@ -206,6 +206,26 @@ const resolveTarget = (options: ProfileCommandOptions): ProfileResult | Target =
     return { accountId, sourceMapsMissing: wrangler !== undefined && wrangler.upload_source_maps !== true, token, worker };
 };
 
+/**
+ * Write beside the target and rename into place, so a failed write never
+ * truncates a capture already at `file`. Returns the failure reason, or
+ * `undefined` on success.
+ */
+const writeAtomically = (file: string, bytes: Uint8Array): string | undefined => {
+    const temporary = `${file}.${String(process.pid)}.tmp`;
+
+    try {
+        writeFileSync(temporary, bytes);
+        renameSync(temporary, file);
+
+        return undefined;
+    } catch (error) {
+        rmSync(temporary, { force: true });
+
+        return error instanceof Error ? error.message : String(error);
+    }
+};
+
 const runProfileCommand = async (options: ProfileCommandOptions): Promise<ProfileResult> => {
     const { logger } = options;
     const checked = validate(options);
@@ -274,7 +294,12 @@ const runProfileCommand = async (options: ProfileCommandOptions): Promise<Profil
     const file = resolve(options.cwd, options.out ?? `${worker}-${profileType}-${stamp}.pprof.gz`);
 
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, bytes);
+
+    const writeError = writeAtomically(file, bytes);
+
+    if (writeError !== undefined) {
+        return fail(logger, EXIT_CODE.FAILURE, `profile failed: could not write ${file}: ${writeError}.`);
+    }
 
     logger.success(`Wrote ${String(bytes.byteLength)} bytes to ${file}`);
     logger.info("Open it with `go tool pprof -http=: <file>` (pprof reads gzip directly) or upload it to a flamegraph viewer.");

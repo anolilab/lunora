@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -169,6 +169,22 @@ describe("lunora cloudflare profile", () => {
         expect(result.code).toBe(EXIT_CODE.FAILURE);
         expect(result.error).toContain("unavailable in this environment");
         expect(existsSync(join(cwd, "j.gz"))).toBe(false);
+    });
+
+    it("keeps an existing capture and leaves no temp file when the write fails", async () => {
+        expect.assertions(4);
+
+        // `out` is a directory, so the final rename cannot replace it.
+        mkdirSync(join(cwd, "taken"));
+        writeFileSync(join(cwd, "taken", "keep"), "x", "utf8");
+
+        const { fetch } = fakeFetch(() => new Response(GZIP_BYTES));
+        const result = await runProfileCommand({ cwd, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, out: "taken" });
+
+        expect(result.code).toBe(EXIT_CODE.FAILURE);
+        expect(result.error).toContain("could not write");
+        expect(readFileSync(join(cwd, "taken", "keep"), "utf8")).toBe("x");
+        expect(readdirSync(cwd).filter((name) => name.endsWith(".tmp"))).toStrictEqual([]);
     });
 
     it("warns when source maps are not uploaded", async () => {
