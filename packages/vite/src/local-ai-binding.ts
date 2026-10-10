@@ -6,11 +6,15 @@
  * `@cloudflare/vite-plugin` opens a remote proxy session for it at boot. With no
  * Cloudflare login that session fails and the dev server dies, even for an app
  * whose models come from `LUNORA_AI_PROXY_URL` or an AI SDK provider. Here the
- * binding is dropped from the worker config in memory instead, through the
- * plugin's `config` customizer: no temp file, so nothing is left behind when the
+ * binding is dropped from each worker config in memory instead, through the
+ * plugin's `config` customizers: no temp file, so nothing is left behind when the
  * dev server is killed. The rule itself lives in `dev-config.ts`.
  *
- * Dev only. The customizer also runs on `vite build`, whose output is the deploy
+ * Every Worker counts: the entry Worker, and each `auxiliaryWorkers` entry, which
+ * the Cloudflare plugin resolves with its own customizer. `serviceWorkersPlugin`
+ * adds the `lunora.config` services as auxiliary entries, so this runs after it.
+ *
+ * Dev only. The customizers also run on `vite build`, whose output is the deploy
  * config, so the plugin below records the command first.
  */
 import { lunoraLine } from "@lunora/config";
@@ -33,11 +37,15 @@ interface LocalAiOptions {
     projectRoot?: string;
 }
 
+/** Customizers this module already wrapped, so a second `config` pass doesn't nest them. */
+const wrapped = new WeakSet<object>();
+
 /**
- * Wrap `options.config` so a dev worker without Cloudflare credentials gets no
- * `ai` binding, and return the `enforce: "pre"` plugin that tells the wrapper a
- * dev server (not a build) is running. A user customizer still runs first; an
- * `ai` it returns is dropped too, since its result is merged over the config.
+ * Wrap `options.config` and every `auxiliaryWorkers` entry so a dev worker without
+ * Cloudflare credentials gets no `ai` binding, and return the `enforce: "pre"`
+ * plugin that tells the wrapper a dev server (not a build) is running. A user
+ * customizer still runs first; an `ai` it returns is dropped too, since its result
+ * is merged over the config.
  *
  * The Cloudflare plugin rejects a `config` customizer together with
  * `experimental.newConfig`, so in that mode nothing is wrapped and the binding
@@ -50,12 +58,10 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
     const usesNewConfig = newConfig !== undefined && newConfig !== false;
     const hasCredentials = localOptions.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: localOptions.projectRoot }));
 
-    if (!usesNewConfig) {
-        const target = options as { config?: Customizer | Partial<WorkerConfigLike> };
-        const userConfig = target.config;
-
-        target.config = (config: WorkerConfigLike, ...rest: unknown[]) => {
-            const fromUser = typeof userConfig === "function" ? userConfig(config, ...rest) : userConfig;
+    const wrapCustomizer = (userConfig: unknown): Customizer => {
+        const wrap: Customizer = (config, ...rest) => {
+            const fromUser =
+                typeof userConfig === "function" ? (userConfig as Customizer)(config, ...rest) : (userConfig as Partial<WorkerConfigLike> | undefined);
             // A copy: a plain-object customizer is the user's own object, and the
             // delete below must not stick to it for the rest of the process.
             const result = fromUser === undefined ? undefined : { ...fromUser };
@@ -73,11 +79,31 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
 
             return result;
         };
-    }
+
+        wrapped.add(wrap);
+
+        return wrap;
+    };
 
     return {
         config(_userConfig, env) {
             serving = env.command === "serve" && env.isPreview !== true;
+
+            if (usesNewConfig) {
+                return;
+            }
+
+            const target = options as { auxiliaryWorkers?: unknown; config?: unknown };
+
+            if (!wrapped.has(target.config as object)) {
+                target.config = wrapCustomizer(target.config);
+            }
+
+            if (Array.isArray(target.auxiliaryWorkers)) {
+                target.auxiliaryWorkers = target.auxiliaryWorkers.map((entry: { config?: unknown }) =>
+                    wrapped.has(entry.config as object) ? entry : { ...entry, config: wrapCustomizer(entry.config) },
+                );
+            }
         },
         enforce: "pre",
         name: "lunora:local-ai-binding",

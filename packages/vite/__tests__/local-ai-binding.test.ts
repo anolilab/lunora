@@ -157,4 +157,39 @@ describe("localAiBinding", () => {
         expect(result).toStrictEqual({ name: "renamed" });
         expect(userConfig).toStrictEqual({ ai: { binding: "MY_AI" }, name: "renamed" });
     });
+
+    it("drops the ai binding from an auxiliary worker too, which has its own customizer", () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const options: { auxiliaryWorkers?: { config?: unknown; configPath: string }[] } = { auxiliaryWorkers: [{ configPath: "svc/wrangler.jsonc" }] };
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "serve");
+
+        const worker = options.auxiliaryWorkers![0]!;
+        const base: WorkerConfig = { ai: { binding: "AI" }, name: "svc" };
+
+        // No customizer of its own, so nothing is returned, but the base loses `ai`.
+        expect((worker.config as Customizer)(base)).toBeUndefined();
+        expect(base).toStrictEqual({ name: "svc" });
+        expect(worker.configPath).toBe("svc/wrangler.jsonc");
+    });
+
+    it("wraps an auxiliary worker once, however many times the config hook runs", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const options: { auxiliaryWorkers?: { config?: unknown; configPath: string }[] } = { auxiliaryWorkers: [{ configPath: "svc/wrangler.jsonc" }] };
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "serve");
+        runConfigHook(plugin, "serve");
+
+        (options.auxiliaryWorkers![0]!.config as Customizer)({ ai: { binding: "AI" } });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(options.auxiliaryWorkers).toHaveLength(1);
+    });
 });
