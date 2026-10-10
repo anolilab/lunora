@@ -1,6 +1,6 @@
 /**
- * The `/v1/mcp` JSON-RPC endpoint (Openship's "MCP tools from the route
- * registry" idea). Lives beside `mcp/tools.ts` rather than inline in the router
+ * The `/v1/mcp` JSON-RPC endpoint. Lives beside `mcp/tools.ts` rather than
+ * inline in the router
  * factory, and dispatches a tool call to its own route handler directly — no
  * re-entry into the router (which would double-charge the rate limiter and
  * forced the router's mutable late-binding holder). The handler is built from

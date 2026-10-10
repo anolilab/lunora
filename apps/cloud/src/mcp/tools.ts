@@ -1,7 +1,6 @@
 /**
- * MCP surface generated from the route registry (Openship's "MCP tools derived
- * from the HTTP route registry" idea — Apache-2.0 — adapted). An agent sees a
- * tool only when its route *opts in* (`RouteSpec.mcp`), the tool call dispatches
+ * MCP surface generated from the route registry. An agent sees a tool only when
+ * its route *opts in* (`RouteSpec.mcp`), the tool call dispatches
  * through the *real* router (so it passes the same auth + rate-limit + handler +
  * function-authz stack as any HTTP caller), and a hard deny-list guarantees
  * token/secret/tenant-access/webhook routes can never become tools even if one
