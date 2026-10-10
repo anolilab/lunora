@@ -1106,6 +1106,14 @@ const slotError = (inner: { error?: unknown }): LunoraClientError => {
 type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
 
 /**
+ * Whether a slot body is a readable `{ result }` / `{ error }` envelope (§4.2).
+ * A `null`, a non-object, or an object carrying neither key is not one, and
+ * reading `"error" in body` on the first of those throws.
+ */
+const isSlotEnvelope = (body: unknown): body is { error?: unknown; result?: unknown } =>
+    body !== null && typeof body === "object" && ("error" in body || "result" in body);
+
+/**
  * Demux a `/_lunora/rpc-batch` response into per-call slots in input order,
  * wire-decoding each success value and reconstructing `.code`/`.data` on a
  * failing call. A slot the server never returned surfaces as an error rather
@@ -1124,9 +1132,16 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
             continue;
         }
 
-        const inner = entry.body as { error?: unknown; result?: unknown } | undefined;
+        // A body that is not a readable envelope is not a verdict on the call, so it
+        // fails the slot instead of throwing and abandoning every later slot.
+        if (!isSlotEnvelope(entry.body)) {
+            slots[entry.id] = { error: slotError({}), ok: false };
+            continue;
+        }
 
-        slots[entry.id] = inner !== undefined && "error" in inner ? { error: slotError(inner), ok: false } : { ok: true, value: decodeWire(inner?.result) };
+        const inner = entry.body;
+
+        slots[entry.id] = "error" in inner ? { error: slotError(inner), ok: false } : { ok: true, value: decodeWire(inner.result) };
     }
 
     return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
@@ -9879,7 +9894,9 @@ class LunoraClient {
         const bySlot = new Map<number, RpcEnvelopeBody>();
 
         for (const entry of results) {
-            if (typeof entry.id === "number" && entry.body !== undefined) {
+            // A body that is not a readable envelope is a slot the server never answered
+            // (§4.3): leave it out so the item is requeued under the same mutationId.
+            if (typeof entry.id === "number" && isSlotEnvelope(entry.body)) {
                 bySlot.set(entry.id, entry.body);
             }
         }
