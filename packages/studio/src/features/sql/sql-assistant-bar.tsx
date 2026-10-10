@@ -4,9 +4,9 @@ import { useState } from "react";
 import { Input } from "../../components/ui/input";
 import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
+import assistantReasonMessage from "../../lib/assistant-reason";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-import assistantReasonMessage from "./assistant-reason";
 
 /**
  * Natural-language prompt bar above the SQL editor.

@@ -1,10 +1,11 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { Streamdown } from "streamdown";
 
 import type { SessionTurn } from "../../components/assistant-provider";
 import { Button } from "../../components/ui/button";
 import { useT } from "../../i18n/i18n-context";
-import type { AiOptInLevel, ChatPendingApproval } from "../../lib/admin";
+import type { AiOptInLevel, ChatPendingApproval, GenerateSqlDegradedReason } from "../../lib/admin";
+import assistantReasonMessage from "../../lib/assistant-reason";
 import { copyToClipboard } from "../../lib/internal";
 import sqlBlocks from "../../lib/sql-blocks";
 
@@ -19,6 +20,26 @@ import sqlBlocks from "../../lib/sql-blocks";
  * no reason to show a remote image, so there is nothing to weigh against that.
  */
 const REPLY_COMPONENTS = { img: (): null => null };
+
+/**
+ * A reply is markdown. `Streamdown` over a hand-rolled renderer, and over plain
+ * `react-markdown`, because what it renders is model output: it ships
+ * `rehype-harden` and `rehype-sanitize`, so a reply cannot smuggle raw HTML, a
+ * `javascript:` link or a remote image into the console.
+ */
+const ReplyBody = ({ text }: { readonly text: string }): ReactElement => (
+    <div className="prose-sm max-w-none text-xs" data-testid="assistant-turn-body">
+        <Streamdown components={REPLY_COMPONENTS}>{text}</Streamdown>
+    </div>
+);
+
+/** The shell every transcript row shares: a role label, then whatever the row holds. */
+const TurnFrame = ({ children, label, testId }: { readonly children: ReactNode; readonly label: string; readonly testId: string }): ReactElement => (
+    <li className="flex flex-col gap-1 border-b border-border px-3 py-2 last:border-b-0" data-testid={testId}>
+        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{label}</span>
+        {children}
+    </li>
+);
 
 /**
  * The operator's gate on a read the turn stopped at.
@@ -127,17 +148,10 @@ const ToolCalls = ({ level, turn }: { readonly level: AiOptInLevel | undefined; 
 /**
  * One rendered turn, with an insert button per SQL block the reply carries.
  *
- * **A reply is markdown; a question is not.** The model writes lists, tables and
- * fenced code, and rendering that as preformatted text made every answer with
- * structure hard to read. What the OPERATOR typed is shown exactly as typed —
- * markdown-rendering their own words would be the surface silently reinterpreting
- * their input.
- *
- * `Streamdown` over a hand-rolled renderer, and over plain `react-markdown`,
- * because what it renders is model output: it ships `rehype-harden` and
- * `rehype-sanitize`, so a reply cannot smuggle raw HTML, a `javascript:` link or
- * a remote image into the console. The SQL-block extraction below still reads the
- * RAW text — the insert path must not depend on how the reply is displayed.
+ * **A reply is markdown; a question is not.** What the OPERATOR typed is shown
+ * exactly as typed — markdown-rendering their own words would be the surface
+ * silently reinterpreting their input. The SQL-block extraction below still reads
+ * the RAW text — the insert path must not depend on how the reply is displayed.
  */
 export const TurnRow = ({
     index,
@@ -162,12 +176,9 @@ export const TurnRow = ({
     const blocks = turn.role === "assistant" && onInsert !== undefined ? sqlBlocks(turn.text) : [];
 
     return (
-        <li className="flex flex-col gap-1 border-b border-border px-3 py-2 last:border-b-0" data-testid={`assistant-turn-${turn.role}`}>
-            <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{turn.role === "user" ? t("You") : t("Assistant")}</span>
+        <TurnFrame label={turn.role === "user" ? t("You") : t("Assistant")} testId={`assistant-turn-${turn.role}`}>
             {turn.role === "assistant" ? (
-                <div className="prose-sm max-w-none text-xs" data-testid="assistant-turn-body">
-                    <Streamdown components={REPLY_COMPONENTS}>{turn.text}</Streamdown>
-                </div>
+                <ReplyBody text={turn.text} />
             ) : (
                 <p className="text-xs whitespace-pre-wrap" data-testid="assistant-turn-body">
                     {turn.text}
@@ -227,25 +238,55 @@ export const TurnRow = ({
                     {t("Delete from here")}
                 </button>
             </div>
-        </li>
+        </TurnFrame>
     );
 };
 
 /**
  * The turn in flight, rendered but not a turn: it carries no copy / branch /
  * insert affordance because there is nothing yet to act on, and it is replaced
- * wholesale by the answer the moment one lands. `Streamdown` over the raw text
- * because half a markdown document is exactly what it is built to render.
+ * wholesale by the answer the moment one lands.
  */
 export const LiveTurn = ({ text }: { readonly text: string }): ReactElement => {
     const t = useT();
 
     return (
-        <li className="flex flex-col gap-1 border-b border-border px-3 py-2 last:border-b-0" data-testid="assistant-turn-live">
-            <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{t("Assistant")}</span>
-            <div className="prose-sm max-w-none text-xs" data-testid="assistant-turn-body">
-                <Streamdown components={REPLY_COMPONENTS}>{text}</Streamdown>
-            </div>
-        </li>
+        <TurnFrame label={t("Assistant")} testId="assistant-turn-live">
+            <ReplyBody text={text} />
+        </TurnFrame>
+    );
+};
+
+/**
+ * The two notices the transcript can carry: the context budget dropped older
+ * turns, or the last turn failed.
+ *
+ * A failure reads from the ops' own per-task status, so it never looks like a
+ * reply. `ai-disabled` and `no-ai-binding` latch the panel hidden before this
+ * renders, so they never reach the copy.
+ */
+export const AssistantStatus = ({
+    reason,
+    truncated,
+}: {
+    readonly reason: GenerateSqlDegradedReason | undefined;
+    readonly truncated: boolean;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <>
+            {truncated && (
+                <p className="px-3 py-1 text-[11px] text-muted-foreground" data-testid="assistant-truncated">
+                    {t("Older turns were dropped to fit the context budget.")}
+                </p>
+            )}
+
+            {reason !== undefined && (
+                <p className="px-3 py-1 text-[11px] text-destructive" data-testid="assistant-error">
+                    {assistantReasonMessage(reason, t)}
+                </p>
+            )}
+        </>
     );
 };

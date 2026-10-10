@@ -1,13 +1,24 @@
 import type { ReactElement } from "react";
 
-import type { AssistantValue } from "../../components/assistant-provider";
+import type { AssistantSession } from "../../components/assistant-provider";
 import { Button } from "../../components/ui/button";
 import { useT } from "../../i18n/i18n-context";
 
 /** The session switcher: pick a conversation, start one, drop one. */
-const SessionBar = ({ assistant }: { readonly assistant: AssistantValue }): ReactElement => {
+const AssistantSessionBar = ({
+    activeId,
+    onDelete,
+    onNew,
+    onSelect,
+    sessions,
+}: {
+    readonly activeId: string | undefined;
+    readonly onDelete: (id: string) => void;
+    readonly onNew: () => void;
+    readonly onSelect: (id: string) => void;
+    readonly sessions: ReadonlyArray<AssistantSession>;
+}): ReactElement => {
     const t = useT();
-    const { activeId, deleteChat, newChat, selectChat, sessions } = assistant;
 
     return (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1" data-testid="assistant-sessions">
@@ -16,7 +27,7 @@ const SessionBar = ({ assistant }: { readonly assistant: AssistantValue }): Reac
                     <Button
                         data-testid="assistant-session"
                         onClick={() => {
-                            selectChat(session.id);
+                            onSelect(session.id);
                         }}
                         size="xs"
                         type="button"
@@ -29,7 +40,7 @@ const SessionBar = ({ assistant }: { readonly assistant: AssistantValue }): Reac
                             aria-label={t("Close chat")}
                             data-testid="assistant-session-close"
                             onClick={() => {
-                                deleteChat(session.id);
+                                onDelete(session.id);
                             }}
                             size="xs"
                             type="button"
@@ -40,21 +51,11 @@ const SessionBar = ({ assistant }: { readonly assistant: AssistantValue }): Reac
                     )}
                 </span>
             ))}
-            <Button
-                aria-label={t("New chat")}
-                className="shrink-0"
-                data-testid="assistant-session-new"
-                onClick={() => {
-                    newChat({ title: t("New chat") });
-                }}
-                size="xs"
-                type="button"
-                variant="ghost"
-            >
+            <Button aria-label={t("New chat")} className="shrink-0" data-testid="assistant-session-new" onClick={onNew} size="xs" type="button" variant="ghost">
                 +
             </Button>
         </div>
     );
 };
 
-export default SessionBar;
+export default AssistantSessionBar;

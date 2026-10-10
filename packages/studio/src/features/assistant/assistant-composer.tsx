@@ -1,16 +1,10 @@
-import type { KeyboardEvent, ReactElement } from "react";
+import type { ReactElement } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useT } from "../../i18n/i18n-context";
 
-/**
- * The composer: one line of text and the send button beside it.
- *
- * Holds no state of its own — the draft lives in `AssistantPanel`, which owns the
- * send path and the seeded-draft effect, so every hook stays above the panel's
- * early return.
- */
+/** One line of text and the send button beside it. The draft itself is owned by the caller. */
 const AssistantComposer = ({
     draft,
     onDraftChange,
@@ -24,14 +18,6 @@ const AssistantComposer = ({
 }): ReactElement => {
     const t = useT();
 
-    // Wrapped: passing `onSend` straight to onClick would hand it the click EVENT.
-    const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-        if (event.key === "Enter") {
-            event.preventDefault();
-            onSend();
-        }
-    };
-
     return (
         <div className="flex items-center gap-2 border-t border-border px-3 py-2">
             <Input
@@ -41,19 +27,16 @@ const AssistantComposer = ({
                 onChange={(event) => {
                     onDraftChange(event.target.value);
                 }}
-                onKeyDown={onKeyDown}
+                onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                        event.preventDefault();
+                        onSend();
+                    }
+                }}
                 placeholder={t("Ask about your data")}
                 value={draft}
             />
-            <Button
-                data-testid="assistant-send"
-                disabled={pending || draft.trim() === ""}
-                onClick={() => {
-                    onSend();
-                }}
-                size="xs"
-                type="button"
-            >
+            <Button data-testid="assistant-send" disabled={pending || draft.trim() === ""} onClick={onSend} size="xs" type="button">
                 {pending ? t("Thinking…") : t("Send")}
             </Button>
         </div>
