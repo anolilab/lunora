@@ -2146,6 +2146,7 @@ interface ReconcileResult {
 interface ReconcileProject {
     projectRoot: string;
     schemaDir: string;
+    target?: string;
 }
 ```
 
@@ -2679,7 +2680,7 @@ const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogg
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, environment?: string) => ReconcileBindingsResult;
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, environment?: string, target?: string) => ReconcileBindingsResult;
 ```
 
 ### `reconcileWranglerCompatibilityDate` (const)
