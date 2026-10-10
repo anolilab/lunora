@@ -2,7 +2,8 @@ import { createSignUpInvitation } from "@lunora/auth";
 import { RateLimiter } from "@lunora/ratelimit";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
-import { api, internal } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
+import { internal } from "../../lunora/_generated/internal";
 import type { AlertDelivery } from "../../lunora/telemetry";
 import { proxyAdminRequest } from "../admin/proxy";
 import { currentAuth } from "../auth";

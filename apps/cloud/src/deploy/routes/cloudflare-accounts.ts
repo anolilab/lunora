@@ -12,7 +12,7 @@
  */
 import type { D1DatabaseLike } from "@lunora/d1";
 
-import { internal } from "../../../lunora/_generated/api.js";
+import { internal } from "../../../lunora/_generated/internal";
 import type { AuthEnv } from "../../auth";
 import { authUserEmails } from "../../auth";
 import { CloudflareTokenError } from "../../cloudflare/fetch";

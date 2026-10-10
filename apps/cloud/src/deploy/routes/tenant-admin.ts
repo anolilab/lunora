@@ -11,7 +11,8 @@
  * admin table rather than called by each handler: these handlers check nothing
  * themselves and are only safe behind that table.
  */
-import { api, internal } from "../../../lunora/_generated/api.js";
+import { api } from "../../../lunora/_generated/api";
+import { internal } from "../../../lunora/_generated/internal";
 import type { TargetId } from "../../provision-contract";
 import { isTargetId, TARGET_IDS, TARGETS } from "../../provision-contract";
 import { constantTimeEqual } from "../../security/constant-time-equal";

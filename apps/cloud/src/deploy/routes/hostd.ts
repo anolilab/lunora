@@ -14,7 +14,7 @@
  */
 import type { D1DatabaseLike } from "@lunora/d1";
 
-import { internal } from "../../../lunora/_generated/api.js";
+import { internal } from "../../../lunora/_generated/internal";
 import type { RolloutBox } from "../../../lunora/boxes";
 import type { HostdReleaseView } from "../../../lunora/hostd-releases";
 import { versionsOf } from "../../boxes/hostd-releases";

@@ -9,7 +9,7 @@
  * the bearer, never a body field, is the credential, and every row is read for
  * the key's own organization.
  */
-import { internal } from "../../../lunora/_generated/api.js";
+import { internal } from "../../../lunora/_generated/internal";
 import { readAccountCosts } from "../../cloudflare-accounts/costs";
 import type { CloudflareAccountRow } from "../../cloudflare-accounts/store";
 import type { RouterEnv } from "./shared";

@@ -16,7 +16,8 @@
  * rather than a blanket 500 — a collector treats 5xx as non-retryable and drops
  * the batch, so answering 500 to a throttle loses a tenant's telemetry for good.
  */
-import { api, internal } from "../../../lunora/_generated/api.js";
+import { api } from "../../../lunora/_generated/api";
+import { internal } from "../../../lunora/_generated/internal";
 import type { OtlpLogEntry, OtlpLogsPayload, OtlpMetricsPayload, OtlpTracePayload } from "../../telemetry/otlp";
 import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../../telemetry/otlp";
 import { decodeLogsPayloadProto, decodeMetricsPayloadProto, decodeTracePayloadProto } from "../../telemetry/otlp-protobuf";

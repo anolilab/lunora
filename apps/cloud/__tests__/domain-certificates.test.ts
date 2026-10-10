@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { internal } from "../lunora/_generated/api.js";
+import { internal } from "../lunora/_generated/internal";
 import { add, recordCertificate, removalTarget, remove, routeForHostname, verifyTarget } from "../lunora/domains";
 import { purgeDeleted } from "../lunora/organizations";
 import { remove as removeProject } from "../lunora/projects";

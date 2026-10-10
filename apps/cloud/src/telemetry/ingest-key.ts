@@ -14,7 +14,7 @@
  * ({@link resolveBoxTelemetryConfig}, plan 458 W6): its session Durable Object
  * reads and mints it over the control-plane store directly, as the sweeps do.
  */
-import { internal } from "../../lunora/_generated/api.js";
+import { internal } from "../../lunora/_generated/internal";
 import { formatDeployKey, hashDeployKey, randomSecret } from "../deploy/keys";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import type { ControlPlaneDatabase } from "../store";

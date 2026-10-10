@@ -1,6 +1,6 @@
 import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal";
 
 /**
  * Control-plane crons. The control-plane Worker is
