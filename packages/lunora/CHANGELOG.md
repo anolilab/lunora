@@ -1,3 +1,11 @@
+## lunorash [1.0.0-alpha.380](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.379...lunorash@1.0.0-alpha.380) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.381
+* **@lunora/client:** upgraded to 1.0.0-alpha.195
+
 ## lunorash [1.0.0-alpha.379](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.378...lunorash@1.0.0-alpha.379) (2026-10-10)
 
 
