@@ -180,7 +180,7 @@ var buildBindingManifest = (config) => {
 // packages/cli/src/util/cloud-client.ts
 import { existsSync, readFileSync, statSync } from "node:fs";
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/index.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/index.js
 import { createRequire as h3 } from "node:module";
 
 // node_modules/.pnpm/@visulima+path@4.0.0/node_modules/@visulima/path/dist/utils.js
@@ -598,12 +598,12 @@ var y = w(z2);
 var _ = new Set(y);
 var C = (e3) => b(e3 instanceof URL ? h(e3) : e3);
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/assertValidFileOrDirectoryPath-CAHgg-jK.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/assertValidFileOrDirectoryPath-CAHgg-jK.js
 var n2 = (t) => {
   if (!t || !(t instanceof URL) && typeof t != "string") throw new TypeError("Path must be a non-empty string or URL.");
 };
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/WalkError-B8qTd-v-.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/WalkError-B8qTd-v-.js
 var e = class extends Error {
   root;
   constructor(r, o2) {
@@ -617,7 +617,7 @@ var e = class extends Error {
   }
 };
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/walk-include-aizKyl9e.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/walk-include-aizKyl9e.js
 var o = (e3) => {
   const t = [], r = /* @__PURE__ */ new Set();
   let s = 0;
@@ -665,7 +665,7 @@ var f = (e3, t, r, s) => {
   return r && !r.some((c) => c.test(i3)) ? false : !s?.some((c) => c.test(i3));
 };
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/walkSync-BWGgTwUy.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/walkSync-BWGgTwUy.js
 import { createRequire as x2 } from "node:module";
 var E;
 var q = (e3) => (E ??= x2(import.meta.url))(e3);
@@ -707,12 +707,12 @@ function* L(e3, t = {}) {
   }
 }
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/_commonjsHelpers-CqkleIqs.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/_commonjsHelpers-CqkleIqs.js
 function e2(t) {
   return t && t.__esModule && Object.prototype.hasOwnProperty.call(t, "default") ? t.default : t;
 }
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/index-DDkv7LRn.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/index-DDkv7LRn.js
 var gt = {};
 var bt;
 var Ct;
@@ -1491,13 +1491,13 @@ function Bt() {
 var Gt = Bt();
 var Dt = e2(Gt);
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/match.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/match.js
 var m = (r, c) => {
   const o2 = Dt(r, c);
   return (t) => o2(t);
 };
 
-// node_modules/.pnpm/@visulima+fs@6.0.28_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/index.js
+// node_modules/.pnpm/@visulima+fs@6.0.29_@visulima+yaml@1.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/index.js
 var F;
 var b3 = (n3) => (F ??= h3(import.meta.url))(n3);
 var f2 = typeof globalThis < "u" && typeof globalThis.process < "u" ? globalThis.process : process;
