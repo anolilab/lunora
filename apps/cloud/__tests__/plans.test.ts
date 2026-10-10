@@ -9,6 +9,7 @@ const entitlementsWith = (limits: Record<string, number>): Parameters<typeof eff
         features: new Set<string>(),
         has: () => false,
         limit: (key: string) => limits[key],
+        periodStart: () => 0,
         plans: [],
     };
 };
