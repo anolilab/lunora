@@ -111,7 +111,7 @@ describe("reconcileWranglerBindings", () => {
                 "utf8",
             );
 
-            const result = reconcileWranglerBindings(root, baseInferred(), "production");
+            const result = reconcileWranglerBindings(root, baseInferred(), { environment: "production" });
 
             expect(result.changed).toBe(true);
             // The write landed at the top level, not inside env.production —
@@ -134,7 +134,7 @@ describe("reconcileWranglerBindings", () => {
                 "utf8",
             );
 
-            const result = reconcileWranglerBindings(root, baseInferred(), "production");
+            const result = reconcileWranglerBindings(root, baseInferred(), { environment: "production" });
 
             expect(result.warnings.some((line) => line.includes("env.production") && line.includes("top level"))).toBe(true);
         });
@@ -142,7 +142,7 @@ describe("reconcileWranglerBindings", () => {
         it("warns distinctly when the requested environment isn't declared at all", () => {
             expect.assertions(1);
 
-            const result = reconcileWranglerBindings(root, baseInferred(), "production");
+            const result = reconcileWranglerBindings(root, baseInferred(), { environment: "production" });
 
             expect(result.warnings.some((line) => line.includes('no "env.production" block'))).toBe(true);
         });
@@ -195,7 +195,7 @@ describe("reconcileWranglerBindings", () => {
 
             writeFileSync(join(root, "wrangler.jsonc"), plain, "utf8");
 
-            const result = reconcileWranglerBindings(root, baseInferred(), undefined, target);
+            const result = reconcileWranglerBindings(root, baseInferred(), { target });
 
             expect(result.added).toContain("upload_source_maps");
             expect(readConfig().upload_source_maps).toBe(true);
@@ -206,7 +206,7 @@ describe("reconcileWranglerBindings", () => {
 
             writeFileSync(join(root, "wrangler.jsonc"), plain, "utf8");
 
-            const result = reconcileWranglerBindings(root, baseInferred(), undefined, target);
+            const result = reconcileWranglerBindings(root, baseInferred(), { target });
 
             expect(result.added).not.toContain("upload_source_maps");
             expect(readConfig().upload_source_maps).toBeUndefined();
@@ -1715,11 +1715,9 @@ describe("reconcileWranglerBindings", () => {
 
                 seedEnvironment(`{ "queue": "receipt-queue-prod", "max_retries": 3, "max_concurrency": 2 }`);
 
-                const result = reconcileWranglerBindings(
-                    root,
-                    baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }),
-                    "production",
-                );
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }), {
+                    environment: "production",
+                });
 
                 // COUNTS: both scopes retuned, one DLQ warning for the env consumer.
                 expect(result.updated).toStrictEqual([
@@ -1746,11 +1744,11 @@ describe("reconcileWranglerBindings", () => {
 
                 seedEnvironment(`{ "queue": "receipt-queue-prod" }`);
 
-                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), "production");
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), { environment: "production" });
 
                 expect(productionConsumer()).toStrictEqual({ max_retries: 5, queue: "receipt-queue-prod" });
 
-                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }), "production");
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }), { environment: "production" });
 
                 expect(productionConsumer()).toStrictEqual({ queue: "receipt-queue-prod" });
             });
@@ -1778,11 +1776,9 @@ describe("reconcileWranglerBindings", () => {
             "consumers": [{ "queue": "billing-prod" }, { "queue": "receipt-queue" }],
         }`);
 
-                const result = reconcileWranglerBindings(
-                    root,
-                    baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }),
-                    "production",
-                );
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }), {
+                    environment: "production",
+                });
 
                 // COUNTS: exactly the one consumer the block's producer names.
                 expect(readConfig().env.production.queues.consumers).toStrictEqual([{ max_retries: 5, queue: "billing-prod" }, { queue: "receipt-queue" }]);
@@ -1795,7 +1791,7 @@ describe("reconcileWranglerBindings", () => {
 
                 seedBlock(`{ "consumers": [{ "queue": "receipt-queue" }, { "queue": "other-worker-queue-prod" }] }`);
 
-                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), "production");
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), { environment: "production" });
 
                 expect(readConfig().env.production.queues.consumers).toStrictEqual([
                     { max_retries: 5, queue: "receipt-queue" },

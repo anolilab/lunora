@@ -90,15 +90,16 @@ export default {
 ### Does the dev server need Cloudflare?
 
 Importing `@lunora/ai` makes Lunora add `"ai": { "binding": "AI" }` to
-`wrangler.jsonc` on every codegen pass. Workers AI has no local emulation, so by
-default the dev server opens a remote session for that binding at boot, and the
-session needs Cloudflare credentials:
+`wrangler.jsonc` on every codegen pass. Workers AI has no local emulation, so the
+dev server opens a remote session for that binding at boot, and the session needs
+Cloudflare credentials. Without them, `lunora dev` and `vite dev` leave the
+binding out and print a warning instead of failing to boot:
 
 - **Locally** it usually just works: a `wrangler login` is stored under `HOME`,
-  which the runner passes through.
-- **In CI**, or anywhere without a login, the dev server fails to boot with
-  "Failed to start the remote proxy session", and the runner reports
-  `APP_UNREACHABLE`. Every test fails, not only the AI ones.
+  which the runner passes through, and the binding stays on.
+- **In CI**, or anywhere without a login, the app still boots. Models from
+  `LUNORA_AI_PROXY_URL` and AI SDK providers keep working, and only `@cf/…`
+  calls fail, with a directed error that names the missing login.
 
 If your app calls Workers AI models (`@cf/…` ids), pass a token through:
 

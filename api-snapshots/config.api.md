@@ -1879,6 +1879,16 @@ interface CloudflareCliConfigFinding {
 }
 ```
 
+### `CloudflareCredentialProbe` (interface)
+
+```ts
+interface CloudflareCredentialProbe {
+    env?: Record<string, string | undefined>;
+    home?: string;
+    projectRoot?: string;
+}
+```
+
 ### `DEFAULT_OBSERVABILITY` (const)
 
 ```ts
@@ -1886,6 +1896,12 @@ const DEFAULT_OBSERVABILITY: Readonly<{
     enabled: true;
     head_sampling_rate: 1;
 }>;
+```
+
+### `DevConfigKind` (type)
+
+```ts
+type DevConfigKind = "dev" | "service";
 ```
 
 ### `ExportGap` (interface)
@@ -2000,24 +2016,25 @@ interface ManifestConfigShape extends WranglerConfigShape {
 }
 ```
 
-### `MaterializeOptions` (interface)
+### `MaterializeDevOptions` (interface)
 
 ```ts
-interface MaterializeOptions {
-    enabled: boolean;
+interface MaterializeDevOptions {
+    hasCredentials?: () => boolean;
     projectRoot: string;
+    remote: boolean;
 }
 ```
 
-### `MaterializeResult` (interface)
+### `MaterializeDevResult` (interface)
 
 ```ts
-interface MaterializeResult {
+interface MaterializeDevResult {
     cleanup: () => void;
     configPath?: string;
-    enabled: boolean;
     reason?: string;
     remoteBindings: RemoteBindingPlan[];
+    withheld: string[];
 }
 ```
 
@@ -2196,6 +2213,7 @@ interface RemoteWranglerShape {
 interface ServiceDevConfigs {
     cleanup: () => void;
     configPaths: string[];
+    withheld: string[];
 }
 ```
 
@@ -2611,6 +2629,12 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 const describePreservedCrons: (preserved: ReadonlyArray<string>) => string | undefined;
 ```
 
+### `describeWithheldWorkersAi` (const)
+
+```ts
+const describeWithheldWorkersAi: (binding: string) => string;
+```
+
 ### `detectCloudflareCliConfig` (const)
 
 ```ts
@@ -2621,6 +2645,12 @@ const detectCloudflareCliConfig: (projectRoot: string) => CloudflareCliConfigFin
 
 ```ts
 const findWranglerFile: (projectRoot: string) => string | undefined;
+```
+
+### `hasCloudflareCredentials` (const)
+
+```ts
+const hasCloudflareCredentials: (probe?: CloudflareCredentialProbe) => boolean;
 ```
 
 ### `injectRemoteFlags` (const)
@@ -2641,16 +2671,16 @@ const isCacheEnabled: (parsed: WranglerCacheShape | null | undefined) => boolean
 const isRemoteEnvEnabled: (value: string | undefined) => boolean;
 ```
 
-### `materializeRemoteWranglerConfig` (const)
+### `materializeDevWranglerConfig` (const)
 
 ```ts
-const materializeRemoteWranglerConfig: (options: MaterializeOptions) => MaterializeResult;
+const materializeDevWranglerConfig: (options: MaterializeDevOptions) => MaterializeDevResult;
 ```
 
 ### `materializeServiceDevConfigs` (const)
 
 ```ts
-const materializeServiceDevConfigs: (wranglerPaths: ReadonlyArray<string>) => ServiceDevConfigs;
+const materializeServiceDevConfigs: (wranglerPaths: ReadonlyArray<string>, options: ServiceMaterializeOptions) => ServiceDevConfigs;
 ```
 
 ### `mergeWranglerEnvironment` (const)
@@ -2680,7 +2710,10 @@ const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogg
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, environment?: string, target?: string) => ReconcileBindingsResult;
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, { environment, target }?: {
+    environment?: string;
+    target?: string;
+}) => ReconcileBindingsResult;
 ```
 
 ### `reconcileWranglerCompatibilityDate` (const)
@@ -2750,6 +2783,14 @@ const warnCloudflareCliConfigOnce: (projectRoot: string, warn: (message: string)
 
 ```ts
 const withTailConsumer: (wrangler: WranglerConfig, consumer: TailConsumer) => WranglerConfig;
+```
+
+### `withheldWorkersAi` (const)
+
+```ts
+const withheldWorkersAi: (ai: {
+    binding?: string;
+} | null | undefined, hasCredentials: () => boolean) => string | undefined;
 ```
 
 ### `wranglerCodegenInputs` (const)
@@ -3174,6 +3215,15 @@ interface ReconcileLogger {
 
 ```ts
 type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
+```
+
+### `ServiceMaterializeOptions` (interface)
+
+```ts
+interface ServiceMaterializeOptions {
+    hasCredentials?: () => boolean;
+    projectRoot: string;
+}
 ```
 
 ### `VectorMetadataDeclaration` (interface)

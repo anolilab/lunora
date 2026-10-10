@@ -317,15 +317,15 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 // Injected materializer stands in for the real temp-config writer.
-                materializeRemote: () => {
+                materializeDev: () => {
                     return {
                         cleanup: () => {},
                         configPath: generatedConfig,
-                        enabled: true,
                         remoteBindings: [
                             { binding: "DB", kind: "D1", path: [0], section: "d1_databases" },
                             { binding: "SEARCH", kind: "Vectorize", path: [0], section: "vectorize" },
                         ],
+                        withheld: [],
                     };
                 },
                 remote: true,
@@ -343,14 +343,51 @@ describe("lunora dev", () => {
             const plan = planDevCommand({
                 cwd: workdir,
                 logger: silentLogger(),
-                materializeRemote: () => {
-                    return { cleanup: () => {}, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };
+                materializeDev: () => {
+                    return { cleanup: () => {}, reason: "no remote-eligible bindings to proxy", remoteBindings: [], withheld: [] };
                 },
                 remote: true,
             });
 
             expect(plan.remote.enabled).toBe(true);
             expect(plan.remote.reason).toContain("no remote-eligible bindings");
+            expect(plan.wrangler.args).not.toContain("--config");
+        });
+
+        it("runs the local copy without the AI binding when remote is off and Cloudflare is logged out", () => {
+            expect.assertions(4);
+
+            const localConfig = join(workdir, ".wrangler.lunora-remote.local.jsonc");
+            const plan = planDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                materializeDev: () => {
+                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: ["AI"] };
+                },
+            });
+
+            expect(plan.remote.enabled).toBe(false);
+            expect(plan.remote.withheld).toStrictEqual(["AI"]);
+            expect(plan.wrangler.args).toContain("--config");
+            expect(plan.wrangler.args).toContain(localConfig);
+        });
+
+        it("writes no dev config with --local, since wrangler then starts no remote proxy session", () => {
+            expect.assertions(2);
+
+            let materialized = false;
+            const plan = planDevCommand({
+                cwd: workdir,
+                local: true,
+                logger: silentLogger(),
+                materializeDev: () => {
+                    materialized = true;
+
+                    return { cleanup: () => {}, remoteBindings: [], withheld: ["AI"] };
+                },
+            });
+
+            expect(materialized).toBe(false);
             expect(plan.wrangler.args).not.toContain("--config");
         });
 
@@ -580,8 +617,8 @@ describe("lunora dev", () => {
             const plan = planDevCommand({
                 cwd: workdir,
                 logger: silentLogger(),
-                materializeRemote: () => {
-                    return { cleanup, configPath: join(workdir, "w.jsonc"), enabled: true, remoteBindings: [] };
+                materializeDev: () => {
+                    return { cleanup, configPath: join(workdir, "w.jsonc"), remoteBindings: [], withheld: [] };
                 },
                 remote: true,
             });
@@ -1004,10 +1041,10 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 findFreePort: async () => 8787,
                 logger: silentLogger(),
-                materializeRemote: ({ projectRoot }) => {
+                materializeDev: ({ projectRoot }) => {
                     snapshotAtMaterialize = readFileSync(join(projectRoot, "wrangler.jsonc"), "utf8");
 
-                    return { cleanup: () => {}, configPath: join(workdir, "w.remote.jsonc"), enabled: true, remoteBindings: [] };
+                    return { cleanup: () => {}, configPath: join(workdir, "w.remote.jsonc"), remoteBindings: [], withheld: [] };
                 },
                 remote: true,
                 startCodegen: () => {
@@ -1154,14 +1191,14 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 // Stub the materializer so remote mode is "on" with a disposer we can observe.
-                materializeRemote: () => {
+                materializeDev: () => {
                     return {
                         cleanup: () => {
                             cleaned = true;
                         },
                         configPath: join(workdir, "wrangler.remote.jsonc"),
-                        enabled: true,
                         remoteBindings: [],
+                        withheld: [],
                     };
                 },
                 remote: true,
@@ -1194,14 +1231,14 @@ describe("lunora dev", () => {
                     ensureEnv: async () => {
                         throw new Error("boom");
                     },
-                    materializeRemote: () => {
+                    materializeDev: () => {
                         return {
                             cleanup: () => {
                                 cleaned = true;
                             },
                             configPath: join(workdir, "wrangler.remote.jsonc"),
-                            enabled: true,
                             remoteBindings: [],
+                            withheld: [],
                         };
                     },
                     remote: true,
@@ -1230,14 +1267,14 @@ describe("lunora dev", () => {
                 runDevCommand({
                     cwd: workdir,
                     logger: silentLogger(),
-                    materializeRemote: () => {
+                    materializeDev: () => {
                         materialized = true;
 
                         return {
                             cleanup: () => {},
                             configPath: join(workdir, "wrangler.remote.jsonc"),
-                            enabled: true,
                             remoteBindings: [],
+                            withheld: [],
                         };
                     },
                     remote: true,

@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { readServiceBindings } from "@lunora/codegen";
 import { detectFramework, DEV_VARS_FILE, parseDevVariableEntries, resolveDeployDriver, resolveProjectTarget, targetRunsOwnDevServer } from "@lunora/config";
-import { findWranglerFile, materializeRemoteWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
 import { findAvailablePort } from "../../util/free-port";
@@ -38,34 +38,37 @@ const DEFAULT_WORKER_PORT = 8787;
 /** Default port Vite serves on — the state record carries the real resolved URL. */
 const DEFAULT_VITE_PORT = 5173;
 
+const noopCleanup = (): void => {};
+
 /**
  * Resolve remote-binding mode into the extra `wrangler dev` args + a banner
  * summary. When `--remote`/`LUNORA_REMOTE` is set we materialize a temp wrangler
  * config with `"remote": true` on each D1/KV/R2 binding (Durable Object shards
  * stay local) and point `wrangler dev --config` at it, so the local worker reads
  * and writes the **deployed** resources. When disabled, or when there's nothing
- * to remote, the args stay empty and dev runs fully local.
+ * to remote, dev runs fully local — on a temp copy without the `ai` binding when
+ * wrangler has no Cloudflare login, since that binding's remote proxy session
+ * would otherwise stop `wrangler dev` from booting.
  */
 const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: DevRemotePlan } => {
-    // A disposer that does nothing — used whenever no temp config was written
-    // (remote off, or a fall-through case), so `cleanup` is always callable.
-    const noopCleanup = (): void => {};
-
-    if (!options.remote) {
-        return { args: [], plan: { bindings: [], cleanup: noopCleanup, enabled: false } };
+    // `--local` starts wrangler with no remote proxy session, so the `ai` binding
+    // can't take the session down and no temp config is needed.
+    if (!options.remote && options.local === true) {
+        return { args: [], plan: { bindings: [], cleanup: noopCleanup, enabled: false, withheld: [] } };
     }
 
-    const materialize = options.materializeRemote ?? materializeRemoteWranglerConfig;
-    const result = materialize({ enabled: true, projectRoot: cwd });
+    const materialize = options.materializeDev ?? materializeDevWranglerConfig;
+    const result = materialize({ projectRoot: cwd, remote: options.remote === true });
     const bindings = result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`);
-    // The materializer always returns an idempotent, never-throwing `cleanup`.
-    const { cleanup } = result;
+    const plan: DevRemotePlan = {
+        bindings,
+        cleanup: result.cleanup,
+        enabled: options.remote === true,
+        reason: result.reason,
+        withheld: result.withheld,
+    };
 
-    if (result.configPath === undefined) {
-        return { args: [], plan: { bindings, cleanup, enabled: true, reason: result.reason } };
-    }
-
-    return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
+    return { args: result.configPath === undefined ? [] : ["--config", result.configPath], plan };
 };
 
 /**
@@ -79,11 +82,11 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
  * where wrangler would otherwise run the service's `build.command` (see
  * `materializeServiceDevConfigs`). `cleanup` unlinks those copies.
  */
-const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void } => {
+const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void; withheld: string[] } => {
     const paths = [...new Set(readServiceBindings(cwd).services.map((service) => service.wranglerPath))];
-    const { cleanup, configPaths } = (options.materializeServiceConfigs ?? materializeServiceDevConfigs)(paths);
+    const { cleanup, configPaths, withheld } = (options.materializeServiceConfigs ?? materializeServiceDevConfigs)(paths, { projectRoot: cwd });
 
-    return { args: configPaths.flatMap((path) => ["--config", path]), cleanup };
+    return { args: configPaths.flatMap((path) => ["--config", path]), cleanup, withheld };
 };
 
 /**
@@ -379,7 +382,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
             runsCodegenWatch: false,
             flavor,
             ipv4LoopbackForced: false,
-            remote: { bindings: [], cleanup: () => {}, enabled: options.remote === true },
+            remote: { bindings: [], cleanup: noopCleanup, enabled: options.remote === true, withheld: [] },
             ...(worker ? { serviceConfigCleanup: worker.cleanup } : {}),
             ...(sidecar ? { sidecar } : {}),
             studioEnabled: false,
@@ -447,7 +450,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         flavor,
         frameworkHint,
         ipv4LoopbackForced: loopbackArgs.length > 0,
-        remote: remote.plan,
+        remote: { ...remote.plan, withheld: [...remote.plan.withheld, ...services.withheld] },
         serviceConfigCleanup: services.cleanup,
         studioEnabled: options.studio !== false,
         studioPort: options.port ?? DEFAULT_STUDIO_PORT,

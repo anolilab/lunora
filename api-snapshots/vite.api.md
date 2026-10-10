@@ -109,7 +109,7 @@ type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlugin>[0]
 
 ```ts
 interface PlanViteRemoteOptions {
-    materialize?: typeof materializeRemoteWranglerConfig;
+    materialize?: typeof materializeDevWranglerConfig;
     projectRoot: string;
     readPreference?: typeof readProjectRemotePreference;
     remoteEnv?: string;
@@ -168,6 +168,7 @@ interface ViteRemotePlan {
     configPath?: string;
     enabled: boolean;
     reason?: string;
+    withheld: string[];
 }
 ```
 

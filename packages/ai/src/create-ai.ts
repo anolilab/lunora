@@ -50,7 +50,7 @@ const isGatewayModelId = (modelId: string): boolean => !modelId.startsWith("@") 
 const bindingRequired = (subject: string): never => {
     throw new LunoraError(
         "INTERNAL",
-        `@lunora/ai: ${subject} needs the \`AI\` binding (env.AI). Add an \`ai\` binding to wrangler.jsonc, or set ${AI_PROXY_URL_ENV} to an OpenAI-compatible proxy for "<provider>/<model>" slugs.`,
+        `@lunora/ai: ${subject} needs the \`AI\` binding (env.AI). In dev, Lunora leaves it out when there is no Cloudflare login: run \`wrangler login\` or set CLOUDFLARE_API_TOKEN. Elsewhere, add an \`ai\` binding to wrangler.jsonc. Or set ${AI_PROXY_URL_ENV} to an OpenAI-compatible proxy for "<provider>/<model>" slugs.`,
     );
 };
 
