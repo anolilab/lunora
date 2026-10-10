@@ -1,3 +1,14 @@
+## @lunora/vite [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.331...@lunora/vite@1.0.0-alpha.332) (2026-10-10)
+
+### Features
+
+* **config:** enable upload_source_maps on the cloudflare target ([#1094](https://github.com/anolilab/lunora/issues/1094)) ([4a22914](https://github.com/anolilab/lunora/commit/4a22914343d6464b2c84e9a3b68fd6e3234db006))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.334
+
 ## @lunora/vite [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.330...@lunora/vite@1.0.0-alpha.331) (2026-10-10)
 
 
