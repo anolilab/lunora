@@ -66,6 +66,7 @@ lunora analyze [--format json]          # wrangler dry-run: bundle size + top mo
 lunora cloudflare                       # list the tools
 lunora cloudflare alerts [status|setup|test]   # usage alerts that catch a runaway bill
 lunora cloudflare deployments <list|inspect|rollback|promote>   # history + traffic control
+lunora cloudflare profile [worker]               # on-demand CPU / heap profile (pprof) of the live Worker
              [--env <name>] [--yes] [--format json]  # json: `list` only
 lunora cloudflare containers <build|push|images|list|info|delete> [args…]
             [--tag <name:tag>] [--push] [--env <n>]
@@ -912,6 +913,30 @@ lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic 
 ```
 
 `rollback` and `promote` change live traffic, so they require `--yes`.
+
+#### `lunora cloudflare profile`
+
+Capture an on-demand CPU or heap profile from the **live** Worker, with no
+redeploy, and save it as a gzip-compressed pprof file:
+
+```bash
+lunora cloudflare profile                                   # 10s CPU profile of the latest version
+lunora cloudflare profile --type heap --duration-ms 30000   # 30s allocation profile
+lunora cloudflare profile --version <version-id> --out cpu.pprof.gz
+lunora cloudflare profile --namespace-id <id> --actor-id <64-hex>   # one Durable Object instance
+go tool pprof -http=: cpu.pprof.gz                          # view the flamegraph
+```
+
+It calls the Workers profile API, so it needs `CLOUDFLARE_API_TOKEN` with the
+"Workers Scripts Read" permission and an account id (`CLOUDFLARE_ACCOUNT_ID` or
+`account_id` in wrangler config). `--duration-ms` is 1000–50000. The capture
+does not invoke your code: the target version must be loaded and receiving
+traffic while it runs, and a Durable Object must be active. `--env staging`
+profiles `<name>-staging`. A heap profile records allocations made during the
+window, not retained memory. Set `upload_source_maps: true` in the wrangler
+config so TypeScript function names are not mangled; the command warns if it
+is missing. The same capture is available from the dashboard's Observability
+tab (Flamegraph).
 
 ### `lunora prepare`
 
