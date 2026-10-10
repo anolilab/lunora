@@ -165,7 +165,7 @@ export const createChannel = mutation
         secretIv: v.optional(boundedString(LIMITS.id)),
     })
     .mutation(async ({ ctx: context, args }): Promise<Id<"notificationChannels">> => {
-        await assertMember(context, args.organizationId, MANAGER_ROLES);
+        const { organizationId } = await assertMember(context, args.organizationId, MANAGER_ROLES);
 
         const hasSecret = args.secretCiphertext !== undefined && args.secretIv !== undefined;
         const reason = invalidDestinationReason(args.kind, args.destination.trim(), hasSecret);
@@ -187,7 +187,7 @@ export const createChannel = mutation
             events: args.events ?? [...NOTIFICATION_EVENTS],
             kind: args.kind,
             name: args.name,
-            organizationId: args.organizationId,
+            organizationId,
             ...(hasSecret ? { secretCiphertext: args.secretCiphertext, secretIv: args.secretIv } : {}),
             updatedAt: now,
         });
