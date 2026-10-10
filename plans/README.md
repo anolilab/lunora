@@ -19,13 +19,13 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                      | Title                                                  | Remaining                                                                   |
-| ----------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| [460](./460-cloudflare-artifacts.md)      | Cloudflare Artifacts as an action-only `ctx.artifacts` | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid) |
-| [463](./463-experimental-graduation.md)   | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages       |
-| [166](./166-enterprise-auth-saml-scim.md) | Enterprise auth: SAML SSO + SCIM                       | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated               |
-| [458](./458-cloud-celld-vps-target.md)    | Lunora Cloud manages a customer VPS (`celld-vps` target)    | Control plane, hostd and install path landed on PR #85; live-box gates open |
-| [365](./365-cloud-spend-guardrails-and-anomaly-research.md) | Cloud spend guardrails, anomaly alerting, recursion protection | W0 + W1 shipped                                         |
+| Plan                                                        | Title                                                          | Remaining                                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [460](./460-cloudflare-artifacts.md)                        | Cloudflare Artifacts as an action-only `ctx.artifacts`         | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid) |
+| [463](./463-experimental-graduation.md)                     | Graduate the experimental tier to stable                       | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages       |
+| [166](./166-enterprise-auth-saml-scim.md)                   | Enterprise auth: SAML SSO + SCIM                               | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated               |
+| [458](./458-cloud-celld-vps-target.md)                      | Lunora Cloud manages a customer VPS (`celld-vps` target)       | Control plane, hostd and install path landed on PR #85; live-box gates open |
+| [365](./365-cloud-spend-guardrails-and-anomaly-research.md) | Cloud spend guardrails, anomaly alerting, recursion protection | W0–W8 shipped (code); live checks in §4b open                               |
 
 ## Open (TODO)
 
