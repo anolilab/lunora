@@ -340,6 +340,50 @@ describe("lunora cloudflare", () => {
         });
     });
 
+    describe("profile", () => {
+        afterEach(() => {
+            vi.unstubAllEnvs();
+            vi.unstubAllGlobals();
+        });
+
+        it("parses its flags through the real CLI (including --version-id) and sends them to the API", async () => {
+            expect.assertions(4);
+
+            const requests: { body: unknown; url: string }[] = [];
+
+            vi.stubEnv("CLOUDFLARE_API_TOKEN", "tok");
+            vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc1");
+            vi.stubGlobal("fetch", async (url: string, init: RequestInit): Promise<Response> => {
+                requests.push({ body: JSON.parse(init.body as string), url });
+
+                return new Response(new Uint8Array([0x1f, 0x8b, 0x08]));
+            });
+
+            const actorId = "a".repeat(64);
+            const { code } = await cli([
+                "cloudflare",
+                "profile",
+                "--version-id",
+                "v-1",
+                "--duration-ms",
+                "5000",
+                "--type",
+                "heap",
+                "--namespace-id",
+                "ns",
+                "--actor-id",
+                actorId,
+                "--out",
+                "p.gz",
+            ]);
+
+            expect(code).toBe(0);
+            expect(requests).toHaveLength(1);
+            expect(requests[0]?.url).toBe("https://api.cloudflare.com/client/v4/accounts/acc1/workers/workers/demo-app/versions/v-1/profile");
+            expect(requests[0]?.body).toStrictEqual({ actor_id: actorId, duration_ms: 5000, namespace_id: "ns", profile_type: "heap" });
+        });
+    });
+
     describe("analyze stays top-level", () => {
         it("runs `lunora analyze` on a celld project — a wrangler bundle is not Cloudflare-only", async () => {
             expect.assertions(2);
