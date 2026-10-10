@@ -43,3 +43,33 @@ Upload the contents of `dist/catalog` to the location `--base-url` names.
 
 The catalog CI (`.github/workflows/catalog.yml`) runs the same steps on push to `alpha`
 when this folder changes, and uploads `dist/catalog` as an artifact.
+
+## 4. Install (owners and admins)
+
+The Catalog tab lists the verified apps and the apps that failed verification, with
+the reason. Choosing an app opens a form built from its `form`: a field per var and
+per secret, with the declared default filled in.
+
+- An install replaces the project's production release of the app. The form asks
+  you to confirm that before it runs.
+- A secret the app can generate is generated when the project does not have it, and
+  its value is never shown. A secret the project already has, and that you leave
+  blank, is kept as it is.
+- Only one install runs per project at a time. A second one answers 409 until the
+  first finishes or its lease expires (35 minutes).
+- If the release does not go live, secrets are restored to the values they had
+  before the install, and secrets it created are removed.
+- Members who are neither owners nor admins can browse the catalog but cannot
+  install from it.
+
+## 5. Control plane configuration
+
+- `CATALOG_INDEX_URL`: the https URL the uploaded `index.json` is served from.
+- `CATALOG_PUBLIC_KEYS`: a JSON array of `{ "keyId", "publicKey" }`, one entry per
+  signing key the control plane trusts.
+- `RELEASES` (the release bucket) and `SECRET_ENCRYPTION_KEY`: already required by
+  deploys. An install refuses to run without them.
+
+With `CATALOG_INDEX_URL` unset the catalog is empty, not an error. With it set and
+the keys missing or malformed, the catalog shows a refusal rather than an empty list.
+The contract the control plane enforces is in `src/catalog/CONTRACT.md`.

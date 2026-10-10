@@ -49,42 +49,42 @@ const formOf = (form: Partial<NonNullable<CatalogManifest["form"]>>, bindings: u
 const portsWith = (overrides: Partial<InstallPorts> = {}) => {
     const calls: string[] = [];
     const ports: InstallPorts = {
-        abandon: vi.fn(async () => {
+        abandon: vi.fn<InstallPorts["abandon"]>(async () => {
             calls.push("abandon");
         }),
-        claim: vi.fn(async () => {
+        claim: vi.fn<InstallPorts["claim"]>(async () => {
             calls.push("claim");
 
             return { busy: false as const, installId: "inst_1" };
         }),
-        finish: vi.fn(async () => {
+        finish: vi.fn<InstallPorts["finish"]>(async () => {
             calls.push("finish");
         }),
-        inFlight: vi.fn(async () => false),
-        mintReleaseKey: vi.fn(async () => {
+        inFlight: vi.fn<InstallPorts["inFlight"]>(async () => false),
+        mintReleaseKey: vi.fn<InstallPorts["mintReleaseKey"]>(async () => {
             calls.push("mint");
 
             return { id: "key_1", key: "dk_secret" };
         }),
-        release: vi.fn(async () => {
+        release: vi.fn<InstallPorts["release"]>(async () => {
             calls.push("release");
 
             return { deploymentId: "dep_1", status: "live" as const, url: "https://counter.example.app" };
         }),
-        removeSecret: vi.fn(async () => {
+        removeSecret: vi.fn<InstallPorts["removeSecret"]>(async () => {
             calls.push("removeSecret");
         }),
-        restoreSecret: vi.fn(async () => {
+        restoreSecret: vi.fn<InstallPorts["restoreSecret"]>(async () => {
             calls.push("restoreSecret");
         }),
-        revokeReleaseKey: vi.fn(async () => {
+        revokeReleaseKey: vi.fn<InstallPorts["revokeReleaseKey"]>(async () => {
             calls.push("revoke");
         }),
-        snapshotSecrets: vi.fn(async (): Promise<SealedSecret[]> => []),
-        storeSecret: vi.fn(async () => {
+        snapshotSecrets: vi.fn<InstallPorts["snapshotSecrets"]>(async (): Promise<SealedSecret[]> => []),
+        storeSecret: vi.fn<InstallPorts["storeSecret"]>(async () => {
             calls.push("store");
         }),
-        storedSecretNames: vi.fn(async () => [] as string[]),
+        storedSecretNames: vi.fn<InstallPorts["storedSecretNames"]>(async () => [] as string[]),
         ...overrides,
     };
 
@@ -219,7 +219,7 @@ describe(runInstall, () => {
 
     it("refuses at once when the project is busy, and touches nothing else", async () => {
         const { calls, ports } = portsWith({
-            claim: vi.fn(async () => {
+            claim: vi.fn<InstallPorts["claim"]>(async () => {
                 return { busy: true as const };
             }),
         });
@@ -231,7 +231,7 @@ describe(runInstall, () => {
     });
 
     it("abandons the claim and refuses when a release is already in flight", async () => {
-        const { calls, ports } = portsWith({ inFlight: vi.fn(async () => true) });
+        const { calls, ports } = portsWith({ inFlight: vi.fn<InstallPorts["inFlight"]>(async () => true) });
 
         const result = await runInstall(baseInput(), ports);
 
@@ -243,8 +243,8 @@ describe(runInstall, () => {
     it("puts back a secret that existed before the install, and removes one it created, when storing fails", async () => {
         const previous: SealedSecret = { ciphertext: "old", iv: "iv", name: "TOKEN" };
         const { ports } = portsWith({
-            snapshotSecrets: vi.fn(async () => [previous]),
-            storeSecret: vi.fn(async (name: string) => {
+            snapshotSecrets: vi.fn<InstallPorts["snapshotSecrets"]>(async () => [previous]),
+            storeSecret: vi.fn<InstallPorts["storeSecret"]>(async (name: string) => {
                 if (name === "SECOND") {
                     throw new Error("store refused");
                 }
@@ -273,11 +273,11 @@ describe(runInstall, () => {
 
     it("rolls the secrets back and abandons the claim when the release does not go live", async () => {
         const { ports } = portsWith({
-            release: vi.fn(async () => {
+            release: vi.fn<InstallPorts["release"]>(async () => {
                 return { deploymentId: "", error: "the health check failed", status: "failed" as const };
             }),
-            storeSecret: vi.fn(async () => {}),
-            snapshotSecrets: vi.fn(async () => []),
+            storeSecret: vi.fn<InstallPorts["storeSecret"]>(async () => {}),
+            snapshotSecrets: vi.fn<InstallPorts["snapshotSecrets"]>(async () => []),
         });
         const input = baseInput({
             artifact: artifactWith({
@@ -298,7 +298,7 @@ describe(runInstall, () => {
 
     it("revokes the key even when the release throws", async () => {
         const { ports } = portsWith({
-            release: vi.fn(async () => {
+            release: vi.fn<InstallPorts["release"]>(async () => {
                 throw new Error("boom");
             }),
         });
@@ -311,7 +311,7 @@ describe(runInstall, () => {
 
     it("reports the install as live but unrecorded when its row cannot be marked", async () => {
         const { ports } = portsWith({
-            finish: vi.fn(async () => {
+            finish: vi.fn<InstallPorts["finish"]>(async () => {
                 throw new Error("db down");
             }),
         });
