@@ -23,6 +23,10 @@ export type { CloudflareCliConfigFinding } from "./cloudflare-cli-config";
 export { CLOUDFLARE_CLI_CONFIG_WARNING_ENV, detectCloudflareCliConfig, warnCloudflareCliConfigOnce } from "./cloudflare-cli-config";
 export { default as CLOUDFLARE_DRIVER } from "./cloudflare-driver";
 export { default as GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG } from "./compatibility-flags";
+export type { CloudflareCredentialProbe } from "./credentials";
+export { hasCloudflareCredentials } from "./credentials";
+export type { DevConfigKind } from "./dev-config";
+export { describeWithheldWorkersAi, withheldWorkersAi } from "./dev-config";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
@@ -31,11 +35,11 @@ export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons"
 export { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 export type { ReconcileProject } from "./reconcile-project";
 export { reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-project";
-export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
+export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,
     isRemoteEnvEnabled,
-    materializeRemoteWranglerConfig,
+    materializeDevWranglerConfig,
     planRemoteBindings,
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,

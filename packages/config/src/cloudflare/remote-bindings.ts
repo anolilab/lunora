@@ -20,16 +20,15 @@
  * authoritative state is its DO SQLite and CF has no remote-DO mode — shards run
  * locally while their data deps point at production (the PLAN5 §5.3 boundary).
  *
- * {@link materializeRemoteWranglerConfig} writes a sibling temp config with
+ * {@link materializeDevWranglerConfig} writes a sibling temp config with
  * `"remote": true` injected onto each eligible binding, comment-preservingly, so
  * `lunora dev` can point `wrangler dev --config` at it without ever mutating the
- * user's checked-in `wrangler.jsonc`. It returns a {@link MaterializeResult.cleanup}
- * disposer so the caller can unlink the generated temp dir when dev exits.
+ * user's checked-in `wrangler.jsonc`. It returns a `cleanup` disposer so the caller
+ * can remove the file when dev exits.
  */
-import { rmSync, writeFileSync } from "node:fs";
-
 import { applyModify } from "../jsonc-edit";
-import join from "../path";
+import { hasCloudflareCredentials } from "./credentials";
+import { noopCleanup, withheldWorkersAi, writeDevConfig } from "./dev-config";
 import { readManifest } from "./lunora-manifest";
 import { ownedServiceBindings } from "./reconcile-services";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -197,137 +196,71 @@ const injectRemoteFlags = (text: string, plans: ReadonlyArray<RemoteBindingPlan>
     return next;
 };
 
-interface MaterializeOptions {
-    /** When `false`, the call is a no-op (returns `enabled: false`). */
-    enabled: boolean;
+interface MaterializeDevOptions {
+    /** Whether wrangler can authenticate; defaults to a probe of `projectRoot`. */
+    hasCredentials?: () => boolean;
     projectRoot: string;
+    /** Proxy the eligible bindings to the deployed resources (`--remote` / `LUNORA_REMOTE`). Off, only the logged-out `ai` withholding applies. */
+    remote: boolean;
 }
 
-interface MaterializeResult {
-    /**
-     * Removes the generated temp config file. Always present and always safe to
-     * call: it is idempotent, a no-op when nothing was written (disabled /
-     * fall-through cases), and never throws if the path is already gone. The dev
-     * command calls this on every exit path (normal, signal, error).
-     */
+interface MaterializeDevResult {
+    /** Removes the temp config. Always safe to call: idempotent, and a no-op when nothing was written. */
     cleanup: () => void;
-
-    /**
-     * Absolute path to the generated temp config to pass to
-     * `wrangler dev --config`. `undefined` when remote mode is disabled, no
-     * wrangler config was found, it failed to parse, or it declared no eligible
-     * binding (nothing to remote — run plain local dev).
-     */
+    /** The temp config to pass to `wrangler dev --config`, or `undefined` to run the user's file unchanged. */
     configPath?: string;
-    /** Whether remote mode was requested at all. */
-    enabled: boolean;
-    /** Why no temp config was produced, for logging (only set when none was). */
+    /** Why remote mode produced no temp config, for the dev log. Only set when nothing was written. */
     reason?: string;
     /** The bindings flipped to remote, for the dev banner. */
     remoteBindings: RemoteBindingPlan[];
+    /** The `ai` binding name left out for lack of Cloudflare credentials, for the dev warning. */
+    withheld: string[];
 }
 
-/** A disposer that does nothing — the cleanup for every fall-through (no temp file written). */
-const noopCleanup = (): void => {};
-
 /**
- * Build an idempotent disposer that removes the generated temp config file.
- * Guards against a double call (the flag) and a missing path (`force: true` +
- * try/catch), so the dev command can wire it onto multiple exit paths without
- * ever crashing the shutdown.
+ * Write the temp wrangler config a dev session runs with: the user's file with any
+ * eligible bindings flipped to `"remote": true` (when `remote` is set), and the
+ * `ai` binding removed when the session has no Cloudflare login. See `dev-config.ts`
+ * for why the `ai` removal exists.
+ *
+ * The temp file sits beside the source `wrangler.jsonc`, not in an OS temp dir,
+ * because wrangler resolves a config's relative `main`/`assets`/`migrations_dir`
+ * paths against the config file's own directory. Returns no `configPath` when there
+ * is nothing to change, so the caller runs the user's file unchanged.
  */
-const createCleanup = (path: string): (() => void) => {
-    let done = false;
-
-    return () => {
-        if (done) {
-            return;
-        }
-
-        done = true;
-
-        try {
-            rmSync(path, { force: true, recursive: true });
-        } catch {
-            /* already gone / unremovable — nothing actionable on shutdown */
-        }
+const materializeDevWranglerConfig = (options: MaterializeDevOptions): MaterializeDevResult => {
+    const unchanged = (reason?: string): MaterializeDevResult => {
+        return { cleanup: noopCleanup, reason, remoteBindings: [], withheld: [] };
     };
-};
-
-/**
- * Per-process counter appended to every materialized temp config's name — the
- * "generation" half of {@link remoteConfigBasename}.
- *
- * A pid alone is NOT unique within one dev process. Vite's `restartServer`
- * resolves the new config (building new plugin instances, which materialize a
- * fresh temp file) BEFORE closing the old server, so the old generation's
- * `buildEnd` disposer fired last — against a constant path — and deleted the
- * file the NEW generation had just written. With `remote: true` the worker then
- * booted against empty local D1/KV/R2 after every restart. Giving each
- * materialization its own filename makes the disposer's ownership structural: it
- * can only ever unlink the file it wrote.
- */
-let remoteConfigGeneration = 0;
-
-/**
- * Filename for a Lunora-generated remote-dev config. A dotfile (less likely to
- * be committed / shown), unique per process AND per materialization so
- * concurrent `lunora dev` runs — and successive dev-server generations within
- * one run — never share a path; the cleanup disposer unlinks it on exit.
- */
-const remoteConfigBasename = (): string => {
-    remoteConfigGeneration += 1;
-
-    return `.wrangler.lunora-remote.${String(process.pid)}.${String(remoteConfigGeneration)}.jsonc`;
-};
-
-/**
- * Produce a temporary wrangler config with `"remote": true` on every eligible
- * binding, so `lunora dev` can run `wrangler dev --config <temp>` against the
- * deployed D1/KV/R2 without touching the user's file.
- *
- * The temp file is written as a sibling of the source `wrangler.jsonc` (in the
- * project root), NOT an OS temp dir: wrangler resolves a config's relative paths
- * (`main`, `assets`, `migrations_dir`, …) against the **config file's own
- * directory**, so a temp config in `/tmp` would make wrangler look for
- * `/tmp/src/server.ts` and fail to start the worker. Keeping it beside the real
- * config preserves those relative paths. Returns `configPath: undefined` (with a
- * `reason`) for every fall-through case so the caller degrades to plain local
- * dev instead of failing.
- */
-const materializeRemoteWranglerConfig = (options: MaterializeOptions): MaterializeResult => {
-    if (!options.enabled) {
-        return { cleanup: noopCleanup, enabled: false, remoteBindings: [] };
-    }
-
     const wranglerPath = findWranglerFile(options.projectRoot);
 
     if (!wranglerPath) {
-        return { cleanup: noopCleanup, enabled: true, reason: "wrangler.jsonc not found", remoteBindings: [] };
+        return unchanged("wrangler.jsonc not found");
     }
 
     const { parsed, text } = readWranglerJsonc<RemoteWranglerShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return { cleanup: noopCleanup, enabled: true, reason: `failed to parse ${wranglerPath} as JSONC`, remoteBindings: [] };
+        return unchanged(`failed to parse ${wranglerPath} as JSONC`);
     }
 
-    // A Lunora-owned service binding (plan 457) runs locally beside the app in
-    // the same dev session, so remoting it would call the deployed Worker instead.
+    // A Lunora-owned service binding (plan 457) runs locally beside the app in the
+    // same dev session, so remoting it would call the deployed Worker instead.
     const localServices = ownedServiceBindings(readManifest(options.projectRoot));
-    const plans = planRemoteBindings(parsed).filter((plan) => plan.section !== "services" || !localServices.has(plan.binding));
+    const plans = options.remote ? planRemoteBindings(parsed).filter((plan) => plan.section !== "services" || !localServices.has(plan.binding)) : [];
+    const withheldBinding = withheldWorkersAi(parsed.ai, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
+    const withheld = withheldBinding === undefined ? [] : [withheldBinding];
+    const remoteBindings = withheldBinding === undefined ? plans : plans.filter((plan) => plan.section !== "ai");
 
-    if (plans.length === 0) {
-        return { cleanup: noopCleanup, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };
+    if (remoteBindings.length === 0 && withheld.length === 0) {
+        return unchanged(options.remote ? "no remote-eligible bindings to proxy" : undefined);
     }
 
-    // Sibling of the source config (same directory) so wrangler resolves the
-    // config's relative `main`/`assets`/`migrations_dir` paths correctly.
-    const configPath = join(options.projectRoot, remoteConfigBasename());
+    const withoutAi = withheld.length > 0 ? applyModify(text, ["ai"], undefined) : text;
+    const contents = remoteBindings.length > 0 ? injectRemoteFlags(withoutAi, remoteBindings) : withoutAi;
+    const written = writeDevConfig(options.projectRoot, "dev", contents);
 
-    writeFileSync(configPath, injectRemoteFlags(text, plans), "utf8");
-
-    return { cleanup: createCleanup(configPath), configPath, enabled: true, remoteBindings: plans };
+    return { cleanup: written.cleanup, configPath: written.configPath, remoteBindings, withheld };
 };
 
 /**
@@ -383,13 +316,5 @@ const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
     return inputs.configPreference ?? false;
 };
 
-export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
-export {
-    createCleanup,
-    injectRemoteFlags,
-    isRemoteEnvEnabled,
-    materializeRemoteWranglerConfig,
-    planRemoteBindings,
-    REMOTE_ELIGIBLE_KEYS,
-    resolveRemoteEnabled,
-};
+export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
+export { injectRemoteFlags, isRemoteEnvEnabled, materializeDevWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };

@@ -100,6 +100,9 @@ dist/
 .celld/
 .celld.wrangler.json
 .celld.service.*.wrangler.json
+# Temp wrangler configs `lunora dev` writes beside wrangler.jsonc (remote bindings,
+# the logged-out `ai` withholding); removed on exit, swept when a session died
+.wrangler.lunora-*.jsonc
 
 # Per-checkout Lunora dev state written by `lunora dev` / the Vite plugin in
 # workspace apps (dev.json lockfile, dev.log, binding-inference cache) —

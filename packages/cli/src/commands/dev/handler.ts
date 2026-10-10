@@ -25,7 +25,7 @@ import {
     secretSourcesFromBindings,
     updateDevServerState,
 } from "@lunora/config";
-import { resolveRemoteEnabled, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { describeWithheldWorkersAi, resolveRemoteEnabled, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
@@ -81,9 +81,15 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
     if (plan.remote.enabled) {
         if (plan.remote.bindings.length > 0) {
             logger.info(`  ➜  Remote:     ${plan.remote.bindings.join(", ")} → deployed worker`);
-        } else {
-            logger.warn(`  ➜  Remote:     requested but inactive (${plan.remote.reason ?? "no eligible bindings"}) — running fully local`);
+        } else if (plan.remote.reason !== undefined) {
+            // No reason means the session still runs with a temp config (only
+            // `ai` was withheld), so "running fully local" would be wrong.
+            logger.warn(`  ➜  Remote:     requested but inactive (${plan.remote.reason}) — running fully local`);
         }
+    }
+
+    for (const binding of plan.remote.withheld) {
+        logger.warn(`  ➜  ${describeWithheldWorkersAi(binding)}`);
     }
 
     logger.info("");

@@ -35,7 +35,7 @@ describe(materializeServiceDevConfigs, () => {
 
         const path = writeService("parser", `{ "name": "parser", "main": "src/index.ts" }\n`);
 
-        expect(materializeServiceDevConfigs([path]).configPaths).toStrictEqual([path]);
+        expect(materializeServiceDevConfigs([path], { hasCredentials: () => true, projectRoot: workdir }).configPaths).toStrictEqual([path]);
     });
 
     it("runs a relative build command in the service's folder, via a sibling copy with an absolute build.cwd", () => {
@@ -52,7 +52,7 @@ describe(materializeServiceDevConfigs, () => {
 }
 `,
         );
-        const { cleanup, configPaths } = materializeServiceDevConfigs([path]);
+        const { cleanup, configPaths } = materializeServiceDevConfigs([path], { hasCredentials: () => true, projectRoot: workdir });
         const [copy] = configPaths as [string];
         const text = readFileSync(copy, "utf8");
 
@@ -76,7 +76,7 @@ describe(materializeServiceDevConfigs, () => {
         expect.assertions(1);
 
         const path = writeService("web", `{ "name": "web", "main": "dist/index.js", "build": { "command": "npm run build", "cwd": "./app" } }\n`);
-        const { cleanup, configPaths } = materializeServiceDevConfigs([path]);
+        const { cleanup, configPaths } = materializeServiceDevConfigs([path], { hasCredentials: () => true, projectRoot: workdir });
 
         expect(parseJsonc(readFileSync(configPaths[0] as string, "utf8")).build.cwd).toBe(join(dirname(path), "app"));
 
@@ -91,7 +91,7 @@ describe(materializeServiceDevConfigs, () => {
             `{ "name": "pinned", "main": "dist/index.js", "build": { "command": "make", "cwd": ${JSON.stringify(workdir)} } }\n`,
         );
 
-        expect(materializeServiceDevConfigs([path]).configPaths).toStrictEqual([path]);
+        expect(materializeServiceDevConfigs([path], { hasCredentials: () => true, projectRoot: workdir }).configPaths).toStrictEqual([path]);
     });
 
     it("keeps the input order across services that do and do not need a copy", () => {
@@ -99,10 +99,41 @@ describe(materializeServiceDevConfigs, () => {
 
         const plain = writeService("plain", `{ "name": "plain", "main": "src/index.ts" }\n`);
         const built = writeService("built", `{ "name": "built", "main": "dist/index.js", "build": { "command": "./build.sh" } }\n`);
-        const { cleanup, configPaths } = materializeServiceDevConfigs([built, plain]);
+        const { cleanup, configPaths } = materializeServiceDevConfigs([built, plain], { hasCredentials: () => true, projectRoot: workdir });
 
         expect(configPaths[1]).toBe(plain);
         expect(dirname(configPaths[0] as string)).toBe(dirname(built));
+
+        cleanup();
+    });
+
+    it("writes a copy without the ai binding when the session has no Cloudflare login", () => {
+        expect.assertions(3);
+
+        const path = join(workdir, "wrangler.jsonc");
+
+        writeFileSync(path, `{ "name": "svc", "main": "src/index.ts", "ai": { "binding": "AI" } }`, "utf8");
+
+        const { cleanup, configPaths, withheld } = materializeServiceDevConfigs([path], { hasCredentials: () => false, projectRoot: workdir });
+
+        expect(withheld).toStrictEqual(["AI"]);
+        expect(configPaths[0]).not.toBe(path);
+        expect(parseJsonc(readFileSync(configPaths[0]!, "utf8")).ai).toBeUndefined();
+
+        cleanup();
+    });
+
+    it("leaves a service's ai binding alone when the session has a login", () => {
+        expect.assertions(2);
+
+        const path = join(workdir, "wrangler.jsonc");
+
+        writeFileSync(path, `{ "name": "svc", "main": "src/index.ts", "ai": { "binding": "AI" } }`, "utf8");
+
+        const { cleanup, configPaths, withheld } = materializeServiceDevConfigs([path], { hasCredentials: () => true, projectRoot: workdir });
+
+        expect(withheld).toStrictEqual([]);
+        expect(configPaths).toStrictEqual([path]);
 
         cleanup();
     });

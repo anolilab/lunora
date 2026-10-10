@@ -15,6 +15,7 @@ import devStatePlugin from "./dev-state-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
+import localAiBinding from "./local-ai-binding";
 import logStreamPlugin from "./log-stream-plugin";
 import { proxyCheckPlugin } from "./proxy-check-plugin";
 import { remoteBindingsPlugin } from "./remote-bindings-plugin";
@@ -221,10 +222,17 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         const celld = celldDevSupport(resolved.projectRoot, resolved.target);
         const onCelld = (): boolean => ownDevServer && celld().runs;
 
+        // Without a Cloudflare login, drop the `ai` binding from the dev worker so
+        // its remote proxy session can't stop the dev server from booting.
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
         // failure (e.g. a circular import in `lunora/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
-        plugins.push(...withoutDevWhen(withWorkerStartupHint(cloudflare(cloudflareOptions)), onCelld));
+        plugins.push(
+            ...withoutDevWhen(
+                [localAiBinding(cloudflareOptions, { projectRoot: resolved.projectRoot }), ...withWorkerStartupHint(cloudflare(cloudflareOptions))],
+                onCelld,
+            ),
+        );
 
         if (ownDevServer) {
             plugins.push(celldDevPlugin(resolved.projectRoot, onCelld), {

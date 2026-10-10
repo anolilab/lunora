@@ -102,6 +102,10 @@ Outside an action — in the worker entry, a Durable Object, or a queue/schedule
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 
+### Local dev without a Cloudflare login
+
+Workers AI only runs remotely, so the `AI` binding needs a Cloudflare login even in dev. When `lunora dev` or `vite dev` finds none (no `wrangler login`, no `CLOUDFLARE_API_TOKEN`), it leaves the binding out and prints a warning instead of failing to boot. AI SDK model objects and `"<provider>/<model>"` slugs through `LUNORA_AI_PROXY_URL` keep working; `@cf/…` models throw until you log in.
+
 ## Related
 
 - [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — function primitives whose `ctx.ai` this package backs.

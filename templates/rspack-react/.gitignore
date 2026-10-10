@@ -1,6 +1,7 @@
 node_modules
 dist
 .wrangler
+.wrangler.lunora-*.jsonc
 .lunora/
 .lunora-cache
 lunora/_generated
