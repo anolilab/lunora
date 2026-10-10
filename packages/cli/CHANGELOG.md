@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.377...@lunora/cli@1.0.0-alpha.378) (2026-10-10)
+
+### Features
+
+* **cli:** add cloudflare profile tool ([#1092](https://github.com/anolilab/lunora/issues/1092)) ([817aa32](https://github.com/anolilab/lunora/commit/817aa32c3af8349547a169a9dfd341dc81519268))
+* **config:** enable upload_source_maps on the cloudflare target ([#1094](https://github.com/anolilab/lunora/issues/1094)) ([4a22914](https://github.com/anolilab/lunora/commit/4a22914343d6464b2c84e9a3b68fd6e3234db006))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.334
+
 ## @lunora/cli [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.376...@lunora/cli@1.0.0-alpha.377) (2026-10-10)
 
 
