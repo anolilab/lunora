@@ -45,7 +45,9 @@ interface LocalAiOptions {
  */
 const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiOptions = {}): Plugin => {
     let serving = false;
-    const usesNewConfig = (options as { experimental?: { newConfig?: unknown } }).experimental?.newConfig !== undefined;
+    const newConfig = (options as { experimental?: { newConfig?: unknown } }).experimental?.newConfig;
+    // `false` is the legacy path, which still accepts a config customizer.
+    const usesNewConfig = newConfig !== undefined && newConfig !== false;
     const hasCredentials = localOptions.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: localOptions.projectRoot }));
 
     if (!usesNewConfig) {

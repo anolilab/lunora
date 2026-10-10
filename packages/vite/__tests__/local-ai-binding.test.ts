@@ -130,6 +130,17 @@ describe("localAiBinding", () => {
         expect(options.experimental.newConfig).toStrictEqual({});
     });
 
+    it("still wraps the config when experimental.newConfig is false, the legacy path", () => {
+        expect.assertions(1);
+
+        const options: { config?: unknown; experimental: { newConfig: boolean } } = { experimental: { newConfig: false } };
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "serve");
+
+        expect(typeof options.config).toBe("function");
+    });
+
     it("does not edit a plain-object config the user passed in", () => {
         expect.assertions(2);
 
