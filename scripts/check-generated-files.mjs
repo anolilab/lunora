@@ -4,7 +4,8 @@
  * Several files in this repo are written by a script and committed:
  * `labeler-config.yml`, each package's `__assets__/package-og.svg` + README block,
  * `apps/docs/src/data/packages.ts`, the error-code reference in
- * `apps/docs/src/content/docs/errors.mdx`, and every example's `lunora/_generated` tree.
+ * `apps/docs/src/content/docs/errors.mdx`, the capability tables on the Lunora
+ * Cloud bring-your-own pages, and every example's `lunora/_generated` tree.
  * Nothing re-ran the generators in CI and compared, so a committed output could
  * drift from what the generator produces and no gate noticed.
  *
@@ -37,8 +38,11 @@ const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** The `lunora` CLI, built. `lunora codegen` runs from it, so it has to exist before the sweep. */
 const cliBin = join(rootDir, "packages/lunora/dist/bin.mjs");
 
+/** Workspace roots that may hold a Lunora app committing a generated tree. */
+const CODEGEN_ROOTS = ["apps", "examples"];
+
 /**
- * `lunora codegen` for every example that commits its `lunora/_generated` tree.
+ * `lunora codegen` for every workspace that commits its `lunora/_generated` tree.
  *
  * This is the repo's primary generator, and it was the one this gate did not
  * cover: all 13 examples had drifted from what `packages/codegen` emits (a
@@ -47,15 +51,22 @@ const cliBin = join(rootDir, "packages/lunora/dist/bin.mjs");
  * trees as a `dependsOn` side effect and throws the result away — the same
  * masking that hid `apps/docs/src/data/packages.ts`.
  *
- * Discovered, not listed: a new example is covered the moment it has a `codegen`
- * script, with nothing to remember here. `templates/*` and `apps/playground` are
- * deliberately absent — they `.gitignore` `lunora/_generated` and commit no
+ * `apps/*` is swept for the same reason, one repeat of the same miss later:
+ * `apps/cloud` commits a `lunora/_generated` tree while this sweep walked only
+ * `examples/`, so an emitter change left it stale and nothing caught it. The
+ * floor check below turns that from "remember to add it" into a failure.
+ *
+ * Discovered, not listed: a workspace is covered the moment it has a `codegen`
+ * script, with nothing to remember here. `templates/*` and `apps/playground`
+ * stay out on their own — they `.gitignore` `lunora/_generated` and commit no
  * generated output, so there is nothing to hold them to.
  */
 const codegenWorkspaces = () =>
-    readdirSync(join(rootDir, "examples"), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => join("examples", entry.name))
+    CODEGEN_ROOTS.flatMap((root) =>
+        readdirSync(join(rootDir, root), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => join(root, entry.name)),
+    )
         .filter((dir) => {
             const manifest = join(rootDir, dir, "package.json");
 
@@ -64,17 +75,20 @@ const codegenWorkspaces = () =>
         .sort();
 
 /**
- * Every `examples/*` that COMMITS a `lunora/_generated` tree, from git rather
- * than from a hand-kept list.
+ * Every workspace that COMMITS a `lunora/_generated` tree, from git rather than
+ * from a hand-kept list.
  *
  * `codegenWorkspaces()` discovers by the presence of a `codegen` script, so
- * renaming or deleting that script in one example silently drops it from the
+ * renaming or deleting that script in one workspace silently drops it from the
  * sweep — the run then prints "All 15 generators…" and stays green. Committed
- * generated output is the thing that can go stale, so it is the floor: an
- * example that commits one has to be covered.
+ * generated output is the thing that can go stale, so it is the floor: a
+ * workspace that commits one has to be covered, wherever it lives.
  */
-const committedGeneratedExamples = () => {
-    const raw = execFileSync("git", ["ls-files", "--", "examples/*/lunora/_generated/*"], { cwd: rootDir, encoding: "utf8" });
+const committedGeneratedWorkspaces = () => {
+    const raw = execFileSync("git", ["ls-files", "--", ...CODEGEN_ROOTS.map((root) => `${root}/*/lunora/_generated/*`)], {
+        cwd: rootDir,
+        encoding: "utf8",
+    });
 
     return [
         ...new Set(
@@ -87,10 +101,10 @@ const committedGeneratedExamples = () => {
 };
 
 const covered = new Set(codegenWorkspaces());
-const uncovered = committedGeneratedExamples().filter((dir) => !covered.has(dir));
+const uncovered = committedGeneratedWorkspaces().filter((dir) => !covered.has(dir));
 
 if (uncovered.length > 0) {
-    console.error(`❌ ${uncovered.length} example(s) commit a \`lunora/_generated\` tree that this sweep never regenerates:`);
+    console.error(`❌ ${uncovered.length} workspace(s) commit a \`lunora/_generated\` tree that this sweep never regenerates:`);
     console.error("");
 
     for (const dir of uncovered) {
@@ -117,6 +131,9 @@ const GENERATORS = [
     // `--experimental-strip-types` because it imports `packages/errors/src/catalog.ts`
     // directly; the flag is still required on the 22.15 this job pins.
     ["node", ["--experimental-strip-types", "apps/docs/scripts/generate-error-reference.js"]],
+    // Reads `apps/cloud/src/provision-contract.ts` as source (an AST, not an import),
+    // so it needs neither the flag nor a build.
+    ["node", ["apps/docs/scripts/generate-target-capabilities.js"]],
     // Its own declared `codegen` script, not a hand-rolled CLI call: that is the
     // script discovery keys on, and it is what the workspace actually runs, so a
     // flag added there is honoured here instead of silently diverging.
@@ -156,7 +173,7 @@ const newestMtime = (dir) => {
 if (!existsSync(cliBin)) {
     console.error(`❌ The \`lunora\` CLI is not built: ${cliBin} is missing.`);
     console.error("");
-    console.error("   `lunora codegen` regenerates the examples' committed `lunora/_generated`");
+    console.error("   `lunora codegen` regenerates the committed `lunora/_generated` trees");
     console.error("   trees, so this check needs a build first:");
     console.error("");
     console.error("     pnpm run build:packages");

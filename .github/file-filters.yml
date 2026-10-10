@@ -113,6 +113,11 @@ dependency_manifests:
     # notice the drift.
     - "commitlint.config.cjs"
     - "scripts/check-pr-title-types.js"
+    # The react-doctor pin lives in two files; the check that compares them, and
+    # both of its inputs, gate the job — otherwise a PR that bumps only the
+    # workflow matches `yaml_lintable` and nothing notices the drift.
+    - "scripts/check-react-doctor-pin.js"
+    - ".github/workflows/react-doctor.yml"
     - ".github/workflows/semantic-pull-request.yml"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
@@ -152,6 +157,14 @@ generated_files:
     # The generated error-code reference itself: a hand edit to the output is drift
     # too, and its generator's only other input (packages/errors) is listed below.
     - "apps/docs/src/content/docs/errors.mdx"
+    # The bring-your-own capability tables, and the contract they are generated from.
+    - "apps/docs/src/content/docs/cloud/your-own-*.mdx"
+    - "apps/cloud/src/provision-contract.ts"
+    # Any app that commits a `lunora/_generated` tree — its schema and functions
+    # are what codegen reads, so a change here is a change to generated output.
+    # Listed because the sweep walks `apps/*` as well as `examples/*`:
+    # `apps/cloud` commits its tree and went stale with nothing to catch it.
+    - "apps/*/lunora/**"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
     - "packages/advisor/**"
@@ -216,6 +229,8 @@ e2e:
 # docs-only PRs skip the install+build entirely.
 benchmarks:
     - "packages/**"
+    # apps/cloud's box-session benches.
+    - "apps/cloud/**"
     - "shared/**"
     - "**/tsconfig*.json"
     - "pnpm-lock.yaml"
@@ -367,6 +382,16 @@ node_capabilities_docs:
     - "scripts/check-node-capabilities-docs.js"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
+
+# The `test-hostd` job: the hostd lane (`pnpm run test:hostd`) — the Rust daemon
+# under its real systemd unit, the pinned celld release, a Caddy built from
+# release-pins.json, moto — so it runs when the crate or the hostd wire protocol
+# changes, plus its own workflow and this file, per the self-listing rule above.
+hostd:
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+    - "apps/hostd/**"
+    - "protocol/hostd/**"
 
 # The `test-celld` job: a live celld (GitHub release), moto (pipx) and a Docker Hub
 # image, so it runs only when something it can observe changes — the packages its

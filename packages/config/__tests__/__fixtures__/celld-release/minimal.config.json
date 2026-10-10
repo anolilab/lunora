@@ -1,0 +1,6 @@
+{
+    "name": "hello",
+    "main": "worker.js",
+    "no_bundle": true,
+    "compatibility_flags": ["nodejs_compat"]
+}

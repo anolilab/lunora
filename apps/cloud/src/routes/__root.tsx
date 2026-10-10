@@ -1,0 +1,85 @@
+import { LunoraClient } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
+import type { QueryClient } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createRootRouteWithContext, HeadContent, Link, Outlet, Scripts } from "@tanstack/react-router";
+import type { ReactElement } from "react";
+import { useEffect, useState } from "react";
+
+import authUiCss from "../../lunora/auth-ui/styles.css?url";
+import { captureEvent } from "../client/analytics";
+import { useScreen } from "../client/tabs";
+import themeCss from "../client/theme.css?url";
+
+interface RouterContext {
+    queryClient: QueryClient;
+}
+
+const RootComponent = (): ReactElement => {
+    const { queryClient } = Route.useRouteContext();
+    // One client per mount. `useState` (not `useMemo`) so React can never discard
+    // and rebuild it — a fresh client would drop every live subscription.
+    const [client] = useState(() => new LunoraClient({ url: lunoraUrl }));
+    const screen = useScreen();
+
+    // Screen views for the whole app from one place — login, the organization
+    // list and every tab — because the router, not the browser, changes the
+    // page here. Keyed on the derived `screen` rather than the pathname, so
+    // navigating between two organizations' Projects tabs is one screen, not
+    // two, and moving within a screen (a search param, a focused trace) does
+    // not re-report it.
+    useEffect(() => {
+        captureEvent("$pageview", { screen });
+    }, [screen]);
+
+    return (
+        <html lang="en">
+            <head>
+                <HeadContent />
+            </head>
+            <body>
+                <QueryClientProvider client={queryClient}>
+                    <LunoraProvider client={client}>
+                        <Outlet />
+                    </LunoraProvider>
+                </QueryClientProvider>
+                <Scripts />
+            </body>
+        </html>
+    );
+};
+
+export const Route = createRootRouteWithContext<RouterContext>()({
+    component: RootComponent,
+    head: () => {
+        return {
+            links: [
+                { href: themeCss, rel: "stylesheet" },
+                // The copy-in auth UI ships plain CSS that reads the same design
+                // tokens via `var(--token, fallback)`, so it inherits Night/Ivory
+                // without Tailwind. Loaded after the theme so the tokens exist.
+                { href: authUiCss, rel: "stylesheet" },
+            ],
+            meta: [{ charSet: "utf8" }, { content: "width=device-width, initial-scale=1", name: "viewport" }, { title: "Lunora Cloud" }],
+        };
+    },
+    notFoundComponent: () => (
+        <main className="mx-auto w-full max-w-3xl px-6 py-16">
+            <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+                <h1>404</h1>
+                <p>This page could not be found.</p>
+                <Link className="text-primary underline-offset-4 hover:underline" to="/">
+                    Back to organizations
+                </Link>
+            </div>
+        </main>
+    ),
+});
+
+/**
+ * Lunora endpoint for the browser client. On the server the provider is only
+ * rendered — the SSR data came from `src/ssr/loader.ts`, which speaks HTTP — so
+ * the page origin is the right target in both environments. `VITE_LUNORA_URL`
+ * overrides it for pointing a local studio at a deployed control plane.
+ */
+const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (import.meta.env.SSR ? "/" : globalThis.location.origin);

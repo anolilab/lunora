@@ -1,0 +1,491 @@
+import { describe, expect, it } from "vitest";
+
+import type { MutationCtx } from "../lunora/_generated/server";
+import { enforceSpendCaps, ingest, rollup, setSpendWarning } from "../lunora/usage";
+import { RATE_CARD } from "../src/billing/spend";
+import { UNVERIFIED_METERS } from "../src/billing/usage";
+import { hashDeployKey } from "../src/deploy/keys";
+
+/**
+ * The money mutations, which had no tests at all.
+ *
+ * `rollup` is the only place in the system that can DOUBLE-bill, and the thing
+ * that prevents it is statement order alone: the extras are deleted before the
+ * survivor's total is written, so a crash mid-compaction can only under-count.
+ * Reverse those two awaits and every org with a multi-row meter group gets
+ * over-charged, with nothing failing. That invariant had no test.
+ *
+ * `enforceSpendCaps` is the runaway-bill brake. A regression that fails to
+ * suspend costs the platform unbounded money; one that lifts a *dunning*
+ * suspension restores service to an org that is not paying.
+ *
+ * `ingest` is called with a tenant-held deploy key, so its negative-quantity
+ * guard is what stops a tenant deflating its own metered usage.
+ */
+
+type Row = Record<string, unknown>;
+
+/** Every db call the mutation made, in order — which is the property under test for `rollup`. */
+type Op = { id: string; kind: "delete" } | { id: string; kind: "patch"; patch: Row } | { document: Row; kind: "insert"; table: string };
+
+const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId: null | string = null): { ctx: MutationCtx; ops: Op[] } => {
+    const ops: Op[] = [];
+    const matchesEntry = (actual: unknown, expected: unknown): boolean => {
+        const comparison = expected as { gte?: number; lt?: number };
+
+        if (typeof expected === "object" && expected !== null && ("lt" in expected || "gte" in expected)) {
+            return (
+                (comparison.lt === undefined || (actual as number) < comparison.lt) && (comparison.gte === undefined || (actual as number) >= comparison.gte)
+            );
+        }
+
+        return actual === expected;
+    };
+    const matches = (row: Row, where: Row): boolean => Object.entries(where).every(([key, value]) => matchesEntry(row[key], value));
+    const select = (table: string, where: Row): Row[] => (tables[table] ?? []).filter((row) => matches(row, where));
+    const facade = (table: string) => {
+        return {
+            findMany: (args?: { orderBy?: Record<string, string>[]; where?: Row }) =>
+                Promise.resolve({ continueCursor: null, isDone: true, page: select(table, args?.where ?? {}) }),
+        };
+    };
+
+    // `ingest` carries `.use(rateLimit("ingest"))`, and `.handler` runs the
+    // middleware chain — so the double must also satisfy the limiter's store: a
+    // `query(table).withIndex(...).first()` that finds no bucket, which is the
+    // first-request path and always allows.
+    const emptyQuery: { first: () => Promise<null>; withIndex: () => typeof emptyQuery } = { first: () => Promise.resolve(null), withIndex: () => emptyQuery };
+
+    const ctx = {
+        auth: { getIdentity: () => Promise.resolve(null), userId },
+        db: {
+            alertRules: facade("alertRules"),
+            get: (id: string) =>
+                Promise.resolve(
+                    Object.values(tables)
+                        .flat()
+                        .find((row) => row["_id"] === id) ?? null,
+                ),
+            members: facade("members"),
+            query: () => emptyQuery,
+            delete: (id: string) => {
+                ops.push({ id, kind: "delete" });
+
+                return Promise.resolve();
+            },
+            insert: (table: string, document: Row) => {
+                ops.push({ document, kind: "insert", table });
+
+                return Promise.resolve("row_1");
+            },
+            deployKeys: facade("deployKeys"),
+            organizations: facade("organizations"),
+            patch: (id: string, patch: Row) => {
+                ops.push({ id, kind: "patch", patch });
+
+                return Promise.resolve();
+            },
+            platformUsage: facade("platformUsage"),
+        },
+        now,
+        runMutation: () => Promise.resolve(undefined),
+        runQuery: () => Promise.resolve(undefined),
+    } as unknown as MutationCtx;
+
+    return { ctx, ops };
+};
+
+/** A closed-period row (periodStart well below any plausible current period). */
+const usageRow = (id: string, quantity: number, over: Row = {}): Row => {
+    return { _id: id, kind: "requests", organizationId: "org_1", periodStart: 1000, quantity, ...over };
+};
+
+/** The quantity the survivor was patched to, for the convergence assertion. */
+const patchedQuantity = (ops: Op[]): number => {
+    const patch = ops.find((op) => op.kind === "patch");
+
+    return patch?.kind === "patch" ? (patch.patch["quantity"] as number) : Number.NaN;
+};
+
+describe("usage.rollup", () => {
+    it("collapses a group to one row carrying the group's total", async () => {
+        const { ctx, ops } = makeCtx({ platformUsage: [usageRow("u1", 10), usageRow("u2", 5), usageRow("u3", 1)] });
+
+        const result = await rollup.handler(ctx, {});
+
+        expect(result).toStrictEqual({ compacted: 2 });
+        expect(ops.filter((op) => op.kind === "delete").map((op) => op.id)).toStrictEqual(["u2", "u3"]);
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "u1", patch: { quantity: 16 } });
+    });
+
+    /**
+     * The invariant the whole design rests on. There is no multi-statement
+     * transaction here, so a crash between the two writes must leave the ledger
+     * under-counted, never over-counted — an extra row surviving beside an
+     * already-summed survivor is a customer billed twice.
+     */
+    it("deletes every extra BEFORE writing the survivor's total", async () => {
+        const { ctx, ops } = makeCtx({ platformUsage: [usageRow("u1", 10), usageRow("u2", 5)] });
+
+        await rollup.handler(ctx, {});
+
+        const lastDelete = ops.findLastIndex((op) => op.kind === "delete");
+        const patchAt = ops.findIndex((op) => op.kind === "patch");
+
+        expect(patchAt).toBeGreaterThan(lastDelete);
+    });
+
+    it("leaves a single-row group untouched", async () => {
+        const { ctx, ops } = makeCtx({ platformUsage: [usageRow("u1", 10)] });
+
+        await expect(rollup.handler(ctx, {})).resolves.toStrictEqual({ compacted: 0 });
+        expect(ops).toStrictEqual([]);
+    });
+
+    it("groups by org, period AND meter — never sums across them", async () => {
+        const { ctx, ops } = makeCtx({
+            platformUsage: [
+                usageRow("a1", 10),
+                usageRow("a2", 5),
+                usageRow("b1", 100, { kind: "cpuMs" }),
+                usageRow("c1", 7, { organizationId: "org_2" }),
+                usageRow("d1", 3, { periodStart: 2000 }),
+            ],
+        });
+
+        await rollup.handler(ctx, {});
+
+        // Only the two `org_1 / 1000 / requests` rows may merge.
+        expect(ops.filter((op) => op.kind === "delete").map((op) => op.id)).toStrictEqual(["a2"]);
+        expect(ops.filter((op) => op.kind === "patch")).toHaveLength(1);
+    });
+
+    /**
+     * Convergence across ticks: a group split by the page boundary collapses in
+     * stages, and the total after the second tick must equal the true total.
+     */
+    it("converges when a group is compacted over two ticks", async () => {
+        const first = makeCtx({ platformUsage: [usageRow("u1", 10), usageRow("u2", 5)] });
+
+        await rollup.handler(first.ctx, {});
+
+        const survivorTotal = patchedQuantity(first.ops);
+        const second = makeCtx({ platformUsage: [usageRow("u1", survivorTotal), usageRow("u4", 4)] });
+
+        await rollup.handler(second.ctx, {});
+
+        expect(patchedQuantity(second.ops)).toBe(19);
+    });
+});
+
+const organization = (over: Row = {}): Row => {
+    return { _id: "org_1", plan: "free", ...over };
+};
+
+/** A state-transition patch — not the sweep's rewrite of the admission fast path's accrual. */
+const isTransition = (op: Op): boolean => op.kind === "patch" && !("spendNanoCents" in op.patch);
+
+describe("usage.enforceSpendCaps", () => {
+    it("suspends an org over its cap and records why", async () => {
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ spendCapMinor: 1 })],
+            platformUsage: [usageRow("u1", 10_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedReason: "spend-cap" } });
+        expect(ops.find((op) => op.kind === "insert")).toMatchObject({ document: { action: "organization.suspend" }, table: "auditLog" });
+    });
+
+    it("never suspends for the alert-only meters the readback writes display-only", async () => {
+        const { ctx, ops } = makeCtx({
+            // $1.00: one billed request-hour of these quantities would pass it many times over.
+            organizations: [organization({ spendCapMinor: 100 })],
+            platformUsage: [...UNVERIFIED_METERS].map((kind, index) =>
+                usageRow(`u${String(index)}`, 1e15, { billable: false, kind, periodStart: Number.MAX_SAFE_INTEGER - 1 }),
+            ),
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.filter((op) => isTransition(op))).toStrictEqual([]);
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ patch: { spendNanoCents: 0 } });
+    });
+
+    it("does not re-suspend an org that is already suspended", async () => {
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ spendCapMinor: 1, suspendedAt: 1, suspendedReason: "spend-cap" })],
+            platformUsage: [usageRow("u1", 10_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.filter((op) => op.kind === "patch" && "suspendedReason" in op.patch)).toStrictEqual([]);
+    });
+
+    /**
+     * The gate that matters most on the recovery side: lifting a DUNNING
+     * suspension would restore service to an org that has not paid.
+     */
+    it("lifts only its own suspensions, never a dunning one", async () => {
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ suspendedAt: 1, suspendedReason: "dunning" })],
+            platformUsage: [],
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.filter((op) => isTransition(op))).toStrictEqual([]);
+    });
+
+    it("lifts a spend-cap suspension once usage is back under the cap", async () => {
+        const { ctx, ops } = makeCtx({ organizations: [organization({ suspendedAt: 1, suspendedReason: "spend-cap" })], platformUsage: [] });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
+    });
+});
+
+/** The real sweep's period bucket — the latch compares against it. */
+const thisPeriod = (): number => {
+    const now = new Date();
+
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+};
+
+/** About $3 of requests in the current period: over a 1-cent warn, under the default cap. */
+const currentSpend = (): Row[] => [usageRow("u1", 10_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })];
+
+const spendRule = (over: Row = {}): Row => {
+    return {
+        _id: "rule_1",
+        channel: "email",
+        destination: "ops@example.com",
+        enabled: true,
+        name: "Budget",
+        organizationId: "org_1",
+        target: "spend",
+        ...over,
+    };
+};
+
+const inserted = (ops: Op[], table: string): Row[] => ops.flatMap((op) => (op.kind === "insert" && op.table === table ? [op.document] : []));
+
+describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
+    it("fires the org's spend rules once when spend reaches the warn threshold, and latches the period", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule(), spendRule({ _id: "rule_off", enabled: false })],
+            organizations: [organization({ name: "Acme", spendCapMinor: 1_000_000, spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toStrictEqual({ suspended: 0, unsuspended: 0, warned: 1 });
+
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { spendWarnedPeriod: thisPeriod() } });
+        expect(inserted(ops, "auditLog")).toMatchObject([{ action: "organization.spend_warn", actorUserId: "system:spend-cap" }]);
+
+        // The disabled rule stays quiet; the enabled one is queued for the drain.
+        const alerts = inserted(ops, "alerts");
+
+        expect(alerts).toHaveLength(1);
+        expect(alerts[0]).toMatchObject({ organizationId: "org_1", ruleId: "rule_1", status: "firing", target: "spend" });
+        expect(String(alerts[0]?.["subject"])).toContain("spend warning");
+    });
+
+    it("tells an organization with no spend rule anyway: it gets the default rule, to its owners and admins", async () => {
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ name: "Acme", spendCapMinor: 1_000_000, spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ warned: 1 });
+
+        expect(inserted(ops, "alertRules")).toMatchObject([
+            { channel: "email", destination: "org:admins", enabled: true, name: "Spend warnings (default)", organizationId: "org_1", target: "spend" },
+        ]);
+        expect(inserted(ops, "auditLog")).toContainEqual(expect.objectContaining({ action: "alert_rule.default_created", actorUserId: "system:spend-cap" }));
+        expect(inserted(ops, "alerts")).toMatchObject([
+            { channel: "email", destination: "org:admins", organizationId: "org_1", status: "firing", target: "spend" },
+        ]);
+    });
+
+    it("respects a spend rule that was turned off: no default rule, nothing sent", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule({ enabled: false })],
+            organizations: [organization({ spendCapMinor: 1_000_000, spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(inserted(ops, "alertRules")).toStrictEqual([]);
+        expect(inserted(ops, "alerts")).toStrictEqual([]);
+    });
+
+    it("does not warn again in a period it already warned in", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule()],
+            organizations: [organization({ spendCapMinor: 1_000_000, spendWarnedPeriod: thisPeriod(), spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ warned: 0 });
+        expect(ops.filter((op) => op.kind === "insert" || isTransition(op))).toStrictEqual([]);
+    });
+
+    it("fires a breach alert with the suspension and latches the warning with it", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule()],
+            organizations: [organization({ name: "Acme", spendCapMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toStrictEqual({ suspended: 1, unsuspended: 0, warned: 0 });
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ patch: { spendWarnedPeriod: thisPeriod(), suspendedReason: "spend-cap" } });
+        expect(String(inserted(ops, "alerts")[0]?.["subject"])).toContain("suspended");
+    });
+
+    /**
+     * A `.global()` row answers NULL for an unset override. Read as an explicit
+     * override, that NULL made every org without one uncapped.
+     */
+    it("caps an org whose override columns are NULL at its plan default", async () => {
+        const { ctx } = makeCtx({
+            organizations: [organization({ spendCapMinor: null, spendWarnMinor: null })],
+            platformUsage: [usageRow("u1", 20_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ suspended: 1 });
+    });
+
+    /** The ledger is the authority: whatever a racing writer left in the accrual, the sweep rewrites it. */
+    it("rewrites the admission fast path's accrual from the ledger", async () => {
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ spendNanoCents: 1, spendPeriod: 0 })],
+            platformUsage: currentSpend(),
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.find((op) => op.kind === "patch" && "spendNanoCents" in op.patch)).toMatchObject({
+            id: "org_1",
+            patch: { spendNanoCents: 10_000_000 * RATE_CARD.requests.nanoCentsPerUnit, spendPeriod: thisPeriod() },
+        });
+    });
+});
+
+const ingestArgs = (over: Row = {}): Row => {
+    return { deployKey: "production:org_1|secret", kind: "requests", organizationId: "org_1", periodStart: 1000, quantity: 5, ...over };
+};
+
+describe("usage.ingest accrual (plan 365 W3)", () => {
+    const keyed = async (organizations: Row[]): Promise<ReturnType<typeof makeCtx>> =>
+        makeCtx(
+            {
+                deployKeys: [{ _id: "dk1", capability: "deploy", hashedKey: await hashDeployKey("production:org_1|secret"), organizationId: "org_1" }],
+                organizations,
+            },
+            Date.now(),
+        );
+
+    it("adds a current-period row's cost to the key's org running spend", async () => {
+        const { ctx, ops } = await keyed([organization({ spendNanoCents: 100, spendPeriod: thisPeriod() })]);
+
+        await ingest.handler(ctx, ingestArgs({ periodStart: thisPeriod(), quantity: 2 }) as never);
+
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({
+            id: "org_1",
+            patch: { spendNanoCents: 100 + 2 * RATE_CARD.requests.nanoCentsPerUnit, spendPeriod: thisPeriod() },
+        });
+    });
+
+    /** A tenant-chosen periodStart must not be able to reset its own running spend. */
+    it("ignores a row for any other period", async () => {
+        const { ctx, ops } = await keyed([organization({ spendNanoCents: 100, spendPeriod: thisPeriod() })]);
+
+        await ingest.handler(ctx, ingestArgs({ periodStart: thisPeriod() + 86_400_000 * 40 }) as never);
+
+        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
+    });
+});
+
+describe("usage.setSpendWarning", () => {
+    const memberCtx = (role: string): ReturnType<typeof makeCtx> =>
+        makeCtx({ members: [{ _id: "m1", organizationId: "org_1", role, userId: "user_1" }], organizations: [organization()] }, undefined, "user_1");
+
+    it("stores the threshold on the verified org, re-arms the latch and audits who set it", async () => {
+        const { ctx, ops } = memberCtx("admin");
+
+        await setSpendWarning.handler(ctx, { organizationId: "org_1", warnMinor: 2500 } as never);
+
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { spendWarnedPeriod: null, spendWarnMinor: 2500 } });
+        expect(inserted(ops, "auditLog")).toMatchObject([{ action: "organization.spend_warn_set", actorUserId: "user_1", target: "2500" }]);
+    });
+
+    it.each([[-1], [1.5], [1e12]])("rejects %s", async (warnMinor) => {
+        const { ctx } = memberCtx("owner");
+
+        await expect(setSpendWarning.handler(ctx, { organizationId: "org_1", warnMinor } as never)).rejects.toThrow("whole number of cents");
+    });
+
+    it("refuses a plain member", async () => {
+        const { ctx } = memberCtx("member");
+
+        await expect(setSpendWarning.handler(ctx, { organizationId: "org_1", warnMinor: 100 } as never)).rejects.toThrow("requires one of");
+    });
+});
+
+describe("usage.ingest", () => {
+    /**
+     * A real, authorized key — otherwise `authorizeDeployKey` throws first and the
+     * quantity guard below is never reached. An earlier version of these tests
+     * asserted only "it rejects", which passed against the WRONG rejection; the
+     * message assertion is what exposed that.
+     */
+    const authorizedCtx = async (): Promise<MutationCtx> => {
+        const key = "production:org_1|secret";
+        const hashedKey = await hashDeployKey(key);
+
+        return makeCtx({ deployKeys: [{ _id: "dk1", capability: "deploy", hashedKey, organizationId: "org_1" }] }).ctx;
+    };
+
+    /**
+     * The deploy key is tenant-held, so this guard is what stops a tenant
+     * deflating its own metered usage — and with it the spend-cap suspension and
+     * the prepaid-overage debit, both of which sum this column directly.
+     */
+    it("rejects a negative quantity at the handler guard", async () => {
+        const ctx = await authorizedCtx();
+
+        await expect(ingest.handler(ctx, ingestArgs({ quantity: -1 }) as never)).rejects.toThrow("non-negative");
+    });
+
+    /**
+     * `NaN` and `Infinity` never reach the guard — `v.number()` refuses them at the
+     * input boundary. Asserted separately rather than lumped in with the negative
+     * case, because "some layer rejected it" is exactly the vague assertion that
+     * let an earlier version of this test pass against the wrong rejection.
+     */
+    it.each([
+        [Number.NaN, "NaN"],
+        [Number.POSITIVE_INFINITY, "Infinity"],
+    ])("rejects %s at the input validator", async (quantity) => {
+        const ctx = await authorizedCtx();
+
+        await expect(ingest.handler(ctx, ingestArgs({ quantity }) as never)).rejects.toThrow("Expected number");
+    });
+
+    it("rejects a non-finite periodStart", async () => {
+        const ctx = await authorizedCtx();
+
+        await expect(ingest.handler(ctx, ingestArgs({ periodStart: Number.NaN }) as never)).rejects.toThrow("Expected number");
+    });
+
+    it("accepts an ordinary metered event", async () => {
+        const ctx = await authorizedCtx();
+
+        await expect(ingest.handler(ctx, ingestArgs() as never)).resolves.toBeDefined();
+    });
+});

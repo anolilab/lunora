@@ -304,6 +304,41 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDataPort` (interface)
+
+```ts
+interface AuthDataPort {
+    exportRows: () => AsyncIterable<{
+        doc: Record<string, unknown>;
+        table: string;
+    }>;
+    importRows: (rows: ReadonlyArray<{
+        doc: Record<string, unknown>;
+        table: string;
+    }>) => Promise<{
+        conflicts: number;
+        errors: ReadonlyArray<{
+            index: number;
+            message: string;
+            table: string;
+        }>;
+        inserted: number;
+    }>;
+    replaceRows?: (rows: ReadonlyArray<{
+        doc: Record<string, unknown>;
+        table: string;
+    }>) => Promise<{
+        deleted: number;
+        errors: ReadonlyArray<{
+            index: number;
+            message: string;
+            table: string;
+        }>;
+        inserted: number;
+    }>;
+}
+```
+
 ### `AuthImpersonation` (interface)
 
 ```ts
@@ -827,6 +862,51 @@ type GlobalImportFunction = (request: {
 }>;
 ```
 
+### `GlobalImportStaging` (interface)
+
+```ts
+interface GlobalImportStaging {
+    abort: (request: {
+        generation: string;
+        session: string;
+    }) => Promise<void>;
+    commit: (request: {
+        generation: string;
+        session: string;
+        staged: boolean;
+        tables: ReadonlyArray<string>;
+    }) => Promise<{
+        conflicts: number;
+        deleted?: Record<string, number>;
+        errors: ReadonlyArray<{
+            code: string;
+            line: number;
+            message: string;
+            table: string;
+        }>;
+        inserted: Record<string, number>;
+    }>;
+    stage: (request: {
+        generation: string;
+        rows: ReadonlyArray<{
+            doc: Record<string, unknown>;
+            line: number;
+            table: string;
+        }>;
+        session: string;
+        tables: ReadonlyArray<string>;
+    }) => Promise<{
+        errors: ReadonlyArray<{
+            code: string;
+            line: number;
+            message: string;
+            table: string;
+        }>;
+        staged: Record<string, number>;
+    }>;
+}
+```
+
 ### `GlobalIntrospector` (interface)
 
 ```ts
@@ -1048,6 +1128,33 @@ interface ImportFanOutResult {
 }
 ```
 
+### `ImportSessionFanOutRequest` (interface)
+
+```ts
+interface ImportSessionFanOutRequest {
+    calls: ReadonlyArray<{
+        args: Record<string, unknown>;
+        shardKey: string;
+    }>;
+    functionPath: string;
+    headers?: Record<string, string>;
+}
+```
+
+### `ImportSessionShardOutcome` (interface)
+
+```ts
+interface ImportSessionShardOutcome {
+    error?: {
+        code: string;
+        message: string;
+        timedOut: boolean;
+    };
+    shardKey: string;
+    value?: unknown;
+}
+```
+
 ### `KvIntrospector` (interface)
 
 ```ts
@@ -1057,6 +1164,7 @@ interface KvIntrospector {
         namespace: string;
     }) => Promise<void>;
     getValue: (options: {
+        encoding?: "base64";
         key: string;
         namespace: string;
     }) => Promise<KvValueResult>;
@@ -1068,6 +1176,7 @@ interface KvIntrospector {
     }) => Promise<KvKeyListResult>;
     listNamespaces: () => Promise<KvNamespaceSummary[]>;
     putValue: (options: {
+        encoding?: "base64";
         expiration?: number;
         expirationTtl?: number;
         key: string;
@@ -1548,11 +1657,13 @@ interface QueryCoordinator {
     orchestrateCdcSync: (namespace: ShardNamespaceInput, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
     orchestrateExport: (namespace: ShardNamespaceInput, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
     orchestrateImport: (namespace: ShardNamespaceInput, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
+    orchestrateImportSession: (namespace: ShardNamespaceInput, request: ImportSessionFanOutRequest) => Promise<ReadonlyArray<ImportSessionShardOutcome>>;
     orchestrateMigration: (namespace: ShardNamespaceInput, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
     orchestrateRank: (namespace: ShardNamespaceInput, request: RankFanOutRequest) => Promise<RankFanOutResult>;
     orchestrateRankPage: (namespace: ShardNamespaceInput, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
     orchestrateShardTraffic: (namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
     readonly registry: ShardRegistry;
+    shardKeysForTables: (tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey) => Promise<ReadonlyArray<string>>;
 }
 ```
 
@@ -2144,6 +2255,7 @@ type StorageListFunction = (prefix?: string, options?: {
 }) => Promise<{
     cursor?: string;
     objects: StorageObject[];
+    truncated?: boolean;
 }>;
 ```
 
@@ -2260,6 +2372,7 @@ interface WorkerOptions {
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
+    authData?: AuthDataPort;
     authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
     authHandler?: (request: Request) => Promise<Response | undefined>;
     authJurisdictionMove?: AuthJurisdictionMove;
@@ -2282,6 +2395,7 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsStaging?: GlobalImportStaging;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
@@ -2312,6 +2426,7 @@ interface WorkerOptions {
     storageDelete?: StorageDeleteFunction;
     storageDownload?: StorageDownloadFunction;
     storageList?: StorageListFunction;
+    storageMultipartUpload?: StorageMultipartUploadFunction;
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
     syncGlobals?: GlobalCdcSyncFunction;
@@ -3257,6 +3372,16 @@ type StorageDownloadFunction = (key: string, options?: {
 } | null>;
 ```
 
+### `StorageMultipartUploadFunction` (type)
+
+```ts
+type StorageMultipartUploadFunction = (key: string, options?: {
+    bucket?: string;
+    contentType?: string;
+    customMetadata?: Record<string, string>;
+}) => Promise<R2MultipartUploadLike>;
+```
+
 ### `StorageSignedUrlFunction` (type)
 
 ```ts
@@ -3275,6 +3400,7 @@ type StorageSignedUrlFunction = (key: string, options?: {
 type StorageUploadFunction = (key: string, body: ArrayBuffer, options?: {
     bucket?: string;
     contentType?: string;
+    customMetadata?: Record<string, string>;
     sha256?: string;
 }) => Promise<{
     etag?: string;

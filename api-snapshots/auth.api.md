@@ -373,6 +373,25 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDataPortLike` (interface)
+
+```ts
+interface AuthDataPortLike {
+    exportRows: () => AsyncIterable<{
+        doc: Row;
+        table: string;
+    }>;
+    importRows: (rows: ReadonlyArray<{
+        doc: Row;
+        table: string;
+    }>) => Promise<AuthImportResult>;
+    replaceRows?: (rows: ReadonlyArray<{
+        doc: Row;
+        table: string;
+    }>) => Promise<AuthReplaceResult>;
+}
+```
+
 ### `AuthDoOptions` (interface)
 
 ```ts
@@ -386,6 +405,20 @@ interface AuthDoOptions {
 ```ts
 interface AuthDoState {
     storage: DoStorageLike;
+}
+```
+
+### `AuthImportResult` (interface)
+
+```ts
+interface AuthImportResult {
+    conflicts: number;
+    errors: {
+        index: number;
+        message: string;
+        table: string;
+    }[];
+    inserted: number;
 }
 ```
 
@@ -532,6 +565,20 @@ interface AuthQuery {
 }
 ```
 
+### `AuthReplaceResult` (interface)
+
+```ts
+interface AuthReplaceResult {
+    deleted: number;
+    errors: {
+        index: number;
+        message: string;
+        table: string;
+    }[];
+    inserted: number;
+}
+```
+
 ### `AuthRow` (type)
 
 ```ts
@@ -637,6 +684,7 @@ const DEFAULT_AUTH_BASE_PATH: string;
 interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
+    dataPort?: AuthDataPortLike;
     discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
     resolveIdentity: (request: Request) => Promise<null | {
@@ -840,6 +888,10 @@ interface SignUpInvitation {
 ```ts
 interface SqlExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    batch?: (statements: ReadonlyArray<{
+        params: ReadonlyArray<unknown>;
+        sql: string;
+    }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 ```
@@ -927,6 +979,12 @@ const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<E
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authCredentialTableNames` (const)
+
+```ts
+const authCredentialTableNames: (options: LunoraAuthOptions) => string[];
+```
+
 ### `authDiscoveryPaths` (const)
 
 ```ts
@@ -951,6 +1009,12 @@ const authDoColumnAdditions: (options: LunoraAuthOptions, existingColumns: (tabl
 
 ```ts
 const authDoSchemaStatements: (options: LunoraAuthOptions) => string[];
+```
+
+### `authTableNames` (const)
+
+```ts
+const authTableNames: (options: LunoraAuthOptions) => string[];
 ```
 
 ### `authTables` (const)
@@ -1018,6 +1082,12 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
     expiresInSeconds?: number;
     invitedBy?: string;
 }) => Promise<IssuedSignUpInvitation>;
+```
+
+### `createSqlAuthDataPort` (const)
+
+```ts
+const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables?: ReadonlyArray<string>) => AuthDataPortLike;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -1927,6 +1997,7 @@ interface BaseSSOUserResolutionInput {
 
 ```ts
 interface D1Like {
+    batch?: (statements: unknown[]) => Promise<unknown>;
     prepare: (sql: string) => {
         bind: (...values: unknown[]) => {
             all: () => Promise<{
@@ -2019,6 +2090,12 @@ interface OIDCMapping {
 
 ```ts
 type ParsedCert = ReturnType<typeof parseCertificate>;
+```
+
+### `Row` (type)
+
+```ts
+type Row = Record<string, unknown>;
 ```
 
 ### `SAMLConfig` (interface)

@@ -5,9 +5,10 @@ Lunora Cloud is the **managed offering** on top of the open-source
 backups, and a human on support. The promise that shapes every item below:
 
 > **Same code, no lock-in.** Your app is a standard Lunora app running on
-> Cloudflare. Cloud makes it easier to run, observe, and operate — it never
-> makes it harder to leave. You can eject to your own Cloudflare account at any
-> time, because you were never anywhere else.
+> Cloudflare, or on a server you own. Cloud makes it easier to run, observe, and
+> operate. It never makes it harder to leave: you can eject to your own
+> Cloudflare account, or keep your server and its bucket, at any time, because
+> you were never anywhere else.
 
 This is a **public, living roadmap** for a product that is **early**. Today,
 Lunora Cloud is a waitlist and a plan — there is intentionally no production
@@ -22,9 +23,10 @@ be a product.
 ## Why you can trust this roadmap
 
 - **Your data stays in your account (first).** The initial product is a **control
-  plane over your own Cloudflare account** — Lunora Cloud orchestrates and
-  observes; your Durable Objects, D1, and R2 live in infrastructure you own and
-  can see.
+  plane over infrastructure you own**: your Cloudflare account, or your own
+  server. Lunora Cloud orchestrates and observes. Your Durable Objects, D1 and
+  R2 live in infrastructure you own and can see. On your own server that means
+  a storage bucket you control, which Cloud cannot read.
 - **No lock-in, by construction.** Everything Cloud runs is the OSS framework.
   There is no proprietary runtime to get stuck in. Eject to self-managed, or move
   between BYO and fully-managed, without a rewrite.
@@ -41,10 +43,18 @@ be a product.
 
 Lunora Cloud ships in **two phases**, and the roadmap reflects the transition:
 
-1. **BYO-Cloudflare control plane (Now / Next).** You connect your own Cloudflare
-   account. Cloud gives you a hosted console, deploys, observability, backups,
-   teams, and support — on infrastructure you own. Lowest trust barrier, and the
-   most direct expression of "same code, no lock-in."
+1. **Bring-your-own control plane (Now / Next).** You connect infrastructure
+   you own. Cloud gives you a hosted console, deploys, observability, backups,
+   teams, and support on it. Lowest trust barrier, and the most direct
+   expression of "same code, no lock-in." Two kinds of infrastructure are built
+   side by side:
+    - **Your Cloudflare account.** Every Lunora feature, on Cloudflare's network.
+    - **Your own server.** A VPS or dedicated box anywhere, running Lunora apps
+      on [celld](https://github.com/denoland/celld) (the open-source,
+      self-hosted Workers runtime), managed by Cloud through a small
+      source-available agent. Most Lunora features work. Those that depend on
+      a Cloudflare product, such as Workers AI, Analytics Engine, Browser
+      Rendering and point-in-time restore, are switched off, and Cloud says so.
 2. **Optional fully-managed hosting (Later).** For teams who don't want to touch
    Cloudflare at all, Cloud runs the infrastructure for you — with a clean
    migration path in **and** back out, so managed never becomes a trap.
@@ -65,10 +75,23 @@ Lunora Cloud ships in **two phases**, and the roadmap reflects the transition:
   observability work landing in the framework now — surfaced as a hosted,
   retained view instead of an in-process panel.
 
-## Next — BYO-Cloudflare control plane GA
+## Next — bring-your-own control plane GA
 
 - **Deploy from git.** One-click / push-to-deploy into your own Cloudflare
-  account, with build logs and rollbacks.
+  account or onto your own server, with build logs and rollbacks.
+- **Bring your own Cloudflare account.** Link your account with a scoped,
+  revocable API token and deploy into it as plain Workers: your Durable
+  Objects, D1 and R2 live in your account, Cloud orchestrates, meters from your
+  account's analytics and never bills your usage. Built in parallel with the
+  server path below.
+- **Bring your own server.** Install the Lunora agent on a Linux VPS with one
+  command and manage it from Cloud. It covers deploys, previews, custom domains
+  with automatic TLS, logs, metrics and upgrades. The agent dials out to Cloud,
+  so your server opens no extra ports and Cloud never holds SSH keys. App data
+  lives in an S3-compatible bucket you own; leaving means keeping it.
+  Capability-gated: Cloud tells you before deploying when your app uses a
+  feature a server cannot provide
+  ([plan 458](../../plans/458-cloud-celld-vps-target.md)).
 - **Teams, orgs & RBAC.** Multi-member organizations with roles, built on the
   framework's auth/organization primitives.
 - **Backups & restore.** Scheduled snapshots and point-in-time restore for Durable
@@ -91,7 +114,8 @@ Lunora Cloud ships in **two phases**, and the roadmap reflects the transition:
   global-replication management as a first-class surface.
 - **SLAs & uptime commitments** for managed workloads.
 - **Two-way migration, guaranteed.** Move BYO → fully-managed and fully-managed →
-  BYO (or fully self-hosted) without a rewrite — the no-lock-in promise, enforced
+  BYO (your Cloudflare account, your own server, or fully self-hosted) without a
+  rewrite — the no-lock-in promise, enforced
   as a shipped, tested path.
 - **Templates & marketplace.** One-click starters and shareable app templates.
 - **Managed warehouse connectors.** Turn-key Snowflake / BigQuery / Airbyte /

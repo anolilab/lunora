@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import { abortStagedGlobalRows, applyCdcChanges, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";
 import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
@@ -295,6 +295,7 @@ class AppBuilder<Env extends object> {
                 // plane: the rows `resolveTableSharding` classifies as `.global()`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
+                options.importGlobalsStaging = buildGlobalImportStaging(database, this.cdcEnabled);
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -469,6 +470,32 @@ const buildGlobalImporter =
             startLine: request.startLine,
         });
     };
+
+/**
+ * `importGlobalsStaging` for a staged replace import: the `.global()` rows wait
+ * in D1's staging table until the commit writes them through the same writer
+ * `importGlobals` uses (changelog included), then prunes. See `@lunora/d1`'s
+ * `import-staging` for what the commit guarantees without a transaction.
+ */
+const buildGlobalImportStaging = (database: D1DatabaseLike, cdc: boolean) => {
+    const globalSchema = schema as unknown as D1CtxDbOptions["schema"];
+
+    return {
+        abort: (request: { generation: string; session: string }) => abortStagedGlobalRows(buildExec(database), request.session, request.generation),
+        commit: (request: { generation: string; session: string; staged: boolean; tables: ReadonlyArray<string> }) => {
+            const exec = buildExec(database);
+
+            return commitStagedGlobalRows(createD1CtxDb({ cdc, exec, schema: globalSchema }), exec, globalSchema, request);
+        },
+        stage: (request: {
+            generation: string;
+            rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+            session: string;
+            tables: ReadonlyArray<string>;
+        }) =>
+            stageGlobalRows(buildExec(database), globalSchema, request),
+    };
+};
 
 /**
  * `exportGlobals` for the admin export endpoint (and the scheduled R2 backup,
