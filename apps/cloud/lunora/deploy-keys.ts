@@ -404,3 +404,51 @@ export const removeReleaseKey = internalMutation
 
         await context.db.delete(id);
     });
+
+/** How long a catalog install's release key lives: the release lease, after which a crashed install's key is dead. */
+const INSTALL_KEY_TTL_MS = 35 * 60 * 1000;
+
+const installKeyName = (installId: string): string => `Catalog install (${installId})`;
+
+/**
+ * Mint the production key one catalog install releases with (SYSTEM). It is scoped
+ * to the project the install claimed, and it expires on its own, so an install
+ * that dies before it revokes leaves no key that lives forever.
+ */
+export const recordInstallKey = internalMutation
+    .input({
+        hashedKey: boundedString(LIMITS.name),
+        installId: v.id("catalogInstalls"),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+    })
+    .mutation(async ({ ctx: context, args: { hashedKey, installId, organizationId, projectId } }): Promise<Id<"deployKeys">> => {
+        const install = (await context.db.get(installId)) as null | { organizationId: Id<"organizations">; projectId: Id<"projects">; status: string };
+
+        if (install?.status !== "installing" || install.organizationId !== organizationId || install.projectId !== projectId) {
+            throw new LunoraError("FORBIDDEN", "a release key must be scoped to its claimed install's own project");
+        }
+
+        return context.db.insert("deployKeys", {
+            createdAt: context.now,
+            expiresAt: context.now + INSTALL_KEY_TTL_MS,
+            hashedKey,
+            name: installKeyName(installId),
+            organizationId,
+            projectId, // secret-scanner:allow -- domain field name
+            type: "production",
+        });
+    });
+
+/** Delete an install's release key once its release has ended (SYSTEM). Only a key {@link recordInstallKey} minted for this install. */
+export const removeInstallKey = internalMutation
+    .input({ id: v.id("deployKeys"), installId: v.id("catalogInstalls") })
+    .mutation(async ({ ctx: context, args: { id, installId } }): Promise<void> => {
+        const row = (await context.db.get(id)) as null | { name: string };
+
+        if (row?.name !== installKeyName(installId)) {
+            throw new LunoraError("NOT_FOUND", "no release key for this install");
+        }
+
+        await context.db.delete(id);
+    });

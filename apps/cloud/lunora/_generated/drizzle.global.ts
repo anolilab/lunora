@@ -886,3 +886,19 @@ export const usageEvents = sqliteTable("usageEvents", {
     by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
     by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
 }));
+
+export const catalogInstalls = sqliteTable("catalogInstalls", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId"),
+    installedBy: text("installedBy").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    slug: text("slug").notNull(),
+    status: text("status", { mode: "json" }).$type<"installing" | "live">().notNull(),
+    version: text("version").notNull(),
+}, (t) => ({
+    by_project: index("by_project").on(t.projectId),
+    by_org: index("by_org").on(t.organizationId),
+}));

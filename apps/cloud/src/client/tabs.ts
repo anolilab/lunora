@@ -46,6 +46,7 @@ export const TABS = [
     { id: "domains", label: "Domains", to: "/orgs/$organizationId/domains", group: "Deploy", icon: Globe02Icon },
     { id: "builds", label: "Builds", to: "/orgs/$organizationId/builds", group: "Deploy", icon: PackageProcessIcon },
     { id: "notifications", label: "Notifications", to: "/orgs/$organizationId/notifications", group: "Deploy", icon: Notification03Icon },
+    { id: "catalog", label: "Catalog", to: "/orgs/$organizationId/catalog", group: "Deploy", icon: PackageIcon },
     { id: "boxes", label: "Boxes", to: "/orgs/$organizationId/boxes", group: "Deploy", icon: ServerStack01Icon },
     { id: "cloudflare-accounts", label: "Cloudflare accounts", to: "/orgs/$organizationId/cloudflare-accounts", group: "Deploy", icon: CloudIcon },
     { id: "traffic", label: "Traffic", to: "/orgs/$organizationId/traffic", group: "Observability", icon: SatelliteIcon },
