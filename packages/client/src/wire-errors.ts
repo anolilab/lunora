@@ -148,13 +148,7 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
 };
 
 /** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
-const reconstructError = (errorBody: {
-    code?: string;
-    data?: unknown;
-    docsUrl?: string;
-    hint?: string | string[];
-    message?: string;
-}): LunoraClientError => {
+const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string }): LunoraClientError => {
     const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
 
     error.code = errorBody.code;

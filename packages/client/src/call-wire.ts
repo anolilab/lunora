@@ -96,13 +96,6 @@ const replayExpectation = (stamp: null | string | undefined, authToken: null | s
 /** One demuxed result slot of a `LunoraClient.batch` call. */
 type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
 
-export {
-    demuxBatchResults,
-    encodeCallArgs,
-    isEncodable,
-    replayExpectation,
-};
+export { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation };
 
-export type {
-    BatchSlot,
-};
+export type { BatchSlot };

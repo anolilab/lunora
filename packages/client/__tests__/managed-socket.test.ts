@@ -39,12 +39,14 @@ class FakeSocket {
 
 const WebSocketImpl = FakeSocket as unknown as typeof WebSocket;
 
-const freshConnection = (): ManagedSocketState => {return {
-    connectTimer: undefined,
-    heartbeatTimer: undefined,
-    lastFrameAt: 0,
-    socket: undefined,
-}};
+const freshConnection = (): ManagedSocketState => {
+    return {
+        connectTimer: undefined,
+        heartbeatTimer: undefined,
+        lastFrameAt: 0,
+        socket: undefined,
+    };
+};
 
 const lastSocket = (): FakeSocket => FakeSocket.instances.at(-1)!;
 

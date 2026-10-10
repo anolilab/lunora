@@ -34,9 +34,4 @@ const withQuery = (path: string, params: Record<string, number | string | undefi
     return query === "" ? path : `${path}?${query}`;
 };
 
-export {
-    bucketQuery,
-    deriveWsUrl,
-    joinUrl,
-    withQuery,
-};
+export { bucketQuery, deriveWsUrl, joinUrl, withQuery };
