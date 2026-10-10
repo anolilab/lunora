@@ -106,8 +106,15 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
     // failure actionable. Restoring only `code`/`data` would give a
     // service-binding caller a weaker error than the same function throws over
     // HTTP, for no reason a caller could see.
+    // Guarded as on the HTTP path: a `data` the codec refuses is dropped and the
+    // server's coded verdict stands. Thrown bare, the codec's own exception
+    // replaced the coded error, so a caller saw no `code` at all.
     if (errorBody.data !== undefined) {
-        error.data = decodeWire(errorBody.data);
+        try {
+            error.data = decodeWire(errorBody.data);
+        } catch {
+            // Dropped: see above.
+        }
     }
 
     if (errorBody.hint !== undefined) {

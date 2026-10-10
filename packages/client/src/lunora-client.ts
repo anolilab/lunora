@@ -10,7 +10,7 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { BatchSlot } from "./call-wire";
-import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./call-wire";
+import { demuxBatchResults, encodeCallArgs, isEncodable, isSlotEnvelope, replayExpectation } from "./call-wire";
 import {
     ARCHITECTURE_PATH,
     AUTH_ACCOUNTS_PATH,
@@ -8927,7 +8927,9 @@ class LunoraClient {
         const bySlot = new Map<number, RpcEnvelopeBody>();
 
         for (const entry of results) {
-            if (typeof entry.id === "number" && entry.body !== undefined) {
+            // A body that is not a readable envelope is a slot the server never answered
+            // (§4.3): leave it out so the item is requeued under the same mutationId.
+            if (typeof entry.id === "number" && isSlotEnvelope(entry.body)) {
                 bySlot.set(entry.id, entry.body);
             }
         }
