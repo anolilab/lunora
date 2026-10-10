@@ -18,7 +18,6 @@ import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createMcpRouteHandler } from "../mcp/handler";
 import { isNotificationEvent, isNotificationKind } from "../notifications/events";
 import { encryptSecret } from "../secrets/crypto";
-import { randomSecret } from "./keys";
 import { constantTimeEqual } from "../security/constant-time-equal";
 import type { OtlpTracePayload } from "../telemetry/otlp";
 import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
@@ -26,6 +25,7 @@ import { ORG_ADMINS_DESTINATION } from "../telemetry/recipients";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken } from "./admin-token";
+import { randomSecret } from "./keys";
 import { createDeployPacer } from "./pacing";
 import type { DeployTarget } from "./release-core";
 import type { RouteParameters } from "./route-path";
@@ -34,6 +34,7 @@ import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { handleAlertTestRoute } from "./routes/alerts";
 import { handleBoxConnectRoute, handleBoxDiagnoseRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { handleCatalogInstallRoute, handleCatalogRoute } from "./routes/catalog";
 import { handleCloudflareAccountConnectRoute, handleCloudflareAlertRecipientsRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
 import { handleDomainAddRoute, handleDomainRemoveRoute, handleDomainVerifyRoute } from "./routes/domains";
@@ -340,6 +341,26 @@ interface NotificationChannelBody {
  * SECRET_ENCRYPTION_KEY before it reaches the mutation, so the database holds only
  * ciphertext. Owner/admin gating happens in `notifications.createChannel`.
  */
+/** Seal a channel's secret at the edge. A response to return instead when the key is missing or sealing fails. */
+const sealChannelSecret = async (
+    environment: RouterEnv,
+    secret: string | undefined,
+): Promise<{ response: Response } | { sealed: { ciphertext: string; iv: string } | undefined }> => {
+    if (!secret) {
+        return { sealed: undefined };
+    }
+
+    if (!environment.SECRET_ENCRYPTION_KEY) {
+        return { response: jsonError(500, "SECRET_ENCRYPTION_KEY not configured") };
+    }
+
+    try {
+        return { sealed: await encryptSecret(environment.SECRET_ENCRYPTION_KEY, secret) };
+    } catch (error) {
+        return { response: jsonError(500, error instanceof Error ? error.message : "secret encryption failed") };
+    }
+};
+
 const handleNotificationChannelRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = environment.__lunoraCtx;
 
@@ -356,19 +377,13 @@ const handleNotificationChannelRoute = async (request: Request, environment: Rou
     const events = Array.isArray(body.events) ? body.events.filter(isNotificationEvent) : undefined;
     const signingKey = body.kind === "webhook" ? randomSecret() : undefined;
     const secret = body.kind === "telegram" ? body.secret?.trim() : signingKey;
-    let sealed: { ciphertext: string; iv: string } | undefined;
+    const sealing = await sealChannelSecret(environment, secret);
 
-    if (secret) {
-        if (!environment.SECRET_ENCRYPTION_KEY) {
-            return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
-        }
-
-        try {
-            sealed = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, secret);
-        } catch (error) {
-            return jsonError(500, error instanceof Error ? error.message : "secret encryption failed");
-        }
+    if ("response" in sealing) {
+        return sealing.response;
     }
+
+    const { sealed } = sealing;
 
     try {
         const id = await context.runMutation(api.notifications.createChannel, {
@@ -839,6 +854,14 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleDomainRemoveRoute, method: "POST", path: "/v1/domains/remove", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
         { handler: handleSecretRoute, method: "POST", path: "/v1/secrets", spec: { auth: "session" } },
+        // session — the list reads any member's org; the install asserts owner/admin through its key mint and secret store.
+        { handler: handleCatalogRoute, method: "GET", path: "/v1/catalog", spec: { auth: "session" } },
+        {
+            handler: (request, environment) => handleCatalogInstallRoute(request, environment, pacer),
+            method: "POST",
+            path: "/v1/catalog/install",
+            spec: { auth: "session" },
+        },
         { handler: handleNotificationChannelRoute, method: "POST", path: "/v1/notification-channels", spec: { auth: "session" } },
         // webhookHmac — provider signature (Creem / GitHub).
         { handler: handleBillingWebhookRoute, method: "POST", path: "/v1/billing/webhook", spec: { auth: "webhookHmac" } },

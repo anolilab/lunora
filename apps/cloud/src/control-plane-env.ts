@@ -40,6 +40,18 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         BUILD_RUNNER?: BuildRunnerNamespace;
 
         /**
+         * The official app catalog's signed `index.json` (`src/catalog/service.ts`). Absent → the
+         * catalog is empty, not an error. Must be an https URL.
+         */
+        CATALOG_INDEX_URL?: string;
+
+        /**
+         * JSON array of `{ keyId, publicKey }` trusted catalog keys, where `publicKey` is the standard
+         * base64 of the raw 32-byte Ed25519 key. Absent or malformed → the catalog is refused, not emptied.
+         */
+        CATALOG_PUBLIC_KEYS?: string;
+
+        /**
          * The control-plane D1's own uuid, which the export REST call addresses.
          * A binding cannot answer its database id, so it is configured; absent →
          * the backup sweep no-ops.
@@ -59,9 +71,12 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         GOOGLE_CLIENT_SECRET?: string;
         /** Bearer token gating the admin endpoints the studio + platform tools call. */
         LUNORA_ADMIN_TOKEN?: string;
+        /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
+        /** The platform's app domain that a verified custom hostname must CNAME toward (defaults to `lunora.app`). */
+        LUNORA_APP_DOMAIN?: string;
+
         /** Per-org edge rules of each kind the platform zone may hold (plan 365 W7, `edgeBudget`); unset → 0 → none applied. */
         LUNORA_DDOS_OVERRIDE_BUDGET?: string;
-
         LUNORA_RATE_LIMIT_RULE_BUDGET?: string;
         /** Sender address for auth (verification / reset) email; captured in dev. */
         MAIL_FROM?: string;
@@ -69,10 +84,7 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
         /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
         RELEASES?: ReleaseBucket;
-        /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
-        /** The platform's app domain that a verified custom hostname must CNAME toward (defaults to `lunora.app`). */
-    LUNORA_APP_DOMAIN?: string;
-    SECRET_ENCRYPTION_KEY?: string;
+        SECRET_ENCRYPTION_KEY?: string;
         SHARD: ShardNamespaceLike;
 
         /**

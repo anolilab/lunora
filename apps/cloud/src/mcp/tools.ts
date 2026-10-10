@@ -26,8 +26,9 @@ const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["deployKey"]);
  * bill of) a customer's account,
  * `/v1/admin` proxies into a tenant, `/v1/eject` returns a tenant's ENTIRE data
  * snapshot in one response, `/v1/invitations/send` mints invite tokens,
- * `/v1/logs/tail` holds the tail secret, and `/v1/mcp` is the surface itself
- * (a tool that re-enters the surface would be a scope-escape vector — the same
+ * `/v1/logs/tail` holds the tail secret, `/v1/catalog` (and its install) is a
+ * person's decision to run someone else's code in their project, and `/v1/mcp`
+ * is the surface itself (a tool that re-enters the surface would be a scope-escape vector — the same
  * reason a general-purpose control plane hard-denies `tokens`/`auth`/`mcp`).
  *
  * `/v1/eject` is the newest and the one most worth stating plainly: it is a
@@ -37,6 +38,9 @@ const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["deployKey"]);
  */
 export const MCP_DENY_PATHS: ReadonlySet<string> = new Set([
     "/v1/admin",
+    // Installing a catalog app writes secrets and releases code into a project: a person's decision, never an agent's.
+    "/v1/catalog",
+    "/v1/catalog/install",
     "/v1/cloudflare-accounts",
     "/v1/eject",
     "/v1/invitations/send",

@@ -7,6 +7,7 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
+        "catalog:publish": "jiti scripts/catalog/publish.ts",
         "codegen": "node node_modules/@lunora/cli/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "deploy:check": "node --experimental-strip-types scripts/check-deploy-config.ts",
@@ -52,6 +53,7 @@
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
         "creem": "^1.5.3",
+        "fflate": "catalog:prod",
         "picomatch": "catalog:node",
         "posthog-js": "catalog:web",
         "react": "catalog:frontend",
@@ -77,6 +79,7 @@
         "acorn": "catalog:node",
         "babel-plugin-react-compiler": "catalog:build",
         "esbuild": "catalog:build",
+        "jiti": "catalog:tooling",
         "jsonc-parser": "catalog:vite",
         "tailwindcss": "catalog:vite",
         "tw-animate-css": "catalog:vite",
