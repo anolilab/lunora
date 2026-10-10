@@ -1,3 +1,15 @@
+## @lunora/vite [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.333...@lunora/vite@1.0.0-alpha.334) (2026-10-10)
+
+### Bug Fixes
+
+* **dev:** drop the ai binding without a cf login ([#1097](https://github.com/anolilab/lunora/issues/1097)) ([2844e76](https://github.com/anolilab/lunora/commit/2844e76e381effe33054018417ae392979a28da2))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.291
+* **@lunora/config:** upgraded to 1.0.0-alpha.336
+
 ## @lunora/vite [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.332...@lunora/vite@1.0.0-alpha.333) (2026-10-10)
 
 
