@@ -852,12 +852,14 @@ const buildGlobalCdcApplier =
  * bundled into the worker, and a runtime import in that file ships with it.
  */
 interface LunoraConfig<Env extends object = object> {
-    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. A literal, for the same reason as `target`. */
-    advisor?: { minSeverity?: "error" | "info" | "warn" };
+    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. `accept` demotes a reviewed ERROR to INFO when its rule, file and export all match. A literal, for the same reason as `target`. */
+    advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
     /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
     codegen?: { exclude?: string[] };
+    /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
+    durableObjects?: { merge?: boolean };
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
