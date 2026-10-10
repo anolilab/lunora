@@ -1,3 +1,9 @@
+## @lunora/values [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.61...@lunora/values@1.0.0-alpha.62) (2026-10-10)
+
+### Features
+
+* ctx.newId, a replay-stable id for mutations; one cyrb53 hash ([#1090](https://github.com/anolilab/lunora/issues/1090)) ([b59709a](https://github.com/anolilab/lunora/commit/b59709abba15f380fb2f8954b2f647d875d1fcfb))
+
 ## @lunora/values [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.60...@lunora/values@1.0.0-alpha.61) (2026-10-08)
 
 ### Bug Fixes
