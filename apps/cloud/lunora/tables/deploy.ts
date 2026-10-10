@@ -376,7 +376,11 @@ export const deployTables = {
         edgeBlockedAt: v.optional(v.number()),
         // Why the last edge block or restore failed, as Cloudflare said it.
         edgeBlockError: v.optional(v.string()),
+        // Consecutive failed scheduled domain checks while verified (see src/domains/check.ts).
+        failedChecks: v.optional(v.number()),
         hostname: v.string(),
+        // When the domain was last checked, by the scheduled sweep or the Verify button.
+        lastCheckedAt: v.optional(v.number()),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         // Redirect-only domains (e.g. apex → www): no routing, just a redirect.

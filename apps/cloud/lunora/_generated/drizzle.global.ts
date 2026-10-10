@@ -298,7 +298,9 @@ export const domains = sqliteTable("domains", {
     createdAt: real("createdAt").notNull(),
     edgeBlockedAt: real("edgeBlockedAt"),
     edgeBlockError: text("edgeBlockError"),
+    failedChecks: real("failedChecks"),
     hostname: text("hostname").notNull(),
+    lastCheckedAt: real("lastCheckedAt"),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
     redirectStatusCode: real("redirectStatusCode"),
@@ -711,6 +713,44 @@ export const dashboards = sqliteTable("dashboards", {
     panels: text("panels", { mode: "json" }).$type<Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>>().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const notificationChannels = sqliteTable("notificationChannels", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    destination: text("destination").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    events: text("events", { mode: "json" }).$type<Array<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired">>().notNull(),
+    kind: text("kind", { mode: "json" }).$type<"discord" | "slack" | "telegram" | "webhook">().notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    secretCiphertext: text("secretCiphertext"),
+    secretIv: text("secretIv"),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const notificationDeliveries = sqliteTable("notificationDeliveries", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    attempts: real("attempts").notNull(),
+    body: text("body").notNull(),
+    channelId: text("channelId").references((): AnySQLiteColumn => notificationChannels._id).notNull(),
+    createdAt: real("createdAt").notNull(),
+    deliveredAt: real("deliveredAt"),
+    error: text("error"),
+    event: text("event", { mode: "json" }).$type<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired" | "test">().notNull(),
+    kind: text("kind", { mode: "json" }).$type<"discord" | "slack" | "telegram" | "webhook">().notNull(),
+    nextAttemptAt: real("nextAttemptAt").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    status: text("status", { mode: "json" }).$type<"pending" | "delivered" | "failed">().notNull(),
+    subject: text("subject").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_status: index("by_status").on(t.status),
     by_org: index("by_org").on(t.organizationId),
 }));
 

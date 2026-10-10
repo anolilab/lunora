@@ -15,7 +15,9 @@ import type { BuildRecordResult } from "../github/webhook";
 import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createMcpRouteHandler } from "../mcp/handler";
+import { isNotificationEvent, isNotificationKind } from "../notifications/events";
 import { encryptSecret } from "../secrets/crypto";
+import { randomSecret } from "./keys";
 import { constantTimeEqual } from "../security/constant-time-equal";
 import type { OtlpTracePayload } from "../telemetry/otlp";
 import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
@@ -317,6 +319,69 @@ const handleInviteRoute = async (request: Request, environment: RouterEnv): Prom
         return Response.json({ ok: true });
     } catch (error) {
         return rejected(error, "invite rejected");
+    }
+};
+
+/** Body of `POST /v1/notification-channels`. Untrusted until narrowed below. */
+interface NotificationChannelBody {
+    destination?: string;
+    events?: unknown[];
+    kind?: unknown;
+    name?: string;
+    organizationId?: string;
+    secret?: string;
+}
+
+/**
+ * `POST /v1/notification-channels` — create a lifecycle notification channel. A
+ * webhook channel gets a freshly generated signing key, returned here once; a
+ * Telegram channel takes its bot token. Either secret is sealed at the edge with
+ * SECRET_ENCRYPTION_KEY before it reaches the mutation, so the database holds only
+ * ciphertext. Owner/admin gating happens in `notifications.createChannel`.
+ */
+const handleNotificationChannelRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__lunoraCtx;
+
+    if (!context) {
+        return jsonError(500, "lunora context unavailable");
+    }
+
+    const body = (await request.json().catch(() => null)) as NotificationChannelBody | null;
+
+    if (!body?.organizationId || !body.name || !body.destination || !isNotificationKind(body.kind)) {
+        return jsonError(400, "organizationId, name, kind and destination are required");
+    }
+
+    const events = Array.isArray(body.events) ? body.events.filter(isNotificationEvent) : undefined;
+    const signingKey = body.kind === "webhook" ? randomSecret() : undefined;
+    const secret = body.kind === "telegram" ? body.secret?.trim() : signingKey;
+    let sealed: { ciphertext: string; iv: string } | undefined;
+
+    if (secret) {
+        if (!environment.SECRET_ENCRYPTION_KEY) {
+            return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
+        }
+
+        try {
+            sealed = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, secret);
+        } catch (error) {
+            return jsonError(500, error instanceof Error ? error.message : "secret encryption failed");
+        }
+    }
+
+    try {
+        const id = await context.runMutation(api.notifications.createChannel, {
+            destination: body.destination,
+            ...(events === undefined ? {} : { events }),
+            kind: body.kind,
+            name: body.name,
+            organizationId: body.organizationId,
+            ...(sealed === undefined ? {} : { secretCiphertext: sealed.ciphertext, secretIv: sealed.iv }),
+        });
+
+        return Response.json({ id, ...(signingKey === undefined ? {} : { signingSecret: signingKey }) });
+    } catch (error) {
+        return rejected(error, "create channel failed");
     }
 };
 
@@ -773,6 +838,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleDomainRemoveRoute, method: "POST", path: "/v1/domains/remove", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
         { handler: handleSecretRoute, method: "POST", path: "/v1/secrets", spec: { auth: "session" } },
+        { handler: handleNotificationChannelRoute, method: "POST", path: "/v1/notification-channels", spec: { auth: "session" } },
         // webhookHmac — provider signature (Creem / GitHub).
         { handler: handleBillingWebhookRoute, method: "POST", path: "/v1/billing/webhook", spec: { auth: "webhookHmac" } },
         { handler: handleWebhookRoute, method: "POST", path: "/v1/github/webhook", spec: { auth: "webhookHmac" } },

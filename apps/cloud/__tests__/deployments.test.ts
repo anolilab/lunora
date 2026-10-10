@@ -24,6 +24,8 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
                     return Promise.resolve({ page });
                 },
             },
+            get: () => Promise.resolve(null),
+            notificationChannels: { findMany: () => Promise.resolve({ page: [] }) },
             patch: (id: string, patch: Row) => {
                 patched.push({ id, patch });
 
