@@ -166,26 +166,27 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
         setPending(true);
         setOutcome(null);
 
-        try {
-            const result = await installRequest({
-                organizationId,
-                projectId: selectedProject._id,
-                slug,
-                values: { secrets: withoutBlanks(values.secrets), vars: withoutBlanks(values.vars) },
-            });
+        const result = await installRequest({
+            organizationId,
+            projectId: selectedProject._id,
+            slug,
+            values: { secrets: withoutBlanks(values.secrets), vars: withoutBlanks(values.vars) },
+        }).catch((error: unknown): InstallOutcome => {
+            return {
+                message: error instanceof Error ? error.message : "could not install the app",
+                ok: false,
+            };
+        });
 
-            setOutcome(result);
+        setOutcome(result);
 
-            if (result.ok) {
-                setConfirmed(false);
-                setKeptNames(result.kept);
-                onInstalled();
-            }
-        } catch (error: unknown) {
-            setOutcome({ message: error instanceof Error ? error.message : "could not install the app", ok: false });
-        } finally {
-            setPending(false);
+        if (result.ok) {
+            setConfirmed(false);
+            setKeptNames(result.kept);
+            onInstalled();
         }
+
+        setPending(false);
     };
 
     const handleSubmit = (): void => {
