@@ -220,7 +220,9 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                                                 ) : null}
                                                 <span className={cn(COLUMN_LABEL, "text-muted-foreground truncate")}>
                                                     {domain.lastCheckedAt === undefined ? "not checked yet" : `checked ${formatDateTime(domain.lastCheckedAt)}`}
-                                                    {domain.failedChecks ? ` · ${String(domain.failedChecks)} of ${String(FAILURES_BEFORE_UNVERIFIED)} checks failed` : ""}
+                                                    {domain.failedChecks
+                                                        ? ` · ${String(domain.failedChecks)} of ${String(FAILURES_BEFORE_UNVERIFIED)} checks failed`
+                                                        : ""}
                                                 </span>
                                                 <StatusBadge tone={domain.verifiedAt ? "success" : "warning"}>
                                                     {domain.verifiedAt ? "verified" : "pending"}

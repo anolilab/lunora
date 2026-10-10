@@ -126,7 +126,11 @@ const deliverOne = async (
     const outcome = await send(row, channel, options);
 
     if (outcome === null) {
-        await database.patch(row._id, { attempts: row.attempts + 1, deliveredAt: options.now, status: "delivered", updatedAt: options.now }, "notificationDeliveries");
+        await database.patch(
+            row._id,
+            { attempts: row.attempts + 1, deliveredAt: options.now, status: "delivered", updatedAt: options.now },
+            "notificationDeliveries",
+        );
 
         return "delivered";
     }

@@ -35,7 +35,12 @@ const makeCtx = (options: FakeOptions = {}) => {
 
     const database = {
         delete: () => Promise.resolve(),
-        get: (id: string) => Promise.resolve(Object.values(tables).flat().find((row) => row._id === id) ?? null),
+        get: (id: string) =>
+            Promise.resolve(
+                Object.values(tables)
+                    .flat()
+                    .find((row) => row._id === id) ?? null,
+            ),
         insert: (table: string, doc: Row) => {
             inserted.push({ doc, table });
 

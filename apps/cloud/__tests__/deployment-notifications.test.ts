@@ -17,7 +17,10 @@ interface FakeOptions {
  * the notification outbox can be asserted apart from audit rows. The caller is an
  * owner of the `org` organization.
  */
-const makeCtx = (rows: Row[], options: FakeOptions = {}): { ctx: MutationCtx; inserted: { doc: Row; table: string }[]; patched: { id: string; patch: Row }[] } => {
+const makeCtx = (
+    rows: Row[],
+    options: FakeOptions = {},
+): { ctx: MutationCtx; inserted: { doc: Row; table: string }[]; patched: { id: string; patch: Row }[] } => {
     const { channels = [], project = { _id: "proj", name: "Acme" } } = options;
     const patched: { id: string; patch: Row }[] = [];
     const inserted: { doc: Row; table: string }[] = [];
@@ -146,7 +149,9 @@ describe("deployment notifications", () => {
 
         expect(notifications(inserted)).toHaveLength(1);
         expect(notifications(inserted)[0]?.doc).toMatchObject({ event: "deployment.failed", status: "pending" });
-        expect(notifications(inserted)[0]?.doc["body"]).toBe('Deployment failed for "Acme" on Lunora Cloud.\nOpen the deployment in the dashboard for its log.');
+        expect(notifications(inserted)[0]?.doc["body"]).toBe(
+            'Deployment failed for "Acme" on Lunora Cloud.\nOpen the deployment in the dashboard for its log.',
+        );
     });
 
     it("does not announce live from the orchestrator report, since activation is what releases it", async () => {
