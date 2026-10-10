@@ -79,6 +79,44 @@ type NodePlatformOptions<Queues extends Record<string, {
 } & NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
 ```
 
+### `NodeProfileHandler` (type)
+
+```ts
+type NodeProfileHandler = (request: Request) => Promise<Response>;
+```
+
+### `NodeProfileHandlerOptions` (interface)
+
+```ts
+interface NodeProfileHandlerOptions {
+    profiler?: NodeProfiler;
+    token: string;
+}
+```
+
+### `NodeProfileRequest` (interface)
+
+```ts
+interface NodeProfileRequest {
+    durationMs: number;
+    profileType: NodeProfileType;
+}
+```
+
+### `NodeProfileType` (type)
+
+```ts
+type NodeProfileType = "cpu" | "heap";
+```
+
+### `NodeProfiler` (interface)
+
+```ts
+interface NodeProfiler {
+    capture: (request: NodeProfileRequest) => Promise<Uint8Array>;
+}
+```
+
 ### `NodeQueueHost` (interface)
 
 ```ts
@@ -268,6 +306,18 @@ const createNodePlatform: <Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>>(options?: NodePlatformOptions<Queues, Workflows>) => NodePlatform<Queues, Workflows>;
+```
+
+### `createNodeProfileHandler` (const)
+
+```ts
+const createNodeProfileHandler: ({ token, profiler }: NodeProfileHandlerOptions) => NodeProfileHandler;
+```
+
+### `createNodeProfiler` (const)
+
+```ts
+const createNodeProfiler: () => NodeProfiler;
 ```
 
 ### `createNodeQueueHost` (const)

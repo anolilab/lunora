@@ -125,6 +125,22 @@ capabilities above (one process, no distributed placement or failover, no
 Cloudflare product bindings) mean it is not a substitute for the Cloudflare
 host in anything that needs them.
 
+## On-demand profiling
+
+`createNodeProfiler()` captures a CPU or heap profile of the running process
+through `node:inspector/promises`, with no native addon and no flag at boot. It
+returns a gzip pprof that `go tool pprof`, Pyroscope and Speedscope read.
+`createNodeProfileHandler({ token })` serves that behind a bearer-guarded `POST`
+route the app mounts itself. `lunora profile --target node --url <route>` calls
+it. A CPU capture only sees work that runs during the window. A heap capture
+reports the allocations still live when it stops. Functions V8 had already
+inlined before a CPU capture began can appear under their caller rather than
+under their own name.
+
+The profiler runs one capture at a time per process, and the handler refuses an
+empty token when it is created. Profiling is not a `ctx.*` surface or binding,
+so it has no entry in `PlatformCapabilities`.
+
 ## Known divergences
 
 **`node-kv-store`'s serializer is not Cloudflare's, and is not even a stable

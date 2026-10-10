@@ -68,7 +68,8 @@
         "@lunora/workflow": "1.0.0-alpha.74",
         "@visulima/workflow": "catalog:workflow",
         "better-sqlite3": "catalog:tooling",
-        "cron-parser": "catalog:tooling"
+        "cron-parser": "catalog:tooling",
+        "pprof-format": "catalog:tooling"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
