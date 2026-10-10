@@ -12,7 +12,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { api, internal } from "../../../lunora/_generated/api.js";
+import { api } from "../../../lunora/_generated/api";
+import { internal } from "../../../lunora/_generated/internal";
 import { captureServerEvent } from "../../analytics/capture";
 import { dispatchBuilds, runBuildStage } from "../../builds/control-plane";
 import type { BuildJob, BuildStage } from "../../builds/runner-job";

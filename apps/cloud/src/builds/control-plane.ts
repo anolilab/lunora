@@ -15,7 +15,7 @@ import type { ContainerAccessor } from "@lunora/container";
 import { containerBindingName, createContainerContext } from "@lunora/container";
 import { LunoraError } from "@lunora/server";
 
-import { internal } from "../../lunora/_generated/api.js";
+import { internal } from "../../lunora/_generated/internal";
 import type { ReusableRelease } from "../../lunora/builds";
 import { buildBox } from "../../lunora/containers";
 import { formatDeployKey, hashDeployKey, randomSecret } from "../deploy/keys";

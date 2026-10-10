@@ -10,7 +10,8 @@
  *
  * Each tells the placement's driver afterwards (`DomainOps.domainsChanged`).
  */
-import { api, internal } from "../../../lunora/_generated/api.js";
+import { api } from "../../../lunora/_generated/api";
+import { internal } from "../../../lunora/_generated/internal";
 import { requireIssuer } from "../../domains/issuers";
 import { createDohResolver, verifyDomain } from "../../domains/verify";
 import type { DomainCertificate, TargetDriver } from "../../targets/driver";

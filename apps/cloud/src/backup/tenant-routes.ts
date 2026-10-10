@@ -13,7 +13,7 @@
  * no further than the `authorization` header of the tenant call — exactly as the
  * studio admin proxy and rollback handle it.
  */
-import { internal } from "../../lunora/_generated/api.js";
+import { internal } from "../../lunora/_generated/internal";
 import type { StoredAdminToken } from "../deploy/admin-token";
 import { resolveAdminToken } from "../deploy/admin-token";
 import type { RouterEnv } from "../deploy/routes/shared";

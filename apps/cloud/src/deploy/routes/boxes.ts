@@ -12,7 +12,7 @@
  * - `GET /v1/boxes/releases/:deploymentId` — `boxKey`: a box downloads a stored
  *   release, with a request signed by its key (plan 458 D6).
  */
-import { internal } from "../../../lunora/_generated/api.js";
+import { internal } from "../../../lunora/_generated/internal";
 import type { EnrolResult } from "../../../lunora/boxes";
 import { createDiagnoseCollector, DIAGNOSE_TIMEOUT_MS } from "../../boxes/diagnose";
 import { isEnrolmentTokenShape } from "../../boxes/enrolment";

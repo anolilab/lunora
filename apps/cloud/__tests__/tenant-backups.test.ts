@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { internal } from "../lunora/_generated/api.js";
+import { internal } from "../lunora/_generated/internal";
 import { authorizeDownload, beginBackup, beginRestore, finish, list } from "../lunora/tenant-backups";
 import { PART_BYTES, uploadStream } from "../src/backup/multipart";
 import { offsiteBucket } from "../src/backup/offsite";
