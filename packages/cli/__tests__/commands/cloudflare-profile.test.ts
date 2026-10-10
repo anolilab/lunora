@@ -187,6 +187,46 @@ describe("lunora cloudflare profile", () => {
         expect(readdirSync(cwd).filter((name) => name.endsWith(".tmp"))).toStrictEqual([]);
     });
 
+    it("uses env.<name>.name for a wrangler environment that sets its own Worker name", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(cwd, "wrangler.jsonc"), `{ "name": "demo-app", "env": { "staging": { "name": "custom-staging" } } }\n`, "utf8");
+
+        const { calls, fetch } = fakeFetch(() => new Response(GZIP_BYTES));
+
+        await runProfileCommand({ cwd, env: "staging", environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, out: "n.gz" });
+
+        expect(calls[0]?.url).toContain("/workers/workers/custom-staging/");
+    });
+
+    it("maps a failure while reading the response body to UNAVAILABLE", async () => {
+        expect.assertions(2);
+
+        const fetch = (async () =>
+            ({
+                arrayBuffer: () => Promise.reject(new DOMException("timed out", "TimeoutError")),
+                ok: true,
+                status: 200,
+            }) as unknown as Response) as unknown as typeof globalThis.fetch;
+        const result = await runProfileCommand({ cwd, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, out: "t.gz" });
+
+        expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
+        expect(existsSync(join(cwd, "t.gz"))).toBe(false);
+    });
+
+    it("reports an unwritable output directory as a failure instead of throwing", async () => {
+        expect.assertions(2);
+
+        // A regular file where a directory is needed makes mkdir fail with ENOTDIR.
+        writeFileSync(join(cwd, "blocker"), "x", "utf8");
+
+        const { fetch } = fakeFetch(() => new Response(GZIP_BYTES));
+        const result = await runProfileCommand({ cwd, environment: ENVIRONMENT, fetch, logger: recordingLogger().logger, out: "blocker/p.gz" });
+
+        expect(result.code).toBe(EXIT_CODE.FAILURE);
+        expect(result.error).toContain("could not write");
+    });
+
     it("warns when source maps are not uploaded", async () => {
         expect.assertions(1);
 

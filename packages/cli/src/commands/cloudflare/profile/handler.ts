@@ -28,6 +28,8 @@ import type { Logger } from "../../../util/logger";
 /** The subset of the wrangler config this command reads. */
 interface WranglerProfileShape {
     account_id?: unknown;
+    /** Per-environment overrides; an `env.<name>.name` is the deployed Worker name as given. */
+    env?: Record<string, { name?: unknown } | undefined>;
     name?: unknown;
     upload_source_maps?: unknown;
 }
@@ -200,8 +202,13 @@ const resolveTarget = (options: ProfileCommandOptions): ProfileResult | Target =
         return fail(logger, EXIT_CODE.USAGE, "profile: no Worker name — pass one, or set `name` in wrangler.jsonc.");
     }
 
-    // A wrangler environment deploys as `<name>-<env>`; an explicit worker name is taken as given.
-    const worker = options.worker === undefined && options.env !== undefined ? `${baseName}-${options.env}` : baseName;
+    // A wrangler environment deploys as `env.<env>.name` when set, else `<name>-<env>`; an explicit worker name is taken as given.
+    const envName = options.env === undefined ? undefined : wrangler?.env?.[options.env]?.name;
+    let worker = baseName;
+
+    if (options.worker === undefined && options.env !== undefined) {
+        worker = typeof envName === "string" && envName.length > 0 ? envName : `${baseName}-${options.env}`;
+    }
 
     return { accountId, sourceMapsMissing: wrangler !== undefined && wrangler.upload_source_maps !== true, token, worker };
 };
@@ -215,15 +222,74 @@ const writeAtomically = (file: string, bytes: Uint8Array): string | undefined =>
     const temporary = `${file}.${String(process.pid)}.tmp`;
 
     try {
+        mkdirSync(dirname(file), { recursive: true });
         writeFileSync(temporary, bytes);
         renameSync(temporary, file);
 
         return undefined;
     } catch (error) {
-        rmSync(temporary, { force: true });
+        try {
+            rmSync(temporary, { force: true });
+        } catch {
+            // The temp path may be unreachable (e.g. a parent that is not a directory); the original error is the one to report.
+        }
 
         return error instanceof Error ? error.message : String(error);
     }
+};
+
+/** POST the capture request; resolves to the gzip bytes, or the failure to return. */
+const requestProfile = async (
+    options: ProfileCommandOptions,
+    { accountId, token, worker }: Target,
+    { durationMs, profileType, version }: { durationMs: number; profileType: ProfileType; version: string },
+): Promise<ProfileResult | { bytes: Uint8Array }> => {
+    const { logger } = options;
+    const body = {
+        duration_ms: durationMs,
+        profile_type: profileType,
+        ...(options.namespaceId === undefined || options.actorId === undefined ? {} : { actor_id: options.actorId, namespace_id: options.namespaceId }),
+    };
+    const url = `${API_BASE}/${encodeURIComponent(accountId)}/workers/workers/${encodeURIComponent(worker)}/versions/${encodeURIComponent(version)}/profile`;
+    const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    let response: Response;
+    let bytes: Uint8Array;
+
+    try {
+        response = await fetchImpl(url, {
+            body: JSON.stringify(body),
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            method: "POST",
+            signal: AbortSignal.timeout(durationMs + RESPONSE_MARGIN_MS),
+        });
+        // Binary gzip — never `.text()` / JSON-parse a success body. Read inside the try so a timeout mid-body maps to UNAVAILABLE.
+        bytes = new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+        return fail(logger, EXIT_CODE.UNAVAILABLE, `profile failed: ${error instanceof Error ? error.message : String(error)}.`);
+    }
+
+    if (!response.ok) {
+        const reason = describeBody(new TextDecoder().decode(bytes));
+
+        return fail(
+            logger,
+            exitCodeForStatus(response.status),
+            `profile failed (HTTP ${String(response.status)})${reason.length > 0 ? `: ${reason}` : ""}${hintForStatus(response.status)}.`,
+        );
+    }
+
+    // A 200 can still carry a `{ success: false }` JSON envelope; only a gzip stream is a profile.
+    if (bytes[0] !== GZIP_MAGIC[0] || bytes[1] !== GZIP_MAGIC[1]) {
+        const reason = describeBody(new TextDecoder().decode(bytes));
+
+        return fail(
+            logger,
+            EXIT_CODE.FAILURE,
+            `profile failed: the API answered 200 with something that is not a gzip profile${reason.length > 0 ? `: ${reason}` : ""}.`,
+        );
+    }
+
+    return { bytes };
 };
 
 const runProfileCommand = async (options: ProfileCommandOptions): Promise<ProfileResult> => {
@@ -241,59 +307,21 @@ const runProfileCommand = async (options: ProfileCommandOptions): Promise<Profil
     }
 
     const { durationMs, profileType } = checked;
-    const { accountId, token, worker } = target;
+    const { worker } = target;
     const version = options.version ?? "latest";
-    const body = {
-        duration_ms: durationMs,
-        profile_type: profileType,
-        ...(options.namespaceId === undefined || options.actorId === undefined ? {} : { actor_id: options.actorId, namespace_id: options.namespaceId }),
-    };
-    const url = `${API_BASE}/${encodeURIComponent(accountId)}/workers/workers/${encodeURIComponent(worker)}/versions/${encodeURIComponent(version)}/profile`;
-    const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
 
     logger.info(`Profiling ${worker}@${version} (${profileType}) for ${String(durationMs)} ms — keep traffic flowing to it…`);
 
-    let response: Response;
+    const captured = await requestProfile(options, target, { durationMs, profileType, version });
 
-    try {
-        response = await fetchImpl(url, {
-            body: JSON.stringify(body),
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            method: "POST",
-            signal: AbortSignal.timeout(durationMs + RESPONSE_MARGIN_MS),
-        });
-    } catch (error) {
-        return fail(logger, EXIT_CODE.UNAVAILABLE, `profile failed: ${error instanceof Error ? error.message : String(error)}.`);
+    if ("code" in captured) {
+        return captured;
     }
 
-    if (!response.ok) {
-        const reason = describeBody(await response.text());
-
-        return fail(
-            logger,
-            exitCodeForStatus(response.status),
-            `profile failed (HTTP ${String(response.status)})${reason.length > 0 ? `: ${reason}` : ""}${hintForStatus(response.status)}.`,
-        );
-    }
-
-    // Binary gzip — never `.text()` / JSON-parse a success body.
-    const bytes = new Uint8Array(await response.arrayBuffer());
-
-    // A 200 can still carry a `{ success: false }` JSON envelope; only a gzip stream is a profile.
-    if (bytes[0] !== GZIP_MAGIC[0] || bytes[1] !== GZIP_MAGIC[1]) {
-        const reason = describeBody(new TextDecoder().decode(bytes));
-
-        return fail(
-            logger,
-            EXIT_CODE.FAILURE,
-            `profile failed: the API answered 200 with something that is not a gzip profile${reason.length > 0 ? `: ${reason}` : ""}.`,
-        );
-    }
+    const { bytes } = captured;
 
     const stamp = (options.now ?? new Date()).toISOString().replaceAll(/[:.]/gu, "-");
     const file = resolve(options.cwd, options.out ?? `${worker}-${profileType}-${stamp}.pprof.gz`);
-
-    mkdirSync(dirname(file), { recursive: true });
 
     const writeError = writeAtomically(file, bytes);
 

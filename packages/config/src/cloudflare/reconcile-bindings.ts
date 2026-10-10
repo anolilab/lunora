@@ -817,7 +817,11 @@ const reconcileWorkflows = (
  * attempt — `lunora deploy --env <name>` now VALIDATES the env-scoped view
  * (closing the reported gap), it just doesn't yet auto-provision it.
  */
-const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings, environment?: string, target?: string): ReconcileBindingsResult => {
+const reconcileWranglerBindings = (
+    projectRoot: string,
+    inferred: InferredBindings,
+    { environment, target }: { environment?: string; target?: string } = {},
+): ReconcileBindingsResult => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     const exportGaps = collectExportGaps(inferred);
