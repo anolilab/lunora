@@ -71,7 +71,6 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         GOOGLE_CLIENT_SECRET?: string;
         /** Bearer token gating the admin endpoints the studio + platform tools call. */
         LUNORA_ADMIN_TOKEN?: string;
-        /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
         /** The platform's app domain that a verified custom hostname must CNAME toward (defaults to `lunora.app`). */
         LUNORA_APP_DOMAIN?: string;
 
@@ -84,6 +83,7 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
         /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
         RELEASES?: ReleaseBucket;
+        /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
         SECRET_ENCRYPTION_KEY?: string;
         SHARD: ShardNamespaceLike;
 
