@@ -4,6 +4,7 @@ node_modules
 .nitro
 dist
 .wrangler
+.wrangler.lunora-*.jsonc
 # `celld dev` state (holds `.dev.vars` values) and the celld driver's projection of wrangler.jsonc
 .celld/
 .celld.wrangler.json

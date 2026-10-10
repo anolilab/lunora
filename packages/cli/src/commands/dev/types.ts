@@ -1,6 +1,6 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
 import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
-import type { materializeRemoteWranglerConfig, materializeServiceDevConfigs } from "@lunora/config/cloudflare";
+import type { materializeDevWranglerConfig, materializeServiceDevConfigs } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
@@ -85,8 +85,8 @@ interface DevCommandOptions {
     /** Pass `--local` to `wrangler dev`: no remote proxy session, so a binding with no local mode (`ai`) cannot stop the session from starting. */
     local?: boolean;
     logger: Logger;
-    /** Injection seam for tests — defaults to the real remote-config materializer. */
-    materializeRemote?: typeof materializeRemoteWranglerConfig;
+    /** Injection seam for tests — defaults to the real dev-config materializer (remote bindings and the logged-out `ai` withholding). */
+    materializeDev?: typeof materializeDevWranglerConfig;
     /** Injection seam for tests — defaults to the real per-service dev-config materializer. */
     materializeServiceConfigs?: typeof materializeServiceDevConfigs;
     /** Studio server port. */
@@ -141,6 +141,8 @@ interface DevRemotePlan {
     enabled: boolean;
     /** Why remote mode didn't take effect despite being requested, for logging. */
     reason?: string;
+    /** `ai` bindings a session left out for lack of Cloudflare credentials, for the banner warning. */
+    withheld: string[];
 }
 
 interface DevCommandPlan {

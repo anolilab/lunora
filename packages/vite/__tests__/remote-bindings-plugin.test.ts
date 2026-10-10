@@ -13,13 +13,13 @@ const callConfig = (plugin: Plugin, command: "build" | "serve"): void => {
     run?.call({} as never, {} as never, { command, mode: "development" } as never);
 };
 
-/** A materialize stub: enabled with a temp configPath + a disposer we can observe. */
+/** A materialize stub: a temp configPath + a disposer we can observe. */
 const materializeWith = (configPath: string | undefined, onCleanup?: () => void) => () => {
     return {
         cleanup: onCleanup ?? ((): void => {}),
         configPath,
-        enabled: true,
         remoteBindings: [],
+        withheld: [],
     };
 };
 
@@ -89,7 +89,7 @@ describe("planViteRemoteBindings", () => {
 
         const plan = planViteRemoteBindings({
             materialize: () => {
-                return { cleanup: () => {}, enabled: true, reason: "wrangler.jsonc not found", remoteBindings: [] };
+                return { cleanup: () => {}, reason: "wrangler.jsonc not found", remoteBindings: [], withheld: [] };
             },
             projectRoot: "/proj",
             readPreference: () => true,
@@ -111,6 +111,7 @@ describe("withRemoteBindings", () => {
                 cleanup: () => {},
                 configPath: "/work/wrangler.remote.jsonc",
                 enabled: true,
+                withheld: [],
             },
         );
 
@@ -120,7 +121,7 @@ describe("withRemoteBindings", () => {
     it("is a no-op when remote mode is disabled", () => {
         expect.assertions(1);
 
-        const options = withRemoteBindings({}, { cleanup: () => {}, enabled: false });
+        const options = withRemoteBindings({}, { cleanup: () => {}, enabled: false, withheld: [] });
 
         expect((options as { configPath?: string }).configPath).toBeUndefined();
     });
@@ -134,6 +135,7 @@ describe("withRemoteBindings", () => {
                 cleanup: () => {},
                 configPath: "/work/wrangler.remote.jsonc",
                 enabled: true,
+                withheld: [],
             },
         );
 
@@ -155,7 +157,7 @@ describe("remoteBindingsPlugin", () => {
             remoteOnOptions(() => {
                 materializations += 1;
 
-                return { cleanup: (): void => {}, configPath: "/work/wrangler.remote.jsonc", enabled: true, remoteBindings: [] };
+                return { cleanup: (): void => {}, configPath: "/work/wrangler.remote.jsonc", remoteBindings: [], withheld: [] };
             }),
         );
 
@@ -194,7 +196,7 @@ describe("remoteBindingsPlugin", () => {
             remoteOnOptions(() => {
                 materializations += 1;
 
-                return { cleanup: (): void => {}, configPath: "/work/wrangler.remote.jsonc", enabled: true, remoteBindings: [] };
+                return { cleanup: (): void => {}, configPath: "/work/wrangler.remote.jsonc", remoteBindings: [], withheld: [] };
             }),
         );
 
@@ -267,7 +269,7 @@ describe("remoteBindingsPlugin", () => {
         const plugin = remoteBindingsPlugin(
             options,
             remoteOnOptions(() => {
-                return { cleanup: (): void => {}, configPath: paths.shift(), enabled: true, remoteBindings: [] };
+                return { cleanup: (): void => {}, configPath: paths.shift(), remoteBindings: [], withheld: [] };
             }),
         );
 

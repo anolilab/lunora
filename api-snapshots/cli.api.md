@@ -198,7 +198,7 @@ interface DevCommandOptions {
     jsonLogs?: boolean;
     local?: boolean;
     logger: Logger;
-    materializeRemote?: typeof materializeRemoteWranglerConfig;
+    materializeDev?: typeof materializeDevWranglerConfig;
     materializeServiceConfigs?: typeof materializeServiceDevConfigs;
     port?: number;
     probeReady?: ReadinessProbe;
@@ -1005,6 +1005,7 @@ interface DevRemotePlan {
     cleanup: () => void;
     enabled: boolean;
     reason?: string;
+    withheld: string[];
 }
 ```
 

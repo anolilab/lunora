@@ -117,7 +117,7 @@ const planOwnDevServer = (inputs: {
     return {
         flavor: "wrangler",
         ipv4LoopbackForced: false,
-        remote: { bindings: [], cleanup: () => {}, enabled: false },
+        remote: { bindings: [], cleanup: () => {}, enabled: false, withheld: [] },
         runsCodegenWatch: codegenRequested(options),
         // Run as a dev session (services registered first, restarted on edit);
         // `wrangler` below then only names the worker in the banner.

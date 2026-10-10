@@ -53,11 +53,12 @@ const fakeBinding = (): AiBindingLike & { runCalls: [string, Record<string, unkn
 
 describe("createAi", () => {
     it("builds a facade whose calls throw a directed error when nothing backs it", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const ai = createAi({});
 
         expect(() => ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast")).toThrow(/needs the `AI` binding/);
+        expect(() => ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast")).toThrow(/wrangler login/);
         expect(() => ai.embeddingModel("@cf/baai/bge-base-en-v1.5")).toThrow(/needs the `AI` binding/);
         await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run needs the `AI` binding/);
     });
