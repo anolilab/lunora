@@ -38,7 +38,8 @@ Both routes are session-authenticated (`auth: "session"`) and org-scoped.
   `apps: { slug, version, name, summary, form: CatalogForm, installs: { projectId, deploymentId, version }[] }[]`
   and `skipped: { slug, version, reason }[]`.
 - `installs` lists the org's projects that run this app (from `catalogInstalls`, live rows only).
-- 503 `{ error }` when the index is not configured, cannot be fetched, or fails verification.
+- 200 with an empty `apps` list when `CATALOG_INDEX_URL` is absent. 503 `{ error }` when the
+  configuration is malformed, or the index cannot be fetched or fails verification.
 
 `POST /v1/catalog/install`
 
@@ -51,16 +52,16 @@ Both routes are session-authenticated (`auth: "session"`) and org-scoped.
 - Failures carry `{ error, field?, code? }` and the status from one table,
   `STATUS_FOR` in `src/deploy/routes/catalog.ts`:
 
-    | kind           | status | when                                                                                   |
-    | -------------- | ------ | -------------------------------------------------------------------------------------- |
-    | `invalidInput` | 400    | a required value is missing, or a value breaks the form                                |
-    | `notFound`     | 404    | no app with that slug, or the project has no production alias                          |
-    | `busy`         | 409    | another install or release is already in flight                                        |
-    | `conflict`     | 409    | the project has no production alias to replace                                         |
-    | `verification` | 422    | the index, manifest or artifact fails verification (`code` is the `ArtifactErrorCode`) |
-    | `upstream`     | 502    | a file of the app cannot be fetched                                                    |
-    | `unavailable`  | 503    | the catalog is not configured or the index cannot be read                              |
-    | `internal`     | 500    | anything else                                                                          |
+    | kind           | status | when                                                                              |
+    | -------------- | ------ | --------------------------------------------------------------------------------- |
+    | `invalidInput` | 400    | a required value is missing, or a value breaks the form                           |
+    | `notFound`     | 404    | no app with that slug                                                             |
+    | `busy`         | 409    | another install or release is already in flight                                   |
+    | `conflict`     | 409    | the project has no production alias to replace                                    |
+    | `verification` | 422    | the manifest or artifact fails verification (`code` is the `ArtifactErrorCode`)   |
+    | `upstream`     | 502    | a file of the app cannot be fetched                                               |
+    | `unavailable`  | 503    | the configuration is malformed, or the index cannot be read or fails verification |
+    | `internal`     | 500    | anything else                                                                     |
 
 ## Index
 
@@ -68,8 +69,9 @@ Both routes are session-authenticated (`auth: "session"`) and org-scoped.
 `lunora-catalog-index:v1` (`index.sig` holds `{ keyId, signature }`).
 
 - `issuedAt` is an ISO timestamp. An index older than 14 days, or dated more than 5
-  minutes in the future, is refused. The control plane also refuses an index older than
-  one it has already served, so a host cannot roll the catalog back.
+  minutes in the future, is refused. An isolate also refuses an index older than the newest
+  one it has served. That high-water mark is module state, so the guarantee holds per isolate:
+  a cold isolate accepts any index still inside the 14-day window.
 - Each entry is `{ slug, version, name, summary?, artifactUrl, manifestUrl, manifestSha256, signatureUrl }`.
   `artifactUrl` is the zip. `manifestUrl` is the release's manifest, whose bytes hash to
   `manifestSha256`. `signatureUrl` is that manifest's signature. All three are https.
