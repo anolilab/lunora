@@ -28,6 +28,7 @@ import { logsCommand } from "./commands/logs";
 import { mcpCommand } from "./commands/mcp";
 import { migrateCommand } from "./commands/migrate";
 import { prepareCommand } from "./commands/prepare";
+import { profileCommand } from "./commands/profile";
 import { registryCommand } from "./commands/registry/command";
 import { resetCommand } from "./commands/reset";
 import { rulesCommand } from "./commands/rules";
@@ -60,6 +61,7 @@ const COMMANDS = [
     "logs",
     "run",
     "insights",
+    "profile",
     "reset",
     "migrate",
     "export",
@@ -99,6 +101,7 @@ const CLI_COMMANDS = [
     logsCommand,
     runCommand,
     insightsCommand,
+    profileCommand,
     resetCommand,
     migrateCommand,
     exportCommand,

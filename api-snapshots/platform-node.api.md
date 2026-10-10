@@ -79,6 +79,20 @@ type NodePlatformOptions<Queues extends Record<string, {
 } & NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
 ```
 
+### `NodeProfileHandler` (type)
+
+```ts
+type NodeProfileHandler = (request: Request) => Promise<Response>;
+```
+
+### `NodeProfileHandlerOptions` (interface)
+
+```ts
+interface NodeProfileHandlerOptions {
+    token: string;
+}
+```
+
 ### `NodeQueueHost` (interface)
 
 ```ts
@@ -268,6 +282,12 @@ const createNodePlatform: <Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>>(options?: NodePlatformOptions<Queues, Workflows>) => NodePlatform<Queues, Workflows>;
+```
+
+### `createNodeProfileHandler` (const)
+
+```ts
+const createNodeProfileHandler: ({ token }: NodeProfileHandlerOptions) => NodeProfileHandler;
 ```
 
 ### `createNodeQueueHost` (const)

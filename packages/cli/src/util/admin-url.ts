@@ -89,7 +89,10 @@ const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger, cwd?: s
  * `RequestInit` lives here: a `Uint8Array` body is `BodyInit` at runtime but not
  * to TypeScript.
  */
-const adminFetch = async (input: string, init?: { body?: string | Uint8Array; headers?: Record<string, string>; method?: string }): Promise<Response> => {
+const adminFetch = async (
+    input: string,
+    init?: { body?: string | Uint8Array; headers?: Record<string, string>; method?: string; signal?: AbortSignal },
+): Promise<Response> => {
     try {
         return await fetch(input, init as RequestInit);
     } catch (error: unknown) {
