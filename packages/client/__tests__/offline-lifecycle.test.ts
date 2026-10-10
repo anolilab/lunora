@@ -468,6 +468,52 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("7b. settles a replayed write whose handler merged to a null result as committed, not rejected", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { email: "a@b.c", name: "again" },
+            functionPath: "users:addUser",
+            id: "m2",
+            identity: null,
+        });
+
+        // The handler used `insert(…, { skipDuplicates: true })`: the duplicate
+        // is a no-op, the wire result is `null`, and the replay succeeds. The
+        // client must not treat that as a failure.
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            persistence: createAsyncStoragePersistence({ storage }),
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { code?: string; functionPath: string; hadAwaiter: boolean; status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        await vi.advanceTimersByTimeAsync(0);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(settled).toHaveLength(1);
+        expect(settled[0]?.status).toBe("committed");
+        expect(settled[0]?.code).toBeUndefined();
+        // Committed means the record leaves durable storage, as for any success.
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
     it("8. surfaces a committed flush and a live-awaiter rejection on onMutationSettled", async () => {
         expect.assertions(4);
 
