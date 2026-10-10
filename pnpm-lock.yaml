@@ -522,6 +522,9 @@ catalogs:
     cz-conventional-changelog:
       specifier: ^3.3.0
       version: 3.3.0
+    fflate:
+      specifier: 0.7.5
+      version: 0.7.5
   redact:
     '@visulima/redact':
       specifier: 5.0.0
@@ -1344,6 +1347,9 @@ importers:
       creem:
         specifier: ^1.5.3
         version: 1.13.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)
+      fflate:
+        specifier: catalog:prod
+        version: 0.7.5
       picomatch:
         specifier: catalog:node
         version: 4.0.7
@@ -1414,6 +1420,9 @@ importers:
       esbuild:
         specifier: catalog:build
         version: 0.28.2
+      jiti:
+        specifier: catalog:tooling
+        version: 2.7.0
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1
