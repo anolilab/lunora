@@ -6,7 +6,7 @@ import { TARGET_OPTION } from "../../util/deploy-target";
 import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 /** The `lunora cloudflare` tools. */
-type CloudflareToolName = "ai-gateway" | "alerts" | "containers" | "deployments";
+type CloudflareToolName = "ai-gateway" | "alerts" | "containers" | "deployments" | "profile";
 
 /** One tool of the `lunora cloudflare` group: its name, its own arguments, and what it does. */
 interface CloudflareTool {
@@ -33,6 +33,11 @@ const CLOUDFLARE_TOOLS: ReadonlyArray<CloudflareTool> = [
         summary: "deployment history; roll back or promote Worker versions",
         usage: "list | inspect <version-id> | rollback [version-id] | promote <version-id>",
     },
+    {
+        name: "profile",
+        summary: "capture an on-demand CPU or heap profile (pprof) from the live Worker or one of its Durable Objects",
+        usage: "[worker]",
+    },
 ];
 
 /**
@@ -45,7 +50,7 @@ const CLOUDFLARE_TOOLS: ReadonlyArray<CloudflareTool> = [
  */
 const cloudflareCommand: Command = {
     argument: { description: `${CLOUDFLARE_TOOLS.map((tool) => tool.name).join(" | ")}, then the tool's own arguments`, name: "tool", type: String },
-    description: "Cloudflare-only tools: usage alerts, AI Gateway, containers, deployments",
+    description: "Cloudflare-only tools: usage alerts, AI Gateway, containers, deployments, profiling",
     examples: [
         ["lunora cloudflare", "List the tools"],
         ["lunora cloudflare alerts", "Show last month's usage and which products have an alert"],
@@ -67,6 +72,9 @@ const cloudflareCommand: Command = {
         ["lunora cloudflare deployments inspect <version-id>", "View a specific Worker version"],
         ["lunora cloudflare deployments rollback --yes", "Roll back to the previous version"],
         ["lunora cloudflare deployments promote <version-id> --yes", "Send 100% of traffic to a version"],
+        ["lunora cloudflare profile", "Capture a 10s CPU profile of the latest version into ./<worker>-cpu-<time>.pprof.gz"],
+        ["lunora cloudflare profile --type heap --duration-ms 30000 --out heap.pprof.gz", "Capture a 30s heap (allocation) profile"],
+        ["lunora cloudflare profile --namespace-id <id> --actor-id <64-hex>", "Profile one Durable Object instance"],
     ],
     group: "Deploy",
     loader: () =>
@@ -105,7 +113,13 @@ const cloudflareCommand: Command = {
         { description: "ai-gateway: create the gateway with log collection off (prompts and responses are not stored)", name: "no-logs", type: Boolean },
         { description: "containers build: name:tag for the image (forwarded to wrangler --tag)", name: "tag", type: String },
         { description: "containers build: push the image to the Cloudflare Registry after building", name: "push", type: Boolean },
-        { description: "containers / deployments: Cloudflare environment name", name: "env", type: String },
+        { description: "containers / deployments / profile: Cloudflare environment name", name: "env", type: String },
+        { description: "profile: capture window in ms, 1000–50000 (default 10000)", name: "duration-ms", type: String },
+        { description: "profile: cpu (default) or heap", name: "type", type: String },
+        { description: "profile: Worker version id to profile (default latest)", name: "version-id", type: String },
+        { description: "profile: file to write the gzip pprof to (default <worker>-<type>-<time>.pprof.gz)", name: "out", type: String },
+        { description: "profile: Durable Object namespace id (with --actor-id)", name: "namespace-id", type: String },
+        { description: "profile: Durable Object instance id, 64 hex characters (with --namespace-id)", name: "actor-id", type: String },
         { description: "deployments rollback / promote: reason recorded with the change", name: "message", type: String },
         {
             ...OUTPUT_FORMAT_OPTION,
@@ -119,8 +133,10 @@ export type { CloudflareTool, CloudflareToolName };
 export { CLOUDFLARE_TOOLS, cloudflareCommand };
 
 export type CloudflareOptions = CreateOptions<{
+    "actor-id": string | undefined;
     "allow-floor": boolean | undefined;
     "dry-run": boolean | undefined;
+    "duration-ms": string | undefined;
     email: string[] | undefined;
     env: string | undefined;
     format: string | undefined;
@@ -128,11 +144,15 @@ export type CloudflareOptions = CreateOptions<{
     logs: boolean | undefined;
     message: string | undefined;
     multiplier: string | undefined;
+    "namespace-id": string | undefined;
+    out: string | undefined;
     push: boolean | undefined;
     "replace-recipients": boolean | undefined;
     tag: string | undefined;
     target: string | undefined;
     threshold: string[] | undefined;
+    type: string | undefined;
+    "version-id": string | undefined;
     webhook: string[] | undefined;
     yes: boolean | undefined;
 }>;

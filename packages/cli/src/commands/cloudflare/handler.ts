@@ -17,6 +17,7 @@ import { runContainersCommand } from "./containers/handler";
 import { isDeploymentsSubcommand, runDeploymentsCommand } from "./deployments/handler";
 import type { CloudflareOptions, CloudflareToolName } from "./index";
 import { CLOUDFLARE_TOOLS } from "./index";
+import { runProfileCommand } from "./profile/handler";
 
 /**
  * Accepted spellings of a tool that are not its name. `absorbs` is a following
@@ -169,11 +170,31 @@ const runDeployments = async ({ cwd, format, logger, options, rest }: ToolRun): 
     return { code: result.code, delegated: result.delegated, error: result.error };
 };
 
+const runProfile = async ({ cwd, logger, options, rest }: ToolRun): Promise<CommandResult<unknown>> => {
+    if (rest.length > 1) {
+        return refuse(logger, EXIT_CODE.USAGE, `cloudflare profile: takes at most one argument (the worker), got "${rest.join(" ")}"`);
+    }
+
+    return runProfileCommand({
+        actorId: options.actorId,
+        cwd,
+        durationMs: options.durationMs,
+        env: options.env,
+        logger,
+        namespaceId: options.namespaceId,
+        out: options.out,
+        type: options.type,
+        version: options.versionId,
+        worker: rest[0],
+    });
+};
+
 const RUNNERS: Readonly<Record<CloudflareToolName, (run: ToolRun) => Promise<CommandResult<unknown>>>> = {
     "ai-gateway": runAiGateway,
     alerts: runAlerts,
     containers: runContainers,
     deployments: runDeployments,
+    profile: runProfile,
 };
 
 /** `lunora cloudflare` handler (lazy-loaded via the command's `loader`). */
