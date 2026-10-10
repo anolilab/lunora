@@ -51,12 +51,7 @@ export interface DomainSweepResult {
 }
 
 /** Queue a domain transition for every enabled channel in the org that subscribes to it. */
-const announce = async (
-    database: ControlPlaneDatabase,
-    domain: DomainRow,
-    event: "domain.failed" | "domain.verified",
-    now: number,
-): Promise<void> => {
+const announce = async (database: ControlPlaneDatabase, domain: DomainRow, event: "domain.failed" | "domain.verified", now: number): Promise<void> => {
     const { page: channelPage } = await database.findMany("notificationChannels", { where: { organizationId: domain.organizationId } });
     const targets = channelsForEvent(channelPage as unknown as ChannelRow[], event);
 

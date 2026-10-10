@@ -71,5 +71,4 @@ export const notificationTables = {
         .global()
         .index("by_org", ["organizationId"])
         .index("by_status", ["status"]),
-
 };

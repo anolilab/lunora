@@ -50,6 +50,4 @@ export const reconcileDomain = (state: DomainCheckState, verified: boolean, now:
 
 /** The one-line detail a domain notification carries. Shared with the manual verify path. */
 export const domainNotificationDetail = (event: "domain.failed" | "domain.verified", hostname: string): string =>
-    event === "domain.verified"
-        ? `${hostname} now serves the app.`
-        : `${hostname} no longer validates. Check its DNS records in the domain settings.`;
+    event === "domain.verified" ? `${hostname} now serves the app.` : `${hostname} no longer validates. Check its DNS records in the domain settings.`;
