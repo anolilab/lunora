@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
-import { createNodeProfileHandler } from "../src/node-profile-handler";
+import { buildProfileHandler, createNodeProfileHandler } from "../src/node-profile-handler";
 import type { NodeProfiler, NodeProfileRequest } from "../src/node-profiler";
 
 const TOKEN = "s3cret-admin-token";
@@ -34,7 +34,7 @@ describe("createNodeProfileHandler", () => {
 
         const bytes = new Uint8Array([0x1f, 0x8b, 9, 9]);
         const { capture, profiler } = fakeProfiler(async () => bytes);
-        const handler = createNodeProfileHandler({ profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, profiler);
 
         const response = await handler(post({ duration_ms: 2500, profile_type: "heap" }));
 
@@ -48,7 +48,7 @@ describe("createNodeProfileHandler", () => {
         expect.assertions(3);
 
         const { capture, profiler } = fakeProfiler();
-        const handler = createNodeProfileHandler({ profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, profiler);
 
         const response = await handler(post({ duration_ms: 1000, profile_type: "cpu" }, {}));
 
@@ -60,7 +60,7 @@ describe("createNodeProfileHandler", () => {
     it("treats a header that is not a bearer as missing", async () => {
         expect.assertions(1);
 
-        const handler = createNodeProfileHandler({ profiler: fakeProfiler().profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, fakeProfiler().profiler);
 
         const response = await handler(post({ duration_ms: 1000, profile_type: "cpu" }, { authorization: `Basic ${TOKEN}` }));
 
@@ -71,7 +71,7 @@ describe("createNodeProfileHandler", () => {
         expect.assertions(2);
 
         const { capture, profiler } = fakeProfiler();
-        const handler = createNodeProfileHandler({ profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, profiler);
 
         const wrong = await handler(post({ duration_ms: 1000, profile_type: "cpu" }, { authorization: "Bearer s3cret" }));
 
@@ -83,7 +83,7 @@ describe("createNodeProfileHandler", () => {
         expect.assertions(3);
 
         const { capture, profiler } = fakeProfiler();
-        const handler = createNodeProfileHandler({ profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, profiler);
 
         const response = await handler(new Request("https://app.example.com/__profile", { headers: { authorization: `Bearer ${TOKEN}` } }));
 
@@ -96,7 +96,7 @@ describe("createNodeProfileHandler", () => {
         expect.assertions(3);
 
         const { capture, profiler } = fakeProfiler();
-        const handler = createNodeProfileHandler({ profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, profiler);
 
         const notJson = await handler(post("{not json"));
         const notObject = await handler(post([1, 2]));
@@ -129,7 +129,7 @@ describe("createNodeProfileHandler", () => {
         const { profiler } = fakeProfiler(async () => {
             throw new LunoraError("CONFLICT", "a profile capture is already running in this process; wait for it to finish");
         });
-        const handler = createNodeProfileHandler({ profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, profiler);
 
         const response = await handler(post({ duration_ms: 1000, profile_type: "cpu" }));
         const body = (await response.json()) as { error: { code: string; message: string } };
@@ -145,7 +145,7 @@ describe("createNodeProfileHandler", () => {
         const { profiler } = fakeProfiler(async () => {
             throw new Error("inspector exploded at /home/app/secret");
         });
-        const handler = createNodeProfileHandler({ profiler, token: TOKEN });
+        const handler = buildProfileHandler(TOKEN, profiler);
 
         const response = await handler(post({ duration_ms: 1000, profile_type: "cpu" }));
         const text = await response.text();

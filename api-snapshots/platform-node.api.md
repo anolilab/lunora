@@ -89,31 +89,7 @@ type NodeProfileHandler = (request: Request) => Promise<Response>;
 
 ```ts
 interface NodeProfileHandlerOptions {
-    profiler?: NodeProfiler;
     token: string;
-}
-```
-
-### `NodeProfileRequest` (interface)
-
-```ts
-interface NodeProfileRequest {
-    durationMs: number;
-    profileType: NodeProfileType;
-}
-```
-
-### `NodeProfileType` (type)
-
-```ts
-type NodeProfileType = "cpu" | "heap";
-```
-
-### `NodeProfiler` (interface)
-
-```ts
-interface NodeProfiler {
-    capture: (request: NodeProfileRequest) => Promise<Uint8Array>;
 }
 ```
 
@@ -311,13 +287,7 @@ const createNodePlatform: <Queues extends Record<string, {
 ### `createNodeProfileHandler` (const)
 
 ```ts
-const createNodeProfileHandler: ({ token, profiler }: NodeProfileHandlerOptions) => NodeProfileHandler;
-```
-
-### `createNodeProfiler` (const)
-
-```ts
-const createNodeProfiler: () => NodeProfiler;
+const createNodeProfileHandler: ({ token }: NodeProfileHandlerOptions) => NodeProfileHandler;
 ```
 
 ### `createNodeQueueHost` (const)

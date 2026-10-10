@@ -95,6 +95,30 @@ describe("cpuProfileToPprof", () => {
         expect(num(busyLocation?.line[0]?.column ?? 0)).toBe(1);
     });
 
+    it("keeps two same-named functions in one file apart by where they are defined", () => {
+        expect.assertions(4);
+
+        const fixture: V8CpuProfile = {
+            endTime: 2000,
+            nodes: [
+                { callFrame: { columnNumber: -1, functionName: "(root)", lineNumber: -1, url: "" }, children: [2, 3], id: 1 },
+                { callFrame: { columnNumber: 0, functionName: "handle", lineNumber: 9, url: "file:///app/api.js" }, children: [], id: 2 },
+                { callFrame: { columnNumber: 0, functionName: "handle", lineNumber: 49, url: "file:///app/api.js" }, children: [], id: 3 },
+            ],
+            samples: [2, 3],
+            startTime: 1000,
+            timeDeltas: [1000, 1000],
+        };
+
+        const profile = cpuProfileToPprof(fixture, { intervalMicros: 1000, startedAtMs: 0 });
+        const handles = profile.function.filter((fn) => str(profile, fn.name) === "handle");
+
+        expect(handles).toHaveLength(2);
+        expect(handles.map((fn) => num(fn.startLine)).toSorted((a, b) => a - b)).toStrictEqual([10, 50]);
+        expect(profile.sample).toHaveLength(2);
+        expect(new Set(profile.sample.map((sample) => num(sample.locationId[0] ?? 0))).size).toBe(2);
+    });
+
     it("names an anonymous function (anonymous) and keeps the string table's empty first entry", () => {
         expect.assertions(2);
 
@@ -155,24 +179,24 @@ const heapFixture = (): V8SamplingHeapProfile => {
 };
 
 describe("heapProfileToPprof", () => {
-    it("declares objects/count and space/bytes, with the sampling interval as the period", () => {
+    it("declares a single space/bytes sample type, with the sampling interval as the period", () => {
         expect.assertions(3);
 
         const profile = heapProfileToPprof(heapFixture(), { durationMs: 2000, samplingIntervalBytes: 32_768, startedAtMs: 0 });
 
-        expect(sampleTypes(profile)).toStrictEqual(["objects/count", "space/bytes"]);
+        expect(sampleTypes(profile)).toStrictEqual(["space/bytes"]);
         expect(num(profile.period)).toBe(32_768);
         expect(num(profile.durationNanos)).toBe(2_000_000_000);
     });
 
-    it("sums allocations per stack and walks the nested tree leaf-first", () => {
+    it("sums allocated bytes per stack and walks the nested tree leaf-first", () => {
         expect.assertions(3);
 
         const profile = heapProfileToPprof(heapFixture(), { durationMs: 2000, samplingIntervalBytes: 32_768, startedAtMs: 0 });
         const byStack = new Map(profile.sample.map((sample) => [stackOf(profile, sample.locationId).join(" < "), sample.value.map((value) => num(value))]));
 
         expect(profile.sample).toHaveLength(2);
-        expect(byStack.get("build < allocate")).toStrictEqual([2, 96]);
-        expect(byStack.get("allocate")).toStrictEqual([1, 100]);
+        expect(byStack.get("build < allocate")).toStrictEqual([96]);
+        expect(byStack.get("allocate")).toStrictEqual([100]);
     });
 });

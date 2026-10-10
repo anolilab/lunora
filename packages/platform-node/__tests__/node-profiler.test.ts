@@ -4,14 +4,14 @@ import { gunzipSync } from "node:zlib";
 import { Profile } from "pprof-format";
 import { describe, expect, it } from "vitest";
 
-import { createNodeProfiler } from "../src/node-profiler";
+import { createNodeProfiler, parseNodeProfileRequest } from "../src/node-profiler";
 
 /**
  * Work the CPU profile attributes to a named frame. Once V8 optimises the loop
  * it can inline this function into its caller, and every sample is then
  * attributed to the caller, which is `(anonymous)` or the test body. Measured:
  * the frame was missing in roughly three of four runs with optimisation on.
- * The CPU test therefore turns optimisation off for this worker (see there).
+ * The CPU test therefore turns optimisation off for the duration (see there).
  */
 const busyLoopForProfiler = (untilMs: number): number => {
     let total = 0;
@@ -67,53 +67,61 @@ const runUntilSettled = (done: Promise<unknown>, work: () => void): Promise<void
         step();
     });
 
-describe("createNodeProfiler", () => {
+describe("parseNodeProfileRequest", () => {
     it.each([
         ["a duration under the floor", { durationMs: 999, profileType: "cpu" }],
         ["a duration over the ceiling", { durationMs: 50_001, profileType: "cpu" }],
         ["a fractional duration", { durationMs: 1500.5, profileType: "cpu" }],
-        ["a non-numeric duration", { durationMs: Number.NaN, profileType: "heap" }],
+        ["a non-numeric duration", { durationMs: "5000", profileType: "cpu" }],
+        ["a missing duration", { durationMs: undefined, profileType: "cpu" }],
         ["an unknown profile type", { durationMs: 1000, profileType: "trace" }],
-    ])("rejects %s with BAD_REQUEST without starting a capture", async (_label, request) => {
+        ["a missing profile type", { durationMs: 1000, profileType: undefined }],
+    ])("rejects %s with BAD_REQUEST", (_label, input) => {
         expect.assertions(1);
 
-        await expect(createNodeProfiler().capture(request as Parameters<ReturnType<typeof createNodeProfiler>["capture"]>[0])).rejects.toMatchObject({
-            code: "BAD_REQUEST",
-        });
+        let thrown: unknown;
+
+        try {
+            parseNodeProfileRequest(input);
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({ code: "BAD_REQUEST" });
     });
 
-    it("refuses a second capture while one is running, from any instance, with CONFLICT", async () => {
+    it("accepts both bounds and both types", () => {
         expect.assertions(2);
 
-        const first = createNodeProfiler().capture({ durationMs: 1000, profileType: "cpu" });
+        expect(parseNodeProfileRequest({ durationMs: 1000, profileType: "cpu" })).toStrictEqual({ durationMs: 1000, profileType: "cpu" });
+        expect(parseNodeProfileRequest({ durationMs: 50_000, profileType: "heap" })).toStrictEqual({ durationMs: 50_000, profileType: "heap" });
+    });
+});
 
-        await expect(createNodeProfiler().capture({ durationMs: 1000, profileType: "cpu" })).rejects.toMatchObject({ code: "CONFLICT" });
-
-        await first;
-
-        // Once the first capture finishes the lock is free again.
-        await expect(createNodeProfiler().capture({ durationMs: 1000, profileType: "heap" })).resolves.toBeInstanceOf(Uint8Array);
-    }, 15_000);
-
+describe("createNodeProfiler", () => {
     it("captures a CPU profile of a busy function from the real inspector", async () => {
         expect.assertions(3);
 
-        // Keep the busy frame unoptimised for this worker process, so V8 cannot inline it into its caller.
+        // Keep the busy frame unoptimised while this capture runs, so V8 cannot inline it into its caller.
         setFlagsFromString("--no-opt");
 
-        const capture = createNodeProfiler().capture({ durationMs: 1000, profileType: "cpu" });
+        try {
+            const capture = createNodeProfiler().capture({ durationMs: 1000, profileType: "cpu" });
 
-        await runUntilSettled(capture, () => {
-            busyLoopForProfiler(Date.now() + 20);
-        });
+            await runUntilSettled(capture, () => {
+                busyLoopForProfiler(Date.now() + 20);
+            });
 
-        const bytes = await capture;
-        const profile = decodeGzip(bytes);
-        const sampled = profile.sample.reduce((total, sample) => total + Number(sample.value[0] ?? 0), 0);
+            const bytes = await capture;
+            const profile = decodeGzip(bytes);
+            const sampled = profile.sample.reduce((total, sample) => total + Number(sample.value[0] ?? 0), 0);
 
-        expect(bytes[0]).toBe(0x1f);
-        expect(sampled).toBeGreaterThan(0);
-        expect(functionNames(profile)).toContain("busyLoopForProfiler");
+            expect(bytes[0]).toBe(0x1f);
+            expect(sampled).toBeGreaterThan(0);
+            expect(functionNames(profile)).toContain("busyLoopForProfiler");
+        } finally {
+            setFlagsFromString("--opt");
+        }
     }, 20_000);
 
     it("captures a heap profile that includes the allocating function from the real inspector", async () => {

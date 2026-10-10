@@ -20,20 +20,7 @@ This is a **spike**, not a production target: it is not wired into `lunora dev`,
 
 ## On-demand profiling
 
-`createNodeProfiler()` captures a CPU or heap profile of the running process
-through the built-in inspector and returns it as a gzip-compressed pprof, which
-`go tool pprof`, Pyroscope and Speedscope read. `createNodeProfileHandler({ token })`
-exposes that over a bearer-guarded `POST` route the app mounts itself; the CLI
-drives it with `lunora profile --target node --url <route>`.
-
-```ts
-import { createNodeProfileHandler } from "@lunora/platform-node";
-
-const profile = createNodeProfileHandler({ token: process.env.LUNORA_ADMIN_TOKEN! });
-// Serve it on whatever route you choose: `if (url.pathname === "/__profile") return profile(request);`
-```
-
-It runs one capture at a time per process, and refuses an empty token when the
-handler is created. The pprof encoding uses `pprof-format`; the V8-to-pprof
-conversion is in `src/node-profile-pprof.ts`. Profiling is not a `ctx.*`
-surface or binding, so it has no entry in `PlatformCapabilities`.
+`createNodeProfileHandler({ token })` serves an on-demand CPU or heap profile
+(gzip pprof) behind a bearer-guarded route the app mounts itself. The full
+description, including what each profile type does and does not show, is in
+[`docs/index.mdx`](./docs/index.mdx#on-demand-profiling).

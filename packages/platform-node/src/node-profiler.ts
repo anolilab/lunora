@@ -37,7 +37,9 @@ interface NodeProfiler {
 
 const MIN_DURATION_MS = 1000;
 const MAX_DURATION_MS = 50_000;
-const PROFILE_TYPES: ReadonlyArray<NodeProfileType> = ["cpu", "heap"];
+const PROFILE_TYPES: ReadonlyArray<string> = ["cpu", "heap"];
+
+const isProfileType = (value: unknown): value is NodeProfileType => typeof value === "string" && PROFILE_TYPES.includes(value);
 
 /** CPU sampling interval, 1 ms (V8's default). Set explicitly so the pprof `period` always matches the sampling. */
 const CPU_SAMPLING_INTERVAL_MICROS = 1000;
@@ -65,15 +67,22 @@ const post = <T>(session: Session, method: string, params?: object): Promise<T> 
         });
     });
 
-/** Throws `BAD_REQUEST` unless `request` names a profile type and a window the capture accepts. */
-const assertValidRequest = (request: NodeProfileRequest): void => {
-    if (!PROFILE_TYPES.includes(request.profileType)) {
+/**
+ * Check untrusted input (a request body, or a caller's object) and narrow it to a
+ * request the capture accepts. Throws `BAD_REQUEST` naming the first field that is wrong.
+ */
+const parseNodeProfileRequest = (input: { durationMs: unknown; profileType: unknown }): NodeProfileRequest => {
+    const { durationMs, profileType } = input;
+
+    if (!isProfileType(profileType)) {
         throw new LunoraError("BAD_REQUEST", `profile type must be one of ${PROFILE_TYPES.join(", ")}`);
     }
 
-    if (!Number.isInteger(request.durationMs) || request.durationMs < MIN_DURATION_MS || request.durationMs > MAX_DURATION_MS) {
+    if (typeof durationMs !== "number" || !Number.isInteger(durationMs) || durationMs < MIN_DURATION_MS || durationMs > MAX_DURATION_MS) {
         throw new LunoraError("BAD_REQUEST", `duration must be an integer from ${String(MIN_DURATION_MS)} to ${String(MAX_DURATION_MS)} ms`);
     }
+
+    return { durationMs, profileType };
 };
 
 /** Runs one capture on a fresh inspector session and always disconnects it. */
@@ -136,7 +145,7 @@ const runCapture = async (request: NodeProfileRequest): Promise<Uint8Array> => {
 const createNodeProfiler = (): NodeProfiler => {
     return {
         capture: async (request) => {
-            assertValidRequest(request);
+            const valid = parseNodeProfileRequest(request);
 
             if (captureInProgress) {
                 throw new LunoraError("CONFLICT", "a profile capture is already running in this process", {
@@ -147,7 +156,7 @@ const createNodeProfiler = (): NodeProfiler => {
             captureInProgress = true;
 
             try {
-                return await runCapture(request);
+                return await runCapture(valid);
             } finally {
                 captureInProgress = false;
             }
@@ -156,4 +165,4 @@ const createNodeProfiler = (): NodeProfiler => {
 };
 
 export type { NodeProfiler, NodeProfileRequest, NodeProfileType };
-export { createNodeProfiler };
+export { createNodeProfiler, parseNodeProfileRequest };

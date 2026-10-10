@@ -21,12 +21,10 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
-import type { NodeProfiler, NodeProfileRequest, NodeProfileType } from "./node-profiler";
-import { createNodeProfiler } from "./node-profiler";
+import type { NodeProfiler } from "./node-profiler";
+import { createNodeProfiler, parseNodeProfileRequest } from "./node-profiler";
 
 interface NodeProfileHandlerOptions {
-    /** Defaults to `createNodeProfiler()`. Injected in tests. */
-    profiler?: NodeProfiler;
     /** The bearer a caller must present. Required and non-empty: an empty token would make the endpoint open to anyone. */
     token: string;
 }
@@ -51,26 +49,15 @@ const presentedToken = (request: Request): string | undefined => {
     return header === null ? undefined : BEARER.exec(header)?.groups?.token;
 };
 
-/** The body's fields as the profiler takes them. A wrong type becomes a value the profiler then refuses, so the error text stays in one place. */
-const readRequest = (body: unknown): NodeProfileRequest | undefined => {
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-        return undefined;
-    }
-
-    const record = body as Record<string, unknown>;
-
-    return {
-        durationMs: typeof record.duration_ms === "number" ? record.duration_ms : Number.NaN,
-        profileType: (typeof record.profile_type === "string" ? record.profile_type : "") as NodeProfileType,
-    };
-};
+const isJsonObject = (body: unknown): body is Record<string, unknown> => typeof body === "object" && body !== null && !Array.isArray(body);
 
 /**
- * Build the handler. Throws at creation (not per request) when the token is
- * empty, so a misconfigured app fails at boot instead of serving an open
- * endpoint.
+ * The handler over an explicit profiler. Throws at creation (not per request)
+ * when the token is empty, so a misconfigured app fails at boot instead of
+ * serving an open endpoint. Tests use it to inject a profiler; the public entry
+ * point is {@link createNodeProfileHandler}.
  */
-const createNodeProfileHandler = ({ token, profiler = createNodeProfiler() }: NodeProfileHandlerOptions): NodeProfileHandler => {
+const buildProfileHandler = (token: string, profiler: NodeProfiler): NodeProfileHandler => {
     if (token.length === 0) {
         throw new LunoraError("ADMIN_TOKEN_NOT_CONFIGURED", "createNodeProfileHandler needs a non-empty token; refusing to expose the profiler without one");
     }
@@ -102,13 +89,13 @@ const createNodeProfileHandler = ({ token, profiler = createNodeProfiler() }: No
             return errorResponse(new LunoraError("BAD_REQUEST", "the body must be JSON: { duration_ms, profile_type }"));
         }
 
-        const profileRequest = readRequest(body);
-
-        if (profileRequest === undefined) {
+        if (!isJsonObject(body)) {
             return errorResponse(new LunoraError("BAD_REQUEST", "the body must be a JSON object: { duration_ms, profile_type }"));
         }
 
         try {
+            // The field checks run here, inside the try, so a bad field is a 400 like any other refusal.
+            const profileRequest = parseNodeProfileRequest({ durationMs: body.duration_ms, profileType: body.profile_type });
             const bytes = await profiler.capture(profileRequest);
 
             return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "Content-Type": "application/gzip" }, status: 200 });
@@ -118,5 +105,8 @@ const createNodeProfileHandler = ({ token, profiler = createNodeProfiler() }: No
     };
 };
 
+/** The public handler: the real profiler, guarded by `token`. */
+const createNodeProfileHandler = ({ token }: NodeProfileHandlerOptions): NodeProfileHandler => buildProfileHandler(token, createNodeProfiler());
+
 export type { NodeProfileHandler, NodeProfileHandlerOptions };
-export { createNodeProfileHandler };
+export { buildProfileHandler, createNodeProfileHandler };

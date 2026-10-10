@@ -127,12 +127,12 @@ host in anything that needs them.
 
 ## On-demand profiling
 
-`createNodeProfiler()` captures a CPU or heap profile of the running process
-through `node:inspector/promises`, with no native addon and no flag at boot. It
-returns a gzip pprof that `go tool pprof`, Pyroscope and Speedscope read.
-`createNodeProfileHandler({ token })` serves that behind a bearer-guarded `POST`
-route the app mounts itself. `lunora profile --target node --url <route>` calls
-it. A CPU capture only sees work that runs during the window. A heap capture
+`createNodeProfileHandler({ token })` captures a CPU or heap profile of the
+running process through the built-in `node:inspector` `Session`, wrapped in
+promises, with no native addon and no flag at boot. It serves the result as a
+gzip pprof that `go tool pprof`, Pyroscope and Speedscope read. The app mounts
+the handler on a bearer-guarded `POST` route of its own choosing, and
+`lunora profile --target node --url <route>` calls it. A CPU capture only sees work that runs during the window. A heap capture
 reports the allocations still live when it stops. Functions V8 had already
 inlined before a CPU capture began can appear under their caller rather than
 under their own name.

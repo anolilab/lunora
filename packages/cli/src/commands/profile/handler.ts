@@ -3,54 +3,33 @@
  * and save it as a gzip-compressed pprof file.
  *
  * The app serves the capture from the route it mounted `createNodeProfileHandler`
- * on, so `--url` is that full route, not a host. The request is `POST
- * { duration_ms, profile_type }` with the admin bearer. The response is binary
- * and is read with `arrayBuffer()`, never as text or JSON.
+ * on, so `--url` is that full route, not a host. Validation, the request, the
+ * status and body mapping, and the atomic write are shared with the other profile
+ * commands (see `util/pprof-capture`). What is left here is Node-specific: the
+ * target check, the URL and bearer, and the `{ error: { message } }` body shape.
  *
  * Only the Node target has an app-side handler. On Cloudflare the same thing is
  * `lunora cloudflare profile`, which this command points to instead of
  * duplicating it.
  */
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-
 import { capErrorBody } from "../../../../../shared/cap-error-body";
 import { resolveAdminBearer } from "../../util/admin-token";
 import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
-import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { ProfileType } from "../../util/pprof-capture";
+import { captureProfile, validateProfileRequest, writeProfile } from "../../util/pprof-capture";
 import type { ProfileOptions } from "./index";
-
-/** The `duration_ms` bounds the app-side handler accepts. */
-const MIN_DURATION_MS = 1000;
-const MAX_DURATION_MS = 50_000;
-const DEFAULT_DURATION_MS = 10_000;
-
-/** Slack on top of the capture window for the app to serialise and return the profile. */
-const RESPONSE_MARGIN_MS = 30_000;
-
-const PROFILE_TYPES = ["cpu", "heap"] as const;
-
-type ProfileType = (typeof PROFILE_TYPES)[number];
-
-/** The first two bytes of every gzip stream, which is what a successful capture returns. */
-const GZIP_MAGIC = [0x1f, 0x8b] as const;
-
-/** The target this command serves. */
-const NODE_TARGET = "node";
-
-/** Shape of `adminFetch`, which the tests replace. */
-type ProfileFetch = typeof adminFetch;
 
 interface ProfileCommandOptions {
     cwd: string;
     /** Capture window in ms, as typed (default 10000). */
     durationMs?: string;
     /** Defaults to the admin fetch; injected in tests. */
-    fetchImpl?: ProfileFetch;
+    fetchImpl?: typeof adminFetch;
     logger: Logger;
     /** Clock for the default file name (tests). */
     now?: Date;
@@ -83,25 +62,6 @@ const fail = (logger: Logger, code: number, message: string): ProfileResult => {
     logger.error(message);
 
     return { code, error: message };
-};
-
-/** The request inputs, validated. Returns the first problem, as a usage message. */
-const validate = (options: ProfileCommandOptions): { error: string } | { durationMs: number; profileType: ProfileType } => {
-    const profileType = options.profileType ?? "cpu";
-
-    if (!(PROFILE_TYPES as ReadonlyArray<string>).includes(profileType)) {
-        return { error: `profile: invalid --type "${profileType}" — expected ${PROFILE_TYPES.join(" | ")}` };
-    }
-
-    const durationMs = options.durationMs === undefined ? DEFAULT_DURATION_MS : Number(options.durationMs);
-
-    if (!Number.isInteger(durationMs) || durationMs < MIN_DURATION_MS || durationMs > MAX_DURATION_MS) {
-        return {
-            error: `profile: invalid --duration-ms "${options.durationMs ?? ""}" — expected an integer from ${String(MIN_DURATION_MS)} to ${String(MAX_DURATION_MS)}`,
-        };
-    }
-
-    return { durationMs, profileType: profileType as ProfileType };
 };
 
 /** The `error.message` of a JSON error body, or the capped raw text when the body is not one. */
@@ -138,32 +98,6 @@ const hintForStatus = (status: number): string => {
     }
 };
 
-/**
- * Write beside the target and rename into place, so a failed write never
- * truncates a capture already at `file`. Returns the failure reason, or
- * `undefined` on success.
- */
-const writeAtomically = (file: string, bytes: Uint8Array): string | undefined => {
-    const temporary = `${file}.${String(process.pid)}.tmp`;
-
-    try {
-        mkdirSync(dirname(file), { recursive: true });
-        writeFileSync(temporary, bytes);
-        renameSync(temporary, file);
-
-        return undefined;
-    } catch (error) {
-        // Best effort: when the parent is not a directory the temporary file cannot exist, and removing it fails too.
-        try {
-            rmSync(temporary, { force: true });
-        } catch {
-            // Nothing to clean up.
-        }
-
-        return error instanceof Error ? error.message : String(error);
-    }
-};
-
 /** The refusal for a project this command cannot profile, or `undefined` for a Node project. */
 const refuseNonNodeTarget = (options: ProfileCommandOptions): ProfileResult | undefined => {
     const { logger } = options;
@@ -181,8 +115,8 @@ const refuseNonNodeTarget = (options: ProfileCommandOptions): ProfileResult | un
         );
     }
 
-    if (resolved.target !== NODE_TARGET) {
-        return fail(logger, EXIT_CODE.USAGE, `profile: only the node target is supported here — pass --target ${NODE_TARGET}`);
+    if (resolved.target !== "node") {
+        return fail(logger, EXIT_CODE.USAGE, "profile: only the node target is supported here — pass --target node");
     }
 
     return undefined;
@@ -218,10 +152,10 @@ const resolveEndpoint = (options: ProfileCommandOptions): ProfileResult | { toke
 
 const runProfileCommand = async (options: ProfileCommandOptions): Promise<ProfileResult> => {
     const { logger } = options;
-    const checked = validate(options);
+    const request = validateProfileRequest(options.profileType, options.durationMs);
 
-    if ("error" in checked) {
-        return fail(logger, EXIT_CODE.USAGE, checked.error);
+    if ("error" in request) {
+        return fail(logger, EXIT_CODE.USAGE, request.error);
     }
 
     const refusal = refuseNonNodeTarget(options);
@@ -236,64 +170,36 @@ const runProfileCommand = async (options: ProfileCommandOptions): Promise<Profil
         return endpoint;
     }
 
-    const { token, url: baseUrl } = endpoint;
-    const { durationMs, profileType } = checked;
-    const body = { duration_ms: durationMs, profile_type: profileType };
-    const fetchImpl = options.fetchImpl ?? adminFetch;
+    const { durationMs, profileType } = request;
+    const captured = await captureProfile({
+        body: { duration_ms: durationMs, profile_type: profileType },
+        describeBody,
+        durationMs,
+        fetch: options.fetchImpl ?? adminFetch,
+        headers: { Authorization: `Bearer ${endpoint.token}` },
+        hintForStatus,
+        logger,
+        url: endpoint.url,
+    });
 
-    logger.info(`Profiling ${baseUrl} (${profileType}) for ${String(durationMs)} ms — keep traffic flowing to it…`);
-
-    let response: Response;
-
-    try {
-        response = await fetchImpl(baseUrl, {
-            body: JSON.stringify(body),
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            method: "POST",
-            signal: AbortSignal.timeout(durationMs + RESPONSE_MARGIN_MS),
-        });
-    } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-
-        return fail(logger, EXIT_CODE.UNAVAILABLE, `profile failed: ${reason}.`);
-    }
-
-    if (!response.ok) {
-        const reason = describeBody(await response.text());
-
-        return fail(
-            logger,
-            exitCodeForStatus(response.status),
-            `profile failed (HTTP ${String(response.status)})${reason.length > 0 ? `: ${reason}` : ""}${hintForStatus(response.status)}.`,
-        );
-    }
-
-    // Binary gzip — never `.text()` / JSON-parse a success body.
-    const bytes = new Uint8Array(await response.arrayBuffer());
-
-    if (bytes[0] !== GZIP_MAGIC[0] || bytes[1] !== GZIP_MAGIC[1]) {
-        const reason = describeBody(new TextDecoder().decode(bytes));
-
-        return fail(
-            logger,
-            EXIT_CODE.FAILURE,
-            `profile failed: the app answered 200 with something that is not a gzip profile${reason.length > 0 ? `: ${reason}` : ""}.`,
-        );
+    if ("code" in captured) {
+        return fail(logger, captured.code, captured.error);
     }
 
     const stamp = (options.now ?? new Date()).toISOString().replaceAll(/[:.]/gu, "-");
-    const file = resolve(options.cwd, options.out ?? `profile-${profileType}-${stamp}.pprof.gz`);
+    const written = writeProfile(options.cwd, options.out, `profile-${profileType}-${stamp}.pprof.gz`, captured.bytes);
 
-    const writeError = writeAtomically(file, bytes);
-
-    if (writeError !== undefined) {
-        return fail(logger, EXIT_CODE.FAILURE, `profile failed: could not write ${file}: ${writeError}.`);
+    if ("error" in written) {
+        return fail(logger, EXIT_CODE.FAILURE, `profile failed: ${written.error}.`);
     }
 
-    logger.success(`Wrote ${String(bytes.byteLength)} bytes to ${file}`);
+    logger.success(`Wrote ${String(captured.bytes.byteLength)} bytes to ${written.file}`);
     logger.info("Open it with `go tool pprof -http=: <file>` (pprof reads gzip directly) or upload it to a flamegraph viewer.");
 
-    return { code: EXIT_CODE.SUCCESS, data: { bytes: bytes.byteLength, durationMs, file, profileType, url: baseUrl } };
+    return {
+        code: EXIT_CODE.SUCCESS,
+        data: { bytes: captured.bytes.byteLength, durationMs, file: written.file, profileType, url: endpoint.url },
+    };
 };
 
 /** `lunora profile` handler (lazy-loaded via the command's `loader`). */

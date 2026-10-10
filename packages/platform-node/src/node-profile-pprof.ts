@@ -113,8 +113,10 @@ const buildPprof = (options: BuildOptions): Profile => {
     const functionIds = new Map<string, number>();
     const locationIds = new Map<string, number>();
 
-    const functionIdFor = (name: string, url: string, lineNumber: number): number => {
-        const key = `${name}\u0000${url}`;
+    // V8 gives each function its definition position, so two functions with one name in one file are
+    // told apart by where they start, not merged.
+    const functionIdFor = (name: string, frame: V8CallFrame): number => {
+        const key = `${name}\u0000${frame.url}\u0000${String(frame.lineNumber)}\u0000${String(frame.columnNumber)}`;
         const existing = functionIds.get(key);
 
         if (existing !== undefined) {
@@ -125,10 +127,10 @@ const buildPprof = (options: BuildOptions): Profile => {
 
         functionIds.set(key, id);
         functions.push({
-            filename: stringTable.dedup(url),
+            filename: stringTable.dedup(frame.url),
             id,
             name: stringTable.dedup(name),
-            startLine: toPprofPosition(lineNumber),
+            startLine: toPprofPosition(frame.lineNumber),
             systemName: stringTable.dedup(name),
         });
 
@@ -137,7 +139,7 @@ const buildPprof = (options: BuildOptions): Profile => {
 
     const locationFor = (frame: V8CallFrame): number => {
         const name = frame.functionName === "" ? ANONYMOUS_FUNCTION : frame.functionName;
-        const functionId = functionIdFor(name, frame.url, frame.lineNumber);
+        const functionId = functionIdFor(name, frame);
         const line = toPprofPosition(frame.lineNumber);
         const column = toPprofPosition(frame.columnNumber);
         const key = `${String(functionId)}\u0000${String(line)}\u0000${String(column)}`;
@@ -245,10 +247,11 @@ const CPU_SAMPLE_TYPES: SampleTypeSpec[] = [
     { type: "cpu", unit: "nanoseconds" },
 ];
 
-const HEAP_SAMPLE_TYPES: SampleTypeSpec[] = [
-    { type: "objects", unit: "count" },
-    { type: "space", unit: "bytes" },
-];
+/**
+ * Heap has one sample type. V8 reports each sampled allocation with its size and does not
+ * scale it up, so a per-sample count would always be 1 and carry no information.
+ */
+const HEAP_SAMPLE_TYPES: SampleTypeSpec[] = [{ type: "space", unit: "bytes" }];
 
 /** Milliseconds to nanoseconds, the unit pprof's `time_nanos` and `duration_nanos` use. */
 const millisToNanos = (millis: number): number => millis * 1_000_000;
@@ -284,7 +287,7 @@ const heapProfileToPprof = (profile: V8SamplingHeapProfile, options: { durationM
         period: options.samplingIntervalBytes,
         periodType: { type: "space", unit: "bytes" },
         samples: profile.samples.map((sample) => {
-            return { nodeId: sample.nodeId, values: [1, sample.size] };
+            return { nodeId: sample.nodeId, values: [sample.size] };
         }),
         sampleTypes: HEAP_SAMPLE_TYPES,
         startNanos: millisToNanos(options.startedAtMs),

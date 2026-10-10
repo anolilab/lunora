@@ -47,8 +47,6 @@ export type { NodePlatform, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
 export type { NodeProfileHandler, NodeProfileHandlerOptions } from "./node-profile-handler";
 export { createNodeProfileHandler } from "./node-profile-handler";
-export type { NodeProfiler, NodeProfileRequest, NodeProfileType } from "./node-profiler";
-export { createNodeProfiler } from "./node-profiler";
 export type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 export { createNodeQueueHost } from "./node-queue-host";
 export type { NodeR2BucketOptions } from "./node-r2-bucket";
