@@ -208,14 +208,12 @@ const useAssistantChat = ({
      */
     const seededDraft = assistant.draft;
 
-     
     useEffect(() => {
         if (seededDraft !== undefined && seededDraft.id !== appliedDraft.current) {
             appliedDraft.current = seededDraft.id;
             setDraft(seededDraft.text);
         }
     }, [seededDraft]);
-     
 
     /*
      * Ask a seeded question once.
@@ -228,7 +226,6 @@ const useAssistantChat = ({
      */
     const ask = assistant.pendingAsk;
 
-     
     useEffect(() => {
         /*
          * `pending` is part of the condition, not just of `send`'s early return.
@@ -257,7 +254,6 @@ const useAssistantChat = ({
         // the ask's identity is what decides whether to send.
         // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
     }, [ask, sessionId, takeAsk, pending]);
-     
 
     return { branchHere, decide, draft, live, pending, reason, send, setDraft, truncatedFor, truncateHere };
 };

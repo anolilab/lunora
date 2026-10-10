@@ -5,9 +5,11 @@ import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
 import AssistantComposer from "./assistant-composer";
 import AssistantHeader from "./assistant-header";
+import LiveTurn from "./assistant-live-turn";
 import AssistantSessionBar from "./assistant-session-bar";
+import AssistantStatus from "./assistant-status";
 import AssistantSuggestions from "./assistant-suggestions";
-import { AssistantStatus, LiveTurn, TurnRow } from "./assistant-turn";
+import TurnRow from "./assistant-turn";
 import useAssistantChat from "./use-assistant-chat";
 
 /**
@@ -44,7 +46,7 @@ const AssistantPanel = ({ assistant }: { readonly assistant: AssistantValue }): 
         return null;
     }
 
-    const {turns} = session;
+    const { turns } = session;
 
     return (
         <section

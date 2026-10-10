@@ -1,149 +1,15 @@
-import type { ReactElement, ReactNode } from "react";
-import { Streamdown } from "streamdown";
+import type { ReactElement } from "react";
 
 import type { SessionTurn } from "../../components/assistant-provider";
 import { Button } from "../../components/ui/button";
 import { useT } from "../../i18n/i18n-context";
-import type { AiOptInLevel, ChatPendingApproval, GenerateSqlDegradedReason } from "../../lib/admin";
-import assistantReasonMessage from "../../lib/assistant-reason";
+import type { AiOptInLevel } from "../../lib/admin";
 import { copyToClipboard } from "../../lib/internal";
 import sqlBlocks from "../../lib/sql-blocks";
-
-/**
- * Element overrides for a rendered reply.
- *
- * Images are DROPPED, not merely sanitized. `rehype-harden` blocks a
- * `javascript:` link but allows every image protocol and prefix, and an image URL
- * in model output is a beacon: it fires on render, it reports that the operator
- * read the reply, and its query string carries whatever the model put there —
- * which, since a turn can read rows, is whatever it just saw. The assistant has
- * no reason to show a remote image, so there is nothing to weigh against that.
- */
-const REPLY_COMPONENTS = { img: (): null => null };
-
-/**
- * A reply is markdown. `Streamdown` over a hand-rolled renderer, and over plain
- * `react-markdown`, because what it renders is model output: it ships
- * `rehype-harden` and `rehype-sanitize`, so a reply cannot smuggle raw HTML, a
- * `javascript:` link or a remote image into the console.
- */
-const ReplyBody = ({ text }: { readonly text: string }): ReactElement => (
-    <div className="prose-sm max-w-none text-xs" data-testid="assistant-turn-body">
-        <Streamdown components={REPLY_COMPONENTS}>{text}</Streamdown>
-    </div>
-);
-
-/** The shell every transcript row shares: a role label, then whatever the row holds. */
-const TurnFrame = ({ children, label, testId }: { readonly children: ReactNode; readonly label: string; readonly testId: string }): ReactElement => (
-    <li className="flex flex-col gap-1 border-b border-border px-3 py-2 last:border-b-0" data-testid={testId}>
-        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{label}</span>
-        {children}
-    </li>
-);
-
-/**
- * The operator's gate on a read the turn stopped at.
- *
- * The engine returns the statement instead of running it, so this is where a row
- * value is first disclosed to a model — and the whole point is that the operator
- * sees the exact statement first. It is shown verbatim, unrendered: this is the
- * one piece of model output the operator is being asked to judge, so it must not
- * pass through a markdown renderer that could style it into something else.
- *
- * Both answers start a follow-up turn. Deny is not a local dismissal — the model
- * is told it was declined, so it answers from what it already has rather than
- * silently waiting for a result that will never arrive.
- */
-const ApprovalCard = ({
-    approval,
-    onDecide,
-}: {
-    readonly approval: ChatPendingApproval;
-    readonly onDecide: (allow: boolean, ticket: string) => void;
-}): ReactElement => {
-    const t = useT();
-
-    return (
-        <div className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/40 p-2" data-testid="assistant-approval">
-            <span className="text-[11px] text-muted-foreground">
-                {t("The assistant wants to read rows before answering. Nothing runs until you allow it.")}
-            </span>
-            <pre className="overflow-x-auto rounded bg-background p-1.5 font-mono text-[11px]" data-testid="assistant-approval-sql">
-                {approval.sql}
-            </pre>
-            <div className="flex gap-2">
-                <Button
-                    data-testid="assistant-approval-allow"
-                    onClick={() => {
-                        onDecide(true, approval.ticket);
-                    }}
-                    size="xs"
-                    type="button"
-                >
-                    {t("Allow")}
-                </Button>
-                <Button
-                    data-testid="assistant-approval-deny"
-                    onClick={() => {
-                        onDecide(false, approval.ticket);
-                    }}
-                    size="xs"
-                    type="button"
-                    variant="secondary"
-                >
-                    {t("Deny")}
-                </Button>
-            </div>
-        </div>
-    );
-};
-
-/**
- * What one turn actually did, listed rather than summarised.
- *
- * The panel used to print a single line — "Answered after reading your data" —
- * for the whole session, which said an answer touched the database but not what
- * it read or whether anything was refused. A turn that ran three statements and
- * one that ran none looked identical, and a refusal looked like nothing at all.
- */
-const ToolCalls = ({ level, turn }: { readonly level: AiOptInLevel | undefined; readonly turn: SessionTurn }): ReactElement | null => {
-    const t = useT();
-    const calls = turn.toolCalls ?? [];
-
-    if (calls.length === 0 && turn.partial !== true) {
-        return null;
-    }
-
-    return (
-        <ul className="flex flex-col gap-0.5 border-s border-border ps-2 text-[11px] text-muted-foreground" data-testid="assistant-tool-calls">
-            {calls.map((call, at) => (
-                <li
-                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- the calls of one immutable turn, in order
-                    key={`${String(at)}:${call.name ?? "?"}`}
-                >
-                    <span className="font-mono">{call.name ?? t("(no such tool)")}</span>
-                    {call.sql === undefined ? null : <span className="ms-1 font-mono opacity-80">{call.sql}</span>}
-                    {call.refused === undefined ? null : <span className="ms-1 text-destructive">{t("refused")}</span>}
-                    {/* A level refusal is the ONE refusal the operator can act on, and
-                        until now its reason reached only the model — the panel printed
-                        the bare word "refused", so a tool the deployment had simply not
-                        opted into looked identical to a malformed request. `needs` is
-                        structured for exactly this: say which tier it wanted, where the
-                        deployment sits, and which var moves it. */}
-                    {call.needs === undefined ? null : (
-                        <span className="block text-muted-foreground" data-testid="assistant-tool-needs">
-                            {t("Needs the {needs} data-sharing level; this deployment is set to {level}. Change LUNORA_AI_OPT_IN in wrangler.jsonc.", {
-                                level: level ?? t("a lower level"),
-                                needs: call.needs,
-                            })}
-                        </span>
-                    )}
-                </li>
-            ))}
-            {turn.partial === true && <li data-testid="assistant-turn-partial">{t("Stopped early — this answer is incomplete.")}</li>}
-        </ul>
-    );
-};
+import ApprovalCard from "./assistant-approval-card";
+import ReplyBody from "./assistant-reply";
+import ToolCalls from "./assistant-tool-calls";
+import TurnFrame from "./assistant-turn-frame";
 
 /**
  * One rendered turn, with an insert button per SQL block the reply carries.
@@ -153,7 +19,7 @@ const ToolCalls = ({ level, turn }: { readonly level: AiOptInLevel | undefined; 
  * silently reinterpreting their input. The SQL-block extraction below still reads
  * the RAW text — the insert path must not depend on how the reply is displayed.
  */
-export const TurnRow = ({
+const TurnRow = ({
     index,
     level,
     onBranch,
@@ -242,51 +108,4 @@ export const TurnRow = ({
     );
 };
 
-/**
- * The turn in flight, rendered but not a turn: it carries no copy / branch /
- * insert affordance because there is nothing yet to act on, and it is replaced
- * wholesale by the answer the moment one lands.
- */
-export const LiveTurn = ({ text }: { readonly text: string }): ReactElement => {
-    const t = useT();
-
-    return (
-        <TurnFrame label={t("Assistant")} testId="assistant-turn-live">
-            <ReplyBody text={text} />
-        </TurnFrame>
-    );
-};
-
-/**
- * The two notices the transcript can carry: the context budget dropped older
- * turns, or the last turn failed.
- *
- * A failure reads from the ops' own per-task status, so it never looks like a
- * reply. `ai-disabled` and `no-ai-binding` latch the panel hidden before this
- * renders, so they never reach the copy.
- */
-export const AssistantStatus = ({
-    reason,
-    truncated,
-}: {
-    readonly reason: GenerateSqlDegradedReason | undefined;
-    readonly truncated: boolean;
-}): ReactElement => {
-    const t = useT();
-
-    return (
-        <>
-            {truncated && (
-                <p className="px-3 py-1 text-[11px] text-muted-foreground" data-testid="assistant-truncated">
-                    {t("Older turns were dropped to fit the context budget.")}
-                </p>
-            )}
-
-            {reason !== undefined && (
-                <p className="px-3 py-1 text-[11px] text-destructive" data-testid="assistant-error">
-                    {assistantReasonMessage(reason, t)}
-                </p>
-            )}
-        </>
-    );
-};
+export default TurnRow;
