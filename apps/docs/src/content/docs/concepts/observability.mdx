@@ -738,13 +738,16 @@ distributed trace whole across services.
 On the Cloudflare target, Lunora writes `"upload_source_maps": true` into
 `wrangler.jsonc` when the key is absent, so production stack traces and
 [on-demand profiles](/packages/cli#lunora-cloudflare-profile) show your source
-function names instead of mangled bundle names. Wrangler generates and uploads
-the maps at `wrangler deploy`; Cloudflare reads them after the invocation
-finishes, so they add no request CPU. Cloudflare documents no separate charge
-for them, but each map is capped at 15 MB gzipped, and the maps carry your
-source, stored in your own account. Set `"upload_source_maps": false` to opt
-out; an explicit value is never changed. The celld and Node targets don't read
-the key, and Lunora does not write it for them.
+function names instead of mangled bundle names. When Wrangler bundles the
+Worker itself, it generates and uploads the maps at `wrangler deploy`. A Worker
+built by Vite is deployed pre-bundled, so the key only has an effect when that
+build emits source maps: set `build.sourcemap` for the worker environment too.
+Cloudflare reads uploaded maps after the invocation finishes, so they add no
+request CPU. Cloudflare documents no separate charge for them, but each map is
+capped at 15 MB gzipped, and the maps carry your source, stored in your own
+account. Set `"upload_source_maps": false` to opt out; an explicit value is
+never changed. The celld and Node targets don't read the key, and Lunora does
+not write it for them.
 
 ## Application metrics with `ctx.metrics`
 

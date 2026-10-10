@@ -50,7 +50,7 @@ const reconcileBindingsSafely = async (
 ): Promise<void> => {
     try {
         const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
-        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred, undefined, options.target);
+        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred, { target: options.target });
 
         const target = reconciled.wranglerPath ?? "wrangler.jsonc";
 

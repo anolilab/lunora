@@ -2680,7 +2680,10 @@ const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogg
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, environment?: string, target?: string) => ReconcileBindingsResult;
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, { environment, target }?: {
+    environment?: string;
+    target?: string;
+}) => ReconcileBindingsResult;
 ```
 
 ### `reconcileWranglerCompatibilityDate` (const)
