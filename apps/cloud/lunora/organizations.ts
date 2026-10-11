@@ -134,6 +134,15 @@ export const create = mutation
 
         let { cellId } = arguments_;
 
+        // An explicit cell must take new organizations, as an auto-picked one must.
+        if (cellId) {
+            const cell = await context.db.get(cellId);
+
+            if (cell?.status !== "active") {
+                throw new LunoraError("UNPROCESSABLE", "that cell is not accepting new organizations");
+            }
+        }
+
         if (!cellId) {
             const { page: cellPage } = await context.db.cells.findMany({});
             const candidate = cellPage.find(
