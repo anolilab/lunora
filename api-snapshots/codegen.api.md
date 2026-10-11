@@ -440,6 +440,7 @@ interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
     flagReads?: ReadonlyArray<FlagReadIR>;
@@ -710,13 +711,17 @@ const QUEUES_FILENAME = "queues.ts";
 ```ts
 interface QueryReadIR {
     file: string;
+    filterFields?: string[];
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
+    indexBounds?: string[];
+    indexName?: string;
     line: number;
     scope: CallSiteScope;
     table: string;
     terminal?: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -1320,7 +1325,7 @@ const discoverNotifyConfig: (project: Project, lunoraDirectory: string) => Advis
 ### `discoverQueries` (const)
 
 ```ts
-const discoverQueries: (project: Project, lunoraDirectory: string) => QueryReadIR[];
+const discoverQueries: (project: Project, lunoraDirectory: string, functions?: ReadonlyArray<FunctionIR>) => QueryReadIR[];
 ```
 
 ### `discoverQueues` (const)
@@ -2286,9 +2291,11 @@ const CAPABILITY_ROWS: readonly [
 ```ts
 interface CallEdgeIR {
     conditional?: true;
+    delayMs?: number;
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
+    passesCursor?: true;
     reason?: string;
     scope: CallSiteScope;
     target?: string;

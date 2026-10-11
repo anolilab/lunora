@@ -65,6 +65,20 @@ const runEdge = (method: string, reference: TsNode | undefined): CallSiteEdge | 
         : undefined;
 };
 
+/** A cursor in a scheduled dispatch's args — the progress a re-arming sweep carries from one run to the next. */
+const CURSOR_ARGUMENT = /cursor/iu;
+
+/**
+ * The literal delay of a `runAfter` and whether its args (third argument) mention
+ * a cursor. Both are facts the self-reschedule lint reads; `runAt` has no delay.
+ */
+const scheduleFactsOf = (method: string, first: TsNode | undefined, args: TsNode | undefined): Pick<CallEdgeIR, "delayMs" | "passesCursor"> => {
+    return {
+        ...(method === "runAfter" && first !== undefined && Node.isNumericLiteral(first) ? { delayMs: first.getLiteralValue() } : {}),
+        ...(args !== undefined && CURSOR_ARGUMENT.test(args.getText()) ? { passesCursor: true as const } : {}),
+    };
+};
+
 /** The edge one call expression contributes, or `undefined` when it is not an edge-shaped call. */
 const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
     const callee = call.getExpression();
@@ -74,7 +88,7 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
     }
 
     const method = callee.getName();
-    const [first, second] = call.getArguments();
+    const [first, second, args] = call.getArguments();
 
     if (RUN_METHODS.has(method)) {
         return runEdge(method, first);
@@ -87,7 +101,7 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
 
         return target === undefined
             ? { kind: "schedule", reason: 'the scheduled function is not a static api.* / internal.* chain or a "namespace:export" key' }
-            : { kind: "schedule", target };
+            : { kind: "schedule", target, ...scheduleFactsOf(method, first, args) };
     }
 
     const producer = SURFACE_METHODS.get(method);

@@ -780,7 +780,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             : {
                   callEdges: discoverCallEdges(project, lunoraDirectory),
                   inserts: discoverInserts(project, lunoraDirectory),
-                  queries: discoverQueries(project, lunoraDirectory),
+                  queries: discoverQueries(project, lunoraDirectory, functions),
                   tableWrites: discoverTableWrites(project, lunoraDirectory),
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
               };
@@ -801,6 +801,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             ? undefined
             : toAdvisorContext({
                   adminRoutes: discoverAdminRoutes(project, lunoraDirectory),
+                  cronTargets: crons.flatMap((job) => (job.functionPath === undefined ? [] : [job.functionPath])),
                   aiRawRuns: discoverAiRawRuns(project, lunoraDirectory),
                   aiToolSideEffects: discoverAiToolSideEffects(project, lunoraDirectory),
                   argumentDerivedFetches: discoverArgumentDerivedFetches(project, lunoraDirectory),

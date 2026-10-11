@@ -266,6 +266,13 @@ export interface LintContext {
     containers?: ReadonlyArray<AdvisorContainer>;
 
     /**
+     * The `namespace:export` keys of the function-targeted cron jobs. A cron fires
+     * its target without a request, so the target is server-driven even when it is
+     * public. Supplied by the codegen feeder; absent for runtime callers.
+     */
+    cronTargets?: ReadonlyArray<string>;
+
+    /**
      * CDC export-sink constructions (`defineExportSink` / `webhookExportSink` /
      * `r2Sink`) discovered in function bodies — the `export_sink_misconfigured`
      * input. Each carries which config keys were present (and which were an empty

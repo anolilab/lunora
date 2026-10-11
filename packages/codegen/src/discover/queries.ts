@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
-import type { QueryReadIR } from "../ir";
+import type { FunctionIR, QueryReadIR } from "../ir";
 import { collectCallRows } from "./ast";
-import { callSiteScopeOf } from "./attribution";
+import { callSiteScopeOf, withCallerVisibility } from "./attribution";
 import { isDatabaseAccessor } from "./database-calls";
 
 /**
@@ -24,7 +24,7 @@ const INDEX_METHODS = new Set(["withGeoIndex", "withIndex", "withSearchIndex"]);
  * narrowed set is actually loaded gets decided.
  *
  * Matched as a known set rather than taken as the chain's last call.
- * {@link chainMethods} follows any property-access-then-call parent, and a
+ * {@link chainCalls} follows any property-access-then-call parent, and a
  * terminal returns a Promise, so `.collect().then(...)` / `.catch(...)` keep the
  * walk going and the last call is a combinator rather than the terminal. Taking
  * the last RECOGNISED terminal reports `collect` for that chain instead of
@@ -57,8 +57,8 @@ const isDatabaseQueryCall = (call: CallExpression): boolean => {
  * property-access parent followed by a call parent unambiguously continues the
  * chain — `query("t").withIndex(...).filter(...)` yields `["withIndex", "filter"]`.
  */
-const chainMethods = (queryCall: CallExpression): string[] => {
-    const methods: string[] = [];
+const chainCalls = (queryCall: CallExpression): CallExpression[] => {
+    const calls: CallExpression[] = [];
     let node: TsNode = queryCall;
 
     for (;;) {
@@ -74,11 +74,115 @@ const chainMethods = (queryCall: CallExpression): string[] => {
             break;
         }
 
-        methods.push(parent.getName());
+        calls.push(callParent);
         node = callParent;
     }
 
-    return methods;
+    return calls;
+};
+
+/** The method name a chain call invokes, or `""` when the callee is not a property access. */
+const methodNameOf = (call: CallExpression): string => {
+    const callee = call.getExpression();
+
+    return Node.isPropertyAccessExpression(callee) ? callee.getName() : "";
+};
+
+/** The first parameter name of a function literal, or `undefined` when it is not one or destructures. */
+const rowParameterOf = (argument: TsNode | undefined): string | undefined => {
+    if (argument === undefined || !(Node.isArrowFunction(argument) || Node.isFunctionExpression(argument))) {
+        return undefined;
+    }
+
+    const name = argument.getParameters()[0]?.getNameNode();
+
+    return name !== undefined && Node.isIdentifier(name) ? name.getText() : undefined;
+};
+
+/** The innermost receiver of a call or property-access chain: `q` for `q.gt(…).lt(…)`. */
+const chainRoot = (node: TsNode): TsNode => {
+    let current = node;
+
+    while (Node.isCallExpression(current) || Node.isPropertyAccessExpression(current)) {
+        current = current.getExpression();
+    }
+
+    return current;
+};
+
+/**
+ * The comparators an `.withIndex(…)` range callback calls on its index parameter
+ * (`(q) => q.eq("a", x).lt("b", y)` → `eq`, `lt`), sorted and de-duplicated.
+ */
+const indexBoundsOf = (callback: TsNode, parameter: string): string[] => {
+    const bounds = new Set<string>();
+
+    for (const call of callback.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        const callee = call.getExpression();
+
+        // `q.gt(…).lt(…)` chains, so the root of a comparator is found by walking its receivers, not read one level down.
+        if (Node.isPropertyAccessExpression(callee)) {
+            const root = chainRoot(callee);
+
+            if (Node.isIdentifier(root) && root.getText() === parameter) {
+                bounds.add(callee.getName());
+            }
+        }
+    }
+
+    return [...bounds].toSorted((a, b) => a.localeCompare(b));
+};
+
+/** The fields a `.filter(…)` predicate reads off its row parameter, sorted and de-duplicated. */
+const filterFieldsOf = (predicate: TsNode, parameter: string): string[] => {
+    const fields = new Set<string>();
+
+    for (const access of predicate.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+        const receiver = access.getExpression();
+
+        if (Node.isIdentifier(receiver) && receiver.getText() === parameter) {
+            fields.add(access.getName());
+        }
+    }
+
+    return [...fields].toSorted((a, b) => a.localeCompare(b));
+};
+
+/**
+ * The range comparators of a chain's `.withIndex(…)`. A `.withIndex(name)` with no
+ * callback is the widest range there is, so it reads as no bounds at all (`[]`);
+ * `undefined` means the chain has no `.withIndex(…)` or its callback cannot be read.
+ */
+const boundsOf = (withIndex: CallExpression | undefined, callback: TsNode | undefined, parameter: string | undefined): string[] | undefined => {
+    if (withIndex === undefined) {
+        return undefined;
+    }
+
+    if (callback === undefined) {
+        return [];
+    }
+
+    return parameter === undefined ? undefined : indexBoundsOf(callback, parameter);
+};
+
+/**
+ * The literal index name, range bounds and filter fields of a read's chain. Each
+ * is `undefined` when the chain does not carry it or the feeder cannot read it
+ * statically, so a lint with no evidence reports nothing.
+ */
+const indexAndFilterOf = (calls: ReadonlyArray<CallExpression>): Pick<QueryReadIR, "filterFields" | "indexBounds" | "indexName"> => {
+    const withIndex = calls.find((call) => methodNameOf(call) === "withIndex");
+    const predicate = calls.find((call) => methodNameOf(call) === "filter")?.getArguments()[0];
+    const [indexArgument, rangeCallback] = withIndex?.getArguments() ?? [];
+    const indexName = indexArgument !== undefined && Node.isStringLiteral(indexArgument) ? indexArgument.getLiteralText() : undefined;
+    const indexParameter = rowParameterOf(rangeCallback);
+    const rowParameter = rowParameterOf(predicate);
+
+    return {
+        filterFields: predicate === undefined || rowParameter === undefined ? undefined : filterFieldsOf(predicate, rowParameter),
+        indexBounds: boundsOf(withIndex, rangeCallback, indexParameter),
+        indexName,
+    };
 };
 
 /**
@@ -146,13 +250,14 @@ const tableOf = (queryCall: CallExpression): string => {
  * unfiltered, unindexed `.collect()` is the read `unbounded_collect` exists for
  * — and dropping it here is precisely why nothing could see it.
  */
-const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR[] =>
-    collectCallRows(project, lunoraDirectory, (call, file): QueryReadIR | undefined => {
+const discoverQueries = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): QueryReadIR[] => {
+    const reads = collectCallRows(project, lunoraDirectory, (call, file): QueryReadIR | undefined => {
         if (!isDatabaseQueryCall(call)) {
             return undefined;
         }
 
-        const methods = chainMethods(call);
+        const calls = chainCalls(call);
+        const methods = calls.map((chained) => methodNameOf(chained));
         const hasFilter = methods.includes("filter");
 
         return {
@@ -164,7 +269,11 @@ const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR
             scope: callSiteScopeOf(call),
             table: tableOf(call),
             terminal: methods.findLast((method) => TERMINAL_METHODS.has(method)),
+            ...indexAndFilterOf(calls),
         };
     });
+
+    return withCallerVisibility(reads, functions);
+};
 
 export default discoverQueries;

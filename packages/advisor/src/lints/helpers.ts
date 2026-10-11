@@ -1,5 +1,8 @@
+import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
+import type { AdvisorCallEdge } from "../call-edges";
 import type { AdvisorCallSiteScope, CallSiteMetadata } from "../call-site-scope";
-import { callSiteMetadata, helperRole } from "../call-site-scope";
+import { callSiteCallers, callSiteMetadata, helperRole } from "../call-site-scope";
+import type { AdvisorTableWrite } from "../inserts";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { AdvisorQueryRead } from "../queries";
 import type { AdvisorSchema, AdvisorTable } from "../schema";
@@ -10,6 +13,9 @@ interface CallSiteRow {
     line: number;
     scope: AdvisorCallSiteScope;
 }
+
+/** Writes that take a row out of, or move it within, the range a read selects. Only these let a sweep make progress. */
+const ROW_CHANGING_WRITES: ReadonlySet<string> = new Set(["delete", "deleteMany", "hardDelete", "patch", "patchMany", "patchWhere", "replace"]);
 
 /**
  * Personally-identifiable-information column names. Kept deliberately tight to
@@ -244,3 +250,34 @@ export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: str
  */
 export const shardKindsByTable = (schema: AdvisorSchema): ReadonlyMap<string, string | undefined> =>
     new Map(schema.tables.map((table) => [table.name, table.shardKind]));
+
+/** `namespace:export` keys of the functions a read or write runs on behalf of, one per export that reaches its site. */
+export const functionKeysOf = (file: string, scope: AdvisorCallSiteScope): string[] =>
+    callSiteCallers(scope).map((exportName) => `${sanitizeNamespace(file)}:${exportName}`);
+
+/**
+ * Every function key that runs without a request: a call edge schedules it, or a cron
+ * job fires it. A lint uses this to tell a sweep that the server drives from one a caller reaches.
+ */
+export const scheduledFunctionKeys = (
+    callEdges: ReadonlyArray<AdvisorCallEdge> | undefined,
+    cronTargets: ReadonlyArray<string> | undefined,
+): ReadonlySet<string> =>
+    new Set([...(callEdges ?? []).flatMap((edge) => (edge.kind === "schedule" && edge.target !== undefined ? [edge.target] : [])), ...(cronTargets ?? [])]);
+
+/**
+ * True when the function(s) reading `table` in `file` also run a row-changing write
+ * against the same table. Such a sweep can drain the rows it selects, so a lint
+ * that would otherwise call it unbounded must hold its verdict.
+ */
+export const writesRowsReadBy = (writes: ReadonlyArray<AdvisorTableWrite> | undefined, read: Pick<AdvisorQueryRead, "file" | "scope" | "table">): boolean => {
+    const readers = callSiteCallers(read.scope);
+
+    return (writes ?? []).some(
+        (write) =>
+            write.file === read.file &&
+            write.table === read.table &&
+            ROW_CHANGING_WRITES.has(write.method) &&
+            callSiteCallers(write.scope).some((caller) => readers.includes(caller)),
+    );
+};

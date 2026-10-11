@@ -1,0 +1,105 @@
+import { defineSchema, defineTable } from "@lunora/server";
+import { v } from "@lunora/values";
+import { describe, expect, it } from "vitest";
+
+import type { AdvisorCallEdge, AdvisorQueryRead, AdvisorTableWrite, LintContext } from "../src";
+import { fromServerSchema } from "../src";
+import unboundedCollectOnOpenRange from "../src/lints/static/unbounded-collect-on-open-range";
+
+const schema = fromServerSchema(defineSchema({ sessions: defineTable({ expiresAt: v.number() }).index("by_expiry", ["expiresAt"]) }));
+
+/** An open `withIndex` collect in export `expire` of file `sweep`, server-driven by default. */
+const read = (overrides: Partial<AdvisorQueryRead> = {}): AdvisorQueryRead => {
+    return {
+        file: "sweep",
+        hasFilter: false,
+        hasIndex: true,
+        indexBounds: ["gt"],
+        indexName: "by_expiry",
+        line: 7,
+        scope: { kind: "export", name: "expire" },
+        table: "sessions",
+        terminal: "collect",
+        visibility: "internal",
+        ...overrides,
+    };
+};
+
+const context = (overrides: Partial<LintContext> = {}): LintContext => {
+    return { schema, ...overrides };
+};
+
+const scheduled: AdvisorCallEdge = { file: "kick", kind: "schedule", line: 3, scope: { kind: "export", name: "start" }, target: "sweep:expire" };
+
+describe("unbounded_collect_on_open_range", () => {
+    it("flags an open-range collect in an internal function", () => {
+        expect.assertions(2);
+
+        const findings = unboundedCollectOnOpenRange.run(context({ queries: [read()] }));
+
+        expect(findings).toStrictEqual([
+            expect.objectContaining({ cacheKey: "unbounded_collect_on_open_range:sweep:7:sessions", level: "WARN", name: "unbounded_collect_on_open_range" }),
+        ]);
+        expect(findings[0]?.detail).toContain('index "by_expiry"');
+    });
+
+    it("flags a public-visibility read that a scheduled dispatch runs", () => {
+        expect.assertions(1);
+
+        const findings = unboundedCollectOnOpenRange.run(context({ callEdges: [scheduled], queries: [read({ visibility: "public" })] }));
+
+        expect(findings).toHaveLength(1);
+    });
+
+    it("flags a public read that a cron job fires", () => {
+        expect.assertions(1);
+
+        const findings = unboundedCollectOnOpenRange.run(context({ cronTargets: ["sweep:expire"], queries: [read({ visibility: "public" })] }));
+
+        expect(findings).toHaveLength(1);
+    });
+
+    it("flags a bare withIndex with no range callback, which is the widest open range", () => {
+        expect.assertions(1);
+
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexBounds: [] })] }))).toHaveLength(1);
+    });
+
+    it("says nothing about a public function that nothing schedules", () => {
+        expect.assertions(1);
+
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ visibility: "public" })] }))).toHaveLength(0);
+    });
+
+    it("says nothing when the range has an upper bound", () => {
+        expect.assertions(1);
+
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexBounds: ["gt", "lt"] })] }))).toHaveLength(0);
+    });
+
+    it("says nothing when the chain caps or pages the read", () => {
+        expect.assertions(2);
+
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ terminal: "take" })] }))).toHaveLength(0);
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ terminal: "paginate" })] }))).toHaveLength(0);
+    });
+
+    it("holds its verdict when the same function removes rows from the table", () => {
+        expect.assertions(2);
+
+        const removing: AdvisorTableWrite = { file: "sweep", line: 9, method: "delete", scope: { kind: "export", name: "expire" }, table: "sessions" };
+        const inserting: AdvisorTableWrite = { ...removing, method: "insert" };
+
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read()], tableWrites: [removing] }))).toHaveLength(0);
+        // An audit insert adds rows and removes none, so it does not end the sweep.
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read()], tableWrites: [inserting] }))).toHaveLength(1);
+    });
+
+    it("stays silent without the evidence it needs", () => {
+        expect.assertions(3);
+
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexBounds: undefined })] }))).toHaveLength(0);
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexName: undefined })] }))).toHaveLength(0);
+        expect(unboundedCollectOnOpenRange.run(context())).toHaveLength(0);
+    });
+});

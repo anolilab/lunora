@@ -118,9 +118,11 @@ interface AdvisorBrowserUrlAccess {
 ```ts
 interface AdvisorCallEdge {
     conditional?: true;
+    delayMs?: number;
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
+    passesCursor?: true;
     reason?: string;
     scope: AdvisorCallSiteScope;
     target?: string;
@@ -570,13 +572,17 @@ interface AdvisorProcedureProtection {
 ```ts
 interface AdvisorQueryRead {
     file: string;
+    filterFields?: string[];
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
+    indexBounds?: string[];
+    indexName?: string;
     line: number;
     scope: AdvisorCallSiteScope;
     table: string;
     terminal?: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -1029,6 +1035,7 @@ interface LintContext {
     containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
     containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
     containers?: ReadonlyArray<AdvisorContainer>;
+    cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
     flagReads?: ReadonlyArray<AdvisorFlagRead>;
@@ -1442,6 +1449,12 @@ const externalSourceUnscoped: Lint;
 const fanOutBreadth: Lint;
 ```
 
+### `filterAfterIndexScan` (const)
+
+```ts
+const filterAfterIndexScan: Lint;
+```
+
 ### `filterOnPrimaryKey` (const)
 
 ```ts
@@ -1786,6 +1799,12 @@ const runAdvisor: (context: LintContext, options?: RunAdvisorOptions) => Finding
 const scoreAdvisor: (procedures: ReadonlyArray<AdvisorProcedureProtection>, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
 ```
 
+### `selfRescheduleWithoutProgress` (const)
+
+```ts
+const selfRescheduleWithoutProgress: Lint;
+```
+
 ### `shapeTargetsGlobalTable` (const)
 
 ```ts
@@ -1862,6 +1881,12 @@ const topicTooManySubscriptions: Lint;
 
 ```ts
 const ttlFieldNotTimestamp: Lint;
+```
+
+### `unboundedCollectOnOpenRange` (const)
+
+```ts
+const unboundedCollectOnOpenRange: Lint;
 ```
 
 ### `unboundedLoop` (const)

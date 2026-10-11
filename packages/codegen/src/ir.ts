@@ -912,11 +912,23 @@ export interface CallEdgeIR {
      * only, never `false`. The `dispatch_cycle` lint's false-positive gate.
      */
     conditional?: true;
+
+    /**
+     * The literal delay of a `ctx.scheduler.runAfter(<n>, …)` in milliseconds.
+     * Absent for `runAt`, or when the delay is not a numeric literal.
+     */
+    delayMs?: number;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call. */
     line: number;
+
+    /**
+     * `true` when a scheduled dispatch's args (its third argument) mention a
+     * cursor. Set only, never `false`. Read by the self-reschedule lint.
+     */
+    passesCursor?: true;
     reason?: string;
     /** Who the call runs on behalf of. */
     scope: CallSiteScope;
@@ -1043,6 +1055,14 @@ export interface QueryReadIR {
     file: string;
 
     /**
+     * The fields the chain's `.filter()` predicate reads off its row parameter
+     * (`(r) => r.a < cutoff && r.b === x` → `["a", "b"]`). `undefined` when the
+     * chain has no filter or the predicate is not a function literal. Optional so
+     * a feeder predating this field still typechecks.
+     */
+    filterFields?: string[];
+
+    /**
      * True when the chain's `.filter()` predicate compares `_id`
      * (`(d) => d._id === args.id`) — a full scan for a row that `ctx.db.get`
      * addresses directly. Optional so a feeder predating this field still
@@ -1053,6 +1073,15 @@ export interface QueryReadIR {
     hasFilter: boolean;
     /** The chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */
     hasIndex: boolean;
+
+    /**
+     * The comparators the `.withIndex(...)` range callback calls on its index
+     * parameter (`q.eq`, `q.lt`, …), sorted and de-duplicated. `undefined` when
+     * the chain has no `.withIndex(...)` or the callback is not a function literal.
+     */
+    indexBounds?: string[];
+    /** The literal index name passed to `.withIndex(...)`, or `undefined` when it is not a string literal or the chain has no `.withIndex(...)`. */
+    indexName?: string;
     /** 1-based line of the `query(...)` call. */
     line: number;
     /** Who the read runs on behalf of. */
@@ -1072,6 +1101,13 @@ export interface QueryReadIR {
      * rather than guessing a terminal.
      */
     terminal?: string;
+
+    /**
+     * Visibility of the procedure the read runs on behalf of: `internal` when every
+     * caller is internal, `public` when any caller is public. Stamped from the
+     * registered functions, so it is absent when the feeder could not read them.
+     */
+    visibility?: "internal" | "public";
 }
 
 /**
