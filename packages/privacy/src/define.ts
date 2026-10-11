@@ -18,6 +18,8 @@ import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
 import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
 import { assembleExport, collectPart, EXPORT_EXPIRY_MS, runErasure, runExport } from "./run";
+import type { TombstonePort } from "./tombstones";
+import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /** The app's erasure settings. The defaults are the decided values (D3 and the sign-in window). */
 interface ErasureOptions {
@@ -40,6 +42,8 @@ interface PrivacyConfig {
     readonly store: RequestStore;
     /** The identifier the archive shows for the subject. Defaults to the subject id itself. */
     readonly subjectKey?: (subjectId: string) => string;
+    /** Where erased subjects are tombstoned, so a restored backup can be erased again. Optional; `restore` needs it. */
+    readonly tombstones?: TombstonePort;
 }
 
 /** The step surface a Workflow handler receives. Matches the native `WorkflowStep` methods the package uses. */
@@ -67,6 +71,8 @@ interface Privacy {
     readonly extendRequest: (input: { reason: string; requestId: string }) => Promise<RequestRecord>;
     readonly requestErasure: (input: { sessionAgeMs: number; subjectId: string }) => Promise<RequestRecord>;
     readonly requestExport: (input: { subjectId: string }) => Promise<RequestRecord>;
+    /** Erase again any restored subject that was erased after the backup. Returns the subject ids it re-erased. */
+    readonly restore: (input: { restoredSubjectIds: ReadonlyArray<string> }) => Promise<ReadonlyArray<string>>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
     readonly runExport: (requestId: string) => Promise<ExportOutcome>;
     /** The deadline sweep: requests due within seven days, and those already overdue. Run it from a cron. */
@@ -196,6 +202,10 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
                 const verdict = verifyErasure(remaining);
 
                 await setStatus(record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
+
+                if (verdict.complete && config.tombstones !== undefined) {
+                    await config.tombstones.add(tombstoneKeyOf(record.subjectId), config.now());
+                }
             });
         } catch (error) {
             await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
@@ -236,10 +246,33 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
 
         requestExport: async ({ subjectId }) => openRequest(config.store, { id: config.newId(), now: config.now(), subjectId, type: "export" }),
 
+        restore: async ({ restoredSubjectIds }) => {
+            if (config.tombstones === undefined) {
+                throw new LunoraError("BAD_REQUEST", "restore needs a tombstone store: pass `tombstones` to definePrivacy.");
+            }
+
+            const subjects = await subjectsToReerase(restoredSubjectIds, config.tombstones);
+
+            for (const subjectId of subjects) {
+                // Re-erase each subject's rows in the same order a first erasure uses.
+                for (const dataset of erasureOrder(config.datasets)) {
+                    // eslint-disable-next-line no-await-in-loop -- one drain per dataset, in order
+                    await drainUntilEmpty(() => config.data.eraseBatch(dataset, subjectId, config.now()));
+                }
+            }
+
+            return subjects;
+        },
+
         runErasure: async (requestId) => {
             const record = await requireRequest(requestId);
+            const outcome = await runErasure(contextFor(record), config.datasets, record);
 
-            return runErasure(contextFor(record), config.datasets, record);
+            if (outcome.status === "completed" && config.tombstones !== undefined) {
+                await config.tombstones.add(tombstoneKeyOf(record.subjectId), config.now());
+            }
+
+            return outcome;
         },
 
         runExport: async (requestId) => {

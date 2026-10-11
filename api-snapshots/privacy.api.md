@@ -248,6 +248,9 @@ interface Privacy {
     readonly requestExport: (input: {
         subjectId: string;
     }) => Promise<RequestRecord>;
+    readonly restore: (input: {
+        restoredSubjectIds: ReadonlyArray<string>;
+    }) => Promise<ReadonlyArray<string>>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
     readonly runExport: (requestId: string) => Promise<ExportOutcome>;
     readonly tick: () => Promise<{
@@ -275,6 +278,7 @@ interface PrivacyConfig {
     readonly presets?: ReadonlyArray<PrivacyPreset>;
     readonly store: RequestStore;
     readonly subjectKey?: (subjectId: string) => string;
+    readonly tombstones?: TombstonePort;
 }
 ```
 
@@ -721,5 +725,14 @@ interface PrivacyWorkflowContext {
         readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
         readonly sleepUntil: (name: string, when: Date) => Promise<void>;
     };
+}
+```
+
+### `TombstonePort` (interface)
+
+```ts
+interface TombstonePort {
+    readonly add: (key: string, erasedAt: Date) => Promise<void>;
+    readonly keys: () => Promise<ReadonlySet<string>>;
 }
 ```
