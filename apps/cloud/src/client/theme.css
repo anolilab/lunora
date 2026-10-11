@@ -266,7 +266,7 @@
     overflow: auto;
     padding: 14px 16px;
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .log-line.error {
