@@ -408,7 +408,16 @@ const ensureDeployment = async (
             return found._id;
         }
 
-        await driveToLive(cookie, found._id);
+        // A row the state table will not move forward (failed, superseded, destroyed, …) stops
+        // the seed here, named by its id and status, rather than being skipped.
+        try {
+            await driveToLive(cookie, found._id);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            throw new Error(`cannot resume deployment ${found._id} (${SCRIPT_NAME}) from status "${found.status}": ${message}`, { cause: error });
+        }
+
         console.info(`  deployment  ${SCRIPT_NAME} (resumed from ${found.status} → live)`);
 
         return found._id;
