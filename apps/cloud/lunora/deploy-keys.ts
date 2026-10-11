@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
+import { RELEASE_LEASE_MS } from "../src/deploy/lease";
 import { findActiveIngestKey, ingestKeyRow } from "../src/telemetry/ingest-key-row";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -340,7 +341,6 @@ export const recordIngestKey = internalMutation
  * plus slack. A release normally deletes its key when it ends; this deadline is
  * what bounds a release whose Worker dies first.
  */
-const RELEASE_KEY_TTL_MS = 35 * 60 * 1000;
 
 /** The name a release key carries, so the org's key list says what it is while it exists. */
 const releaseKeyName = (buildId: string): string => `Git build release (${buildId})`;
@@ -379,7 +379,7 @@ export const recordReleaseKey = internalMutation
 
         return context.db.insert("deployKeys", {
             createdAt: context.now,
-            expiresAt: context.now + RELEASE_KEY_TTL_MS,
+            expiresAt: context.now + RELEASE_LEASE_MS,
             hashedKey,
             name: releaseKeyName(buildId),
             organizationId,
@@ -406,7 +406,6 @@ export const removeReleaseKey = internalMutation
     });
 
 /** How long a catalog install's release key lives: the release lease, after which a crashed install's key is dead. */
-const INSTALL_KEY_TTL_MS = 35 * 60 * 1000;
 
 const installKeyName = (installId: string): string => `Catalog install (${installId})`;
 
@@ -431,7 +430,7 @@ export const recordInstallKey = internalMutation
 
         return context.db.insert("deployKeys", {
             createdAt: context.now,
-            expiresAt: context.now + INSTALL_KEY_TTL_MS,
+            expiresAt: context.now + RELEASE_LEASE_MS,
             hashedKey,
             name: installKeyName(installId),
             organizationId,

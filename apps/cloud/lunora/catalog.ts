@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { RELEASE_LEASE_MS } from "../src/deploy/lease";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
@@ -14,7 +15,6 @@ import { boundedString, LIMITS } from "./validators";
  */
 
 /** A claim older than this is a crashed install and no longer blocks its project. Matches the release-key lease. */
-const CLAIM_LEASE_MS = 35 * 60 * 1000;
 
 /** One live install, as the catalog listing reads it. */
 export interface CatalogInstallView {
@@ -94,7 +94,7 @@ export const claimInstall = internalMutation
         const holder = await holderOf();
 
         if (holder !== undefined) {
-            if (context.now - holder.createdAt < CLAIM_LEASE_MS) {
+            if (context.now - holder.createdAt < RELEASE_LEASE_MS) {
                 return { busy: true };
             }
 
