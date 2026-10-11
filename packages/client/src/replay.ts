@@ -223,10 +223,11 @@ export const indexReplaySlots = (results: { body?: unknown; id?: number }[]): Ma
 
 /**
  * What a batch slot means for the queued write it answers. `unanswered` means the
- * server never replied (retry under the same mutationId). `refused` carries the
- * server's verdict as an error. `accepted` carries the envelope to settle.
+ * server never replied (retry under the same mutationId). `errored` carries the server's
+ * error, which the caller may requeue or settle, depending on the failure. `accepted`
+ * carries the envelope to settle.
  */
-export type ReplaySlotVerdict = { error: LunoraClientError; kind: "refused" } | { inner: RpcEnvelopeBody; kind: "accepted" } | { kind: "unanswered" };
+export type ReplaySlotVerdict = { error: LunoraClientError; kind: "errored" } | { inner: RpcEnvelopeBody; kind: "accepted" } | { kind: "unanswered" };
 
 export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlotVerdict => {
     if (inner === undefined) {
@@ -234,7 +235,7 @@ export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlo
     }
 
     if ("error" in inner) {
-        return { error: slotError(inner), kind: "refused" };
+        return { error: slotError(inner), kind: "errored" };
     }
 
     return { inner, kind: "accepted" };

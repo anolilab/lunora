@@ -47,7 +47,7 @@ describe("replaySlotVerdict", () => {
 
         const verdict = replaySlotVerdict({ error: { code: "CONFLICT", message: "taken" } });
 
-        expect(verdict.kind).toBe("refused");
+        expect(verdict.kind).toBe("errored");
         expect(verdict).toMatchObject({ error: { code: "CONFLICT", message: "taken" } });
     });
 

@@ -8702,7 +8702,7 @@ class LunoraClient {
                 // The server never returned this slot. It may or may not have committed,
                 // so retry under the same `mutationId` (idempotent).
                 requeue.push(item);
-            } else if (verdict.kind === "refused") {
+            } else if (verdict.kind === "errored") {
                 refused ||= isAuthReplayFailure(verdict.error);
 
                 if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
@@ -8713,7 +8713,13 @@ class LunoraClient {
                 }
             } else {
                 accepted = true;
-                this.settleReplayBatchResult(item, verdict.inner);
+                const decoded = decodeReplayResult(verdict.inner);
+
+                if (decoded.kind === "undecodable") {
+                    this.settleReplayUndecodable(item, decoded.error, verdict.inner.commitCursor);
+                } else {
+                    this.settleReplaySuccess(item, decoded.value, verdict.inner.commitCursor);
+                }
             }
         }
 
@@ -8724,24 +8730,6 @@ class LunoraClient {
         }
 
         return requeue;
-    }
-
-    /**
-     * Settle one batch slot that answered with a result. Decoded per slot: one
-     * result the codec refuses must not abandon the slots after it (committed
-     * writes left pending and unsettled for the rest of the session), and its
-     * own write DID commit.
-     */
-    private settleReplayBatchResult(item: QueuedMutation, inner: RpcEnvelopeBody): void {
-        const decoded = decodeReplayResult(inner);
-
-        if (decoded.kind === "undecodable") {
-            this.settleReplayUndecodable(item, decoded.error, inner.commitCursor);
-
-            return;
-        }
-
-        this.settleReplaySuccess(item, decoded.value, inner.commitCursor);
     }
 }
 
