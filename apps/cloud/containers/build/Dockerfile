@@ -41,6 +41,7 @@ RUN corepack enable
 # and bundles it into each plain Worker (see `worker.mjs`).
 WORKDIR /srv
 COPY server.mjs workspace.mjs release.mjs scan.mjs worker.mjs shim-runtime.mjs ./
+COPY scan-alarms.mjs scan-attribution.mjs scan-budget.mjs scan-detect.mjs scan-guards.mjs scan-jumps.mjs scan-loops.mjs scan-queues.mjs scan-report.mjs scan-tree.mjs ./
 COPY vendor/acorn.mjs vendor/acorn.LICENSE vendor/release-manifest.mjs vendor/release-manifest.LICENSES ./vendor/
 
 # Builds land under here, one directory per build, owned by the unprivileged

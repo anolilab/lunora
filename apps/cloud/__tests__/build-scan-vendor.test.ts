@@ -84,6 +84,16 @@ describe("build box image contents", () => {
         // A guard that found nothing would pass vacuously.
         expect([...modules].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             "release.mjs",
+            "scan-alarms.mjs",
+            "scan-attribution.mjs",
+            "scan-budget.mjs",
+            "scan-detect.mjs",
+            "scan-guards.mjs",
+            "scan-jumps.mjs",
+            "scan-loops.mjs",
+            "scan-queues.mjs",
+            "scan-report.mjs",
+            "scan-tree.mjs",
             "scan.mjs",
             "server.mjs",
             "vendor/acorn.mjs",
