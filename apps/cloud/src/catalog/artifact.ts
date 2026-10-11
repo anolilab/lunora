@@ -21,6 +21,14 @@ export const CATALOG_FORMAT = 1;
 /** Largest archive accepted, so a hostile one cannot exhaust the Worker's memory on decompression. */
 export const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Largest total the files an artifact declares may reach once inflated. An install holds
+ * the inflated files, the bundle and the assets' base64 copies at once, and a Worker
+ * isolate has 128 MB. The cap is checked against the manifest's declared sizes before
+ * anything is inflated, so an archive over it is refused whatever its compressed size.
+ */
+export const MAX_INFLATED_BYTES = 48 * 1024 * 1024;
+
 /** Environment names a form may declare: upper snake case, and never the platform's own `LUNORA_` namespace. */
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
 const RESERVED_PREFIX = "LUNORA_";
@@ -403,8 +411,8 @@ export const parseManifest = (value: unknown): { manifest: CatalogManifest; ok: 
         files.push(parsed.field);
     }
 
-    if (total > MAX_ARTIFACT_BYTES) {
-        return refuse("TOO_LARGE", `the listed files total ${String(total)} bytes, over the ${String(MAX_ARTIFACT_BYTES)}-byte limit`);
+    if (total > MAX_INFLATED_BYTES) {
+        return refuse("TOO_LARGE", `the app's files total ${String(total)} bytes, over the ${String(MAX_INFLATED_BYTES)}-byte install limit`);
     }
 
     if (typeof record["main"] !== "string" || !seen.has(record["main"])) {
@@ -479,6 +487,13 @@ export type ArchiveVerifyResult = { files: Map<string, Uint8Array>; ok: true } |
 export const verifyArchive = async (archive: Uint8Array, manifest: CatalogManifest): Promise<ArchiveVerifyResult> => {
     if (archive.byteLength > MAX_ARTIFACT_BYTES) {
         return refuse("TOO_LARGE", `the archive is ${String(archive.byteLength)} bytes, over the ${String(MAX_ARTIFACT_BYTES)}-byte limit`);
+    }
+
+    // Each inflated file is exactly its declared size (checked below), so the declared total bounds what inflation can produce.
+    const declared = manifest.files.reduce((sum, file) => sum + file.size, 0);
+
+    if (declared > MAX_INFLATED_BYTES) {
+        return refuse("TOO_LARGE", `the app's files total ${String(declared)} bytes, over the ${String(MAX_INFLATED_BYTES)}-byte install limit`);
     }
 
     const listed = new Map(manifest.files.map((file) => [file.path, file]));

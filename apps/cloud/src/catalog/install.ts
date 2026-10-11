@@ -257,7 +257,10 @@ const resolveSecrets = (
     return { generated, kept, ok: true, secrets };
 };
 
-/** Split the artifact's non-entry files into the static files to serve and the root rules files, which travel as config strings. */
+/**
+ * Split the artifact's non-entry files into the static files to serve and the root rules files, which travel as config strings.
+ * Consumes `files`: each file's raw bytes are released as soon as it is encoded, so an asset is never held both raw and as base64.
+ */
 const collectStatic = (
     manifest: CatalogManifest,
     files: Map<string, Uint8Array>,
@@ -279,6 +282,7 @@ const collectStatic = (
         if (RULES_FILES.has(file.path)) {
             // Carried as config strings, never served (see `parseAssets` in the deploy core).
             rules.push([file.path, decoder.decode(bytes)]);
+            files.delete(file.path);
 
             continue;
         }
@@ -288,6 +292,7 @@ const collectStatic = (
         }
 
         assetFiles.push({ content: toBase64(bytes), path: `/${file.path}` });
+        files.delete(file.path);
     }
 
     return { assetFiles, ok: true, rules };
@@ -330,7 +335,8 @@ const assetUpload = (
 /**
  * Turn an artifact and the user's values into a release request, or the failure the
  * user needs to see. Every check the deploy core would make on these values happens
- * here first, so a bad value never reaches the secret store.
+ * here first, so a bad value never reaches the secret store. The plan carries every
+ * byte the release needs, so this consumes `artifact.files` (see `collectStatic`).
  */
 export const planInstall = (input: InstallInput, stored: ReadonlySet<string>): InstallPlanResult => {
     const { artifact, projectId, scriptName, values } = input;

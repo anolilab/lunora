@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { advanceIndexState } from "../lunora/catalog";
 import type { CatalogForm } from "../src/catalog/artifact";
+import { MAX_INFLATED_BYTES } from "../src/catalog/artifact";
 import { verifyCatalogIndex } from "../src/catalog/index";
 import type { InstallPorts, SealedSecret } from "../src/catalog/install";
 import { packArtifact } from "../src/catalog/pack";
@@ -632,5 +633,61 @@ describe(installApp, () => {
         const outcome = await installApp(deps, request, adapters);
 
         expect(outcome).toMatchObject({ kind: "verification", ok: false });
+    });
+
+    it("installs an app whose declared files total exactly the install limit, and changes nothing below it", async () => {
+        const key = await generateKey("catalog-2026");
+        const app = await publishApp(key, { files: { "worker.js": new Uint8Array(MAX_INFLATED_BYTES) }, name: "Counter", slug: "counter", version: "1.0.0" });
+        const { adapters, ports, deps } = await setup(await publishIndex(key, [app]), key);
+
+        const outcome = await installApp(deps, request, adapters);
+
+        expect(outcome).toMatchObject({ deploymentId: "dep_1", ok: true });
+        expect(ports.release).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses an app whose declared files exceed the install limit, before anything is claimed or released", async () => {
+        const key = await generateKey("catalog-2026");
+        // A manifest that declares one byte over the limit. `packArtifact` refuses to pack it, so it is signed by hand.
+        const manifest = encoder.encode(
+            JSON.stringify({
+                files: [{ path: "worker.js", sha256: "0".repeat(64), size: MAX_INFLATED_BYTES + 1 }],
+                format: 1,
+                main: "worker.js",
+                slug: "counter",
+                version: "1.0.0",
+            }),
+        );
+        const {archive} = await packArtifact({ files: counterFiles(), keyId: key.keyId, main: "worker.js", privateKey: key.privateKey, slug: "counter", version: "1.0.0" });
+        const stem = `${BASE}/counter-1.0.0`;
+        const app: PublishedApp = {
+            entry: {
+                artifactUrl: `${stem}.zip`,
+                manifestSha256: await sha256Hex(manifest),
+                manifestUrl: `${stem}.manifest.json`,
+                name: "Counter",
+                signatureUrl: `${stem}.manifest.sig`,
+                slug: "counter",
+                version: "1.0.0",
+            },
+            manifest,
+            served: new Map<string, Served>([
+                [`${stem}.manifest.json`, { body: manifest }],
+                [`${stem}.manifest.sig`, { body: await signatureFile(key, ARTIFACT_SIGNING_DOMAIN, manifest) }],
+                [`${stem}.zip`, { body: archive }],
+            ]),
+        };
+        const { adapters, ports, deps } = await setup(await publishIndex(key, [app]), key);
+
+        const outcome = await installApp(deps, request, adapters);
+
+        expect(outcome).toStrictEqual({
+            code: "TOO_LARGE",
+            error: `its manifest is invalid: the app's files total ${String(MAX_INFLATED_BYTES + 1)} bytes, over the ${String(MAX_INFLATED_BYTES)}-byte install limit`,
+            kind: "verification",
+            ok: false,
+        });
+        expect(ports.claim).not.toHaveBeenCalled();
+        expect(ports.release).not.toHaveBeenCalled();
     });
 });
