@@ -126,8 +126,6 @@ import {
     applyOptimisticLayer,
     dropAcknowledgedLayers,
     dropConfirmedLayers,
-    foldOptimistic,
-    notifySubscription,
     refoldSubscription,
     rollbackOptimistic,
 } from "./optimistic-layers";
@@ -4339,7 +4337,7 @@ class LunoraClient {
                     dropConfirmedLayers(state, cursor);
                 }
 
-                notifySubscription(state, foldOptimistic(data, state.optimisticLayers));
+                refoldSubscription(state, data);
             },
             onLeaderClaimAnswered: () => {
                 // A new tab just announced itself. Re-state our status directly:
@@ -5022,7 +5020,7 @@ class LunoraClient {
 
         this.cacheSeededQueries.set(queryCacheKey(state.fn.__lunoraRef, state.argsKey, state.shardKey), entry);
 
-        notifySubscription(state, foldOptimistic(entry.value, state.optimisticLayers));
+        refoldSubscription(state, entry.value);
     }
 
     /**
@@ -5105,7 +5103,7 @@ class LunoraClient {
                 state.serverBase = undefined;
                 state.serverCursor = undefined;
                 state.serverEpoch = undefined;
-                notifySubscription(state, foldOptimistic(undefined, state.optimisticLayers));
+                refoldSubscription(state, undefined);
             }
 
             this.hydratedQueryCache.set(key, entry);
@@ -6905,7 +6903,7 @@ class LunoraClient {
         }
 
         // Drop the cache seed before the value moves, then commit the payload and its
-        // position. The watermark and its checkpoint fan-out happen inside commit.
+        // position. The watermark and the checkpoint fan-out follow the commit.
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
         commitDataFrame(state, message, payload);
 
@@ -7706,7 +7704,7 @@ class LunoraClient {
             // acknowledged by anything.
             state.acked = false;
 
-            notifySubscription(state, foldOptimistic(undefined, state.optimisticLayers));
+            refoldSubscription(state, undefined);
         }
 
         // Shapes are the same rows by another protocol, and were left untouched
