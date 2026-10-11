@@ -69,7 +69,12 @@ export interface PokeBuffer {
     undecodable: Map<string, unknown>;
 }
 
-/** Buffer key for an in-flight poke: `pokeId` is only unique per shard socket, so it is scoped by connection. */
+/**
+ * Buffer key for an in-flight poke. The connection has to be in the key: `pokeId` is a per-DO
+ * counter that also resets on eviction, so a multi-shard client (one socket per shard, one map)
+ * sees two shards mint `poke-1` concurrently. Keyed by `pokeId` alone, their frames interleave into
+ * one buffer: one shard applies the other's epoch, and the other finds no buffer for its parts.
+ */
 export const pokeBufferKey = (shardKey: string | undefined, pokeId: string): string => `${connectionKey(shardKey)}\u0000${pokeId}`;
 
 /**

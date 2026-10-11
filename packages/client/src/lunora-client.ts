@@ -193,8 +193,6 @@ import type {
     ServerIdentityMessage,
     ServerMessage,
     ServerPokeEndMessage,
-    ServerPokePartMessage,
-    ServerPokeStartMessage,
     ServerResumeMessage,
     ServerSettledMessage,
     ServerWhisperMessage,
@@ -949,17 +947,7 @@ class LunoraClient {
 
     private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
 
-    /**
-     * In-flight pokes being assembled between `pokeStart` and `pokeEnd`, keyed by
-     * `<connectionKey>\u0000<pokeId>`.
-     *
-     * The connection has to be in the key: `pokeId` is a per-DO counter that also
-     * resets on eviction, so a multi-shard client — one socket per shard, one map
-     * here — sees two shards mint `poke-1` concurrently. Keyed by `pokeId` alone
-     * their frames interleave into a single buffer: one shard applies the other's
-     * epoch (spurious fork → view wiped) and the other finds no buffer for its
-     * parts at all, silently dropping rows while the server's memo advances.
-     */
+    /** In-flight pokes, keyed by connection and `pokeId`. See `pokeBufferKey` in shape-state.ts. */
     private readonly pokeAssembler = new PokeAssembler(LunoraClient.MAX_POKE_BUFFERS);
 
     private nextShapeId = 0;
@@ -6687,12 +6675,12 @@ class LunoraClient {
                 break;
             }
             case "pokePart": {
-                this.handlePokePart(message, shardKey);
+                this.pokeAssembler.part(shardKey, message);
 
                 break;
             }
             case "pokeStart": {
-                this.handlePokeStart(message, shardKey);
+                this.pokeAssembler.start(shardKey, message);
 
                 break;
             }
@@ -6791,14 +6779,6 @@ class LunoraClient {
         if (shapeState) {
             fanSubscriptionError(shapeState.errorCallbacks, buildSubscriptionError(message));
         }
-    }
-
-    private handlePokeStart(message: ServerPokeStartMessage, shardKey: string | undefined): void {
-        this.pokeAssembler.start(shardKey, message);
-    }
-
-    private handlePokePart(message: ServerPokePartMessage, shardKey: string | undefined): void {
-        this.pokeAssembler.part(shardKey, message);
     }
 
     private handlePokeEnd(message: ServerPokeEndMessage, shardKey: string | undefined): void {

@@ -213,12 +213,15 @@ describe("lunoraClient subscribeShape", () => {
     });
 
     it("keeps a shape's view and checkpoint when one of its parts carries an undecodable row", () => {
-        expect.assertions(2);
+        expect.assertions(3);
+
+        vi.useFakeTimers();
 
         const client = makeClient();
         const seen: Record<string, unknown>[][] = [];
+        const errors: { code?: string }[] = [];
 
-        client.subscribeShape({ name: "all" }, (rows) => seen.push(rows));
+        client.subscribeShape({ name: "all" }, (rows) => seen.push(rows), { onError: (error) => errors.push(error) });
         const socket = latestSocket();
 
         socket.open();
@@ -243,7 +246,16 @@ describe("lunoraClient subscribeShape", () => {
         socket.receive({ checkpoint: 9, epoch: "e1", pokeId: "live", type: "pokeEnd" });
 
         expect(seen.at(-1)).toStrictEqual([{ _id: "m1" }]);
-        expect(frames(socket).filter((frame) => frame.type === "shape_subscribe")).toHaveLength(1);
+        expect(errors.map((error) => error.code)).toContain("WIRE_DECODE_FAILED");
+
+        // The checkpoint stays at 5: a reconnect resumes from it, not from the refused poke's 9.
+        socket.triggerClose();
+        vi.runOnlyPendingTimers();
+        const resumed = latestSocket();
+
+        resumed.open();
+
+        expect(frames(resumed).find((frame) => frame.type === "shape_subscribe")).toMatchObject({ sinceCheckpoint: 5, sinceEpoch: "e1" });
     });
 
     it("resumes from the last applied checkpoint on reconnect", () => {

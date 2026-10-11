@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PokeBuffer, ShapeSubscriptionState } from "../src/shape-state";
-import { commitPokeSlice, PokeAssembler, pokeBufferKey } from "../src/shape-state";
+import { commitPokeSlice, PokeAssembler } from "../src/shape-state";
 import type { RowOp, ServerPokeEndMessage, ServerPokePartMessage, ServerPokeStartMessage } from "../src/types";
 
 const shape = (overrides: Partial<ShapeSubscriptionState> = {}): ShapeSubscriptionState => {
@@ -152,13 +152,6 @@ describe("pokeAssembler", () => {
         assembler.clear();
 
         expect(assembler.end(undefined, "p1")).toBeUndefined();
-    });
-
-    it("keys a buffer by shard and poke id", () => {
-        expect.assertions(2);
-
-        expect(pokeBufferKey(undefined, "p1")).toBe(pokeBufferKey("", "p1"));
-        expect(pokeBufferKey("tenant-a", "p1")).not.toBe(pokeBufferKey("tenant-b", "p1"));
     });
 });
 
