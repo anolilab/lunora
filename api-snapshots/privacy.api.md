@@ -11,6 +11,15 @@ SemVer promise until the package graduates.
 
 ## `@lunora/privacy`
 
+### `ArchiveFile` (interface)
+
+```ts
+interface ArchiveFile {
+    readonly data: Uint8Array | string;
+    readonly path: string;
+}
+```
+
 ### `CoverageProblem` (interface)
 
 ```ts
@@ -48,10 +57,43 @@ class InvalidTransitionError extends Error {
 type LegalBasis = "consent" | "contract" | "legal_obligation" | "legitimate_interest";
 ```
 
+### `MANIFEST_FORMAT_VERSION` (const)
+
+```ts
+const MANIFEST_FORMAT_VERSION = 1;
+```
+
 ### `MIN_DRAIN_BUDGET_DAYS` (const)
 
 ```ts
 const MIN_DRAIN_BUDGET_DAYS = 3;
+```
+
+### `Manifest` (interface)
+
+```ts
+interface Manifest {
+    readonly datasets: ReadonlyArray<ManifestDataset>;
+    readonly formatVersion: typeof MANIFEST_FORMAT_VERSION;
+    readonly generatedAt: string;
+    readonly subjectKey: string;
+}
+```
+
+### `ManifestDataset` (interface)
+
+```ts
+interface ManifestDataset {
+    readonly articles: ReadonlyArray<ExportArticle>;
+    readonly files: ReadonlyArray<string>;
+    readonly id: string;
+    readonly legalBasis: LegalBasis;
+    readonly origin: DataOrigin;
+    readonly purpose: string;
+    readonly recipients: ReadonlyArray<string>;
+    readonly restricted: boolean;
+    readonly retention: string;
+}
 ```
 
 ### `PrivacyPolicy` (interface)
@@ -123,6 +165,17 @@ interface RetentionRule {
 type RetentionStart = "endOfCalendarYear" | "from";
 ```
 
+### `SummaryDataset` (interface)
+
+```ts
+interface SummaryDataset {
+    readonly articles: ReadonlyArray<ExportArticle>;
+    readonly id: string;
+    readonly purpose: string;
+    readonly retention: string;
+}
+```
+
 ### `TableClassification` (interface)
 
 ```ts
@@ -142,6 +195,33 @@ const addCalendarMonths: (date: Date, months: number) => Date;
 
 ```ts
 const articlesFor: (origin: DataOrigin, legalBasis: LegalBasis) => ReadonlyArray<ExportArticle>;
+```
+
+### `buildArchive` (const)
+
+```ts
+const buildArchive: (files: ReadonlyArray<ArchiveFile>, generatedAt: Date, level?: 0 | 1 | 6 | 9) => Uint8Array;
+```
+
+### `buildManifest` (const)
+
+```ts
+const buildManifest: (input: {
+    datasets: ReadonlyArray<ManifestDataset>;
+    generatedAt: Date;
+    subjectKey: string;
+}) => Manifest;
+```
+
+### `buildSummaryPdf` (const)
+
+```ts
+const buildSummaryPdf: (input: {
+    datasets: ReadonlyArray<SummaryDataset>;
+    generatedAt: Date;
+    subjectKey: string;
+    title: string;
+}) => Promise<Uint8Array>;
 ```
 
 ### `canCancel` (const)

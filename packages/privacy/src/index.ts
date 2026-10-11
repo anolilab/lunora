@@ -1,3 +1,5 @@
+export type { ArchiveFile, Manifest, ManifestDataset, SummaryDataset } from "./archive";
+export { buildArchive, buildManifest, buildSummaryPdf, MANIFEST_FORMAT_VERSION } from "./archive";
 export type { DataOrigin, ExportArticle, LegalBasis } from "./articles";
 export { articlesFor } from "./articles";
 export type { CoverageProblem, TableClassification } from "./coverage";
