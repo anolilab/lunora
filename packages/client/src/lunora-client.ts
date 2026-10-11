@@ -1,18 +1,35 @@
 import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
-import { collectPages } from "../../../shared/collect-pages";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { onSessionChanged } from "../../../shared/session-change";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
+import { fetchArchitecture, fetchOpenApi, fetchOpenRpc, getCronJobs, listFunctions, runCronJob } from "./admin/functions";
+import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./admin/global-tables";
+import type { AdminHost } from "./admin/host";
+import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } from "./admin/kv";
+import { queryLogArchive, shardTraffic } from "./admin/observability";
+import {
+    cancelScheduledJob,
+    decodeRecordArgs,
+    getWorkflowInstance,
+    listDeadJobs,
+    listScheduledJobs,
+    listWorkflowInstances,
+    removeDeadJob,
+    retryDeadJob,
+    schedulerStatus,
+    setWorkflowInstanceStatus,
+} from "./admin/scheduler";
+import { deleteStorageObject, listStorageBuckets, listStorageObjects, signedStorageUrl, uploadStorageObject } from "./admin/storage";
+import { listVectorIndexes, queryVectorIndex } from "./admin/vector-indexes";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { BatchSlot } from "./call-wire";
 import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./call-wire";
 import {
-    ARCHITECTURE_PATH,
     AUTH_ACCOUNTS_PATH,
     AUTH_ADD_MEMBER_PATH,
     AUTH_ADD_TEAM_MEMBER_PATH,
@@ -57,38 +74,11 @@ import {
     AUTH_UPDATE_TEAM_PATH,
     AUTH_UPDATE_USER_PATH,
     AUTH_USERS_PATH,
-    CRON_JOBS_PATH,
-    CRON_JOBS_RUN_PATH,
     DEFAULT_AUTH_BASE_PATH,
-    FUNCTIONS_PATH,
     GET_SESSION_PATH,
-    GLOBAL_FACET_PATH,
-    GLOBAL_TABLE_PATH,
-    GLOBAL_TABLES_PATH,
-    KV_KEYS_PATH,
-    KV_NAMESPACES_PATH,
-    KV_VALUE_PATH,
-    LOG_ARCHIVE_PATH,
-    OPENAPI_PATH,
-    OPENRPC_PATH,
     RPC_BATCH_PATH,
     RPC_PATH,
-    SCHEDULED_CANCEL_PATH,
-    SCHEDULED_DEAD_CANCEL_PATH,
-    SCHEDULED_DEAD_PATH,
-    SCHEDULED_DEAD_RETRY_PATH,
-    SCHEDULED_PATH,
-    SCHEDULED_STATUS_PATH,
     SCHEDULED_WS_PATH,
-    SHARD_TRAFFIC_PATH,
-    STORAGE_BUCKETS_PATH,
-    STORAGE_PATH,
-    STORAGE_URL_PATH,
-    VECTOR_INDEXES_PATH,
-    VECTOR_QUERY_PATH,
-    WORKFLOWS_INSTANCE_PATH,
-    WORKFLOWS_INSTANCES_PATH,
-    WORKFLOWS_STATUS_PATH,
     WS_PATH,
 } from "./client-paths";
 import type { ClientQueryRef } from "./client-query-store";
@@ -106,7 +96,7 @@ import {
     RESUBSCRIBE_CONCURRENCY,
     SOCKET_STABLE_MS,
 } from "./client-tuning";
-import { bucketQuery, deriveWsUrl, joinUrl, withQuery } from "./client-urls";
+import { deriveWsUrl, joinUrl, withQuery } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
 import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
@@ -210,7 +200,6 @@ import type {
     ServerWhisperMessage,
     ShardTrafficResult,
     StorageListPage,
-    StorageObject,
     Unsubscribe,
     User,
     VectorIndexSummary,
@@ -459,20 +448,6 @@ type ReplayIdentityVerdict = { credential: ReplayCredential; verdict: "match" } 
 const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
 
 /**
- * Undo the scheduler's `encodeWire(args)` on a record read back off the admin
- * routes, so `listScheduledJobs` / `listDeadJobs` / `subscribeScheduledJobs`
- * answer the same values `@lunora/scheduler`'s `createScheduler.list()` answers
- * a shard-side reader for the SAME record.
- *
- * The decode has to happen HERE and not in the worker's admin proxy: that proxy
- * re-serializes with `JSON.stringify`, which throws on the very `bigint` the
- * encode exists to carry, so decoding on the way through would turn a job with a
- * `bigint` argument into a 500. Identity for pure-JSON args.
- */
-const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord =>
-    "args" in record ? { ...record, args: decodeWire(record.args) as Record<string, unknown> } : record;
-
-/**
  * @internal
  */
 const RESOLVED_PROMISE = Promise.resolve();
@@ -503,7 +478,13 @@ class LunoraClient {
     public readonly url: string;
 
     public readonly wsUrl: string;
-
+    /** The admin modules reach the client only through this host. The arrows read `this` when called, so spies and overrides installed after construction still take effect. */
+    private readonly adminHost: AdminHost = {
+        adminFetch: (...args) => this.adminFetch(...args),
+        assertOpen: () => {
+            this.assertOpen();
+        },
+    };
     /** Local reactive store for {@link ClientQueryRef} values — no server round-trip. Private; reach it via `getClientQuery` / `setClientQuery` / `subscribeClientQuery`. */
     private readonly clientQueryStore: ClientQueryStore;
 
@@ -2424,11 +2405,7 @@ class LunoraClient {
      * absent field so an older worker yields an empty-but-valid shape.
      */
     public async shardTraffic(table: string): Promise<ShardTrafficResult> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(SHARD_TRAFFIC_PATH, "POST", { table })) as Partial<ShardTrafficResult>;
-
-        return { failed: body.failed ?? 0, ok: body.ok ?? 0, shards: body.shards ?? [] };
+        return shardTraffic(this.adminHost, table);
     }
 
     // --- Scheduler admin ----------------------------------------------------
@@ -2441,11 +2418,7 @@ class LunoraClient {
      * must match. Powers `@lunora/studio`'s scheduled-jobs panel.
      */
     public async listScheduledJobs(): Promise<ScheduleRecord[]> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
-
-        return (body.records ?? []).map((record) => decodeRecordArgs(record));
+        return listScheduledJobs(this.adminHost);
     }
 
     /**
@@ -2458,24 +2431,12 @@ class LunoraClient {
      * Defaults any absent field so an older worker still yields a valid shape.
      */
     public async schedulerStatus(): Promise<SchedulerStatus> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(SCHEDULED_STATUS_PATH, "GET")) as Partial<SchedulerStatus>;
-
-        return {
-            backlog: body.backlog ?? 0,
-            inFlight: body.inFlight ?? 0,
-            pools: body.pools ?? [],
-        };
+        return schedulerStatus(this.adminHost);
     }
 
     /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
     public async cancelScheduledJob(id: string): Promise<{ cancelled: boolean }> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
-
-        return { cancelled: body.cancelled === true };
+        return cancelScheduledJob(this.adminHost, id);
     }
 
     /**
@@ -2487,25 +2448,7 @@ class LunoraClient {
      * {@link listScheduledJobs}. Powers `@lunora/studio`'s dead-letter panel.
      */
     public async listDeadJobs(): Promise<ScheduleRecord[]> {
-        this.assertOpen();
-
-        // Walk every page. `/dead` became a bounded, cursored read so a shard
-        // that dead-lettered thousands of jobs over a weekend cannot fail to
-        // serialize them in one response — but the studio's dead-letter panel is
-        // the ONLY view of a permanently-failed job and the only way to requeue
-        // one, so stopping at the first page would hide exactly the backlog the
-        // operator opened it for. Returning `records` alone made this silently
-        // truncate the moment the route grew its limit.
-        const records = await collectPages<ScheduleRecord>(
-            async (cursor) =>
-                (await this.adminFetch(cursor === undefined ? SCHEDULED_DEAD_PATH : `${SCHEDULED_DEAD_PATH}?cursor=${encodeURIComponent(cursor)}`, "GET")) as {
-                    cursor?: string;
-                    records?: ScheduleRecord[];
-                    truncated?: boolean;
-                },
-        );
-
-        return records.map((record) => decodeRecordArgs(record));
+        return listDeadJobs(this.adminHost);
     }
 
     /**
@@ -2514,11 +2457,7 @@ class LunoraClient {
      * matched. Hits the admin-gated `POST /_lunora/admin/scheduled/dead/retry`.
      */
     public async retryDeadJob(id: string): Promise<{ retried: boolean }> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(SCHEDULED_DEAD_RETRY_PATH, "POST", { id })) as { retried?: boolean };
-
-        return { retried: body.retried === true };
+        return retryDeadJob(this.adminHost, id);
     }
 
     /**
@@ -2527,11 +2466,7 @@ class LunoraClient {
      * admin-gated `POST /_lunora/admin/scheduled/dead/cancel`.
      */
     public async removeDeadJob(id: string): Promise<{ removed: boolean }> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(SCHEDULED_DEAD_CANCEL_PATH, "POST", { id })) as { removed?: boolean };
-
-        return { removed: body.removed === true };
+        return removeDeadJob(this.adminHost, id);
     }
 
     /**
@@ -2551,62 +2486,17 @@ class LunoraClient {
         perPage?: number;
         status?: WorkflowInstanceStatus;
     }): Promise<WorkflowInstancePage> {
-        this.assertOpen();
-
-        const query = new URLSearchParams({ name: options.name });
-
-        if (options.status !== undefined) {
-            query.set("status", options.status);
-        }
-
-        if (options.page !== undefined) {
-            query.set("page", String(options.page));
-        }
-
-        if (options.perPage !== undefined) {
-            query.set("perPage", String(options.perPage));
-        }
-
-        const body = (await this.adminFetch(`${WORKFLOWS_INSTANCES_PATH}?${query.toString()}`, "GET")) as Partial<WorkflowInstancePage>;
-
-        return {
-            configured: body.configured,
-            instances: body.instances ?? [],
-            page: body.page ?? 1,
-            perPage: body.perPage ?? options.perPage ?? 0,
-            totalCount: body.totalCount,
-        };
+        return listWorkflowInstances(this.adminHost, options);
     }
 
     /** Read one workflow instance with its step timeline (`/_lunora/admin/workflows/instance`). */
     public async getWorkflowInstance(options: { id: string; name: string }): Promise<WorkflowInstanceDetail> {
-        this.assertOpen();
-
-        const query = new URLSearchParams({ id: options.id, name: options.name });
-        const body = (await this.adminFetch(`${WORKFLOWS_INSTANCE_PATH}?${query.toString()}`, "GET")) as Partial<WorkflowInstanceDetail>;
-
-        return {
-            createdOn: body.createdOn,
-            endedOn: body.endedOn,
-            error: body.error,
-            id: body.id ?? options.id,
-            output: body.output,
-            params: body.params,
-            startedOn: body.startedOn,
-            status: body.status ?? "unknown",
-            steps: body.steps ?? [],
-        };
+        return getWorkflowInstance(this.adminHost, options);
     }
 
     /** Pause / resume / terminate a workflow instance (`/_lunora/admin/workflows/status`). Needs an Edit-scoped Cloudflare token. */
     public async setWorkflowInstanceStatus(options: { action: WorkflowInstanceAction; id: string; name: string }): Promise<{ status: WorkflowInstanceStatus }> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(WORKFLOWS_STATUS_PATH, "POST", { action: options.action, id: options.id, name: options.name })) as {
-            status?: WorkflowInstanceStatus;
-        };
-
-        return { status: body.status ?? "unknown" };
+        return setWorkflowInstanceStatus(this.adminHost, options);
     }
 
     /**
@@ -2781,11 +2671,7 @@ class LunoraClient {
      * runner auto-discovery.
      */
     public async listFunctions(): Promise<FunctionDescriptor[]> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(FUNCTIONS_PATH, "GET")) as { functions?: FunctionDescriptor[] };
-
-        return body.functions ?? [];
+        return listFunctions(this.adminHost);
     }
 
     /**
@@ -2798,11 +2684,7 @@ class LunoraClient {
      * scheduler jobs.
      */
     public async getCronJobs(): Promise<CronJobInfo[]> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(CRON_JOBS_PATH, "GET")) as { jobs?: CronJobInfo[] };
-
-        return body.jobs ?? [];
+        return getCronJobs(this.adminHost);
     }
 
     /**
@@ -2815,11 +2697,7 @@ class LunoraClient {
      * and rejects with the dispatch error otherwise.
      */
     public async runCronJob(name: string): Promise<{ name: string; ran: boolean }> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(CRON_JOBS_RUN_PATH, "POST", { name })) as { name?: string; ran?: boolean };
-
-        return { name: body.name ?? name, ran: body.ran === true };
+        return runCronJob(this.adminHost, name);
     }
 
     /**
@@ -2831,9 +2709,7 @@ class LunoraClient {
      * document (no `paths`), so callers can render a "not configured" state.
      */
     public async fetchOpenApi(): Promise<Record<string, unknown>> {
-        this.assertOpen();
-
-        return (await this.adminFetch(OPENAPI_PATH, "GET")) as Record<string, unknown>;
+        return fetchOpenApi(this.adminHost);
     }
 
     /**
@@ -2844,9 +2720,7 @@ class LunoraClient {
      * (no modules, nodes or edges). Powers `@lunora/studio`'s Architecture view.
      */
     public async fetchArchitecture(): Promise<Record<string, unknown>> {
-        this.assertOpen();
-
-        return (await this.adminFetch(ARCHITECTURE_PATH, "GET")) as Record<string, unknown>;
+        return fetchArchitecture(this.adminHost);
     }
 
     /**
@@ -2860,9 +2734,7 @@ class LunoraClient {
      * document (no `methods`), so callers can render a "not configured" state.
      */
     public async fetchOpenRpc(): Promise<Record<string, unknown>> {
-        this.assertOpen();
-
-        return (await this.adminFetch(OPENRPC_PATH, "GET")) as Record<string, unknown>;
+        return fetchOpenRpc(this.adminHost);
     }
 
     // --- Storage admin ------------------------------------------------------
@@ -2875,12 +2747,7 @@ class LunoraClient {
      * `@lunora/studio`'s file browser.
      */
     public async listStorageObjects(options: { bucket?: string; cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
-        this.assertOpen();
-
-        const path = withQuery(STORAGE_PATH, { bucket: options.bucket, cursor: options.cursor, limit: options.limit, prefix: options.prefix });
-        const body = (await this.adminFetch(path, "GET")) as { cursor?: string; objects?: StorageObject[] };
-
-        return { cursor: body.cursor, objects: body.objects ?? [] };
+        return listStorageObjects(this.adminHost, options);
     }
 
     /**
@@ -2895,12 +2762,7 @@ class LunoraClient {
      * that a mismatched/older worker never performed.
      */
     public async deleteStorageObject(key: string, options?: { bucket?: string }): Promise<{ deleted: boolean; key: string }> {
-        this.assertOpen();
-
-        const path = `${STORAGE_PATH}?key=${encodeURIComponent(key)}${bucketQuery(options?.bucket)}`;
-        const body = (await this.adminFetch(path, "DELETE")) as { deleted?: boolean; key?: string };
-
-        return { deleted: body.deleted === true, key: body.key ?? key };
+        return deleteStorageObject(this.adminHost, key, options);
     }
 
     /**
@@ -2910,11 +2772,7 @@ class LunoraClient {
      * array when the worker configures no `storageBuckets`, i.e. single-bucket).
      */
     public async listStorageBuckets(): Promise<string[]> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(STORAGE_BUCKETS_PATH, "GET")) as { buckets?: string[] };
-
-        return body.buckets ?? [];
+        return listStorageBuckets(this.adminHost);
     }
 
     /**
@@ -2930,12 +2788,7 @@ class LunoraClient {
         contentType?: string;
         key: string;
     }): Promise<{ etag?: string; key: string }> {
-        this.assertOpen();
-
-        const path = `${STORAGE_PATH}?key=${encodeURIComponent(options.key)}${bucketQuery(options.bucket)}`;
-        const body = (await this.adminFetch(path, "PUT", options.body, options.contentType)) as { etag?: string; key?: string };
-
-        return { etag: body.etag, key: body.key ?? options.key };
+        return uploadStorageObject(this.adminHost, options);
     }
 
     /**
@@ -2950,18 +2803,7 @@ class LunoraClient {
      * as future fields there).
      */
     public async signedStorageUrl(key: string, options?: { bucket?: string; expiresInSeconds?: number }): Promise<string> {
-        this.assertOpen();
-
-        const expiresInSeconds = options?.expiresInSeconds;
-        const expiryQuery = expiresInSeconds === undefined ? "" : `&expiresIn=${encodeURIComponent(expiresInSeconds.toString())}`;
-        const path = `${STORAGE_URL_PATH}?key=${encodeURIComponent(key)}${expiryQuery}${bucketQuery(options?.bucket)}`;
-        const body = (await this.adminFetch(path, "GET")) as { url?: string };
-
-        if (typeof body.url !== "string") {
-            throw new TypeError("LunoraClient: storage URL endpoint returned no `url`");
-        }
-
-        return body.url;
+        return signedStorageUrl(this.adminHost, key, options);
     }
 
     // --- Global (D1) tables admin -------------------------------------------
@@ -2973,9 +2815,7 @@ class LunoraClient {
      * browser's global mode.
      */
     public async listGlobalTables(): Promise<GlobalTableInfo[]> {
-        this.assertOpen();
-
-        return (await this.adminFetch(GLOBAL_TABLES_PATH, "GET")) as GlobalTableInfo[];
+        return listGlobalTables(this.adminHost);
     }
 
     /**
@@ -2992,23 +2832,7 @@ class LunoraClient {
      * half of that symmetry.
      */
     public async readGlobalTablePage(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
-        this.assertOpen();
-
-        const params = new URLSearchParams({ table: options.table });
-
-        if (options.limit !== undefined) {
-            params.set("limit", String(options.limit));
-        }
-
-        if (options.offset !== undefined) {
-            params.set("offset", String(options.offset));
-        }
-
-        if (options.filters !== undefined && options.filters.length > 0) {
-            params.set("filters", JSON.stringify(encodeWire(options.filters)));
-        }
-
-        return decodeWire(await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
+        return readGlobalTablePage(this.adminHost, options);
     }
 
     /**
@@ -3025,19 +2849,7 @@ class LunoraClient {
      * broken drill-down rather than a display glitch.
      */
     public async facetGlobalColumn(options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }): Promise<GlobalFacetResult> {
-        this.assertOpen();
-
-        const params = new URLSearchParams({ column: options.column, table: options.table });
-
-        if (options.limit !== undefined) {
-            params.set("limit", String(options.limit));
-        }
-
-        if (options.filters !== undefined && options.filters.length > 0) {
-            params.set("filters", JSON.stringify(encodeWire(options.filters)));
-        }
-
-        return decodeWire(await this.adminFetch(`${GLOBAL_FACET_PATH}?${params.toString()}`, "GET")) as GlobalFacetResult;
+        return facetGlobalColumn(this.adminHost, options);
     }
 
     // --- Vector indexes admin -----------------------------------------------
@@ -3052,11 +2864,7 @@ class LunoraClient {
      * from the generated `LUNORA_VECTOR_INDEXES` registry.
      */
     public async listVectorIndexes(): Promise<VectorIndexSummary[]> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(VECTOR_INDEXES_PATH, "GET")) as { indexes?: VectorIndexSummary[] };
-
-        return body.indexes ?? [];
+        return listVectorIndexes(this.adminHost);
     }
 
     /**
@@ -3067,11 +2875,7 @@ class LunoraClient {
      * wired (the index lists read-only).
      */
     public async queryVectorIndex(options: { name: string; text: string; topK?: number }): Promise<VectorQueryMatch[]> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(VECTOR_QUERY_PATH, "POST", options)) as { matches?: VectorQueryMatch[] };
-
-        return body.matches ?? [];
+        return queryVectorIndex(this.adminHost, options);
     }
 
     /**
@@ -3085,13 +2889,7 @@ class LunoraClient {
      * state rather than an error.
      */
     public async queryLogArchive(query: PipelineLogQuery = {}): Promise<PipelineLogPage> {
-        this.assertOpen();
-
-        // `PipelineLogQuery` is a named interface (no index signature), so widen it
-        // to the record shape `adminFetch` serializes.
-        const body = (await this.adminFetch(LOG_ARCHIVE_PATH, "POST", query as Record<string, unknown>)) as Partial<PipelineLogPage>;
-
-        return { nextCursor: body.nextCursor, rows: body.rows ?? [] };
+        return queryLogArchive(this.adminHost, query);
     }
 
     // --- KV namespace admin -------------------------------------------------
@@ -3103,11 +2901,7 @@ class LunoraClient {
      * studio's KV browser.
      */
     public async listKvNamespaces(): Promise<KvNamespaceSummary[]> {
-        this.assertOpen();
-
-        const body = (await this.adminFetch(KV_NAMESPACES_PATH, "GET")) as { namespaces?: KvNamespaceSummary[] };
-
-        return body.namespaces ?? [];
+        return listKvNamespaces(this.adminHost);
     }
 
     /**
@@ -3116,16 +2910,7 @@ class LunoraClient {
      * `GET /_lunora/admin/kv/keys` endpoint.
      */
     public async listKvKeys(options: { cursor?: string; limit?: number; namespace: string; prefix?: string }): Promise<KvKeyListResult> {
-        this.assertOpen();
-
-        const path = withQuery(KV_KEYS_PATH, {
-            cursor: options.cursor,
-            limit: options.limit,
-            namespace: options.namespace,
-            prefix: options.prefix,
-        });
-
-        return (await this.adminFetch(path, "GET")) as KvKeyListResult;
+        return listKvKeys(this.adminHost, options);
     }
 
     /**
@@ -3134,11 +2919,7 @@ class LunoraClient {
      * when the key is absent.
      */
     public async getKvValue(options: { key: string; namespace: string }): Promise<KvValueResult> {
-        this.assertOpen();
-
-        const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });
-
-        return (await this.adminFetch(path, "GET")) as KvValueResult;
+        return getKvValue(this.adminHost, options);
     }
 
     /**
@@ -3155,9 +2936,7 @@ class LunoraClient {
         namespace: string;
         value: string;
     }): Promise<void> {
-        this.assertOpen();
-
-        await this.adminFetch(KV_VALUE_PATH, "PUT", options);
+        return putKvValue(this.adminHost, options);
     }
 
     /**
@@ -3165,11 +2944,7 @@ class LunoraClient {
      * admin-gated `DELETE /_lunora/admin/kv/value` endpoint.
      */
     public async deleteKvKey(options: { key: string; namespace: string }): Promise<void> {
-        this.assertOpen();
-
-        const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });
-
-        await this.adminFetch(path, "DELETE");
+        return deleteKvKey(this.adminHost, options);
     }
 
     // --- Auth admin ---------------------------------------------------------
