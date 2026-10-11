@@ -112,6 +112,8 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     }
 
     let latestData: Record<string, unknown> | undefined = options.data;
+    // True only inside the subscription gate; `setData` must not heartbeat on the server.
+    let active = false;
 
     const sendHeartbeat = (): void => {
         const args: ArgsOf<H> = { roomId, sessionId } as ArgsOf<H>;
@@ -126,7 +128,10 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
     const setData = (next: Record<string, unknown> | undefined): void => {
         latestData = next;
-        sendHeartbeat();
+
+        if (active) {
+            sendHeartbeat();
+        }
     };
 
     // Skip every network side effect on the Angular server platform (SSR): Node
@@ -134,6 +139,8 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     // would open a real connection during the server render. `present` stays
     // `undefined`; the browser render re-runs this and connects.
     if (shouldOpenSubscription(fromInjectionContext)) {
+        active = true;
+
         // Register this room/session as the socket's connection context BEFORE the
         // first heartbeat so the server's presence `onDisconnect` hook can delete
         // the row instantly on socket drop.
@@ -181,6 +188,7 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
         // Teardown: clear interval, remove listener, release connection context, unsubscribe.
         destroyRef.onDestroy(() => {
+            active = false;
             clearInterval(intervalHandle);
 
             if (typeof document !== "undefined") {
