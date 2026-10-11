@@ -147,6 +147,17 @@
                     *) pnpm exec vis run build --filter "./$WORKSPACE..." ;;
                   esac
 
+            # An app's generated code (`lunora/_generated`) is gitignored and only codegen
+            # writes it, and its suites import it. The build above builds the app's
+            # dependencies, not the app, so generate it here.
+            - "name": "Generate app code"
+              "env":
+                  "WORKSPACE": "${{ matrix.workspace }}"
+              "run": |
+                  case "$WORKSPACE" in
+                    apps/*) pnpm --filter "./$WORKSPACE" run --if-present codegen ;;
+                  esac
+
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
