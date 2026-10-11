@@ -8,5 +8,28 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+    },
+    "upload_source_maps": true,
+    "exports": {
+        "PrivacyErasureWorkflow": {
+            "type": "workflow",
+            "limits": {
+                "steps": 25000,
+            },
+            "name": "privacy-erasure",
+        },
+        "PrivacyExportWorkflow": {
+            "type": "workflow",
+            "limits": {
+                "steps": 25000,
+            },
+            "name": "privacy-export",
+        },
+    },
+    "triggers": {
+        "crons": ["0 6 * * *"],
+    },
 }
