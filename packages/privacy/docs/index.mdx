@@ -61,23 +61,37 @@ export const privacyFor = definePrivacy({
 
 Call it from a mutation with that mutation's context: `await privacyFor(ctx).requestExport()`. The subject comes from the context's authenticated identity (the `identity` port), never from an argument, so a caller cannot act on another subject's data.
 
-Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically.
+Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically. Each handler binds the ports from its own context, since a workflow step has no `ctx.db`: it reaches the data through `ctx.run`.
 
 :::caution[Not yet verified]
 Codegen has been checked only with a handler that is a property of a module-level object. The handlers here sit on the per-call `privacyFor(ctx)` result, which codegen has not been checked against yet. Plan §4.2 tracks this. Do not ship the registration on the strength of this page alone.
 :::
 
 ```ts
+// lunora/privacy.ts (add next to privacyFor)
+export const privacyWorkflows = {
+    erasureHandler: async (context: WorkflowRunContext<{ requestId: string }>) => privacyFor(context).workflows.erasureHandler(context),
+    exportHandler: async (context: WorkflowRunContext<{ requestId: string }>) => privacyFor(context).workflows.exportHandler(context),
+};
+
 // lunora/workflows.ts
 import { defineWorkflow } from "@lunora/workflow";
 
-import { privacy } from "./privacy";
+import { privacyWorkflows } from "./privacy";
 
-export const privacyExport = defineWorkflow({ handler: privacy.workflows.exportHandler, limits: { steps: 25_000 }, name: "privacy-export" });
-export const privacyErasure = defineWorkflow({ handler: privacy.workflows.erasureHandler, limits: { steps: 25_000 }, name: "privacy-erasure" });
+export const privacyExport = defineWorkflow<{ requestId: string }>({
+    handler: privacyWorkflows.exportHandler,
+    limits: { steps: 25_000 },
+    name: "privacy-export",
+});
+export const privacyErasure = defineWorkflow<{ requestId: string }>({
+    handler: privacyWorkflows.erasureHandler,
+    limits: { steps: 25_000 },
+    name: "privacy-erasure",
+});
 ```
 
-Declare the functions in their own file as builder calls, so codegen registers them. Each one passes its handler from the package.
+A mutation opens the request with `privacyFor(ctx).requestExport(...)` and then starts the workflow with `ctx.workflows.get("privacyExport").create(...)`. The worked example is `examples/privacy`.
 
 ## What it does
 
