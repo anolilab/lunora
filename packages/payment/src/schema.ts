@@ -68,14 +68,14 @@ const subscriptions = defineTable({
     .index("by_reference", ["referenceId"]);
 
 const sessions = defineTable({
-    amountMinor: v.number().int(),
-    capturedMinor: v.number().int(),
+    amountMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+    capturedMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
     createdAt: v.number(),
     currency: v.string(),
     provider: v.string(),
     providerSessionId: v.string(),
     referenceId: v.string(),
-    refundedMinor: v.number().int(),
+    refundedMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
     state: v.string(),
     // The provider subscription this payment started — lends its owner to an unattributed subscription row.
     subscriptionId: v.optional(v.string()),
