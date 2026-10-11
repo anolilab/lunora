@@ -265,7 +265,7 @@ mod tests {
 
         // Nothing listens on port 1: the request fails in transport, where reqwest names the URL.
         let bucket = BucketConfig { name: "customer-bucket".into(), endpoint: Some("http://127.0.0.1:1".into()), region: None };
-        let error = delete_prefix("fleets/my-app/", &bucket, &credentials, &reqwest::Client::new()).await.unwrap_err();
+        let error = delete_prefix("fleets/my-app/", &bucket, &credentials, &crate::daemon::http::client()).await.unwrap_err();
 
         assert!(!error.message.contains("the-session-token") && !error.message.contains("test-key") && !error.message.contains("X-Amz"), "{}", error.message);
     }
