@@ -238,6 +238,9 @@ export const cancelDeletion = mutation
 /** Organizations one purge tick erases. Bounds a single mutation; a backlog drains over ticks. */
 const PURGE_BATCH = 100;
 
+/** The `@lunora/payment` tables keyed by an organization's id (`referenceId`). */
+const PAYMENT_REFERENCE_TABLES = ["customers", "paymentSessions", "subscriptions", "usageEvents"] as const;
+
 /**
  * Purge orgs whose deletion request has aged past the retention window
  * (GAPS.md D3 right-to-erasure). Erases the org's control-plane rows across
@@ -321,6 +324,10 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         await queueCertificateReleases(context, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
         await purgeScopedRows(context, orgScopedTables, { organizationId });
+        // The payment mirror is keyed by the organization id as its reference. It holds
+        // the customer's email and provider ids, so an erasure removes it with the rest.
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await purgeScopedRows(context, PAYMENT_REFERENCE_TABLES, { referenceId: organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
         await releaseIdleAliases(context, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above

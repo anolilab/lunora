@@ -46,6 +46,7 @@ const PURGED_TABLES = [
     "builds",
     "catalogInstalls",
     "cloudflareAccounts",
+    "customers",
     "dashboards",
     "deployKeys",
     "domains",
@@ -61,12 +62,15 @@ const PURGED_TABLES = [
     "notificationDeliveries",
     "observations",
     "overageDebits",
+    "paymentSessions",
     "platformUsage",
     "projects",
     "secrets",
+    "subscriptions",
     "tenantLogs",
     "uptimeChecks",
     "uptimeState",
+    "usageEvents",
 ];
 
 /** What a stubbed `fetch` is called with. */
