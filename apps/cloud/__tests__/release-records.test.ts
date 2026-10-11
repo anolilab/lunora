@@ -52,6 +52,7 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
     const ctx = {
         auth: { getIdentity: () => Promise.resolve({ subject: "usr_1" }), userId: "usr_1" },
         db: {
+            catalogInstalls: { findMany: findMany("catalogInstalls") },
             deployments: { findMany: findMany("deployments") },
             halts: { findMany: findMany("halts") },
             query: () => emptyQuery,

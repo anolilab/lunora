@@ -4,6 +4,18 @@
  * before it writes anything, and becomes `live` once its release is up. A row left
  * `installing` by a crashed install stops blocking the project after its lease.
  *
+ * The badge's two values, and what moves a row between them:
+ * - `installing`: the install holds its project's claim (`activeKey` is the project id)
+ *   and its release is not up yet. `finishInstall` ends it.
+ * - `live`: the release is up. `activeKey` is `live:` followed by the install's id, and
+ *   `deploymentId` names the deployment, which is the `deployments` row's id.
+ * - removed, not moved to another status: a `live` row is deleted when its deployment is
+ *   superseded (an activation or a rollback moves off it) or fails, because the app is no
+ *   longer serving. `lunora/deployments.ts` does this. A row never leaves `installing` for
+ *   a deployment event, so a claim is only ever ended by its own install.
+ * A rollback back onto a superseded catalog deployment finds no row, so its badge stays
+ * off until the app is installed again.
+ *
  * Composed into the schema by `lunora/schema.ts`.
  */
 import { defineTable, v } from "@lunora/server";

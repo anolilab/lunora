@@ -683,6 +683,30 @@ const projectNameOf = async (context: MutationContext, projectId: Id<"projects">
 };
 
 /**
+ * Keep a catalog install's badge in step with its deployment. A live install row names
+ * the deployment it went live as. When that deployment is superseded or fails, the
+ * install no longer serves, so its row is removed, the way `finishInstall` removes a
+ * superseded install when the next one goes live.
+ *
+ * Only `live` rows are touched. An `installing` row belongs to its install's claim, and
+ * `finishInstall` is what marks it live, so a deployment going live needs no write here.
+ * A deployment no install row names matches nothing, so a project with no catalog
+ * install is untouched.
+ */
+const settleCatalogInstall = async (context: MutationContext, deployment: Pick<DeploymentRow, "_id" | "projectId">): Promise<void> => {
+    const installs = await collectAll<{ _id: Id<"catalogInstalls">; deploymentId?: string; status: string }>((cursor) =>
+        context.db.catalogInstalls.findMany({ cursor, where: { projectId: deployment.projectId } }),
+    );
+
+    for (const install of installs) {
+        if (install.status === "live" && install.deploymentId === deployment._id) {
+            // eslint-disable-next-line no-await-in-loop -- a handful of installs per project
+            await context.db.delete(install._id);
+        }
+    }
+};
+
+/**
  * Record a health-checked deployment as its alias's live release (GAPS.md A1).
  * The Worker already runs it — this is bookkeeping, not a cutover. Marks every
  * other live deployment of the same alias + kind `superseded`: their stored
@@ -717,6 +741,8 @@ export const activate = mutation
         for (const other of others) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
+            // eslint-disable-next-line no-await-in-loop -- the same small batch
+            await settleCatalogInstall(context, other);
         }
 
         const project = (await context.db.get(deployment.projectId)) as null | { activeDeploymentId?: string; name?: string };
@@ -788,6 +814,7 @@ export const rollback = internalMutation
 
         if (replaced && replaced._id !== id) {
             await context.db.patch(replaced._id, { status: "superseded", supersededAt: now, updatedAt: now });
+            await settleCatalogInstall(context, replaced);
         }
 
         await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
@@ -992,6 +1019,10 @@ export const updateStatus = mutation
             status,
             updatedAt: now,
         });
+
+        if ((status === "superseded" || status === "failed") && existing.status !== status) {
+            await settleCatalogInstall(context, existing);
+        }
 
         // Notify the org's `deploy` rules, but only on the transition INTO failed.
         // The orchestrator re-drives this mutation as it works through the

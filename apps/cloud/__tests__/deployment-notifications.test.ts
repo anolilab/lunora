@@ -41,6 +41,7 @@ const makeCtx = (
             return Promise.resolve(`${table}_id`);
         },
         alertRules: { findMany: () => Promise.resolve({ page: [] }) },
+        catalogInstalls: { findMany: () => Promise.resolve({ page: [] }) },
         members: { findMany: (args?: { where?: Row }) => Promise.resolve(filtered(members, args)) },
         notificationChannels: { findMany: (args?: { where?: Row }) => Promise.resolve(filtered(channels, args)) },
         patch: (id: string, patch: Row) => {
