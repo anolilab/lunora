@@ -42,7 +42,7 @@ describe("replaySlotVerdict", () => {
         expect(replaySlotVerdict(undefined)).toStrictEqual({ kind: "unanswered" });
     });
 
-    it("refuses a slot carrying an error envelope, with the server's code", () => {
+    it("errors a slot carrying an error envelope, with the server's code", () => {
         expect.assertions(2);
 
         const verdict = replaySlotVerdict({ error: { code: "CONFLICT", message: "taken" } });
