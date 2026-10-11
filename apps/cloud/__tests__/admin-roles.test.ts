@@ -17,8 +17,16 @@ describe("admin-removal guard permission", () => {
     });
 
     it("follows the role map it is given rather than a built-in copy", () => {
-        const grantsDelete = { authorize: () => {return { success: true }} };
-        const refuses = { authorize: () => {return { success: false }} };
+        const grantsDelete = {
+            authorize: () => {
+                return { success: true };
+            },
+        };
+        const refuses = {
+            authorize: () => {
+                return { success: false };
+            },
+        };
         const roles = { ...ADMIN_ROLES, moderator: grantsDelete, user: refuses };
 
         expect(canDeleteUsers("moderator", roles)).toBe(true);
