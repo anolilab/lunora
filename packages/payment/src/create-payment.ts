@@ -117,10 +117,10 @@ export interface CreatePaymentOptions {
     readonly adapter: PaymentAdapter;
 
     /**
-     * Per-caller authorization for every mutation. Return `false` to reject with 403. Omit only
-     * for trusted server-internal callers (e.g. the reconciliation sweep).
+     * Per-caller authorization for every mutation. Return `true` to allow; anything else
+     * (including a throw) rejects with 403. Required — there is no default-open mode.
      */
-    readonly authorize?: AuthorizeReference;
+    readonly authorize: AuthorizeReference;
     /** Plan → features/limits map. Required for `check`; omit if you don't gate features. */
     readonly entitlements?: EntitlementsConfig;
     /** Optional telemetry sink — fired on webhook apply, failed payments, and past-due subscriptions. */
@@ -188,10 +188,6 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const { adapter, store } = options;
 
     const ensureAuthorized = async (referenceId: string): Promise<void> => {
-        if (!options.authorize) {
-            return;
-        }
-
         // `unknown`, compared to an exact `true`. The authorizer is app code and
         // untyped JavaScript reaches it, so a verdict object (`{ allowed: false }`,
         // a settled promise result, a row) would be TRUTHY and authorize a charge

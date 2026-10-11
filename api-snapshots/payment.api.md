@@ -116,7 +116,7 @@ interface CheckoutResult {
 ```ts
 interface CreatePaymentOptions {
     readonly adapter: PaymentAdapter;
-    readonly authorize?: AuthorizeReference;
+    readonly authorize: AuthorizeReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
     readonly store: PaymentStore;
