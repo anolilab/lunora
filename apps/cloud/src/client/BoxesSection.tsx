@@ -54,8 +54,11 @@ const BoxBrowser = ({ boxes, domain, onDiagnose, onRename, onRevoke, projectsByB
                                 setSelectedId(box._id);
                                 // Below `lg` the detail stacks under the list, so a pick would
                                 // otherwise change content the reader cannot see.
-                                if (globalThis.matchMedia("(max-width: 1023px)").matches) {
-                                    document.querySelector("#box-detail")?.scrollIntoView({ block: "start" });
+                                if (globalThis.matchMedia?.("(max-width: 1023px)").matches) {
+                                    // After the commit, so the scroll lands on the newly selected box.
+                                    requestAnimationFrame(() => {
+                                        document.querySelector("#box-detail")?.scrollIntoView({ block: "start" });
+                                    });
                                 }
                             }}
                             selected={box._id === selected?._id}
