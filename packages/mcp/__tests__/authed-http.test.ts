@@ -266,6 +266,21 @@ describe("createAuthedMcpFetchHandler", () => {
             expect(challenge).toHaveBeenCalledWith(["lunora:observability"]);
         });
 
+        it("does not challenge an observability call while the family is closed on the server", async () => {
+            expect.assertions(2);
+
+            const challenge = vi.fn<(scopes: string[]) => Error>((scopes) => new Error(`insufficient_scope: ${scopes.join(" ")}`));
+            const handle = createAuthedMcpFetchHandler({
+                protect: fakeProtect({ scope: "lunora:read" }),
+                server: adminServer(),
+                stepUp: { challenge, scope: "lunora:write" },
+            });
+            const response = await handle(mcpRequest(logsCall));
+
+            expect(challenge).not.toHaveBeenCalled();
+            expect(response.status).toBe(200);
+        });
+
         it("challenges a row-read call with the data-read scope, not the observability one", async () => {
             expect.assertions(2);
 

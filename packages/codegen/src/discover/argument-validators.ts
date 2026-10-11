@@ -1,5 +1,5 @@
 import type { CallExpression, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { ArgumentValidatorIR } from "../ir";
 import { procedureArgumentObjects } from "../procedure-argument-objects";
@@ -96,17 +96,21 @@ const namespaceReceiversOf = (sourceFile: SourceFile): Set<string> => {
 const destructuredFactoriesOf = (sourceFile: SourceFile, namespaces: ReadonlySet<string>): Map<string, string> => {
     const destructured = new Map<string, string>();
 
-    for (const declaration of sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
-        const pattern = declaration.getNameNode();
-        const initializer = declaration.getInitializer();
+    // Top-level declarations only, the scope `sameFileHelperBody` reads. A destructure
+    // inside one function would otherwise bind its names for every other function.
+    for (const statement of sourceFile.getVariableStatements()) {
+        for (const declaration of statement.getDeclarations()) {
+            const pattern = declaration.getNameNode();
+            const initializer = declaration.getInitializer();
 
-        if (!Node.isObjectBindingPattern(pattern) || !initializer || !namespaces.has(initializer.getText())) {
-            continue;
-        }
+            if (!Node.isObjectBindingPattern(pattern) || !initializer || !namespaces.has(initializer.getText())) {
+                continue;
+            }
 
-        for (const element of pattern.getElements()) {
-            if (!element.getDotDotDotToken()) {
-                destructured.set(element.getName(), element.getPropertyNameNode()?.getText() ?? element.getName());
+            for (const element of pattern.getElements()) {
+                if (!element.getDotDotDotToken()) {
+                    destructured.set(element.getName(), element.getPropertyNameNode()?.getText() ?? element.getName());
+                }
             }
         }
     }

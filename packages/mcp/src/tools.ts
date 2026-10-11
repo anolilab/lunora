@@ -367,7 +367,7 @@ const OBSERVABILITY_SCOPE = "lunora:observability";
  * decides, and an `unknown` bag is what keeps that comparison honest instead of
  * one the compiler (and the lint rule) believes is redundant.
  */
-type ToolGates = Record<ToolGate, unknown>;
+type ToolGates = Partial<Record<ToolGate, unknown>>;
 
 /** Fail closed: only the boolean `true` opts in, whatever a caller actually passed. */
 const isOptedIn = (value: unknown): boolean => value === true;
@@ -503,11 +503,20 @@ const callTool = async (
 };
 
 /**
- * The token scope a tool needs on the authed path, or `undefined` when no scope
- * gates it. Only the raw-row and observability families carry one; the write and
- * agent tools are challenged through `stepUp` in `./authed-http` instead.
+ * The scope a tool needs on the authed path, or `undefined` when none is needed:
+ * no scope gates it, or its family is closed under `gates`. A closed family is
+ * refused at dispatch regardless of the token, so demanding a scope for it would
+ * only send the client to re-authorize for nothing.
  */
-const scopeForTool = (name: string): string | undefined => TOOL_FAMILIES.find((family) => family.names.has(name))?.gate?.scope;
+const scopeForTool = (name: string, gates: ToolGates): string | undefined => {
+    const family = TOOL_FAMILIES.find((candidate) => candidate.names.has(name));
+
+    if (family?.gate?.scope === undefined || closedGate(family, gates) !== undefined) {
+        return undefined;
+    }
+
+    return family.gate.scope;
+};
 
 export { callTool, DATA_READ_SCOPE, OBSERVABILITY_SCOPE, READ_ONLY_TOOL_DEFINITIONS, scopeForTool, toolDefinitions, WRITE_TOOL_DEFINITIONS, WRITE_TOOL_NAMES };
 

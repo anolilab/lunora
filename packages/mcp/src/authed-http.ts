@@ -76,7 +76,6 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { McpAgentExposure } from "./agent-tools";
 import { isAgentToolName } from "./agent-tools";
 import type { McpFetchHandler } from "./serve-stateless";
 import { readScreenedBody, serveStateless } from "./serve-stateless";
@@ -201,11 +200,13 @@ const withTokenScopes = (server: LunoraMcpServerOptions, scopes: ReadonlySet<str
 
 /**
  * Every scope the messages' tool calls need: the step-up scope for a write or
- * agent tool, and the family's own scope for a raw-row or observability tool.
- * A batch is checked message by message, so a call tucked inside one is named.
+ * agent tool, and the family's own scope for a raw-row or observability tool
+ * whose family is open on `server` (the scope never opens a closed family). A
+ * batch is checked message by message, so a call tucked inside one is named.
  */
-const requiredScopes = (messages: ReadonlyArray<unknown>, agents: ReadonlyArray<McpAgentExposure>, stepUpScope: string): Set<string> => {
+const requiredScopes = (messages: ReadonlyArray<unknown>, server: LunoraMcpServerOptions, stepUpScope: string): Set<string> => {
     const required = new Set<string>();
+    const agents = server.agents ?? [];
 
     for (const message of messages) {
         const name = callToolName(message);
@@ -218,7 +219,7 @@ const requiredScopes = (messages: ReadonlyArray<unknown>, agents: ReadonlyArray<
             required.add(stepUpScope);
         }
 
-        const familyScope = scopeForTool(name);
+        const familyScope = scopeForTool(name, server);
 
         if (familyScope !== undefined) {
             required.add(familyScope);
@@ -258,10 +259,8 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
 
     return options.protect(async (request: Request, claims: McpAccessTokenClaims): Promise<Response> => {
         const scopes = mcpTokenScopes(claims);
-        const resolved = withTokenScopes(
-            typeof options.server === "function" ? await options.server(claims) : { ...options.server, client: sharedClient },
-            scopes,
-        );
+        const base = typeof options.server === "function" ? await options.server(claims) : { ...options.server, client: sharedClient };
+        const resolved = withTokenScopes(base, scopes);
         let parsedBody: unknown;
 
         if (stepUp !== undefined) {
@@ -281,7 +280,7 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
             // on that. The agent tool names come from the resolved server, since a
             // `toolName` override renames them.
             const messages: unknown[] = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
-            const missing = [...requiredScopes(messages, resolved.agents ?? [], stepUp.scope)].filter((scope) => !scopes.has(scope));
+            const missing = [...requiredScopes(messages, base, stepUp.scope)].filter((scope) => !scopes.has(scope));
 
             if (missing.length > 0) {
                 throw stepUp.challenge(missing);

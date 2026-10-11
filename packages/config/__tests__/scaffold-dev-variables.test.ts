@@ -662,6 +662,27 @@ describe("fillDevSecrets", () => {
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${"b".repeat(64)}"`);
     });
 
+    it("never replaces a peer's .dev.vars that lands after the read, on the create path", () => {
+        expect.assertions(3);
+
+        // The peer lands in the window between the read and the publish. The hook
+        // fires once, so the publish step's own check is the only one that sees it.
+        onBeforePublish = () => {
+            onBeforePublish = undefined;
+            writeFileSync(join(dir, ".dev.vars"), 'BETTER_AUTH_SECRET="peer-secret"\n', "utf8");
+        };
+
+        try {
+            const result = fillDevSecrets({ cwd: dir, randomHex: fixedHex });
+
+            expect(result.status).toBe("unchanged");
+            expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('BETTER_AUTH_SECRET="peer-secret"\n');
+            expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+        } finally {
+            onBeforePublish = undefined;
+        }
+    });
+
     it("is idempotent — a second run with everything filled changes nothing", () => {
         expect.assertions(2);
 

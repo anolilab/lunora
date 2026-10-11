@@ -139,6 +139,22 @@ const HELPER_BOUNDED_AT_SITE = `
     });
 `;
 
+/** A destructure of `any` inside one function does not bind `any` for another function. */
+const NESTED_DESTRUCTURE = `
+    import { mutation } from "@lunora/server";
+
+    const scoped = () => {
+        const { any } = v;
+
+        return any();
+    };
+
+    export const update = mutation({
+        args: { payload: any() },
+        handler: async () => null,
+    });
+`;
+
 /** A local function named `any` that is not the validator namespace. */
 const UNRELATED_ANY = `
     import { mutation } from "@lunora/server";
@@ -231,6 +247,14 @@ describe("discoverArgumentValidators", () => {
 
         expect(found).toHaveLength(1);
         expect(found[0]?.anyArgs).toStrictEqual(["payload"]);
+    });
+
+    it("does NOT let a destructure inside one function bind `any` for another function", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), NESTED_DESTRUCTURE, "utf8");
+
+        expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
     it("flags a v.any() returned by a same-file helper", () => {

@@ -404,10 +404,13 @@ second. A token without the scope does not see those tools in `tools/list`, and
 a call to one is refused. With `stepUp` set, the call is answered with
 `insufficient_scope` naming the scope, so the client can re-authorize.
 
-The scopes are a second gate, not a grant. The operator must still set
-`LUNORA_MCP_ALLOW_DATA_READS` or `LUNORA_MCP_ALLOW_OBSERVABILITY` (or the
-matching constructor option) and supply an admin token. Lunora does not issue
-these scopes. Declare them in `mcp({ scopes })` as shown above.
+The scopes are a second gate, not a grant. The operator must still enable the
+family and supply an admin token. On the stdio binary, enable it with
+`LUNORA_MCP_ALLOW_DATA_READS` or `LUNORA_MCP_ALLOW_OBSERVABILITY`. On the OAuth
+path those env vars are not read: the authed server factory's options (or the
+per-claims `server` function) set `allowDataReads: true` or
+`allowObservability: true`. Lunora does not issue these scopes. Declare them in
+`mcp({ scopes })` as shown above.
 
 ### The discovery documents
 

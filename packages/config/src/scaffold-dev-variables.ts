@@ -712,8 +712,11 @@ interface FillDevSecretsResult {
  * This fills those gaps at dev startup, so both `lunora dev` and the
  * `@lunora/vite` dev server give a working project with zero manual `openssl`.
  *
- * Never overwrites a real (non-placeholder) value. The write is atomic + owner-
- * only (temp + rename, `mode: 0o600`), matching the other `.dev.vars` writers.
+ * Never overwrites a real (non-placeholder) value. Two writers, on purpose: when
+ * the file does not exist yet, the create goes through {@link createExclusively}
+ * and loses to a peer that creates it first; when it exists, the fill rewrites
+ * it through {@link atomicWrite} (temp + rename, owner-only) with the keys it
+ * just read and planned against.
  */
 const fillDevSecrets = (deps: { cwd: string; info?: (message: string) => void; randomHex?: (bytes: number) => string }): FillDevSecretsResult => {
     const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
@@ -726,7 +729,13 @@ const fillDevSecrets = (deps: { cwd: string; info?: (message: string) => void; r
         return { addedKeys: [], filledKeys: [], status: "unchanged" };
     }
 
-    atomicWrite(devVariablesPath, plan.content, { mode: 0o600 });
+    if (exists) {
+        atomicWrite(devVariablesPath, plan.content, { mode: 0o600 });
+    } else if (!createExclusively(devVariablesPath, plan.content)) {
+        // A peer created `.dev.vars` after the read above. Leave its file alone; it
+        // fills its own keys.
+        return { addedKeys: [], filledKeys: [], status: "unchanged" };
+    }
 
     const generated = [...plan.filledKeys, ...plan.addedKeys];
 
