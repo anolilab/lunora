@@ -1,7 +1,7 @@
 /* eslint-disable no-secrets/no-secrets -- JSDoc quotes the `KEY="<placeholder>"` .dev.vars grammar, not a credential. */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -312,11 +312,11 @@ const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (genera
  *
  * `mode: 0o600` for secret-bearing files so they are owner-only, not
  * world-readable on a shared host (Node otherwise defaults to 0o666 → 0o644
- * under the usual umask); `rename` preserves the temp file's mode. `flag:
- * "wx"` makes the temp write exclusive-create for callers racing a concurrent
- * `lunora dev` / Vite dev server.
+ * under the usual umask); `rename` preserves the temp file's mode. This
+ * overwrites `path` by design; for a create that must not replace a peer's
+ * file, use {@link createExclusively}.
  */
-const atomicWrite = (path: string, content: string, options: { flag?: "wx"; mode?: number } = {}): void => {
+const atomicWrite = (path: string, content: string, options: { mode?: number } = {}): void => {
     const temporaryPath = `${path}.tmp-${String(process.pid)}`;
 
     try {
@@ -326,6 +326,37 @@ const atomicWrite = (path: string, content: string, options: { flag?: "wx"; mode
         rmSync(temporaryPath, { force: true });
 
         throw error;
+    }
+};
+
+/**
+ * Create `path` with `content` only if nothing is there. Returns `false` when
+ * a peer already created it. The content goes to a sibling temp file, which is
+ * then hard-linked to `path`: `link` fails with `EEXIST` when `path` exists, so
+ * the create is exclusive on the final path. A `rename` here would silently
+ * replace a peer's (possibly secret-bearing) file that landed after the
+ * caller's existence check. The temp file is removed on every path, and the
+ * hard link shares the temp file's inode, so `mode: 0o600` carries over.
+ */
+const createExclusively = (path: string, content: string): boolean => {
+    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+
+    try {
+        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+
+        try {
+            linkSync(temporaryPath, path);
+
+            return true;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+                return false;
+            }
+
+            throw error;
+        }
+    } finally {
+        rmSync(temporaryPath, { force: true });
     }
 };
 
@@ -476,15 +507,13 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
             return { addedKeys: [], generatedKeys: [], status: "declined" };
         }
 
-        // Re-check right before the write: another process may have created the
-        // file since the `existsSync` above. If so, bail rather than overwrite the
-        // peer's (possibly secret-bearing) file. The `wx` temp write keeps the
-        // create exclusive against a peer racing this same path.
-        if (existsSync(devVariablesPath)) {
+        // Re-check right before the write (a cheap early exit), then create
+        // exclusively: a peer can still create the file between this check and
+        // the write, and `createExclusively` refuses to replace it.
+        if (existsSync(devVariablesPath) || !createExclusively(devVariablesPath, plan.content)) {
             return { addedKeys: [], generatedKeys: [], status: "skipped-exists" };
         }
 
-        atomicWrite(devVariablesPath, plan.content, { flag: "wx", mode: 0o600 });
         deps.info(`Created ${DEV_VARS_FILE}${generatedSuffix(plan.generatedKeys)}.`);
 
         return { addedKeys: [], generatedKeys: plan.generatedKeys, status: "generated" };

@@ -1,5 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain placeholder secret-like strings */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,12 +23,27 @@ import {
  */
 let onStatSync: (() => void) | undefined;
 
+/**
+ * Fired right before the final publish step (`renameSync` or `linkSync`) runs,
+ * after the pre-write existence re-check — lets a test land a peer's file in
+ * that exact window.
+ */
+let onBeforePublish: (() => void) | undefined;
+
 // eslint-disable-next-line vitest/prefer-import-in-mock -- `vi.mock(import("node:fs"), ...)` type-checks the mock's shape too strictly against `statSync`'s (Stats | BigIntStats | undefined) overloads
 vi.mock("node:fs", async (importOriginal) => {
     const actual = await importOriginal<typeof import("node:fs")>();
 
     return {
         ...actual,
+        linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+            onBeforePublish?.();
+            actual.linkSync(...args);
+        },
+        renameSync: (...args: Parameters<typeof actual.renameSync>): void => {
+            onBeforePublish?.();
+            actual.renameSync(...args);
+        },
         statSync: (...args: Parameters<typeof actual.statSync>) => {
             onStatSync?.();
 
@@ -514,6 +529,58 @@ describe("ensureDevVariables", () => {
         expect(result.status).toBe("skipped-exists");
         // The peer's file is left untouched.
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="peer-secret"\n');
+    });
+
+    it("never overwrites a peer's .dev.vars that lands after the re-check, before the final write", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        // The peer lands in the window between the existence re-check and the
+        // final publish step — the one the temp-file `wx` flag does not cover.
+        onBeforePublish = () => {
+            writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="peer-secret"\n', "utf8");
+        };
+
+        try {
+            const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+
+            expect(result.status).toBe("skipped-exists");
+            expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="peer-secret"\n');
+            expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+        } finally {
+            onBeforePublish = undefined;
+        }
+    });
+
+    it("rethrows a non-EEXIST publish failure, leaving no temp file and no .dev.vars", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        onBeforePublish = () => {
+            throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+        };
+
+        try {
+            await expect(ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex })).rejects.toThrow(/EPERM/u);
+            expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+            expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+        } finally {
+            onBeforePublish = undefined;
+        }
+    });
+
+    it.skipIf(process.platform === "win32")("creates .dev.vars owner-only and leaves no temp file behind", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+
+        expect(result.status).toBe("generated");
+        expect(statSync(join(dir, ".dev.vars")).mode.toString(8).slice(-3)).toBe("600");
+        expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
     });
 });
 
