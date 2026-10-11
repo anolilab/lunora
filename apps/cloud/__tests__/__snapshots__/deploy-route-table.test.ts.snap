@@ -1,0 +1,420 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`deploy route table > keeps every route's method, path, auth tier, rate tier and handler 1`] = `
+[
+  {
+    "handler": "handleDeployRoute",
+    "method": "POST",
+    "path": "/v1/deploy",
+    "spec": {
+      "auth": "deployKey",
+    },
+  },
+  {
+    "handler": "handleRollbackRoute",
+    "method": "POST",
+    "path": "/v1/deployments/rollback",
+    "spec": {
+      "auth": "deployKey",
+      "mcp": {
+        "description": "Roll a project back to a retained release by re-provisioning its stored bundle (needs deploymentId + organizationId).",
+      },
+    },
+  },
+  {
+    "handler": "handleLogsIngestRoute",
+    "method": "POST",
+    "path": "/v1/logs/ingest",
+    "spec": {
+      "auth": "deployKey",
+    },
+  },
+  {
+    "handler": "handleTelemetryRoute",
+    "method": "POST",
+    "path": "/v1/telemetry",
+    "spec": {
+      "auth": "deployKey",
+      "rateTier": "telemetry",
+    },
+  },
+  {
+    "handler": "handleOtlpTracesRoute",
+    "method": "POST",
+    "path": "/v1/traces",
+    "spec": {
+      "auth": "deployKey",
+      "rateTier": "telemetry",
+    },
+  },
+  {
+    "handler": "handleOtlpLogsRoute",
+    "method": "POST",
+    "path": "/v1/logs",
+    "spec": {
+      "auth": "deployKey",
+      "rateTier": "telemetry",
+    },
+  },
+  {
+    "handler": "handleOtlpMetricsRoute",
+    "method": "POST",
+    "path": "/v1/metrics",
+    "spec": {
+      "auth": "deployKey",
+      "rateTier": "telemetry",
+    },
+  },
+  {
+    "handler": "handleUsageRoute",
+    "method": "POST",
+    "path": "/v1/usage",
+    "spec": {
+      "auth": "deployKey",
+    },
+  },
+  {
+    "handler": "handleUsageSummaryRoute",
+    "method": "POST",
+    "path": "/v1/usage/summary",
+    "spec": {
+      "auth": "deployKey",
+      "mcp": {
+        "description": "An organization's usage and estimated spend for a billing period: cost per meter, spend cap and warning threshold, level (ok/warn/breach), suspension, and the current period's projected spend (needs organizationId; optional periodStart, a UTC month start in epoch ms). Needs an organization-wide deploy key.",
+      },
+    },
+  },
+  {
+    "handler": "handleCloudflareCostsRoute",
+    "method": "POST",
+    "path": "/v1/usage/cloudflare-costs",
+    "spec": {
+      "auth": "deployKey",
+      "mcp": {
+        "description": "The real Cloudflare spend by product of a Cloudflare account the organization connected, for its most recent charge period (needs organizationId + id of the connected account; the token needs Billing Read). Needs an organization-wide deploy key.",
+      },
+    },
+  },
+  {
+    "handler": "handleAdminRoute",
+    "method": "POST",
+    "path": "/v1/admin",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleSessionRollbackRoute",
+    "method": "POST",
+    "path": "/v1/rollback",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handler",
+    "method": "POST",
+    "path": "/v1/alerts/test",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleEjectRoute",
+    "method": "POST",
+    "path": "/v1/eject",
+    "spec": {
+      "auth": "deployKey",
+    },
+  },
+  {
+    "handler": "handleBackupNowRoute",
+    "method": "POST",
+    "path": "/v1/backups",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleRestoreRoute",
+    "method": "POST",
+    "path": "/v1/backups/restore",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleDownloadRoute",
+    "method": "POST",
+    "path": "/v1/backups/download",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleDomainAddRoute",
+    "method": "POST",
+    "path": "/v1/domains",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleDomainVerifyRoute",
+    "method": "POST",
+    "path": "/v1/domains/verify",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleDomainRemoveRoute",
+    "method": "POST",
+    "path": "/v1/domains/remove",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleInviteRoute",
+    "method": "POST",
+    "path": "/v1/invitations/send",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleSecretRoute",
+    "method": "POST",
+    "path": "/v1/secrets",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleCatalogRoute",
+    "method": "GET",
+    "path": "/v1/catalog",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handler",
+    "method": "POST",
+    "path": "/v1/catalog/install",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleNotificationChannelRoute",
+    "method": "POST",
+    "path": "/v1/notification-channels",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleGitHubInstallRoute",
+    "method": "GET",
+    "path": "/v1/github/install",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleGitHubSetupRoute",
+    "method": "GET",
+    "path": "/v1/github/setup",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleBillingWebhookRoute",
+    "method": "POST",
+    "path": "/v1/billing/webhook",
+    "spec": {
+      "auth": "webhookHmac",
+    },
+  },
+  {
+    "handler": "handleWebhookRoute",
+    "method": "POST",
+    "path": "/v1/github/webhook",
+    "spec": {
+      "auth": "webhookHmac",
+    },
+  },
+  {
+    "handler": "handleLogsTailRoute",
+    "method": "POST",
+    "path": "/v1/logs/tail",
+    "spec": {
+      "auth": "tailSecret",
+    },
+  },
+  {
+    "handler": "",
+    "method": "POST",
+    "path": "/v1/mcp",
+    "spec": {
+      "auth": "deployKey",
+    },
+  },
+  {
+    "handler": "handleBoxEnrolRoute",
+    "method": "POST",
+    "path": "/v1/boxes/enrol",
+    "spec": {
+      "auth": "enrolmentToken",
+    },
+  },
+  {
+    "handler": "handleBoxConnectRoute",
+    "method": "GET",
+    "path": "/v1/boxes/connect",
+    "spec": {
+      "auth": "boxKey",
+    },
+  },
+  {
+    "handler": "handleBoxReleaseRoute",
+    "method": "GET",
+    "path": "/v1/boxes/releases/:deploymentId",
+    "spec": {
+      "auth": "boxKey",
+    },
+  },
+  {
+    "handler": "handleBoxRevokeRoute",
+    "method": "POST",
+    "path": "/v1/boxes/revoke",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleBoxDiagnoseRoute",
+    "method": "POST",
+    "path": "/v1/boxes/diagnose",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleCloudflareAccountConnectRoute",
+    "method": "POST",
+    "path": "/v1/cloudflare-accounts",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handler",
+    "method": "POST",
+    "path": "/v1/cloudflare-accounts/alert-recipients",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
+    "handler": "handleHostdManifestRoute",
+    "method": "GET",
+    "path": "/v1/hostd/releases/:releaseId/manifest",
+    "spec": {
+      "auth": "boxKey",
+    },
+  },
+  {
+    "handler": "handleTenantPlanRoute",
+    "method": "GET",
+    "path": "/v1/tenants/plan",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handlePreviewAuthRoute",
+    "method": "POST",
+    "path": "/v1/tenants/preview-auth",
+    "spec": {
+      "auth": "adminToken",
+      "rateTier": "previewAuth",
+    },
+  },
+  {
+    "handler": "handleTenantRecursionRoute",
+    "method": "POST",
+    "path": "/v1/tenants/recursion",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handleTenantCustomDomainRoute",
+    "method": "GET",
+    "path": "/v1/tenants/custom-domain",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handleCellRegisterRoute",
+    "method": "POST",
+    "path": "/v1/cells",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handleHaltRoute",
+    "method": "POST",
+    "path": "/v1/halts",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handleBuildDispatchRoute",
+    "method": "POST",
+    "path": "/v1/builds/dispatch",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handleBuildRunRoute",
+    "method": "POST",
+    "path": "/v1/builds/run",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handleHostdReleaseRoute",
+    "method": "POST",
+    "path": "/v1/hostd/releases",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handleHostdRolloutRoute",
+    "method": "POST",
+    "path": "/v1/hostd/rollout",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+  {
+    "handler": "handlePlatformMetricsRoute",
+    "method": "GET",
+    "path": "/v1/platform/metrics",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
+]
+`;

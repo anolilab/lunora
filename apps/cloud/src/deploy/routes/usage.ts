@@ -9,7 +9,9 @@
  * the bearer, never a body field, is the credential, and every row is read for
  * the key's own organization.
  */
+import { api } from "../../../lunora/_generated/api";
 import { internal } from "../../../lunora/_generated/internal";
+import type { UsageMeter as UsageKind } from "../../billing/spend";
 import { readAccountCosts } from "../../cloudflare-accounts/costs";
 import type { CloudflareAccountRow } from "../../cloudflare-accounts/store";
 import type { RouterEnv } from "./shared";
@@ -107,4 +109,43 @@ export const handleCloudflareCostsRoute = async (request: Request, environment: 
                       }),
                   },
     });
+};
+
+interface UsageBody {
+    deployKey?: string;
+    deploymentId?: string;
+    kind?: UsageKind;
+    organizationId?: string;
+    periodStart?: number;
+    quantity?: number;
+}
+
+/**
+ * `POST /v1/usage` — platform metering ingestion (§4). Deploy-key authenticated
+ * (the `usage.ingest` mutation verifies the key); the tenant data plane reports
+ * requests/CPU/storage here.
+ */
+export const handleUsageRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = requireContext(environment);
+
+    const usage = (await request.json().catch(() => null)) as UsageBody | null;
+
+    if (!usage?.deployKey || !usage.organizationId || !usage.kind || typeof usage.quantity !== "number" || typeof usage.periodStart !== "number") {
+        return jsonError(400, "deployKey, organizationId, kind, quantity and periodStart are required");
+    }
+
+    try {
+        const id = await context.runMutation<string>(api.usage.ingest, {
+            deploymentId: usage.deploymentId,
+            deployKey: usage.deployKey,
+            kind: usage.kind,
+            organizationId: usage.organizationId,
+            periodStart: usage.periodStart,
+            quantity: usage.quantity,
+        });
+
+        return Response.json({ id });
+    } catch (error) {
+        return rejected(error, "usage rejected");
+    }
 };
