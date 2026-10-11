@@ -35,6 +35,16 @@ interface CoverageProblem {
 type DataOrigin = "provided" | "observed" | "derived" | "inferred";
 ```
 
+### `ErasureSettings` (interface)
+
+```ts
+interface ErasureSettings {
+    readonly drainBudgetDays: number;
+    readonly freshAgeMs: number;
+    readonly graceDays: number;
+}
+```
+
 ### `ExportArticle` (type)
 
 ```ts
@@ -123,10 +133,38 @@ interface PrivacyPreset {
 type PrivacyTableName = "archive" | "events" | "holds" | "requests" | "tombstones";
 ```
 
+### `RequestRecord` (interface)
+
+```ts
+interface RequestRecord {
+    readonly dueAt: Date;
+    readonly erasureGraceUntil?: Date;
+    readonly extendedDueAt?: Date;
+    readonly id: string;
+    readonly reason?: string;
+    readonly receivedAt: Date;
+    readonly status: RequestStatus;
+    readonly subjectId: string;
+    readonly type: RequestType;
+}
+```
+
 ### `RequestStatus` (type)
 
 ```ts
 type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled";
+```
+
+### `RequestStore` (interface)
+
+```ts
+interface RequestStore {
+    addEvent: (requestId: string, at: Date, kind: string, detail?: string) => Promise<void>;
+    findOpen: (subjectId: string, type: RequestType) => Promise<RequestRecord | undefined>;
+    get: (id: string) => Promise<RequestRecord | undefined>;
+    insert: (record: RequestRecord) => Promise<void>;
+    update: (id: string, patch: Partial<Omit<RequestRecord, "id">>) => Promise<void>;
+}
 ```
 
 ### `RequestType` (type)
@@ -236,6 +274,15 @@ const canCancel: (type: RequestType, status: RequestStatus) => boolean;
 const canExtend: (receivedAt: Date, now: Date, alreadyExtended: boolean) => boolean;
 ```
 
+### `cancelRequest` (const)
+
+```ts
+const cancelRequest: (store: RequestStore, input: {
+    id: string;
+    now: Date;
+}) => Promise<RequestRecord>;
+```
+
 ### `checkCoverage` (const)
 
 ```ts
@@ -260,6 +307,16 @@ const effectiveDueAt: (receivedAt: Date, extended: boolean) => Date;
 const erasureGraceUntil: (receivedAt: Date, graceDays: number, drainBudgetDays: number) => Date;
 ```
 
+### `extendRequest` (const)
+
+```ts
+const extendRequest: (store: RequestStore, input: {
+    id: string;
+    now: Date;
+    reason: string;
+}) => Promise<RequestRecord>;
+```
+
 ### `extendedDueAt` (const)
 
 ```ts
@@ -276,6 +333,19 @@ const isOverdue: (receivedAt: Date, extended: boolean, status: RequestStatus, no
 
 ```ts
 const isTerminal: (status: RequestStatus) => boolean;
+```
+
+### `openRequest` (const)
+
+```ts
+const openRequest: (store: RequestStore, input: {
+    erasure?: ErasureSettings;
+    id: string;
+    now: Date;
+    sessionAgeMs?: number;
+    subjectId: string;
+    type: RequestType;
+}) => Promise<RequestRecord>;
 ```
 
 ### `privacyExtension` (const)

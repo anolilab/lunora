@@ -23,6 +23,8 @@ export {
     MIN_DRAIN_BUDGET_DAYS,
     transition,
 } from "./lifecycle";
+export type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
+export { cancelRequest, extendRequest, openRequest } from "./requests";
 export type { PrivacyPolicy, PrivacyPreset, RetainDirective, RetentionRule, RetentionStart } from "./rules";
 export { retain, retainUntil } from "./rules";
 export type { PrivacyTableName } from "./tables";
