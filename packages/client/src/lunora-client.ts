@@ -154,9 +154,17 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
-import { onBecomeLeader, onLeaderClaimAnswered, onLeaderStatus, onStopBeingLeader } from "./tab-leadership";
+import {
+    onBecomeLeader,
+    onFollowerSubscriptionData,
+    onFollowerSubscriptionError,
+    onFollowerSubscriptionSettled,
+    onLeaderClaimAnswered,
+    onLeaderStatus,
+    onStopBeingLeader,
+} from "./tab-leadership";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -3500,7 +3508,7 @@ class LunoraClient {
         // NOT guarded by `assertLeaderOwnedSurface`, unlike the other
         // socket-backed surfaces: a follower's `subscribe` is exactly how the
         // cross-tab relay works. The registration below is what puts a
-        // `SubscriptionState` in `this.subscriptions`, and `onSubscriptionData`
+        // `SubscriptionState` in `this.subscriptions`, and the follower data handler
         // drops any broadcast whose key it cannot find there — so refusing a
         // follower's `subscribe` would not merely fail that call, it would make
         // the leader's entire broadcast path dead code and break every
@@ -4232,6 +4240,14 @@ class LunoraClient {
                 this.queueResubscribe(state);
             },
             queuedShardKeys: () => this.queuedOfflineShardKeys,
+            clientIdentifier: () => this.clientId,
+            dropCacheSeed: (key) => {
+                this.dropCacheSeed(key);
+            },
+            ackAndAdvanceCursor: (state, cursor, epoch) => {
+                this.ackAndAdvanceCursor(state, cursor, epoch);
+            },
+            subscription: (key) => this.subscriptions.get(key),
         };
 
         return new TabCoordinator({
@@ -4246,107 +4262,16 @@ class LunoraClient {
                 onLeaderStatus(leadership, status, identity);
             },
             onSubscriptionData: (key, data, cursor, epoch, identity) => {
-                // Belt-and-braces identity check — see `onConnectionStatus`'s
-                // comment for the full rationale (identical here).
-                if (isForeignStamp(identity, this.identityFingerprint())) {
-                    return;
-                }
-
-                // A follower tab received the authoritative server value from
-                // the leader. Update serverBase and re-fold any local optimistic
-                // layers so the displayed value reflects both the new base and
-                // the follower's own pending writes.
-                const state = this.subscriptions.get(key);
-
-                if (!state) {
-                    return;
-                }
-
-                // The leader's frame replaces the cache seed — same bookkeeping
-                // the leader's own `handleDataMessage` does.
-                this.dropCacheSeed(key);
-
-                // `cursor` rides the broadcast only from a CLIENT-01-aware
-                // leader tab. When present, advance this follower's own resume
-                // cursor/epoch and run the SAME confirmed-layer drop + notify
-                // tail `handleDataMessage` uses on the leader — so a follower's
-                // optimistic overlay (per-call or `setQuery`) is released the
-                // moment the confirming frame arrives instead of staying masked
-                // forever (CLIENT-01). A mixed-version deploy where the leader
-                // hasn't shipped the cursor yet falls through to the historical
-                // fold-and-notify-without-drop behavior below — backward
-                // compatible with a cursor-less wire frame.
-                // The epoch rides only with a cursor. A cursor-less frame changes nothing but the
-                // value, so it never drops layers against the old cursor.
-                commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
-
-                if (cursor !== undefined) {
-                    dropConfirmedLayers(state, cursor);
-                }
-
-                refoldSubscription(state, data);
+                onFollowerSubscriptionData(leadership, key, data, cursor, epoch, identity);
             },
             onLeaderClaimAnswered: () => {
                 onLeaderClaimAnswered(leadership);
             },
             onSubscriptionError: (key, error, identity) => {
-                // Belt-and-braces identity check — see `onConnectionStatus`'s
-                // comment for the full rationale (identical here). This was the
-                // one of the four callbacks without it, which only went unnoticed
-                // because nothing broadcast to it.
-                if (isForeignStamp(identity, this.identityFingerprint())) {
-                    return;
-                }
-
-                const state = this.subscriptions.get(key);
-
-                if (state) {
-                    fanSubscriptionError(state.errorCallbacks, error);
-                }
+                onFollowerSubscriptionError(leadership, key, error, identity);
             },
             onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity) => {
-                // Belt-and-braces identity check — see `onConnectionStatus`'s
-                // comment for the full rationale (identical here).
-                if (isForeignStamp(identity, this.identityFingerprint())) {
-                    return;
-                }
-
-                // The leader's `settled` checkpoint advanced with no value
-                // change — reuse the exact same tail the leader itself runs
-                // (ack + advance cursor/epoch + drop confirmed layers +
-                // notify) so a follower's `setQuery`/per-call overlay a
-                // byte-identical write just confirmed gets released here too.
-                const state = this.subscriptions.get(key);
-
-                if (state) {
-                    this.ackAndAdvanceCursor(state, cursor, epoch);
-
-                    // The echoed `lastMutationId` is the LEADER's own
-                    // per-client watermark — scoped server-side to ITS
-                    // announced `clientId` — so it only belongs to this
-                    // follower when the two clientIds match (clientIds CAN
-                    // legitimately be shared across tabs, e.g. a `@lunora/db`
-                    // app persisting one stable id alongside its outbox; see
-                    // `this.clientId`'s docblock). An absent `clientId`
-                    // (mixed-version leader) also skips this half — the
-                    // follower's own RPC-ack watermark path and the
-                    // `CheckpointRegistry` bounded fallback still resolve it.
-                    // `Math.max` guards monotonicity: this must never move
-                    // `state.lastMutationId` backwards.
-                    if (lastMutationId !== undefined && clientId === this.clientId) {
-                        advanceWatermark(state, lastMutationId);
-                    }
-
-                    // Fan out to every registered checkpoint subscriber, same
-                    // as the leader's own `handleSettledMessage` tail — a
-                    // `@lunora/db` `onCheckpoint` gate on a follower tab must
-                    // advance too, or it hangs on a confirmed write the leader
-                    // already acknowledged. The checkpoint (cursor) half
-                    // always fires; `state.lastMutationId` is whatever it was
-                    // above — unchanged (a no-op re-resolve) when the frame
-                    // didn't own this follower's watermark.
-                    fanCheckpoints(state);
-                }
+                onFollowerSubscriptionSettled(leadership, key, cursor, epoch, lastMutationId, clientId, identity);
             },
         });
     }
@@ -6694,7 +6619,7 @@ class LunoraClient {
             fanSubscriptionError(state.errorCallbacks, subscriptionError);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
-            // with no caller, so the `onSubscriptionError` handler wired to it
+            // with no caller, so the follower error handler wired to it
             // was unreachable: a `subscribe(..., { onError })` on a follower
             // never fired for a server-side rejection (an RLS denial, a failed
             // admin gate) and the query just sat empty. Guarded on leadership
@@ -6935,7 +6860,7 @@ class LunoraClient {
         // Cross-tab: propagate the checkpoint advance to follower tabs too, or a
         // `setQuery`/per-call optimistic overlay this byte-identical write just
         // confirmed would stay masked on a follower until the next VISIBLE data
-        // frame (see `onSubscriptionSettled` in the constructor).
+        // frame (see `onFollowerSubscriptionSettled` in `tab-leadership.ts`).
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.keyOf(state);
 

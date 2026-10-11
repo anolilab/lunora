@@ -1,18 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ConnectionStatus } from "../src/connection-state";
-import type { SubscriptionState } from "../src/subscription";
+import type { SubscriptionCallback, SubscriptionState, SyncWatermark } from "../src/subscription";
 import type { LeaderMirror, TabLeadershipHost } from "../src/tab-leadership";
-import { onBecomeLeader, onLeaderClaimAnswered, onLeaderStatus, onStopBeingLeader } from "../src/tab-leadership";
+import {
+    onBecomeLeader,
+    onFollowerSubscriptionData,
+    onFollowerSubscriptionError,
+    onFollowerSubscriptionSettled,
+    onLeaderClaimAnswered,
+    onLeaderStatus,
+    onStopBeingLeader,
+} from "../src/tab-leadership";
 
 /** A host whose every operation is a recorded fake, with a leader mirror the test can read. */
 const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<LeaderMirror> = {}) => {
     const leader: LeaderMirror = { status: undefined, wasEverConnected: false, ...mirror };
     const host: TabLeadershipHost = {
+        ackAndAdvanceCursor: vi.fn<(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void>(),
         activeSubscriptions: vi.fn<() => SubscriptionState[]>(() => []),
         broadcastStatus: vi.fn<(status: ConnectionStatus, identity: string | null) => void>(),
+        clientIdentifier: vi.fn<() => string>(() => "client-a"),
         closeConnections: vi.fn<() => void>(),
         computeStatus: vi.fn<() => ConnectionStatus>(() => "connected"),
+        dropCacheSeed: vi.fn<(key: string) => void>(),
         emitConnectionStatus: vi.fn<() => void>(),
         ensureSocket: vi.fn<(shardKey: string | undefined) => void>(),
         flushOfflineQueues: vi.fn<() => void>(),
@@ -21,6 +32,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
         leader,
         queueResubscribe: vi.fn<(state: SubscriptionState) => void>(),
         queuedShardKeys: vi.fn<() => Iterable<string | undefined>>(() => []),
+        subscription: vi.fn<(key: string) => SubscriptionState | undefined>(() => undefined),
         ...overrides,
     };
 
@@ -28,6 +40,25 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
 };
 
 const subscription = (id: string, shardKey: string | undefined): SubscriptionState => ({ id, shardKey }) as unknown as SubscriptionState;
+
+/** A subscription in its just-opened state, with every field set so no cast is needed. */
+const liveSubscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {
+    return {
+        acked: false,
+        args: {},
+        argsKey: "{}",
+        callbacks: new Set<SubscriptionCallback>(),
+        checkpointCallbacks: new Set<(watermark: SyncWatermark) => void>(),
+        errorCallbacks: new Set(),
+        fn: { __lunoraRef: "todos:list" },
+        id: "s1",
+        lastValue: undefined,
+        optimisticLayers: [],
+        serverBase: undefined,
+        wireArgs: {},
+        ...overrides,
+    };
+};
 
 describe("onBecomeLeader", () => {
     it("reopens a socket and queues a resubscribe for every subscription, then broadcasts once", () => {
@@ -139,5 +170,154 @@ describe("onLeaderClaimAnswered", () => {
 
         expect(leading.host.broadcastStatus).toHaveBeenCalledWith("connected", "subj:a");
         expect(following.host.broadcastStatus).not.toHaveBeenCalled();
+    });
+});
+
+describe("onFollowerSubscriptionData", () => {
+    it("commits the leader's value, position and cache drop, then re-folds it to subscribers", () => {
+        expect.assertions(4);
+
+        const seen: unknown[] = [];
+        const state = liveSubscription({ callbacks: new Set([(value: unknown) => seen.push(value)]), serverCursor: 1, serverEpoch: "e0" });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a");
+
+        expect(host.dropCacheSeed).toHaveBeenCalledWith("s1");
+        expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        expect(state.serverCursor).toBe(5);
+        expect(seen).toStrictEqual([[{ id: "a" }]]);
+    });
+
+    it("releases an optimistic layer the frame's cursor confirms, and shows the base value", () => {
+        expect.assertions(2);
+
+        const seen: unknown[] = [];
+        const confirmed = { commitCursor: 4, id: Symbol("write"), transform: () => "optimistic" };
+        const state = liveSubscription({
+            callbacks: new Set([(value: unknown) => seen.push(value)]),
+            optimisticLayers: [confirmed],
+            serverCursor: 1,
+        });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", "server", 5, "e1", "subj:a");
+
+        expect(state.optimisticLayers).toStrictEqual([]);
+        expect(seen).toStrictEqual(["server"]);
+    });
+
+    it("keeps the cursor and epoch when the frame carries no cursor", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ serverCursor: 1, serverEpoch: "e0" });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", "value", undefined, "e9", "subj:a");
+
+        expect(state.serverCursor).toBe(1);
+        expect(state.serverEpoch).toBe("e0");
+    });
+
+    it("drops a frame stamped for another identity, changing nothing", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ serverBase: "before" });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", "after", 5, "e1", "subj:b");
+
+        expect(state.serverBase).toBe("before");
+        expect(host.dropCacheSeed).not.toHaveBeenCalled();
+    });
+
+    it("does nothing for a key this tab does not hold", () => {
+        expect.assertions(1);
+
+        const { host } = fakeHost();
+
+        onFollowerSubscriptionData(host, "missing", "value", 5, "e1", "subj:a");
+
+        expect(host.dropCacheSeed).not.toHaveBeenCalled();
+    });
+});
+
+describe("onFollowerSubscriptionError", () => {
+    it("fans the leader's error to this tab's subscribers", () => {
+        expect.assertions(1);
+
+        const seen: unknown[] = [];
+        const state = liveSubscription({ errorCallbacks: new Set([(error: unknown) => seen.push(error)]) });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a");
+
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "no" }]);
+    });
+
+    it("drops an error stamped for another identity", () => {
+        expect.assertions(1);
+
+        const seen: unknown[] = [];
+        const state = liveSubscription({ errorCallbacks: new Set([(error: unknown) => seen.push(error)]) });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:b");
+
+        expect(seen).toStrictEqual([]);
+    });
+});
+
+describe("onFollowerSubscriptionSettled", () => {
+    it("advances the resume position and fans the checkpoint out to this tab", () => {
+        expect.assertions(2);
+
+        const seen: SyncWatermark[] = [];
+        const state = liveSubscription({ checkpointCallbacks: new Set([(watermark: SyncWatermark) => seen.push(watermark)]), serverCursor: 11 });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionSettled(host, "s1", 12, "e1", undefined, undefined, "subj:a");
+
+        expect(host.ackAndAdvanceCursor).toHaveBeenCalledWith(state, 12, "e1");
+        expect(seen).toHaveLength(1);
+    });
+
+    it("advances this tab's watermark only when the echoed client id is its own", () => {
+        expect.assertions(2);
+
+        const own = liveSubscription({ lastMutationId: 3 });
+        const ownHost = fakeHost({ subscription: () => own });
+
+        onFollowerSubscriptionSettled(ownHost.host, "s1", 12, "e1", 7, "client-a", "subj:a");
+
+        const other = liveSubscription({ lastMutationId: 3 });
+        const otherHost = fakeHost({ subscription: () => other });
+
+        onFollowerSubscriptionSettled(otherHost.host, "s1", 12, "e1", 7, "client-b", "subj:a");
+
+        expect(own.lastMutationId).toBe(7);
+        expect(other.lastMutationId).toBe(3);
+    });
+
+    it("leaves the watermark alone when the frame carries no client id, as a mixed-version leader sends", () => {
+        expect.assertions(1);
+
+        const state = liveSubscription({ lastMutationId: 3 });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionSettled(host, "s1", 12, "e1", 7, undefined, "subj:a");
+
+        expect(state.lastMutationId).toBe(3);
+    });
+
+    it("drops a settled frame stamped for another identity", () => {
+        expect.assertions(1);
+
+        const state = liveSubscription();
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionSettled(host, "s1", 12, "e1", 7, "client-a", "subj:b");
+
+        expect(host.ackAndAdvanceCursor).not.toHaveBeenCalled();
     });
 });

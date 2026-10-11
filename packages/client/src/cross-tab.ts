@@ -75,7 +75,7 @@ interface TabCoordinatorOptions {
      * its own confirmed optimistic layers instead of just displaying the raw
      * value; both are absent on a mixed-version leader that hasn't shipped the
      * cursor yet (the follower falls back to its historical behavior — see
-     * `lunora-client.ts`'s `onSubscriptionData` wiring).
+     * the follower data handler in `tab-leadership.ts`).
      *
      * `identity` is the leader's `identityFingerprint()` (see
      * `onConnectionStatus`'s docblock for the full rationale and the

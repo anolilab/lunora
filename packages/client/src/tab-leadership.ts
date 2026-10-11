@@ -1,6 +1,8 @@
 import type { ConnectionStatus } from "./connection-state";
-import type { SubscriptionState } from "./subscription";
-import { isForeignStamp, isLiveTransition } from "./subscription-frames";
+import { dropConfirmedLayers, refoldSubscription } from "./optimistic-layers";
+import type { SubscriptionError, SubscriptionState } from "./subscription";
+import { fanSubscriptionError } from "./subscription";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
 
 /**
  * The leader's last-reported status, as a follower mirrors it. The status is `undefined`
@@ -23,26 +25,38 @@ export interface LeaderMirror {
  * as a call into its own state, and the hooks own no state beyond the `leader` mirror.
  */
 export interface TabLeadershipHost {
+    /** Mark `state` acked and advance its resume position when the frame carries a newer one. */
+    ackAndAdvanceCursor: (state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void;
+
     /** Every subscription, snapshotted, so a resubscribe cannot change the set it walks. */
     activeSubscriptions: () => SubscriptionState[];
 
     broadcastStatus: (status: ConnectionStatus, identity: string | null) => void;
 
+    /** This client's id, which a `settled` frame echoes so only its own watermark is advanced. */
+    clientIdentifier: () => string;
+
     /** Tear down and forget every shard connection this tab holds. */
     closeConnections: () => void;
-
     computeStatus: () => ConnectionStatus;
+
+    /** Forget the cached seed for `key`, since the frame about to land replaces it. */
+    dropCacheSeed: (key: string) => void;
+
     emitConnectionStatus: () => void;
-
     ensureSocket: (shardKey: string | undefined) => void;
-
     flushOfflineQueues: () => void;
     identityFingerprint: () => string | null;
     isLeader: () => boolean;
     readonly leader: LeaderMirror;
+
     /** Shards with a queued offline write, so their sockets open even with no subscription. */
     queuedShardKeys: () => Iterable<string | undefined>;
+
     queueResubscribe: (state: SubscriptionState) => void;
+
+    /** The subscription a frame addresses, or `undefined` when this tab holds none under `key`. */
+    subscription: (key: string) => SubscriptionState | undefined;
 }
 
 /**
@@ -108,4 +122,94 @@ export const onLeaderClaimAnswered = (host: TabLeadershipHost): void => {
     if (host.isLeader()) {
         host.broadcastStatus(host.computeStatus(), host.identityFingerprint());
     }
+};
+
+/**
+ * The leader broadcast a value for `key`. The follower takes it as its own authoritative
+ * base, releases any optimistic layer that the cursor now confirms, and re-folds what
+ * remains. It does not persist the value, advance a watermark, or fan out checkpoints:
+ * those belong to the leader, which owns the socket and the cache.
+ *
+ * The epoch rides only with a cursor. A cursor-less frame changes nothing but the value,
+ * so it never drops layers against the old cursor.
+ */
+export const onFollowerSubscriptionData = (
+    host: TabLeadershipHost,
+    key: string,
+    data: unknown,
+    cursor: number | undefined,
+    epoch: string | undefined,
+    identity: string | null | undefined,
+): void => {
+    if (isForeignStamp(identity, host.identityFingerprint())) {
+        return;
+    }
+
+    const state = host.subscription(key);
+
+    if (!state) {
+        return;
+    }
+
+    host.dropCacheSeed(key);
+    commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
+
+    if (cursor !== undefined) {
+        dropConfirmedLayers(state, cursor);
+    }
+
+    refoldSubscription(state, data);
+};
+
+/** The leader reported an error for `key`. Fan it to this tab's subscribers. */
+export const onFollowerSubscriptionError = (host: TabLeadershipHost, key: string, error: SubscriptionError, identity: string | null | undefined): void => {
+    if (isForeignStamp(identity, host.identityFingerprint())) {
+        return;
+    }
+
+    const state = host.subscription(key);
+
+    if (state) {
+        fanSubscriptionError(state.errorCallbacks, error);
+    }
+};
+
+/**
+ * The leader's `settled` checkpoint advanced with no value change. Advance this tab's
+ * resume position and release any layer a byte-identical write just confirmed, then fan
+ * the checkpoint out so a `@lunora/db` gate on this tab does not hang.
+ *
+ * The echoed `lastMutationId` is the leader's own per-client watermark. It belongs to this
+ * tab only when the two client ids match, because clientIds can be shared across tabs.
+ * An absent `clientId` (a mixed-version leader) skips this half on purpose: the follower's
+ * own RPC-ack watermark path and the `CheckpointRegistry` bounded fallback still resolve it.
+ * Do not "fix" that skip. `Math.max` in `advanceWatermark` keeps the watermark from moving
+ * backwards.
+ */
+export const onFollowerSubscriptionSettled = (
+    host: TabLeadershipHost,
+    key: string,
+    cursor: number | undefined,
+    epoch: string | undefined,
+    lastMutationId: number | undefined,
+    clientId: string | undefined,
+    identity: string | null | undefined,
+): void => {
+    if (isForeignStamp(identity, host.identityFingerprint())) {
+        return;
+    }
+
+    const state = host.subscription(key);
+
+    if (!state) {
+        return;
+    }
+
+    host.ackAndAdvanceCursor(state, cursor, epoch);
+
+    if (lastMutationId !== undefined && clientId === host.clientIdentifier()) {
+        advanceWatermark(state, lastMutationId);
+    }
+
+    fanCheckpoints(state);
 };
