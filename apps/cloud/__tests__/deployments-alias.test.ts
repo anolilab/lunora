@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server";
-import { claimAlias } from "../lunora/deployments";
+import { claimAlias } from "../lunora/deployment-aliases";
 
 type AliasRow = { _id: string; alias: string; organizationId: string; projectId: string }; // gitleaks:allow -- a type alias; the scanner matches `projectId` as a Cypress id
 

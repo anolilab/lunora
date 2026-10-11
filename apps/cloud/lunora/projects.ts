@@ -13,7 +13,7 @@ import { assertPlacementRef, hostsOf, isCellPlaced, rowReaderOf } from "../src/t
 import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
-import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./deployments";
+import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./deployment-aliases";
 import { queueCertificateReleases } from "./domains";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";

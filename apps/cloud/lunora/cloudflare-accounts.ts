@@ -7,7 +7,7 @@ import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeBillingKey } from "./authz";
-import { pendingTeardown } from "./deployments";
+import { pendingTeardown } from "./deployment-aliases";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";

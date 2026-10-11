@@ -105,7 +105,7 @@ describe(renderDeployAlert, () => {
  * exercise, and the property is one line that is easy to lose in an edit.
  */
 describe("updateStatus fires only on the transition into failed", () => {
-    const source = readFileSync(fileURLToPath(new URL("../lunora/deployments.ts", import.meta.url)), "utf8");
+    const source = readFileSync(fileURLToPath(new URL("../lunora/deployment-lifecycle.ts", import.meta.url)), "utf8");
 
     it("guards the fire on the previous status", () => {
         expect(source).toContain('if (status === "failed" && existing.status !== "failed")');

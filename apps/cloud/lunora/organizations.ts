@@ -5,7 +5,7 @@ import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
-import { releaseIdleAliases } from "./deployments";
+import { releaseIdleAliases } from "./deployment-aliases";
 import { queueCertificateReleases } from "./domains";
 import { releaseEdgeRules } from "./edge";
 import { orgPlan } from "./entitlements";

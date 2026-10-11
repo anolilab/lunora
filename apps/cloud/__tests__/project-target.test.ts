@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { pendingTeardown } from "../lunora/deployments";
+import { pendingTeardown } from "../lunora/deployment-aliases";
 import { setTarget } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
