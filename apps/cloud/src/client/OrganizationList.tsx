@@ -2,7 +2,7 @@ import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { Preloaded, ReturnOf } from "@lunora/client";
 import { useMutation, usePreloadedQuery } from "@lunora/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ import { Field, FormError, StatusBadge } from "./section-ui";
 import type { CellId, OrgId } from "./types";
 
 interface OrganizationListProps {
+    /** Account-level actions, under the create panel — this is the one signed-in screen outside any org. */
+    account?: ReactNode;
     onSelect: (id: OrgId) => void;
     /** Cells, server-rendered by the `/` route loader. */
     preloadedCells: Preloaded<ReturnOf<typeof api.cells.list>>;
@@ -65,7 +67,7 @@ const slugify = (value: string): string => {
  * SSR-preloaded, so `usePreloadedQuery` never hands back `undefined` and there is
  * no loading state to skeleton over — only "empty" and "populated".
  */
-export const OrganizationList = ({ onSelect, preloadedCells, preloadedOrganizations }: OrganizationListProps): ReactElement => {
+export const OrganizationList = ({ account, onSelect, preloadedCells, preloadedOrganizations }: OrganizationListProps): ReactElement => {
     // Seeded from the SSR render, then live over the WebSocket from mount on.
     const organizations = usePreloadedQuery(preloadedOrganizations) ?? [];
     const cells = usePreloadedQuery(preloadedCells);
@@ -135,7 +137,7 @@ export const OrganizationList = ({ onSelect, preloadedCells, preloadedOrganizati
                     </div>
                 </main>
 
-                <aside className="lg:sticky lg:top-24 lg:self-start">
+                <aside className="grid gap-12 lg:sticky lg:top-24 lg:self-start">
                     <div className="border border-border p-6">
                         <h2 className={cn(COLUMN_LABEL, "text-muted-foreground")}>New organization</h2>
                         <p className="mt-3 text-sm text-muted-foreground">New organizations start on the free plan — upgrade later from the Billing tab.</p>
@@ -218,6 +220,7 @@ export const OrganizationList = ({ onSelect, preloadedCells, preloadedOrganizati
                             <FormError message={error} />
                         </form>
                     </div>
+                    {account}
                 </aside>
             </div>
         </div>
