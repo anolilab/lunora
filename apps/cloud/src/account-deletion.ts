@@ -36,8 +36,8 @@ const ERASE_URL = "https://control-plane.internal/v1/account/erase";
 /**
  * Call `POST /v1/account/erase` in-process; `null` when the admin token it is
  * gated on is not configured, so the caller can refuse before anything runs.
- * The operator's `removeUser` (`operator-removal.ts`) calls it with
- * `operator: true`, which is refused with a 409 for a sole owner.
+ * The operator's `removeUser` (`operator-removal.ts`) calls it with `check: true`
+ * before the auth cascade, and with the bare form after it.
  */
 export const postAccountErase = async (env: AuthEnv, body: { check?: true; operator?: true; userId: string }): Promise<null | Response> => {
     const token = env.LUNORA_ADMIN_TOKEN;

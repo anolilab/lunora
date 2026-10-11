@@ -96,12 +96,11 @@ export const handleAccountExportRoute = async (request: Request, environment: Ro
  * - `{ userId }` from the self-service after-delete hook: removes the
  *   memberships and anonymises the audit actor (`account.eraseUser`), and
  *   answers the organizations that were left without an owner.
- * - `{ userId, operator: true }` from the operator's `removeUser` and from the
- *   orphaned-membership sweep: the same, except that it is refused while the
- *   user is the only owner of an organization. The refusal is a 409 naming the
- *   organizations, as the check's is, and nothing is written; the operator
- *   promotes another member (`POST /v1/organizations/owners`) or deletes the
- *   organization, then removes the user again.
+ * - `{ userId, operator: true }` from the orphaned-membership sweep: the same,
+ *   except that it is refused while the user is the only owner of an
+ *   organization. The refusal is a 409 naming the organizations, as the check's
+ *   is, and nothing is written. The operator's `removeUser` checks with
+ *   `{ userId, check: true }` before the auth cascade instead.
  */
 export const handleAccountEraseRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);

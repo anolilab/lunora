@@ -337,17 +337,44 @@ describe("operator removeUser", () => {
         workerFetch.mockReset();
     });
 
-    it("erases the control plane's data before the auth cascade", async () => {
+    it("checks, removes the user, then cleans up the control plane's data", async () => {
         workerFetch.mockImplementation(async (request) => {
-            calls.push(`erase:${await request.text()}`);
+            calls.push(`${request.url.endsWith("/v1/account/erase") ? "erase" : "other"}:${await request.text()}`);
 
-            return Response.json({ erased: true, ownerless: [] });
+            return Response.json({ erasable: true, ownerless: [] });
         });
 
         await withControlPlaneErasure(adminDouble(), { DB: {}, LUNORA_ADMIN_TOKEN: "admin" }).removeUser({ userId: "usr_me" });
 
-        expect(calls).toStrictEqual([`erase:${JSON.stringify({ operator: true, userId: "usr_me" })}`, "auth:usr_me"]);
+        expect(calls).toStrictEqual([
+            `erase:${JSON.stringify({ check: true, userId: "usr_me" })}`,
+            "auth:usr_me",
+            `erase:${JSON.stringify({ userId: "usr_me" })}`,
+        ]);
         expect(workerFetch.mock.calls[0]?.[0].headers.get("authorization")).toBe("Bearer admin");
+    });
+
+    it("keeps the removal when the cleanup after it fails, and logs it for the sweep", async () => {
+        const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        workerFetch.mockImplementation(async (request) => {
+            const body = await request.text();
+
+            calls.push(`erase:${body}`);
+
+            return body.includes("check") ? Response.json({ erasable: true }) : Response.json({ error: "boom" }, { status: 500 });
+        });
+
+        await expect(withControlPlaneErasure(adminDouble(), { DB: {}, LUNORA_ADMIN_TOKEN: "admin" }).removeUser({ userId: "usr_me" })).resolves.toBeUndefined();
+
+        expect(calls).toStrictEqual([
+            `erase:${JSON.stringify({ check: true, userId: "usr_me" })}`,
+            "auth:usr_me",
+            `erase:${JSON.stringify({ userId: "usr_me" })}`,
+        ]);
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining("orphaned-membership sweep"), 500);
+
+        logged.mockRestore();
     });
 
     it("does not remove the user when the erasure fails", async () => {
