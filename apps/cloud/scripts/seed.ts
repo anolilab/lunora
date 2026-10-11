@@ -374,7 +374,6 @@ const ensureProject = async (cookie: string, organizationId: string): Promise<st
  */
 const driveToLive = async (cookie: string, id: string): Promise<void> => {
     await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "provisioning" });
-    await rpc<unknown>(cookie, "deployments:updateStatus", { id, status: "building" });
     await rpc<unknown>(cookie, "deployments:updateStatus", { bundleHash: hex(16), id, status: "verifying", url: `https://${DOMAIN_HOSTNAME}` });
     // `live` BEFORE `activate`, which is the order the real deploy path uses
     // (`src/deploy/handler.ts` patches the status from the orchestrator's `live`
@@ -642,7 +641,8 @@ const seedTelemetry = async (cookie: string, organizationId: string, deploymentI
  * `LUNORA_ADMIN_TOKEN` as a bearer to whatever host `LUNORA_SEED_URL` names,
  * force-drives the newest deployment of the target project to `live` (rewriting
  * `activeDeploymentId`, so a project's stable URL can end up pointing at a
- * torn-down script — `updateStatus` enforces no transitions), and revokes any
+ * torn-down script; `updateStatus` now refuses a move out of `destroyed`, so the
+ * drive stops there rather than resurrecting the row), and revokes any
  * deploy key called `dev-seed`. A typo'd or copy-pasted URL should not be able to
  * do any of that, so the default is refusal and the override has to be deliberate.
  */

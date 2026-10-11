@@ -246,6 +246,37 @@ const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "li
     };
 
 /**
+ * The status moves the system performs, keyed by the status a deployment is in.
+ * `updateStatus` refuses any move not listed here. Every entry is a write some
+ * writer really makes:
+ *
+ * - `queued → provisioning → verifying → live`, the orchestrator's progress
+ *   events forwarded by `src/deploy/release-core.ts`. A release without a health
+ *   check goes `provisioning → live`.
+ * - `→ failed` from any in-flight state. `live → failed` is an activation that
+ *   fails after the live write (`fail("activate")` in `release-core.ts`).
+ * - `live → superseded` and `superseded → live`: `activate`, `rollback`, and a
+ *   halt's resume (`halt-converge.ts`).
+ * - `→ destroyed`: an expired preview, a deleted project or organization, and
+ *   the superseded prune (`pruneSuperseded`).
+ * - Same-status writes: the orchestrator re-drives `updateStatus`, and a retry
+ *   can write a status the row already holds.
+ *
+ * `building` has no writer. It stays in the status union for the client's phase
+ * view, so no move into or out of it is listed.
+ */
+export const ALLOWED_TRANSITIONS: Readonly<Record<DeploymentStatus, ReadonlyArray<DeploymentStatus>>> = {
+    building: [],
+    destroyed: [],
+    failed: ["failed", "destroyed"],
+    live: ["live", "superseded", "failed", "destroyed"],
+    provisioning: ["provisioning", "verifying", "live", "failed", "destroyed"],
+    queued: ["provisioning", "failed", "destroyed"],
+    superseded: ["live", "destroyed"],
+    verifying: ["verifying", "live", "failed", "destroyed"],
+};
+
+/**
  * Resolve a deployment's tenant URL + *sealed* admin token for the hosted-studio
  * admin proxy (§3). Asserts the caller is a member of the deployment's org.
  * Returns the stored admin-token fields (ciphertext + IV, or the plaintext dev
@@ -962,8 +993,42 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
 });
 
 /**
- * Advance a deployment's lifecycle (queued → provisioning → building → live, or
- * → failed). Driven by the deploy orchestrator as it works through the
+ * The side effects of a deployment entering `status`, run after `updateStatus`
+ * has written it. The phase timestamp is stamped in that same write, from
+ * `PHASE_TIMESTAMP`. The catalog badge ends, and a failure is announced, only on a
+ * crossing into the status, never on a same-status re-write.
+ */
+const onEnter = async (context: MutationContext, id: Id<"deployments">, existing: DeploymentRow, status: DeploymentStatus): Promise<void> => {
+    if ((status === "superseded" || status === "failed") && existing.status !== status) {
+        await endInstallBadge(installBadgeOf(context), existing);
+    }
+
+    // Notify the org's `deploy` rules, but only on the transition INTO failed.
+    // The orchestrator re-drives this mutation as it works through the
+    // provisioner's events, and a deployment that is already failed can be
+    // written again by a retry — firing on the state rather than the crossing
+    // would page somebody once per attempt for one broken release.
+    if (status === "failed" && existing.status !== "failed") {
+        const project = (await context.db.get(existing.projectId)) as null | { name: string };
+
+        await fireDeployAlerts(context, existing.organizationId, `deployment:${id}`, {
+            detail: `The deployment did not reach a live state. Its last recorded phase was "${existing.status}".`,
+            kind: "deployment",
+            project: project?.name ?? "project",
+            reference: existing.scriptName,
+        });
+
+        await enqueueNotification(context, existing.organizationId, "deployment.failed", {
+            detail: "Open the deployment in the dashboard for its log.",
+            project: await projectNameOf(context, existing.projectId),
+        });
+    }
+};
+
+/**
+ * Advance a deployment's lifecycle (queued → provisioning → verifying → live, or
+ * → failed). A move the transition table ({@link ALLOWED_TRANSITIONS}) does not
+ * list is refused with a CONFLICT. Driven by the deploy orchestrator as it works through the
  * provisioner's progress events, authorized by the same `deployKey` (CI) or a
  * member session (dashboard).
  *
@@ -1003,6 +1068,10 @@ export const updateStatus = mutation
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
             : assertMember(context, existing.organizationId, ["owner", "admin"]));
 
+        if (!ALLOWED_TRANSITIONS[existing.status].includes(status)) {
+            throw new LunoraError("CONFLICT", `cannot move a ${existing.status} deployment to ${status}`);
+        }
+
         const { now } = context;
         const phaseColumn = PHASE_TIMESTAMP[status];
 
@@ -1014,30 +1083,7 @@ export const updateStatus = mutation
             updatedAt: now,
         });
 
-        if ((status === "superseded" || status === "failed") && existing.status !== status) {
-            await endInstallBadge(installBadgeOf(context), existing);
-        }
-
-        // Notify the org's `deploy` rules, but only on the transition INTO failed.
-        // The orchestrator re-drives this mutation as it works through the
-        // provisioner's events, and a deployment that is already failed can be
-        // written again by a retry — firing on the state rather than the crossing
-        // would page somebody once per attempt for one broken release.
-        if (status === "failed" && existing.status !== "failed") {
-            const project = (await context.db.get(existing.projectId)) as null | { name: string };
-
-            await fireDeployAlerts(context, existing.organizationId, `deployment:${id}`, {
-                detail: `The deployment did not reach a live state. Its last recorded phase was "${existing.status}".`,
-                kind: "deployment",
-                project: project?.name ?? "project",
-                reference: existing.scriptName,
-            });
-
-            await enqueueNotification(context, existing.organizationId, "deployment.failed", {
-                detail: "Open the deployment in the dashboard for its log.",
-                project: await projectNameOf(context, existing.projectId),
-            });
-        }
+        await onEnter(context, id, existing, status);
     });
 
 /**

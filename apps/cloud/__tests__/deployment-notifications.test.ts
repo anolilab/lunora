@@ -141,10 +141,19 @@ describe("deployment notifications", () => {
         expect(notifications(inserted)).toHaveLength(0);
     });
 
-    const building = { _id: "dep_3", kind: "production", organizationId: "org", projectId: "proj", scriptName: "acme-v3", status: "building", version: 3 };
+    // The orchestrator's in-flight phase: the table refuses a move out of `building`, which nothing writes.
+    const provisioning = {
+        _id: "dep_3",
+        kind: "production",
+        organizationId: "org",
+        projectId: "proj",
+        scriptName: "acme-v3",
+        status: "provisioning",
+        version: 3,
+    };
 
     it("announces a failure on the change into failed, without quoting an error", async () => {
-        const { ctx, inserted } = makeCtx([building], { channels: [LIVE_CHANNEL] });
+        const { ctx, inserted } = makeCtx([provisioning], { channels: [LIVE_CHANNEL] });
 
         await updateStatus.handler(ctx, { id: "dep_3" as Id<"deployments">, status: "failed" });
 
@@ -156,7 +165,7 @@ describe("deployment notifications", () => {
     });
 
     it("does not announce live from the orchestrator report, since activation is what releases it", async () => {
-        const { ctx, inserted } = makeCtx([{ ...building, status: "verifying" }], { channels: [LIVE_CHANNEL] });
+        const { ctx, inserted } = makeCtx([{ ...provisioning, status: "verifying" }], { channels: [LIVE_CHANNEL] });
 
         await updateStatus.handler(ctx, { id: "dep_3" as Id<"deployments">, status: "live", url: "https://acme-v3.example.app" });
 
@@ -164,7 +173,7 @@ describe("deployment notifications", () => {
     });
 
     it("does not re-announce a failure that is reported again", async () => {
-        const { ctx, inserted } = makeCtx([{ ...building, status: "failed" }], { channels: [LIVE_CHANNEL] });
+        const { ctx, inserted } = makeCtx([{ ...provisioning, status: "failed" }], { channels: [LIVE_CHANNEL] });
 
         await updateStatus.handler(ctx, { id: "dep_3" as Id<"deployments">, status: "failed" });
 
