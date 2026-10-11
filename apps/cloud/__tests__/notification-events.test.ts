@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Id } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
 import { markVerified } from "../lunora/domains";
-import { channels,createChannel } from "../lunora/notifications";
+import { channels, createChannel } from "../lunora/notifications";
 import withRateLimitStore from "./support/rate-limit-db";
 
 type Row = Record<string, unknown> & { _id: string };
@@ -29,9 +29,11 @@ const makeCtx = (options: FakeOptions = {}) => {
         notificationChannels: channelRows,
         projects,
     };
-    const filtered = (source: Row[], args?: { where?: Record<string, unknown> }): { page: Row[] } => {return {
-        page: source.filter((row) => Object.entries(args?.where ?? {}).every(([key, value]) => row[key] === value)),
-    }};
+    const filtered = (source: Row[], args?: { where?: Record<string, unknown> }): { page: Row[] } => {
+        return {
+            page: source.filter((row) => Object.entries(args?.where ?? {}).every(([key, value]) => row[key] === value)),
+        };
+    };
 
     const database = {
         delete: () => Promise.resolve(),

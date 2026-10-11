@@ -725,6 +725,35 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Invalid input";
     };
+    readonly FETCH: {
+        readonly internal: true;
+        readonly status: 502;
+        readonly title: "Catalog fetch failed";
+    };
+    readonly BAD_SIGNATURE: {
+        readonly status: 422;
+        readonly title: "Catalog signature does not verify";
+    };
+    readonly UNKNOWN_KEY: {
+        readonly status: 422;
+        readonly title: "Catalog signed by an unknown key";
+    };
+    readonly HASH_MISMATCH: {
+        readonly status: 422;
+        readonly title: "Catalog file hash mismatch";
+    };
+    readonly INVALID_INDEX: {
+        readonly status: 502;
+        readonly title: "Invalid catalog index";
+    };
+    readonly INVALID_MANIFEST: {
+        readonly status: 422;
+        readonly title: "Invalid catalog manifest";
+    };
+    readonly UNSUPPORTED_FORMAT: {
+        readonly status: 422;
+        readonly title: "Unsupported catalog format";
+    };
     readonly INVALID_SCHEDULE_ID: {
         readonly status: 400;
         readonly title: "Invalid schedule id";
