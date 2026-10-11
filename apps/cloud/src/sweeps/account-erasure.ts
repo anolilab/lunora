@@ -16,13 +16,13 @@
  *
  * Such a user is left for the operator and not touched: erasing their
  * membership would leave the organization without an owner, and keeping it as a
- * special case would keep the removed user's id without a reason. The sweep
- * sees it in the membership table (an owner row in an organization with no
- * other owner) and does not call the erasure at all, or learns it from the
- * erasure's refusal when the table changed meanwhile. Either way it reports the
- * user in `leftForOperator` and does not count them against the per-tick cap.
- * The operator promotes another member to owner or deletes the organization,
- * and the next tick erases the user like any other orphan.
+ * special case would keep the removed user's id without a reason. The erasure
+ * decides, with the same rule as every other operator removal, and writes
+ * nothing when it refuses; the sweep reports the user in `leftForOperator`. A
+ * user who looks like a sole owner in the membership table is handed to the
+ * erasure even once the per-tick cap is reached, so every one is reported on
+ * every tick. The operator promotes another member to owner or deletes the
+ * organization, and the next tick erases the user like any other orphan.
  *
  * Residual case: a user who had no memberships but did author audit entries,
  * and whose after-delete step failed, keeps their id on those entries until the
@@ -85,43 +85,22 @@ const groupMemberships = (memberships: ReadonlyArray<Membership>): { byUser: Map
     return { byUser, ownersByOrganization };
 };
 
-/** The organizations among `rows` that `rows` holds the only owner membership of. */
-const soleOwnedOrganizationIds = (rows: ReadonlyArray<Membership>, ownersByOrganization: ReadonlyMap<unknown, number>): string[] =>
-    rows.flatMap((row) =>
-        row.role === "owner" && typeof row.organizationId === "string" && (ownersByOrganization.get(row.organizationId) ?? 0) <= 1 ? [row.organizationId] : [],
-    );
-
 /**
- * Erase one deleted user and record the outcome. Once erased, their owner rows
- * are gone, so `ownersByOrganization` counts them out: a co-owner later in the
- * walk may now be the only one.
+ * Whether `rows` holds the only owner membership of an organization, by the
+ * membership table alone. Only a hint: the erasure also skips an organization
+ * that is gone or scheduled for deletion.
  */
-const eraseOne = async (
-    ports: AccountErasurePorts,
-    userId: string,
-    rows: ReadonlyArray<Membership>,
-    { ownersByOrganization, result }: { ownersByOrganization: Map<unknown, number>; result: AccountErasureSweepResult },
-): Promise<void> => {
+const looksLikeSoleOwner = (rows: ReadonlyArray<Membership>, ownersByOrganization: ReadonlyMap<unknown, number>): boolean =>
+    rows.some((row) => row.role === "owner" && (ownersByOrganization.get(row.organizationId) ?? 0) <= 1);
+
+/** Erase one deleted user and record the outcome. */
+const eraseOne = async (ports: AccountErasurePorts, userId: string, result: AccountErasureSweepResult): Promise<void> => {
     const outcome = await ports.erase(userId).catch(() => false);
 
     if (typeof outcome === "object") {
         result.leftForOperator.push({ organizationIds: outcome.refused, userId });
-
-        return;
-    }
-
-    if (!outcome) {
-        result.failed.push(userId);
-
-        return;
-    }
-
-    result.erased.push(userId);
-
-    for (const row of rows) {
-        if (row.role === "owner") {
-            ownersByOrganization.set(row.organizationId, (ownersByOrganization.get(row.organizationId) ?? 1) - 1);
-        }
+    } else {
+        (outcome ? result.erased : result.failed).push(userId);
     }
 };
 
@@ -129,40 +108,33 @@ const eraseOne = async (
  * Erase the control-plane data of every user that still has a membership but
  * no account, up to {@link MAX_ERASURES_PER_TICK}. Walks the whole membership
  * table, so an orphan past the first page is found; only the erasures are capped.
- * A user who is the only owner of an organization is reported in
- * `leftForOperator` and not touched.
+ * A user the erasure refuses as the only owner of an organization is reported
+ * in `leftForOperator` and not touched, and does not count against the cap.
  *
  * Fails closed: when the account lookup rejects, the sweep rejects before
  * erasing anything, because every id would otherwise read as deleted.
  */
 export const runAccountErasureSweep = async (database: ControlPlaneDatabase, ports: AccountErasurePorts): Promise<AccountErasureSweepResult> => {
     const { byUser, ownersByOrganization } = groupMemberships(await drainTable<Membership>(database, "members"));
-    const result: AccountErasureSweepResult = { erased: [], failed: [], leftForOperator: [] };
-
     if (byUser.size === 0) {
-        return result;
+        return { erased: [], failed: [], leftForOperator: [] };
     }
 
     const existing = await ports.existingUserIds([...byUser.keys()]);
+    const result: AccountErasureSweepResult = { erased: [], failed: [], leftForOperator: [] };
 
     for (const [userId, rows] of byUser) {
         if (existing.has(userId)) {
             continue;
         }
 
-        const soleOwned = soleOwnedOrganizationIds(rows, ownersByOrganization);
-
-        if (soleOwned.length > 0) {
-            result.leftForOperator.push({ organizationIds: soleOwned, userId });
-            continue;
-        }
-
-        if (result.erased.length + result.failed.length >= MAX_ERASURES_PER_TICK) {
+        // Past the cap, only a likely sole owner is still handed to the erasure, so every refusal is reported.
+        if (!looksLikeSoleOwner(rows, ownersByOrganization) && result.erased.length + result.failed.length >= MAX_ERASURES_PER_TICK) {
             continue;
         }
 
         // eslint-disable-next-line no-await-in-loop -- one user at a time; each erasure is several writes
-        await eraseOne(ports, userId, rows, { ownersByOrganization, result });
+        await eraseOne(ports, userId, result);
     }
 
     return result;

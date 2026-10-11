@@ -139,11 +139,11 @@ describe("account erasure (workerd, real D1)", () => {
         await expect(rows("auditLog", { actorUserId: "usr_op" })).resolves.toHaveLength(1);
         await expect(rows("auditLog", { action: "member.set-role", organizationId: team })).resolves.toMatchObject([{ target: "usr_op → member" }]);
 
-        // The auth layer no longer has usr_op: the sweep leaves the sole owner for the operator and calls nothing.
-        const erased: string[] = [];
+        // The auth layer no longer has usr_op: the sweep hands them to the erasure, which refuses and writes nothing.
+        const calls: string[] = [];
         const sweepPorts: AccountErasurePorts = {
             erase: async (userId) => {
-                erased.push(userId);
+                calls.push(userId);
 
                 const result: EraseUserResult = await eraseUser.handler(context(), { operator: true, userId });
 
@@ -153,8 +153,9 @@ describe("account erasure (workerd, real D1)", () => {
         };
 
         await expect(runAccountErasureSweep(database, sweepPorts)).resolves.toMatchObject({ leftForOperator: [{ organizationIds: [solo], userId: "usr_op" }] });
-        expect(erased).toStrictEqual([]);
+        expect(calls).toStrictEqual(["usr_op"]);
         await expect(rows("members", { userId: "usr_op" })).resolves.toHaveLength(2);
+        await expect(rows("auditLog", { actorUserId: "usr_op" })).resolves.toHaveLength(1);
 
         // The operator promotes the peer; the next sweep erases usr_op like any other orphan.
         await expect(operatorPromoteOwner.handler(context(), { organizationId: solo as never, userId: "usr_op_peer" })).resolves.toStrictEqual({
@@ -165,9 +166,9 @@ describe("account erasure (workerd, real D1)", () => {
             { actorUserId: OPERATOR_ACTOR, target: `${peer} → owner` },
         ]);
 
-        await runAccountErasureSweep(database, sweepPorts);
+        await expect(runAccountErasureSweep(database, sweepPorts)).resolves.toMatchObject({ erased: ["usr_op"], leftForOperator: [] });
 
-        expect(erased).toStrictEqual(["usr_op"]);
+        expect(calls).toStrictEqual(["usr_op", "usr_op"]);
         await expect(rows("members", { userId: "usr_op" })).resolves.toStrictEqual([]);
         await expect(rows("members", { organizationId: solo })).resolves.toMatchObject([{ role: "owner", userId: "usr_op_peer" }]);
         await expect(rows("auditLog", { actorUserId: "usr_op" })).resolves.toStrictEqual([]);

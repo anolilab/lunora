@@ -102,8 +102,9 @@ describe("orphaned-membership sweep", () => {
         expect(sweepPorts.existingUserIds).not.toHaveBeenCalled();
     });
 
-    it("leaves a deleted sole owner untouched for the operator, and reports them", async () => {
-        const sweepPorts = ports(["usr_peer"]);
+    it("reports a deleted sole owner the erasure refused as left for the operator, and writes nothing", async () => {
+        const sweepPorts = ports(["usr_peer"], () => Promise.resolve({ refused: ["org_1"] }));
+        // The store refuses every write, so a passing sweep wrote nothing itself.
         const store = membersStore([
             { _id: "m_sole", organizationId: "org_1", role: "owner", userId: "usr_removed" },
             { _id: "m_other", organizationId: "org_2", role: "member", userId: "usr_removed" },
@@ -115,49 +116,21 @@ describe("orphaned-membership sweep", () => {
             failed: [],
             leftForOperator: [{ organizationIds: ["org_1"], userId: "usr_removed" }],
         });
-        expect(sweepPorts.erase).not.toHaveBeenCalled();
+        expect(sweepPorts.erase.mock.calls).toStrictEqual([["usr_removed"]]);
     });
 
-    it("erases a deleted owner once the organization has another owner", async () => {
-        const sweepPorts = ports(["usr_new_owner"]);
-        const store = membersStore([
-            { _id: "m_old", organizationId: "org_1", role: "owner", userId: "usr_removed" },
-            { _id: "m_new", organizationId: "org_1", role: "owner", userId: "usr_new_owner" },
-        ]);
+    it("erases a deleted owner the erasure does not refuse, such as one whose organization is gone", async () => {
+        const sweepPorts = ports([]);
+        const store = membersStore([{ _id: "m_old", organizationId: "org_gone", role: "owner", userId: "usr_removed" }]);
 
         await expect(runAccountErasureSweep(store, sweepPorts)).resolves.toStrictEqual({ erased: ["usr_removed"], failed: [], leftForOperator: [] });
     });
 
-    it("leaves the second of two deleted co-owners for the operator once the first is erased", async () => {
-        const sweepPorts = ports([]);
-        const store = membersStore([
-            { _id: "m_a", organizationId: "org_1", role: "owner", userId: "usr_a" },
-            { _id: "m_b", organizationId: "org_1", role: "owner", userId: "usr_b" },
-        ]);
-
-        await expect(runAccountErasureSweep(store, sweepPorts)).resolves.toStrictEqual({
-            erased: ["usr_a"],
-            failed: [],
-            leftForOperator: [{ organizationIds: ["org_1"], userId: "usr_b" }],
-        });
-        expect(sweepPorts.erase.mock.calls).toStrictEqual([["usr_a"]]);
-    });
-
-    it("reports a user the erasure refused as left for the operator, not as failed", async () => {
-        const sweepPorts = ports([], () => Promise.resolve({ refused: ["org_9"] }));
-
-        await expect(runAccountErasureSweep(pagedStore(["usr_gone"], 10), sweepPorts)).resolves.toStrictEqual({
-            erased: [],
-            failed: [],
-            leftForOperator: [{ organizationIds: ["org_9"], userId: "usr_gone" }],
-        });
-    });
-
-    it("does not count sole owners against the per-tick cap", async () => {
+    it("does not count refused sole owners against the per-tick cap", async () => {
         const sole = Array.from({ length: MAX_ERASURES_PER_TICK + 5 }, (_, index) => {
             return { _id: `m_sole_${String(index)}`, organizationId: `org_${String(index)}`, role: "owner", userId: `usr_sole_${String(index)}` };
         });
-        const sweepPorts = ports([]);
+        const sweepPorts = ports([], (userId) => Promise.resolve(userId.startsWith("usr_sole_") ? { refused: ["org"] } : true));
         const result = await runAccountErasureSweep(
             membersStore([...sole, { _id: "m_real", organizationId: "org_x", role: "member", userId: "usr_real" }]),
             sweepPorts,
@@ -165,5 +138,19 @@ describe("orphaned-membership sweep", () => {
 
         expect(result.erased).toStrictEqual(["usr_real"]);
         expect(result.leftForOperator).toHaveLength(sole.length);
+    });
+
+    it("still reports a sole owner found after the per-tick cap is reached", async () => {
+        const gone = Array.from({ length: MAX_ERASURES_PER_TICK + 2 }, (_, index) => {
+            return { _id: `m_${String(index)}`, organizationId: "org_shared", role: "member", userId: `usr_${String(index)}` };
+        });
+        const sweepPorts = ports([], (userId) => Promise.resolve(userId === "usr_sole" ? { refused: ["org_sole"] } : true));
+        const result = await runAccountErasureSweep(
+            membersStore([...gone, { _id: "m_sole", organizationId: "org_sole", role: "owner", userId: "usr_sole" }]),
+            sweepPorts,
+        );
+
+        expect(result.erased).toHaveLength(MAX_ERASURES_PER_TICK);
+        expect(result.leftForOperator).toStrictEqual([{ organizationIds: ["org_sole"], userId: "usr_sole" }]);
     });
 });

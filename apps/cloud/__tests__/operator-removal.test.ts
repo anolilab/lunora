@@ -100,6 +100,14 @@ describe("operator erasure", () => {
         expect(deletes(ops).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m3"]);
     });
 
+    it("does not refuse over an organization whose row is gone", async () => {
+        const tables = operatorTables();
+        const { ctx, ops } = makeCtx({ ...tables, organizations: [{ _id: "org_2", name: "Globex" }] });
+
+        await expect(eraseUser.handler(ctx, { operator: true, userId: "usr_me" })).resolves.toStrictEqual({ ownerless: [] });
+        expect(deletes(ops).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m3"]);
+    });
+
     it("still refuses a self-service deletion by a sole owner", async () => {
         // Self-service refuses in the before-delete check, which writes nothing; eraseUser runs after it.
         const { ctx, ops } = makeCtx(operatorTables());
