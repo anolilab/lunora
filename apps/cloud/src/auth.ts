@@ -17,6 +17,8 @@ import { createAuth, ensureMigrated, lunoraD1Adapter } from "@lunora/auth";
 import { admin, inviteOnly, passkey, twoFactor } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
+import { beforeAccountDeletion } from "./account-deletion";
+
 /**
  * The slice of the worker `env` the auth build reads.
  *
@@ -32,6 +34,8 @@ export interface AuthEnv extends Record<string, unknown> {
     GITHUB_CLIENT_SECRET?: string;
     GOOGLE_CLIENT_ID?: string;
     GOOGLE_CLIENT_SECRET?: string;
+    /** Authorizes the account-deletion hook's in-process call to `POST /v1/account/erase`. */
+    LUNORA_ADMIN_TOKEN?: string;
     MAIL_FROM?: string;
     /** `"development"` under `lunora dev`; read by the invite gate's bootstrap carve-out. */
     WORKER_ENV?: string;
@@ -141,6 +145,14 @@ const authOptions = (env: AuthEnv, requestOrigin?: string): LunoraAuthOptions =>
         rateLimit: { enabled: true },
         secret: env.AUTH_SECRET,
         socialProviders: socialProviders(env),
+        /*
+         * Self-service account deletion (the auth UI's delete-account flow). The
+         * hook runs before any auth row is removed and clears what the control
+         * plane holds under the user id — or refuses while the user is the only
+         * owner of an organization. Built here, over this `env`, so every entry
+         * that builds the instance (fetch, the build runner, a cron) carries it.
+         */
+        user: { deleteUser: { beforeDelete: beforeAccountDeletion(env), enabled: true } },
     };
 };
 

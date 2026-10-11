@@ -416,5 +416,13 @@ exports[`deploy route table > keeps every route's method, path, auth tier, rate 
       "auth": "adminToken",
     },
   },
+  {
+    "handler": "handleAccountEraseRoute",
+    "method": "POST",
+    "path": "/v1/account/erase",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
 ]
 `;

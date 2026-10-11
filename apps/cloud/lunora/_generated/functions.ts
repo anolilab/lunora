@@ -97,6 +97,7 @@ export interface RegisteredLunoraFunction {
  * emits (`api[namespace][fn].__lunoraRef === "namespace:fn"`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
+    "account:eraseUser": lunora_account_0.eraseUser as unknown as RegisteredLunoraFunction,
     "account:exportMine": lunora_account_0.exportMine as unknown as RegisteredLunoraFunction,
     "alerts:anomalyBaselines": lunora_alerts_1.anomalyBaselines as unknown as RegisteredLunoraFunction,
     "alerts:createRule": lunora_alerts_1.createRule as unknown as RegisteredLunoraFunction,
@@ -318,6 +319,12 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  * onto its function's live `.args` object and consulted by the interpreted
  * parser as a zero-allocation fast path; anything it can't model is deferred.
  */
+installCompiledValidatorMap(lunora_account_0.eraseUser.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["userId"] !== "string") return DEFER;
+return { "userId": source["userId"] };
+});
 installCompiledValidatorMap(lunora_alerts_1.anomalyBaselines.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -1205,6 +1212,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     account: {
+        eraseUser: (args: { userId: string }) => Promise<{ erased: false; soleOwnerOf: { id: string; name: string }[] } | { erased: true; }>;
         exportMine: (args?: {}) => Promise<Record<string, unknown>>;
     };
     alerts: {
@@ -1536,6 +1544,7 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 /** Build a {@link Caller} bound to `context` (typically a handler's `ctx`). */
 export const createCaller = (context: CallerCtx): Caller => ({
     account: {
+        eraseUser: (args) => callRegistered(context, "account:eraseUser", args),
         exportMine: (args) => callRegistered(context, "account:exportMine", args),
     },
     alerts: {
