@@ -1,3 +1,6 @@
+import type { LunoraDatabaseLike } from "@lunora/payment";
+import { migrateLegacyPaymentTables } from "@lunora/payment";
+
 import { evaluateDunning } from "../src/billing/dunning";
 import type { QuotaResource } from "../src/billing/plans";
 import { effectiveLimit } from "../src/billing/plans";
@@ -105,7 +108,7 @@ export const subscription = query
     .query(async ({ ctx: context, args: { organizationId } }): Promise<SubscriptionRow[]> => {
         await assertMember(context, organizationId);
 
-        const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
+        const { page } = await context.db.payment_subscriptions.findMany({ where: { referenceId: organizationId } });
 
         return page;
     });
@@ -136,6 +139,21 @@ export const processWebhook = action
     });
 
 /**
+ * Move rows out of the payment tables' legacy names (`customers`, `events`,
+ * `paymentSessions`, `subscriptions`, `usageEvents`) into the `payment_*` tables
+ * the payment store reads. Moves at most `batchSize` rows (default 100) per call;
+ * run it until it reports `remaining: false`, then the legacy declarations in
+ * `lunora/tables/billing.ts` can go. Until it has run, a subscriber whose rows
+ * are still under the legacy names resolves to the free plan, and the
+ * organization erasure does not reach those rows. SYSTEM only (operator-run).
+ */
+export const moveLegacyPaymentTables = internalMutation
+    .input({ batchSize: v.optional(v.number()) })
+    .mutation(async ({ ctx: context, args: { batchSize } }): Promise<{ moved: number; remaining: boolean }> =>
+        migrateLegacyPaymentTables(context.db as unknown as LunoraDatabaseLike, batchSize === undefined ? {} : { batchSize }),
+    );
+
+/**
  * Dunning enforcement (GAPS.md C2): payment failure → 14-day grace → suspend.
  * Reads the synced subscription states per org (the billing webhook keeps them
  * current), stamps/clears `paymentFailedAt`, and suspends orgs whose grace ran
@@ -147,7 +165,7 @@ export const enforceDunning = internalMutation.mutation(async ({ ctx: context })
     // Both reads drain every page. A single `findMany({})` page stops at 1000 rows, so
     // any organization past that boundary was never dunned — no grace stamp, no
     // suspension, and no recovery either — while the sweep still reported success.
-    const subscriptions = await collectAll<SubscriptionRow>((cursor) => context.db.subscriptions.findMany({ cursor }));
+    const subscriptions = await collectAll<SubscriptionRow>((cursor) => context.db.payment_subscriptions.findMany({ cursor }));
     const statesByOrg = new Map<string, string[]>();
 
     for (const row of subscriptions) {

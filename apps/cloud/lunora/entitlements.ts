@@ -10,7 +10,7 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
 /**
  * Live entitlement resolution. Quota is enforced against the
  * org's **synced subscription state**, not the static `organizations.plan`
- * column — the billing (Creem) webhook writes `subscriptions`, so reading them here is the
+ * column — the billing (Creem) webhook writes `payment_subscriptions`, so reading them here is the
  * single source of truth (the `plan` column is just the nominal tier the org was
  * created under). An org with no active subscription resolves to the free-plan
  * baseline, so a non-subscriber is always bounded.
@@ -26,11 +26,11 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
  * reconciles on. Mapping `_id` here would round-trip a Lunora id into that
  * column.
  */
-export const toSubscription = (row: StoredRow<"subscriptions">): Subscription => {
+export const toSubscription = (row: StoredRow<"payment_subscriptions">): Subscription => {
     return {
         ...row,
         id: row.providerSubscriptionId,
-        // `subscriptions` is `.externallyManaged()` — the payment webhook sync
+        // `payment_subscriptions` is `.externallyManaged()` — the payment webhook sync
         // owns these two columns, so the schema keeps them `v.string()` instead
         // of restating the provider layer's unions. Narrowed here rather than
         // filtered: a value this build does not recognize must not silently drop
@@ -42,7 +42,7 @@ export const toSubscription = (row: StoredRow<"subscriptions">): Subscription =>
 
 /** Resolve an org's entitlements from its synced subscription state. */
 export const orgEntitlements = async (context: QueryContext, organizationId: Id<"organizations">): Promise<Entitlements> => {
-    const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
+    const { page } = await context.db.payment_subscriptions.findMany({ where: { referenceId: organizationId } });
 
     return resolveEntitlements(
         LUNORA_CLOUD_PLANS,

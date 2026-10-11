@@ -29,8 +29,8 @@ const PRUNE_BATCH = 200;
 
 /** The two financial tables, typed as one facade shape each (the union of the two is not callable). */
 const financialFacades = (context: MutationContext): ReadonlyArray<FindManyFacade> => [
-    context.db.paymentSessions as unknown as FindManyFacade,
-    context.db.subscriptions as unknown as FindManyFacade,
+    context.db.payment_sessions as unknown as FindManyFacade,
+    context.db.payment_subscriptions as unknown as FindManyFacade,
 ];
 
 interface FindManyFacade {
@@ -68,7 +68,7 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
         financial += stale.length;
     }
 
-    const { page: events } = await context.db.events.findMany({
+    const { page: events } = await context.db.payment_events.findMany({
         limit: PRUNE_BATCH,
         orderBy: [{ processedAt: "asc" }],
         where: { processedAt: { lt: context.now - WEBHOOK_EVENT_RETENTION_MS } },

@@ -239,7 +239,7 @@ export const cancelDeletion = mutation
 const PURGE_BATCH = 100;
 
 /** The `@lunora/payment` rows an organization erasure deletes outright. */
-const PAYMENT_DELETE_TABLES = ["customers", "usageEvents"] as const;
+const PAYMENT_DELETE_TABLES = ["payment_customers", "payment_usageEvents"] as const;
 
 /**
  * Purge orgs whose deletion request has aged past the retention window
@@ -333,14 +333,18 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         // eslint-disable-next-line no-await-in-loop -- see above
         await purgeScopedRows(context, PAYMENT_DELETE_TABLES, { referenceId: organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
-        await anonymiseScopedRows(context, "paymentSessions", { referenceId: organizationId }, (row) => {
+        await anonymiseScopedRows(context, "payment_sessions", { referenceId: organizationId }, (row) => {
             return {
                 providerSessionId: `erased:${row._id}`,
                 referenceId: ERASED_REFERENCE,
+                // The provider's subscription id is a provider id too. Replaced, not
+                // cleared: the store refuses an explicit `undefined`, and a row that
+                // never had one keeps the column absent.
+                ...(typeof row["subscriptionId"] === "string" ? { subscriptionId: `erased:${row._id}` } : {}),
             };
         });
         // eslint-disable-next-line no-await-in-loop -- see above
-        await anonymiseScopedRows(context, "subscriptions", { referenceId: organizationId }, (row) => {
+        await anonymiseScopedRows(context, "payment_subscriptions", { referenceId: organizationId }, (row) => {
             return {
                 providerSubscriptionId: `erased:${row._id}`,
                 referenceId: ERASED_REFERENCE,

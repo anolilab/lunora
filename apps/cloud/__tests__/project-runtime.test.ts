@@ -91,7 +91,7 @@ describe("projects", () => {
         expect.assertions(2);
 
         const tables = (): Record<string, Row[]> => {
-            return { aliasOwnership: [], deployments: [], members: [owner(ORG)], organizations: [{ _id: ORG }], projects: [], subscriptions: [] };
+            return { aliasOwnership: [], deployments: [], members: [owner(ORG)], organizations: [{ _id: ORG }], projects: [], payment_subscriptions: [] };
         };
         const worker = makeCtx(tables());
         const lunora = makeCtx(tables());

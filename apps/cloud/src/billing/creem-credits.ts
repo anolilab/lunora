@@ -66,7 +66,7 @@ export interface CreditPurchase {
     /** Existing credits-account id, when the org already has one. */
     accountId?: null | string;
     credits: number;
-    /** The org's Creem customer id (from the payments `customers` table). */
+    /** The org's Creem customer id (from the `payment_customers` table). */
     customerId: string;
     /** Idempotency link — use the Creem payment/checkout id of the pack purchase. */
     reference: string;

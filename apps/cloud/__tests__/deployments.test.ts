@@ -97,7 +97,7 @@ describe("deployments.planForScript", () => {
                 aliasOwnership: { findMany: () => page(world.ledger ?? []) },
                 deployments: { findMany: () => page(world.deployments ?? [live]) },
                 get: (id: string) => Promise.resolve(rows.find((row) => row["_id"] === id) ?? null),
-                subscriptions: { findMany: () => page([]) },
+                payment_subscriptions: { findMany: () => page([]) },
             },
             now: Date.now(),
         } as unknown as QueryCtx;

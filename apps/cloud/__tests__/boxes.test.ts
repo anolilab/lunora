@@ -126,7 +126,7 @@ describe("boxes.createEnrolment", () => {
 
     it("returns the token once and stores only its hash, valid for 15 minutes", async () => {
         const { ctx, ops } = withOrigin(
-            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: RELEASES, members: [owner("org_1")], subscriptions: PRO }, { now: NOW }),
+            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: RELEASES, members: [owner("org_1")], payment_subscriptions: PRO }, { now: NOW }),
         );
 
         const result = await createEnrolment.handler(ctx, { name: " edge ", organizationId: "org_1" as never });
@@ -155,7 +155,9 @@ describe("boxes.createEnrolment", () => {
         const live = [box({ _id: "b1" }), box({ _id: "b2" }), box({ _id: "b3", status: "revoked" })];
         const unused = { _id: "e1", expiresAt: NOW + 60_000, organizationId: "org_1" };
         const expired = { _id: "e2", expiresAt: NOW - 1, organizationId: "org_1" };
-        const { ctx } = withOrigin(makeCtx({ boxEnrolments: [unused, expired], boxes: live, members: [owner("org_1")], subscriptions: PRO }, { now: NOW }));
+        const { ctx } = withOrigin(
+            makeCtx({ boxEnrolments: [unused, expired], boxes: live, members: [owner("org_1")], payment_subscriptions: PRO }, { now: NOW }),
+        );
 
         await expect(createEnrolment.handler(ctx, { name: "fourth", organizationId: "org_1" as never })).rejects.toThrow(
             "boxes quota reached for this plan (limit 3)",
@@ -163,7 +165,7 @@ describe("boxes.createEnrolment", () => {
     });
 
     it("gives the free plan no boxes", async () => {
-        const { ctx } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: [] }, { now: NOW }));
+        const { ctx } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], payment_subscriptions: [] }, { now: NOW }));
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toThrow("(limit 0)");
     });
@@ -176,7 +178,7 @@ describe("boxes.createEnrolment", () => {
 
     it("mints nothing while the control plane offers no hostd release to install", async () => {
         const { ctx, ops } = withOrigin(
-            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }),
+            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: [], members: [owner("org_1")], payment_subscriptions: PRO }, { now: NOW }),
         );
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({
@@ -187,7 +189,7 @@ describe("boxes.createEnrolment", () => {
     });
 
     it("mints nothing on a control plane that does not know its own origin", async () => {
-        const { ctx, ops } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }), null);
+        const { ctx, ops } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], payment_subscriptions: PRO }, { now: NOW }), null);
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({
             code: "SERVICE_UNAVAILABLE",
@@ -243,7 +245,7 @@ describe("boxes.enrol", () => {
 
     it("consumes a fresh token: creates a pending box in the token's org and marks the token used", async () => {
         const row = await enrolment();
-        const { ctx, ops } = makeCtx({ boxEnrolments: [row], boxes: [], subscriptions: PRO }, { now: NOW });
+        const { ctx, ops } = makeCtx({ boxEnrolments: [row], boxes: [], payment_subscriptions: PRO }, { now: NOW });
 
         const result = await enrol.handler(ctx, enrolArgs(row.hashedToken as string));
 
@@ -272,7 +274,7 @@ describe("boxes.enrol", () => {
 
     it("re-checks the limit when the token is consumed", async () => {
         const row = await enrolment();
-        const { ctx, ops } = makeCtx({ boxEnrolments: [row], boxes: [box({ _id: "b1" })], subscriptions: [] }, { now: NOW });
+        const { ctx, ops } = makeCtx({ boxEnrolments: [row], boxes: [box({ _id: "b1" })], payment_subscriptions: [] }, { now: NOW });
 
         await expect(enrol.handler(ctx, enrolArgs(row.hashedToken as string))).rejects.toThrow("boxes quota reached");
         expect(ops).toStrictEqual([]);
