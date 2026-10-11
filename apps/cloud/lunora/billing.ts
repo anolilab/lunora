@@ -1,6 +1,3 @@
-import type { LunoraDatabaseLike } from "@lunora/payment";
-import { migrateLegacyPaymentTables } from "@lunora/payment";
-
 import { evaluateDunning } from "../src/billing/dunning";
 import type { QuotaResource } from "../src/billing/plans";
 import { effectiveLimit } from "../src/billing/plans";
@@ -137,21 +134,6 @@ export const processWebhook = action
 
         return { applied: result.applied ?? false, status: response.status };
     });
-
-/**
- * Move rows out of the payment tables' legacy names (`customers`, `events`,
- * `paymentSessions`, `subscriptions`, `usageEvents`) into the `payment_*` tables
- * the payment store reads. Moves at most `batchSize` rows (default 100) per call;
- * run it until it reports `remaining: false`, then the legacy declarations in
- * `lunora/tables/billing.ts` can go. Until it has run, a subscriber whose rows
- * are still under the legacy names resolves to the free plan, and the
- * organization erasure does not reach those rows. SYSTEM only (operator-run).
- */
-export const moveLegacyPaymentTables = internalMutation
-    .input({ batchSize: v.optional(v.number()) })
-    .mutation(async ({ ctx: context, args: { batchSize } }): Promise<{ moved: number; remaining: boolean }> =>
-        migrateLegacyPaymentTables(context.db as unknown as LunoraDatabaseLike, batchSize === undefined ? {} : { batchSize }),
-    );
 
 /**
  * Dunning enforcement (GAPS.md C2): payment failure → 14-day grace → suspend.

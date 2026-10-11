@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
  * ("100" before "25"), so `orderBy`, range filters and aggregates would silently
  * return wrong answers.
  *
- * `paymentSessions` had three such money columns. Every table in this schema is
+ * `payment_sessions` has three such money columns. Every table in this schema is
  * `.global()`, so the throw was not scoped to billing: the schema never
  * constructed, and the Worker could not boot — every route 500ed. The entire
  * unit suite passed throughout, because nothing imported the schema module for

@@ -141,9 +141,19 @@ export const billingTables = {
         .index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
 
     payment_sessions: defineTable({
-        // Minor units as `v.number()` where the package declares `v.bigint()`:
-        // `defineSchema` refuses a bigint on a `.global()` table (see the legacy
-        // `paymentSessions` below for why), and every table here is global.
+        // Minor units as `v.number()` where the package declares `v.bigint()`.
+        //
+        // `defineSchema` REFUSES a bigint on a `.global()` table, and refuses it
+        // for a good reason: a global table stores one as decimal TEXT, which SQL
+        // compares lexicographically — "100" sorts before "25" — so `orderBy`, a
+        // range filter or an aggregate on the column silently returns wrong
+        // answers. Every table in this schema is `.global()`.
+        //
+        // A double holds minor units exactly to 2^53 — about ninety trillion
+        // dollars — so the precision a bigint was reaching for is not in question
+        // at any amount this will ever see. The alternative the error message
+        // offers, `v.string()`, buys equality only and would break the ordering
+        // these columns are read with.
         amountMinor: v.number(),
         capturedMinor: v.number(),
         createdAt: v.number(),
@@ -193,98 +203,6 @@ export const billingTables = {
         idempotencyKey: v.string(),
         // `"add"` (default when absent) or `"set"`.
         mode: v.optional(v.string()),
-        provider: v.string(),
-        quantity: v.number(),
-        referenceId: v.string(),
-        reportedToProvider: v.boolean(),
-    })
-        .externallyManaged()
-        .global()
-        .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
-        .index("by_reference_feature", ["referenceId", "featureId"]),
-
-    // ── Legacy @lunora/payment tables ─────────────────────────────────────────
-    // The names the payment store used before it moved to `payment_*`. Nothing
-    // reads or writes them any more except `billing.moveLegacyPaymentTables`,
-    // which moves their rows into the tables above and needs them declared to
-    // read them. Delete these five once that mutation reports
-    // `remaining: false` in every environment.
-    customers: defineTable({
-        createdAt: v.number(),
-        email: v.optional(v.string()),
-        provider: v.string(),
-        providerCustomerId: v.string(),
-        referenceId: v.string(),
-    })
-        .externallyManaged()
-        .global()
-        .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
-        .index("by_reference", ["referenceId"]),
-
-    events: defineTable({
-        processedAt: v.number(),
-        provider: v.string(),
-        providerEventId: v.string(),
-        type: v.string(),
-    })
-        .externallyManaged()
-        .global()
-        .index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
-
-    paymentSessions: defineTable({
-        // Minor units as `v.number()`, not `v.bigint()`.
-        //
-        // `defineSchema` REFUSES a bigint on a `.global()` table, and refuses it
-        // for a good reason: a global table stores one as decimal TEXT, which SQL
-        // compares lexicographically — "100" sorts before "25" — so `orderBy`, a
-        // range filter or an aggregate on the column silently returns wrong
-        // answers. Every table in this schema is `.global()`, so this was not a
-        // billing-only defect: the schema failed to construct and the control
-        // plane could not boot at all.
-        //
-        // A double holds minor units exactly to 2^53 — about ninety trillion
-        // dollars — so the precision a bigint was reaching for is not in question
-        // at any amount this will ever see. The alternative the error message
-        // offers, `v.string()`, buys equality only and would break the ordering
-        // these columns are read with.
-        amountMinor: v.number(),
-        capturedMinor: v.number(),
-        createdAt: v.number(),
-        currency: v.string(),
-        provider: v.string(),
-        providerSessionId: v.string(),
-        referenceId: v.string(),
-        refundedMinor: v.number(),
-        state: v.string(),
-        updatedAt: v.number(),
-    })
-        .externallyManaged()
-        .global()
-        .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
-        .index("by_reference", ["referenceId"]),
-
-    subscriptions: defineTable({
-        cancelAtPeriodEnd: v.boolean(),
-        createdAt: v.number(),
-        currentPeriodEnd: v.optional(v.number()),
-        currentPeriodStart: v.optional(v.number()),
-        priceId: v.string(),
-        provider: v.string(),
-        providerSubscriptionId: v.string(),
-        quantity: v.number(),
-        referenceId: v.string(),
-        state: v.string(),
-        updatedAt: v.number(),
-    })
-        .externallyManaged()
-        .global()
-        .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
-        .index("by_reference", ["referenceId"]),
-
-    usageEvents: defineTable({
-        createdAt: v.number(),
-        featureId: v.string(),
-        idempotencyKey: v.string(),
         provider: v.string(),
         quantity: v.number(),
         referenceId: v.string(),

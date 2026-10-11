@@ -441,11 +441,6 @@ class AppBuilder<Env extends object> {
             ["payment_sessions", { mode: { kind: "global" } }],
             ["payment_subscriptions", { mode: { kind: "global" } }],
             ["payment_usageEvents", { mode: { kind: "global" } }],
-            ["customers", { mode: { kind: "global" } }],
-            ["events", { mode: { kind: "global" } }],
-            ["paymentSessions", { mode: { kind: "global" } }],
-            ["subscriptions", { mode: { kind: "global" } }],
-            ["usageEvents", { mode: { kind: "global" } }],
             ["catalogInstalls", { mode: { kind: "global" } }],
             ["catalogIndexState", { mode: { kind: "global" } }],
         ]);
