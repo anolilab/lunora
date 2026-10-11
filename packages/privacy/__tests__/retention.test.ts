@@ -35,8 +35,8 @@ describe("retain directive", () => {
 });
 
 describe("the voucher period", () => {
-    it("keeps the decided 10 years and says why in the rule note", () => {
+    it("keeps the decided 10 years and states the statutory 8 years in the note", () => {
         expect(voucher!.years).toBe(10);
-        expect(voucher!.note).toContain("pending TR");
+        expect(voucher!.note).toContain("8 years");
     });
 });
