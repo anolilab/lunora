@@ -76,12 +76,3 @@ export const routeErrorFrame = (message: ServerErrorMessage, held: { shape: bool
 
     return held.shape ? "shape" : "none";
 };
-
-/** Where a `complete` frame belongs: a stream ends, a subscription is cancelled, or nothing holds the id. */
-export const routeCompleteFrame = (held: { stream: boolean; subscription: boolean }): "none" | "stream" | "subscription" => {
-    if (held.stream) {
-        return "stream";
-    }
-
-    return held.subscription ? "subscription" : "none";
-};

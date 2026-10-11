@@ -152,7 +152,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, routeCompleteFrame, routeErrorFrame } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, routeErrorFrame } from "./subscription-frames";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -6704,9 +6704,6 @@ class LunoraClient {
     }
 
     private handleErrorMessage(message: ServerErrorMessage): void {
-        // Token-expiry rejection (sent just before the server closes the socket
-        // with code 4001). Surface it to listeners; the close handler also fires
-        // and arms the reconnect, so nothing else to do here.
         // Stream-scoped errors arrive on the same `error` envelope as subscription
         // errors. The route is decided from the frame and what holds its id, and each
         // branch below only performs the effect for its route.
@@ -6716,6 +6713,9 @@ class LunoraClient {
         const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
         const route = routeErrorFrame(message, { shape: shapeState !== undefined, stream: stream !== undefined, subscription: state !== undefined });
 
+        // Token-expiry rejection (sent just before the server closes the socket with code
+        // 4001). Surface it to listeners; the close handler also fires and arms the
+        // reconnect, so nothing else to do here.
         if (route === "tokenExpired") {
             this.notifyTokenExpired();
 
@@ -6768,10 +6768,9 @@ class LunoraClient {
             return;
         }
 
-        // A shape subscription is keyed in its own map (`shape_*` ids), so the
-        // lookup above misses it. Without this a rejected `shape_subscribe`
-        // (unknown shape, RLS-denied, cross-shard-invalid) would never reach the
-        // subscriber's `onError` and the shape would silently hang with no data.
+        // Shape subscriptions are keyed in their own map (`shape_*` ids). A rejected
+        // `shape_subscribe` (unknown shape, RLS-denied, cross-shard-invalid) must reach the
+        // subscriber's `onError`, or the shape hangs with no data.
         if (route === "shape" && shapeState) {
             fanSubscriptionError(shapeState.errorCallbacks, buildSubscriptionError(message));
         }
@@ -7085,17 +7084,17 @@ class LunoraClient {
      */
     private handleCompleteMessage(id: string): void {
         const stream = this.streams.get(id);
-        const state = this.subscriptions.getById(id);
-        const route = routeCompleteFrame({ stream: stream !== undefined, subscription: state !== undefined });
 
-        if (route === "stream" && stream) {
+        if (stream) {
             stream.handle.complete();
             this.forgetStream(id);
 
             return;
         }
 
-        if (route === "subscription" && state) {
+        const state = this.subscriptions.getById(id);
+
+        if (state) {
             state.acked = false;
             fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }

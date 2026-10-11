@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { refoldSubscription } from "../src/optimistic-layers";
 import type { SubscriptionCallback, SubscriptionState, SyncWatermark } from "../src/subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, routeCompleteFrame, routeErrorFrame } from "../src/subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, routeErrorFrame } from "../src/subscription-frames";
 import type { ServerDataMessage, ServerErrorMessage } from "../src/types";
 
 /** A subscription in its just-opened state, with every field set so no cast is needed. */
@@ -158,15 +158,5 @@ describe("routeErrorFrame", () => {
 
         expect(routeErrorFrame(frame(), { shape: false, stream: false, subscription: false })).toBe("none");
         expect(routeErrorFrame(frame({ id: undefined }), { shape: true, stream: true, subscription: true })).toBe("none");
-    });
-});
-
-describe("routeCompleteFrame", () => {
-    it("ends a stream first, then cancels a subscription, and otherwise has no owner", () => {
-        expect.assertions(3);
-
-        expect(routeCompleteFrame({ stream: true, subscription: true })).toBe("stream");
-        expect(routeCompleteFrame({ stream: false, subscription: true })).toBe("subscription");
-        expect(routeCompleteFrame({ stream: false, subscription: false })).toBe("none");
     });
 });
