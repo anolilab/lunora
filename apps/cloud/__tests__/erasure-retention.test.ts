@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { exportMine } from "../lunora/account";
 import { purgeDeleted } from "../lunora/organizations";
+import { remove } from "../lunora/projects";
 import { prune } from "../lunora/retention";
+import type { OffsiteBucket } from "../src/backup/offsite";
+import { runTenantBackupSweep } from "../src/backup/tenant-sweep";
+import type { TenantBackupBucket } from "../src/backup/tenant-transport";
+import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 /**
@@ -104,6 +109,185 @@ describe("organization erasure: payment mirror", () => {
                 { id: "sub_1", patch: { providerSubscriptionId: "erased:sub_1", referenceId: "erased" } },
             ]),
         );
+    });
+});
+
+/**
+ * Tenant backups hold the tenant's application data, so an erasure must reach
+ * the snapshot objects, not only their rows. A mutation cannot reach the
+ * bucket: the purge deletes the projects and leaves the backup rows, and the
+ * tenant backup sweep then deletes every snapshot whose project is gone —
+ * primary object, then off-site copy, then the row that names them.
+ */
+describe("erasure: tenant backups", () => {
+    const backup = (id: string, organizationId: string, projectId: string): Record<string, unknown> => {
+        return {
+            _id: id,
+            alias: `alias-${projectId}`,
+            createdAt: NOW - DAY,
+            deploymentId: "dep",
+            key: `tenant-backups/${organizationId}/alias-${projectId}/${id}.ndjson.gz`,
+            operation: "backup",
+            organizationId,
+            projectId,
+            status: "succeeded",
+            trigger: "scheduled",
+        };
+    };
+
+    const erasedBackups = [backup("bk_gone_1", "org_1", "prj_gone"), backup("bk_gone_2", "org_1", "prj_gone")];
+    const liveBackups = [backup("bk_live_1", "org_2", "prj_live"), backup("bk_live_2", "org_2", "prj_live")];
+    const keyOf = (row: Record<string, unknown>): string => row["key"] as string;
+
+    /** Run the backup sweep over `tables`, recording every object and row delete in the order it happened. */
+    const sweep = async (tables: Record<string, unknown[]>, options: { failPrimary?: boolean } = {}) => {
+        const events: string[] = [];
+        const database = fakeControlPlaneDb(tables, {
+            delete: async (id) => {
+                events.push(`row:${id}`);
+            },
+        });
+        const refuseUpload = (): never => {
+            throw new Error("no snapshot is due in this test");
+        };
+        const bucket: TenantBackupBucket = {
+            createMultipartUpload: refuseUpload,
+            delete: async (keys) => {
+                if (options.failPrimary) {
+                    throw new Error("bucket unavailable");
+                }
+
+                events.push(...[keys].flat().map((key) => `object:${key}`));
+            },
+            get: async () => null,
+        };
+        const offsite: OffsiteBucket = {
+            createMultipartUpload: refuseUpload,
+            delete: async (keys) => {
+                events.push(...keys.map((key) => `offsite:${key}`));
+            },
+            list: async () => {
+                return { objects: [], truncated: false };
+            },
+        };
+
+        const result = await runTenantBackupSweep({ bucket, database, now: NOW, offsite, senderFor: async () => null });
+
+        return { events, result };
+    };
+
+    /** The tables as the store holds them once the mutation's deletes have landed. */
+    const afterDeletes = (tables: Record<string, Record<string, unknown>[]>, ops: ReturnType<typeof makeCtx>["ops"]): Record<string, unknown[]> => {
+        const gone = new Set(deletedIds(ops));
+
+        return Object.fromEntries(Object.entries(tables).map(([table, rows]) => [table, rows.filter((row) => !gone.has(row["_id"] as string))]));
+    };
+
+    /** The doomed rows' events, in order: each object (primary, then off-site) strictly before its row. */
+    const expectObjectsBeforeRows = (events: string[], rows: Record<string, unknown>[]): void => {
+        for (const row of rows) {
+            const primary = events.indexOf(`object:${keyOf(row)}`);
+            const copy = events.indexOf(`offsite:${keyOf(row)}`);
+            const record = events.indexOf(`row:${String(row["_id"])}`);
+
+            expect(primary).toBeGreaterThanOrEqual(0);
+            expect(copy).toBeGreaterThan(primary);
+            expect(record).toBeGreaterThan(copy);
+        }
+    };
+
+    it("erases a purged organization's backups and leaves a live organization's alone", async () => {
+        const tables: Record<string, Record<string, unknown>[]> = {
+            ...(ORG_TABLES as Record<string, Record<string, unknown>[]>),
+            aliasOwnership: [],
+            customers: [],
+            deployments: [],
+            edgeRules: [],
+            organizations: [
+                { _id: "org_1", deletionRequestedAt: 1 },
+                { _id: "org_2", plan: "pro" },
+            ],
+            paymentSessions: [],
+            projects: [
+                { _id: "prj_gone", organizationId: "org_1" },
+                { _id: "prj_live", organizationId: "org_2" },
+            ],
+            subscriptions: [],
+            tenantBackups: [...erasedBackups, ...liveBackups],
+            usageEvents: [],
+        };
+        const { ctx, ops } = makeCtx(tables, { now: NOW });
+
+        await purgeDeleted.handler(ctx, {});
+
+        // The purge takes the project and leaves the backup rows: they are what names the objects.
+        expect(deletedIds(ops)).toEqual(expect.arrayContaining(["prj_gone", "org_1"]));
+        expect(deletedIds(ops)).not.toEqual(expect.arrayContaining([expect.stringMatching(/^bk_/u)]));
+
+        const { events, result } = await sweep(afterDeletes(tables, ops));
+
+        expect(result.pruned).toBe(erasedBackups.length);
+
+        expectObjectsBeforeRows(events, erasedBackups);
+
+        for (const row of liveBackups) {
+            expect(events.filter((event) => event.endsWith(keyOf(row)) || event === `row:${String(row["_id"])}`)).toStrictEqual([]);
+        }
+    });
+
+    it("erases a removed project's backups, objects before rows", async () => {
+        const tables: Record<string, Record<string, unknown>[]> = {
+            aliasOwnership: [],
+            auditLog: [],
+            buildLogs: [],
+            builds: [],
+            catalogInstalls: [],
+            deployments: [],
+            domains: [],
+            halts: [],
+            members: [owner("org_1")],
+            organizations: [{ _id: "org_1", plan: "pro" }],
+            projects: [
+                { _id: "prj_gone", organizationId: "org_1" },
+                { _id: "prj_live", organizationId: "org_1" },
+            ],
+            secrets: [],
+            tenantBackups: [
+                ...erasedBackups,
+                ...liveBackups.map((row) => {
+                    return { ...row, organizationId: "org_1" };
+                }),
+            ],
+        };
+        const { ctx, ops } = makeCtx(tables, { now: NOW });
+
+        await remove.handler(ctx, { id: "prj_gone" as never, organizationId: "org_1" as never });
+
+        expect(deletedIds(ops)).toContain("prj_gone");
+        expect(deletedIds(ops)).not.toEqual(expect.arrayContaining([expect.stringMatching(/^bk_/u)]));
+
+        const { events, result } = await sweep(afterDeletes(tables, ops));
+
+        expect(result.pruned).toBe(erasedBackups.length);
+
+        expectObjectsBeforeRows(events, erasedBackups);
+
+        expect(events.some((event) => event.includes("prj_live") || event.startsWith("row:bk_live"))).toBe(false);
+    });
+
+    it("keeps an erased project's backup row while its object cannot be deleted, so the next tick retries", async () => {
+        const { events, result } = await sweep(
+            {
+                deployments: [],
+                organizations: [],
+                projects: [],
+                tenantBackups: erasedBackups,
+            },
+            { failPrimary: true },
+        );
+
+        expect(result.pruned).toBe(0);
+        expect(events).toStrictEqual([]);
     });
 });
 
