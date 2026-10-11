@@ -691,6 +691,13 @@ catalogs:
   # `defineWorkflow` + `createRuntime` with a pluggable `WorkflowStore` — that
   # the node workflow binding adapts into the `@lunora/workflow` binding shape.
   # Exact-pinned per the `@visulima/*` convention.
+  privacy:
+    # ZIP archives. `ZipDeflate` (synchronous) is verified on workerd in plan 468 Phase 0;
+    # `AsyncZipDeflate` fails there with "Worker is not defined", so do not use it.
+    fflate: 0.8.3
+    # PDF summary copy. Verified on workerd, byte-identical for two runs with a fixed
+    # creation date. Last published 2022-05-12: re-check before raising this pin.
+    "pdf-lib": 1.17.1
   workflow:
     "@visulima/workflow": 3.0.0
   # x402 agentic payments (@lunora/x402) — the Coinbase/x402 v2 protocol SDK
