@@ -596,77 +596,35 @@ const sweepDomains = async (database: ControlPlaneStore, env: ControlPlaneEnv): 
  * match at 00/06/12/18:00 UTC and Cloudflare delivers them as two separate
  * scheduled() invocations, so a broader gate would run the usage rollback twice
  * and double-insert that window into `platformUsage` (over-billing overage). The
- * tenant cron fan-out is *not* here — it needs a driver's in-network `dispatch`
- * and stays a separate branch in {@link runScheduled}.
+ * entries that are not plain sweeps carry a `stage` (see {@link Stage}): the box
+ * sweep before the org purge, the build drain and emergency stops in the
+ * background, and the tenant cron fan-out last.
  */
 
+/** The per-invocation values every scheduled entry is handed by {@link runScheduled}. */
+interface TickContext {
+    context: ExecutionContextLike;
+    controller: ScheduledControllerLike;
+    /** The control-plane store, built once per invocation; `undefined` only when no control-plane D1 is bound. */
+    database: ControlPlaneStore | undefined;
+    env: ControlPlaneEnv;
+    worker: ScheduledWorker;
+}
+
 /**
- * One sweep's run. The store is built once per invocation by {@link runScheduled}
- * and is `undefined` only when no control-plane D1 is bound.
+ * When an entry runs within one invocation. `before` runs ahead of the control
+ * plane's own code crons. `sweep` entries (the default) run together, each
+ * isolated from the others. `background` entries are handed to `waitUntil`, or
+ * awaited in table order without it, after the sweeps. `fanOut` runs last and is
+ * not caught, so its failure rejects the invocation.
  */
-type SweepRun = (database: ControlPlaneStore | undefined, env: ControlPlaneEnv, controller: ScheduledControllerLike) => Promise<void>;
+type Stage = "background" | "before" | "fanOut" | "sweep";
 
 /** Adapt a sweep that needs the store: with no store bound it is skipped, the same as its old `if (!env.DB)` guard. */
 const withStore =
-    (run: (database: ControlPlaneStore, env: ControlPlaneEnv, controller: ScheduledControllerLike) => Promise<void>): SweepRun =>
-    (database, env, controller) =>
-        database === undefined ? Promise.resolve() : run(database, env, controller);
-
-const SCHEDULED_SWEEPS: { cron: string; run: SweepRun }[] = [
-    { cron: EVERY_HOUR, run: withStore(sweepTeardown) },
-    { cron: EVERY_HOUR, run: withStore(sweepUsageRollback) },
-    { cron: EVERY_SIX_HOURS, run: withStore(sweepOverageReconciliation) },
-    // Control-plane backup. Rides the existing 6-hourly trigger rather than
-    // claiming a fourth cron (Cloudflare caps a Worker at three).
-    { cron: EVERY_SIX_HOURS, run: (_database, env) => sweepBackup(env) },
-    // Tenant data snapshots. Hourly so a fleet is covered in bounded slices
-    // (`MAX_BACKUPS_PER_TICK`); each project is still snapshotted once a day,
-    // because the sweep only takes projects that are due.
-    { cron: EVERY_HOUR, run: withStore(sweepTenantBackups) },
-    // Box DNS reconcile (plan 458 G13): the backstop that removes any box record
-    // a revoke or an org purge left behind, within the hour. On the hours the
-    // six-hourly trigger also fires, that invocation runs it instead, ahead of
-    // the org purge — see scheduled() — so the two never overlap.
-    {
-        cron: EVERY_HOUR,
-        run: withStore(async (database, env, controller) => {
-            if (!sixHourlyTickRunsBoxSweep(controller.scheduledTime)) {
-                await sweepBoxes(database, env);
-            }
-        }),
-    },
-    // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
-    { cron: EVERY_MINUTE, run: withStore(sweepNotifications) },
-    { cron: EVERY_HOUR, run: withStore(sweepDomains) },
-    { cron: EVERY_HOUR, run: withStore(sweepHostdRollouts) },
-    // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
-    { cron: EVERY_HOUR, run: withStore(sweepOutdatedBoxes) },
-    // Custom-domain certificates still validating or deploying (GAPS.md B1).
-    { cron: EVERY_HOUR, run: withStore(sweepCertificates) },
-    // Suspended organizations blocked at the edge, recovered ones restored (plan 365 W8).
-    { cron: EVERY_HOUR, run: withStore(sweepEdgeBlocks) },
-    // Anomaly scores over the last completed hour (plan 365 W4). It reads the hour
-    // BEFORE this tick, so the usage rollback writing this tick's rows alongside
-    // it lands in the next bucket rather than racing this one.
-    { cron: EVERY_HOUR, run: withStore(sweepAnomalies) },
-    // Monthly usage thresholds, against the ledger the previous tick's readback filled.
-    { cron: EVERY_HOUR, run: withStore(sweepUsageAlerts) },
-    { cron: EVERY_MINUTE, run: withStore(sweepUptime) },
-    // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
-    // minute so quiet windows the ingest never re-examines still fire/clear —
-    // rides the existing every-minute trigger (no new cron, stays within the cap).
-    { cron: EVERY_MINUTE, run: withStore(sweepAlerts) },
-    // The release path's own alerts, which are raised inside mutations and so
-    // cannot be delivered where they are fired — plus anything an earlier
-    // delivery dropped. Rides the existing every-minute trigger.
-    { cron: EVERY_MINUTE, run: withStore(sweepAlertDrain) },
-    // Edge rules (plan 365 W7): settings and anomaly engagements applied within a minute.
-    { cron: EVERY_MINUTE, run: withStore(sweepEdgeRules) },
-    // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
-    { cron: EVERY_MINUTE, run: withStore(sampleQueueDepth) },
-    // A suspension or recovery reaches customer boxes within a minute (plan 365).
-    { cron: EVERY_MINUTE, run: withStore(sweepBoxSuspensions) },
-];
+    (run: (database: ControlPlaneStore, env: ControlPlaneEnv, controller: ScheduledControllerLike) => Promise<void>) =>
+    (tick: TickContext): Promise<void> =>
+        tick.database === undefined ? Promise.resolve() : run(tick.database, tick.env, tick.controller);
 
 /**
  * Where the Worker reaches its own build-queue drain. The host is never
@@ -733,24 +691,91 @@ const sweepBoxesBeforePurge = (database: ControlPlaneStore, env: ControlPlaneEnv
         console.error("[sweep] box sweep before the org purge failed", error);
     });
 
-/** The emergency-stop sweep, handed to `waitUntil` when the context has it so the tenant fan-out does not wait behind it. */
-const runHaltSweep = async (database: ControlPlaneStore, env: ControlPlaneEnv, context: ExecutionContextLike): Promise<void> => {
-    const halts = sweepHalts(database, env).catch((error: unknown) => {
+/** The emergency-stop sweep; a failure is logged, never thrown into the invocation. */
+const runHaltSweep = (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> =>
+    sweepHalts(database, env).catch((error: unknown) => {
         // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
         console.error("[halt] halt sweep failed", error);
     });
 
-    if (context.waitUntil) {
-        context.waitUntil(halts);
-    } else {
-        await halts;
-    }
-};
+/** The git build drain; a failure is logged, never thrown into the invocation. */
+const runBuildDrain = (tick: TickContext): Promise<void> =>
+    drainBuildQueue(tick.env, tick.context, tick.worker).catch((error: unknown) => {
+        // eslint-disable-next-line no-console -- see drainBuildQueue
+        console.error("[builds] build dispatch failed", error);
+    });
+
+const SCHEDULED_SWEEPS: { cron: string; run: (tick: TickContext) => Promise<void>; stage?: Stage }[] = [
+    { cron: EVERY_HOUR, run: withStore(sweepTeardown) },
+    { cron: EVERY_HOUR, run: withStore(sweepUsageRollback) },
+    { cron: EVERY_SIX_HOURS, run: withStore(sweepOverageReconciliation) },
+    // Control-plane backup. Rides the existing 6-hourly trigger rather than
+    // claiming a fourth cron (Cloudflare caps a Worker at three).
+    { cron: EVERY_SIX_HOURS, run: (tick) => sweepBackup(tick.env) },
+    // Tenant data snapshots. Hourly so a fleet is covered in bounded slices
+    // (`MAX_BACKUPS_PER_TICK`); each project is still snapshotted once a day,
+    // because the sweep only takes projects that are due.
+    { cron: EVERY_HOUR, run: withStore(sweepTenantBackups) },
+    // Box DNS reconcile (plan 458 G13): the backstop that removes any box record
+    // a revoke or an org purge left behind, within the hour. On the hours the
+    // six-hourly trigger also fires, that invocation runs it instead, ahead of
+    // the org purge — see scheduled() — so the two never overlap.
+    {
+        cron: EVERY_HOUR,
+        run: withStore(async (database, env, controller) => {
+            if (!sixHourlyTickRunsBoxSweep(controller.scheduledTime)) {
+                await sweepBoxes(database, env);
+            }
+        }),
+    },
+    // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
+    { cron: EVERY_MINUTE, run: withStore(sweepNotifications) },
+    { cron: EVERY_HOUR, run: withStore(sweepDomains) },
+    { cron: EVERY_HOUR, run: withStore(sweepHostdRollouts) },
+    // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
+    { cron: EVERY_HOUR, run: withStore(sweepOutdatedBoxes) },
+    // Custom-domain certificates still validating or deploying (GAPS.md B1).
+    { cron: EVERY_HOUR, run: withStore(sweepCertificates) },
+    // Suspended organizations blocked at the edge, recovered ones restored (plan 365 W8).
+    { cron: EVERY_HOUR, run: withStore(sweepEdgeBlocks) },
+    // Anomaly scores over the last completed hour (plan 365 W4). It reads the hour
+    // BEFORE this tick, so the usage rollback writing this tick's rows alongside
+    // it lands in the next bucket rather than racing this one.
+    { cron: EVERY_HOUR, run: withStore(sweepAnomalies) },
+    // Monthly usage thresholds, against the ledger the previous tick's readback filled.
+    { cron: EVERY_HOUR, run: withStore(sweepUsageAlerts) },
+    { cron: EVERY_MINUTE, run: withStore(sweepUptime) },
+    // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
+    // minute so quiet windows the ingest never re-examines still fire/clear —
+    // rides the existing every-minute trigger (no new cron, stays within the cap).
+    { cron: EVERY_MINUTE, run: withStore(sweepAlerts) },
+    // The release path's own alerts, which are raised inside mutations and so
+    // cannot be delivered where they are fired — plus anything an earlier
+    // delivery dropped. Rides the existing every-minute trigger.
+    { cron: EVERY_MINUTE, run: withStore(sweepAlertDrain) },
+    // Edge rules (plan 365 W7): settings and anomaly engagements applied within a minute.
+    { cron: EVERY_MINUTE, run: withStore(sweepEdgeRules) },
+    // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
+    { cron: EVERY_MINUTE, run: withStore(sampleQueueDepth) },
+    // A suspension or recovery reaches customer boxes within a minute (plan 365).
+    { cron: EVERY_MINUTE, run: withStore(sweepBoxSuspensions) },
+    // Box sweep ahead of the org purge, on the six-hourly tick (see runScheduled).
+    { cron: EVERY_SIX_HOURS, stage: "before", run: withStore((database, env) => sweepBoxesBeforePurge(database, env)) },
+    // Git build drain: needs no store, and a build must not hold up the tenant fan-out.
+    { cron: EVERY_MINUTE, stage: "background", run: (tick) => runBuildDrain(tick) },
+    // Emergency stops and resumes: a converge is a provision job that can take minutes.
+    { cron: EVERY_MINUTE, stage: "background", run: withStore((database, env) => runHaltSweep(database, env)) },
+    // Tenant cron fan-out (§2.4): WfP drops `triggers.crons` for namespaced workers,
+    // so this is the only path that fires their cron jobs. It needs a fleet's
+    // in-network `dispatch`, and runs last, uncaught.
+    { cron: EVERY_MINUTE, stage: "fanOut", run: withStore((database, env) => fanOutTenantCrons(database, env)) },
+];
 
 /**
- * One scheduled invocation: the box sweep ahead of the org purge on the
- * six-hourly tick, the control plane's own code crons, every sweep whose bucket
- * the tick matches, the git build drain and the tenant cron fan-out.
+ * One scheduled invocation. Runs the entries of {@link SCHEDULED_SWEEPS} whose
+ * cron matches this tick, grouped by stage: the box sweep ahead of the org purge,
+ * then the control plane's own code crons, then the sweeps, the background
+ * entries, and the tenant cron fan-out last.
  */
 export const runScheduled = async (
     controller: ScheduledControllerLike,
@@ -758,10 +783,16 @@ export const runScheduled = async (
     context: ExecutionContextLike,
     worker: ScheduledWorker,
 ): Promise<void> => {
-    // The control plane store, built once for this invocation. With no D1 bound the
-    // store sweeps are skipped, which is what each one used to check for itself.
-    const database = env.DB ? controlPlaneDatabase(env.DB as D1DatabaseLike) : undefined;
-    const everyMinute = controller.cron === EVERY_MINUTE;
+    // The control-plane store, built once for this invocation.
+    const tick: TickContext = {
+        context,
+        controller,
+        database: env.DB ? controlPlaneDatabase(env.DB as D1DatabaseLike) : undefined,
+        env,
+        worker,
+    };
+    const entriesAt = (stage: Stage): typeof SCHEDULED_SWEEPS =>
+        SCHEDULED_SWEEPS.filter((sweep) => sweep.cron === controller.cron && (sweep.stage ?? "sweep") === stage);
 
     // The org purge (`organizations.purgeDeleted`, a code cron on this tick)
     // hard-deletes an erased organization's boxes, but a mutation cannot close
@@ -769,8 +800,9 @@ export const runScheduled = async (
     // every organization past the same cutoff, so it runs first; its hourly run
     // is the backstop for anything this pass could not finish, and stands down
     // on this tick's hour so the two invocations never sweep at once.
-    if (controller.cron === EVERY_SIX_HOURS && database !== undefined) {
-        await sweepBoxesBeforePurge(database, env);
+    for (const sweep of entriesAt("before")) {
+        // eslint-disable-next-line no-await-in-loop -- one ordered step each
+        await sweep.run(tick);
     }
 
     // The control plane's own code crons fire on their declared expression.
@@ -780,7 +812,7 @@ export const runScheduled = async (
     // isolated from each other rather than chained.
     //
     // These ran in a bare loop with no `catch`, so the FIRST sweep to throw took
-    // out every sweep after it — and the tenant cron fan-out below, which is what
+    // out every sweep after it — and the tenant cron fan-out, which is what
     // fires customers' scheduled functions. The every-minute sweeps each add a
     // live throw source in front of it — the alert drain alone issues up to a
     // hundred outbound deliveries — and one hung customer webhook would have
@@ -789,11 +821,7 @@ export const runScheduled = async (
     // `allSettled` is what makes the "each is independent" claim true rather than
     // aspirational. A throwing sweep is logged and skipped; the next tick retries
     // it, which is safe because every one of them is idempotent by design.
-    const swept = await Promise.allSettled(
-        SCHEDULED_SWEEPS.filter((sweep) => sweep.cron === controller.cron).map(async (sweep) => {
-            await sweep.run(database, env, controller);
-        }),
-    );
+    const swept = await Promise.allSettled(entriesAt("sweep").map((sweep) => sweep.run(tick)));
 
     for (const result of swept) {
         if (result.status === "rejected") {
@@ -802,32 +830,21 @@ export const runScheduled = async (
         }
     }
 
-    if (everyMinute) {
-        const drained = drainBuildQueue(env, context, worker).catch((error: unknown) => {
-            // eslint-disable-next-line no-console -- see drainBuildQueue
-            console.error("[builds] build dispatch failed", error);
-        });
+    // Background entries (the build drain, the emergency stops) are handed to
+    // `waitUntil`, so a slow one does not hold the invocation's tail.
+    for (const sweep of entriesAt("background")) {
+        const pending = sweep.run(tick);
 
         if (context.waitUntil) {
-            context.waitUntil(drained);
+            context.waitUntil(pending);
         } else {
-            await drained;
+            // eslint-disable-next-line no-await-in-loop -- without waitUntil, each runs to completion in table order
+            await pending;
         }
     }
 
-    // Emergency stops and resumes (`sweepHalts`). Handed to `waitUntil` rather
-    // than run with the sweeps above: a converge is a provision job that can take
-    // minutes, and the tenant cron fan-out below must not wait behind it.
-    if (everyMinute && database !== undefined) {
-        await runHaltSweep(database, env, context);
-    }
-
-    // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
-    // whose cron is due, for every target that cannot fire crons itself. WfP
-    // drops `triggers.crons` for namespaced workers, so this is the only path
-    // that fires their cron jobs. Special-cased (not in SCHEDULED_SWEEPS)
-    // because it needs a fleet's in-network `dispatch`.
-    if (everyMinute && database !== undefined) {
-        await fanOutTenantCrons(database, env);
+    for (const sweep of entriesAt("fanOut")) {
+        // eslint-disable-next-line no-await-in-loop -- one fan-out entry per tick today
+        await sweep.run(tick);
     }
 };
