@@ -1,10 +1,16 @@
 import { LunoraError } from "@lunora/server";
 
-import { internalMutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, v } from "./_generated/server.js";
 import { anonymiseScopedRows, purgeScopedRows } from "./purge";
 
 /** Rows per list in one export. A caller with more than this gets the first page and a flag. */
 const EXPORT_LIMIT = 1000;
+
+/**
+ * The version of the account export document. `/2` added `profile`, which the
+ * router fills from the authentication layer; every `/1` key is unchanged.
+ */
+export const ACCOUNT_EXPORT_FORMAT = "lunora-account-export/2";
 
 /**
  * The actor an audit entry names once its author has deleted their account.
@@ -19,12 +25,13 @@ export const DELETED_ACTOR = "deleted-user";
  *
  * It covers what the control plane itself stores under the caller's user id:
  * their memberships, and the audit entries they authored. The account profile
- * (email, name, sign-in methods) is held by the authentication layer and is not
- * in this document. Lists are capped at {@link EXPORT_LIMIT}; `truncated` says
- * when a list was cut off. It is a bounded read behind sign-in, so it takes no
- * write-side rate limit.
+ * (email, name, sign-in methods) is held by the authentication layer, which a
+ * Lunora function cannot reach, so `GET /v1/account/export` adds it as
+ * `profile` and is the only caller. Lists are capped at {@link EXPORT_LIMIT};
+ * `truncated` says when a list was cut off. It is a bounded read behind
+ * sign-in, so it takes no write-side rate limit. SYSTEM only (router).
  */
-export const exportMine = query.query(async ({ ctx: context }): Promise<Record<string, unknown>> => {
+export const exportMine = internalQuery.query(async ({ ctx: context }): Promise<Record<string, unknown>> => {
     const { userId } = context.auth;
 
     if (!userId) {
@@ -48,7 +55,7 @@ export const exportMine = query.query(async ({ ctx: context }): Promise<Record<s
             };
         }),
         exportedAt: context.now,
-        format: "lunora-account-export/1",
+        format: ACCOUNT_EXPORT_FORMAT,
         memberships: memberships.map((membership) => {
             return {
                 createdAt: membership.createdAt,

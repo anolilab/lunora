@@ -6,9 +6,6 @@ import type { FunctionReference } from "@lunora/client";
 import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
-    account: {
-        exportMine: FunctionReference<"query", {}, Record<string, unknown>>;
-    };
     alerts: {
         anomalyBaselines: FunctionReference<"query", { organizationId: Id<"organizations"> }, { lastBucketStart: number; lastMean: number; lastScore: number; lastValue: number; samples: number; signal: "storage" | "requests" | "errors"; warmingUp: boolean }[]>;
         createRule: FunctionReference<"mutation", { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; meter?: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten"; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; projectId?: Id<"projects">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly" | "usage_threshold"; threshold: number; windowMinutes?: number }, Id<"alertRules">>;
@@ -212,9 +209,6 @@ export interface ApiTypes {
 }
 
 export const api: ApiTypes = {
-    account: {
-        exportMine: { __lunoraRef: "account:exportMine" },
-    },
     alerts: {
         anomalyBaselines: { __lunoraRef: "alerts:anomalyBaselines" },
         createRule: { __lunoraRef: "alerts:createRule" },

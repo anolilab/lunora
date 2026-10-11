@@ -216,6 +216,14 @@ exports[`deploy route table > keeps every route's method, path, auth tier, rate 
     },
   },
   {
+    "handler": "handleAccountExportRoute",
+    "method": "GET",
+    "path": "/v1/account/export",
+    "spec": {
+      "auth": "session",
+    },
+  },
+  {
     "handler": "handleGitHubInstallRoute",
     "method": "GET",
     "path": "/v1/github/install",

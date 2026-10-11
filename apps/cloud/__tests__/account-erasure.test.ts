@@ -1,22 +1,39 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/internal";
-import { DELETED_ACTOR, eraseUser } from "../lunora/account";
+import { ACCOUNT_EXPORT_FORMAT, DELETED_ACTOR, eraseUser } from "../lunora/account";
 import { beforeAccountDeletion } from "../src/account-deletion";
 import { ensureAuth } from "../src/auth";
-import { handleAccountEraseRoute } from "../src/deploy/routes/account";
+import type { AuthRecordReader } from "../src/deploy/routes/account";
+import { handleAccountEraseRoute, handleAccountExportRoute, readAccountProfile } from "../src/deploy/routes/account";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import { makeCtx } from "./_helpers/fake-ctx";
 
 /**
- * Self-service account deletion. It removes the user's memberships and takes
- * their id out of the audit log, which keeps its entries; it is refused while the
- * user is an organization's only owner.
+ * Self-service account deletion and the account export's profile. The deletion
+ * removes the user's memberships and takes their id out of the audit log, which
+ * keeps its entries; it is refused while the user is an organization's only owner.
  */
 
+type AuthRecords = Record<string, Record<string, unknown>[]>;
+
 const authState = vi.hoisted(() => {
-    return { createdOptions: [] as Record<string, unknown>[] };
+    const records: AuthRecords = {};
+
+    return { createdOptions: [] as Record<string, unknown>[], records, userId: undefined as string | undefined };
 });
+
+/** A better-auth adapter double over `records`, matching `where` by equality. */
+const fakeAdapter = (records: AuthRecords): AuthRecordReader => {
+    const select = (model: string, where: { field: string; value: string }[]) =>
+        (records[model] ?? []).filter((row) => where.every(({ field, value }) => row[field] === value));
+
+    return {
+        findMany: <T>(query: { model: string; where: { field: string; value: string }[] }) => Promise.resolve(select(query.model, query.where) as T[]),
+        findOne: <T>(query: { model: string; where: { field: string; value: string }[] }) =>
+            Promise.resolve((select(query.model, query.where)[0] ?? null) as T | null),
+    };
+};
 
 const workerFetch = vi.hoisted(() => vi.fn<(request: Request) => Promise<Response>>());
 
@@ -29,7 +46,16 @@ vi.mock("@lunora/auth", async (importOriginal) => {
         createAuth: (options: Record<string, unknown>) => {
             authState.createdOptions.push(options);
 
-            return {};
+            return {
+                // Read through to the current records, so a test can set them after the instance is built.
+                $context: Promise.resolve({
+                    adapter: {
+                        findMany: (query: never) => fakeAdapter(authState.records).findMany(query),
+                        findOne: (query: never) => fakeAdapter(authState.records).findOne(query),
+                    },
+                }),
+                api: { getSession: () => Promise.resolve(authState.userId === undefined ? null : { user: { id: authState.userId } }) },
+            };
         },
         ensureMigrated: () => Promise.resolve(),
         lunoraD1Adapter: () => {
@@ -187,5 +213,69 @@ describe("account deletion hook", () => {
         workerFetch.mockResolvedValue(Response.json({ erased: true }));
 
         await expect(beforeAccountDeletion({ DB: {}, LUNORA_ADMIN_TOKEN: "admin" })({ id: "usr_me" })).resolves.toBeUndefined();
+    });
+});
+
+describe("account export profile", () => {
+    const records = {
+        account: [
+            { accessToken: "gho_secret", accountId: "42", providerId: "github", userId: "usr_me" },
+            { password: "hash", providerId: "credential", userId: "usr_me" },
+            { providerId: "google", userId: "usr_other" },
+        ],
+        passkey: [{ publicKey: "pk", userId: "usr_me" }],
+        user: [{ createdAt: new Date(1000), email: "me@example.de", emailVerified: true, id: "usr_me", name: "Me" }],
+    };
+
+    it("reads the profile and sign-in methods from the auth records, without credentials", async () => {
+        const profile = await readAccountProfile(fakeAdapter(records), "usr_me");
+
+        expect(profile).toStrictEqual({ createdAt: 1000, email: "me@example.de", name: "Me", signInMethods: ["credential", "github", "passkey"] });
+    });
+
+    it("answers null when the auth layer has no user row", async () => {
+        await expect(readAccountProfile(fakeAdapter(records), "usr_gone")).resolves.toBeNull();
+    });
+
+    it("adds the profile to the control plane's export under the new format", async () => {
+        authState.records = records;
+        authState.userId = "usr_me";
+        await ensureAuth({ AUTH_SECRET: "s".repeat(32), DB: {} }, "https://cloud.test");
+
+        const document = { auditEntries: [], exportedAt: 1, format: ACCOUNT_EXPORT_FORMAT, memberships: [], truncated: false };
+        const environment = {
+            __lunoraCtx: {
+                runAction: () => Promise.reject(new Error("unused")),
+                runMutation: () => Promise.reject(new Error("unused")),
+                runQuery: (reference: unknown) =>
+                    reference === internal.account.exportMine ? Promise.resolve(document) : Promise.reject(new Error("unexpected")),
+            },
+        } as RouterEnv;
+
+        const response = await handleAccountExportRoute(new Request("https://cloud.test/v1/account/export"), environment);
+        const exported = await response.json();
+
+        expect(exported).toStrictEqual({
+            ...document,
+            format: "lunora-account-export/2",
+            profile: { createdAt: 1000, email: "me@example.de", name: "Me", signInMethods: ["credential", "github", "passkey"] },
+        });
+        expect(JSON.stringify(exported)).not.toMatch(/gho_secret|"hash"/u);
+    });
+
+    it("refuses an anonymous caller", async () => {
+        authState.userId = undefined;
+
+        const environment = {
+            __lunoraCtx: {
+                runAction: () => Promise.reject(new Error("unused")),
+                runMutation: () => Promise.reject(new Error("unused")),
+                runQuery: () => Promise.reject(new Error("unexpected read")),
+            },
+        } as RouterEnv;
+
+        const response = await handleAccountExportRoute(new Request("https://cloud.test/v1/account/export"), environment);
+
+        expect(response.status).toBe(401);
     });
 });

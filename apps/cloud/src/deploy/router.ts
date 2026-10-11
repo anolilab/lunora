@@ -11,7 +11,7 @@ import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import { handleAccountEraseRoute } from "./routes/account";
+import { handleAccountEraseRoute, handleAccountExportRoute } from "./routes/account";
 import { handleAdminRoute } from "./routes/admin-proxy";
 import { handleAlertTestRoute } from "./routes/alerts";
 import { handleBillingWebhookRoute } from "./routes/billing";
@@ -172,6 +172,8 @@ export const createDeployRouter = (): HttpRouterLike => {
             spec: { auth: "session" },
         },
         { handler: handleNotificationChannelRoute, method: "POST", path: "/v1/notification-channels", spec: { auth: "session" } },
+        // session — the caller's own account export; the query reads only the session user's rows.
+        { handler: handleAccountExportRoute, method: "GET", path: "/v1/account/export", spec: { auth: "session" } },
         // session — both handlers resolve the session themselves and check owner/admin before binding.
         { handler: handleGitHubInstallRoute, method: "GET", path: "/v1/github/install", spec: { auth: "session" } },
         { handler: handleGitHubSetupRoute, method: "GET", path: "/v1/github/setup", spec: { auth: "session" } },
