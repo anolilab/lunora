@@ -3,9 +3,12 @@
 Data-subject rights for Lunora apps: the GDPR Art. 15 and 20 export, Art. 17
 erasure, and retention holds for records the law says to keep.
 
-> **Experimental.** The package is under development and is not released. Every
-> legal and tax value it ships is pending review by counsel or a tax adviser, and
-> the test `presets.test.ts` lists each one that is still open.
+> **Not reviewed by a lawyer.** The legal and tax values in this package are research, not
+> legal advice, and no lawyer or tax adviser has checked them. The sources and open
+> questions are in `docs/legal.mdx`. Do not rely on a default until a qualified
+> lawyer and a tax adviser have reviewed it against your own processing.
+>
+> **Experimental.** The package is under development and is not released.
 
 ## What is built
 
