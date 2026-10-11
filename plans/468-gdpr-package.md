@@ -656,15 +656,10 @@ known up front:
   1.4.0, workerd via wrangler 4.149.0, same versions as the repo's catalog). The same bytes came from Node.
   **`AsyncZipDeflate` fails on workerd** with `Worker is not defined`, so the plan uses `ZipDeflate` only.
   Wall time is not CPU time, and the sample is not the largest allowed export; see Phase 1.
-- **PDF library: `pdf-lib` 1.17.1 (MIT), recommended, with a stale-maintenance risk.** On workerd it
-  rendered 40 pages (49 KB) in 98 ms, and two runs with a fixed creation date were byte-identical.
-  Its dependencies are pure JS. It was last published 2022-05-12. The alternatives were `pdfkit`
-  (maintained, but Node-oriented and depends on `fontkit`) and `jspdf` (browser-first). A maintainer
-  should confirm the choice.
+- **PDF library: decided, `pdf-lib` 1.17.1 (MIT).** On workerd it rendered 40 pages (49 KB) in 98 ms, and two runs with a fixed creation date were byte-identical. A 200-page render of the large export took about 1.6 s. Its dependencies are pure JS. It was last published 2022-05-12, so the maintenance risk is accepted and re-checked at each release. `pdfkit` (Node-oriented) and `jspdf` (browser-first) were rejected.
 - **Node signed-URL check: passed.** The storage package's `signed-url.test.ts` passes 30 of 30 cases,
   covering expired URLs, tampered keys, wrong secrets, and malformed input.
-- **DEFLATE CPU measurement: partial.** Only the 1.2 MB sample above was measured. Phase 1 must measure
-  the largest export the app allows, once the pre-flight limit exists.
+- **DEFLATE CPU measurement: done for a 40 MB export, on workerd.** A 39.5 MB JSON export compressed with `ZipDeflate` at level 6 in about 2.6 s of wall time (0.90 MB out, for a sample that compresses well), and the 200-page PDF took about 1.6 s. Wall time is not CPU time, and real data compresses less, so the cost may be higher. Even so, this is well inside the 30 s default CPU limit. **Proposed cap:** the pre-flight refuses exports above 200 MB (`PRIVACY_EXPORT_TOO_LARGE`). That figure is a recommendation for the maintainer to confirm, and the measurement above is the evidence behind it.
 
 - The legal and tax review (§10) is the user's to complete. Phase 0 cannot close until it is.
 
@@ -752,7 +747,7 @@ known up front:
    GoBD.
 5. **D5 Export format. Decided (2026-10-11): JSON and PDF.** A compressed (DEFLATE) ZIP holding the JSON data, plus
    `manifest.json`, the `portable/` Art. 20 subset and a `summary.pdf` readable copy (replacing the
-   earlier `README.html`). The PDF library is `pdf-lib`, verified on workerd (Phase 0 results). Files expire after 7 days, and download links are 15-minute signed URLs behind
+   earlier `README.html`). The PDF library is `pdf-lib`, decided and verified on workerd (Phase 0 results). Files expire after 7 days, and download links are 15-minute signed URLs behind
    authentication.
 6. **D6 Does the identity-verification time pause the one-month clock? Decided: no** (strict clock)
    until legal review says otherwise.
