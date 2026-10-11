@@ -1,7 +1,17 @@
 # Plan 479 — Pin the rollback boundary: what a release owns, what it never owns, and what a rollback is allowed to do
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** TODO (small; mostly tests and one decision)
+**Status:** PARTIAL on `feat/cloud-dispatcher-fail-closed`. Workstream A shipped; B, C, D not done.
+
+- **A shipped** as the `rollback boundary` describe in `apps/cloud/__tests__/release.test.ts`. A1 pins the
+  `StoredRelease` and `DeployManifest` key sets with `Record<keyof T, true>`, so `tsc` rejects an added field. Verified
+  by adding a field once (TS2741), then reverting. A1 also checks the JSON the deploy handler stores. A2 asserts a
+  rollback uses the target row's crons, and none when the row has none. A3 runs a rollback through an allowlist proxy over
+  the backend and deps: any other key throws and is recorded, and the recorded list must be empty. Sabotage-checked: an
+  added backend read in `reprovision` and a dropped `cronSpecs` spread both turn it red.
+- **B not done.** Studio copy on the rollback confirmation, out of scope for this change.
+- **C not done.** The audit-row check (`GAPS.md:878`) is a separate piece of work.
+- **D not done.** It needs a retention-window product decision (`GAPS.md:891`).
 
 ## 0. Headline finding
 
@@ -29,7 +39,7 @@ Size: **S–M**.
 
 ## 2. Existing seams (do not reinvent)
 
-- `StoredRelease` is already the narrow record. Enforce the invariant by its *shape*, and test the shape.
+- `StoredRelease` is already the narrow record. Enforce the invariant by its _shape_, and test the shape.
 - `resolveReleaseSpec` (`release.ts:205`) is the one place secrets and per-deploy values are resolved. Policy belongs next to it.
 - The `keepClasses` guard (`release.ts:257-290`) is the precedent for a rollback that refuses rather than does something destructive.
 
@@ -42,8 +52,8 @@ Size: **S–M**.
 ## 4. Design decisions
 
 1. **`vars` stay with the release.** A rollback restores the `vars` of that deploy, because they are part of the app's configuration as the code was written.
-   *Rejected:* moving `vars` to live policy; every `wrangler` var would become a control-plane setting, against the no-lock-in promise.
-   *UX:* the rollback confirmation says so ("This also restores the environment variables from that release").
+   _Rejected:_ moving `vars` to live policy; every `wrangler` var would become a control-plane setting, against the no-lock-in promise.
+   _UX:_ the rollback confirmation says so ("This also restores the environment variables from that release").
 2. **A structural test, not a policy re-implementation.** `StoredRelease`'s key set is exactly `{ assets, bundle, manifest }`, and `DeployManifest` has no policy keys.
 3. **No health check added.** The target passed a check when it first went live. A check changes rollback semantics and is a separate decision.
 
@@ -64,15 +74,15 @@ Not applicable. Cloud deploy-plane behaviour; no framework `ctx.*` surface or bi
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 1 | A | Three tests green; the first fails when a policy field is added to `StoredRelease` (verify once by adding one) |
-| 2 | B, C, D | Studio copy reviewed; audit row visible in the Activity tab |
+| Phase | Work    | Gate                                                                                                           |
+| ----- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| 1     | A       | Three tests green; the first fails when a policy field is added to `StoredRelease` (verify once by adding one) |
+| 2     | B, C, D | Studio copy reviewed; audit row visible in the Activity tab                                                    |
 
 ## 8. Risks & STOP conditions
 
 - **STOP** if test A2 shows crons are read from the stored release instead of the row. Fix the source of truth before anything else.
-- **Risk:** a rolled-back `vars` value points at a decommissioned service. *Mitigate:* the §4.1 copy; no automatic change.
+- **Risk:** a rolled-back `vars` value points at a decommissioned service. _Mitigate:_ the §4.1 copy; no automatic change.
 
 ## 9. Open questions — decided
 

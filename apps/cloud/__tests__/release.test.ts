@@ -8,7 +8,7 @@ import { rollbackRelease } from "../src/deploy/release";
 import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
 import type { StoredRelease } from "../src/deploy/release-store";
 import { ConvergeScheduler } from "../src/deploy/scheduler";
-import type { TenantDeploymentSpec } from "../src/provision-contract";
+import type { DeployManifest, TenantDeploymentSpec } from "../src/provision-contract";
 import { resolveTenant } from "../src/targets/cloudflare-wfp/route";
 import type { TargetDriver } from "../src/targets/driver";
 import memoryReleaseStore from "./_helpers/memory-release-store";
@@ -385,6 +385,117 @@ describe(rollbackRelease, () => {
 
         await expect(rollbackRelease({ deploymentId: "dep_prev", organizationId: "org_1" }, release)).rejects.toThrow("box failed");
         expect(rollbackDeployment).not.toHaveBeenCalled();
+    });
+});
+
+/** A rollback fixture whose target row carries `overrides`; `releases` holds `PREVIOUS` under `dep_prev`. */
+const setupRollbackBoundary = async (overrides: Partial<ReleaseTarget>) => {
+    const { deployed, provisioner } = capture();
+    const { store: releases } = memoryReleaseStore();
+    const rollbackDeployment = vi.fn<DeployBackend["rollbackDeployment"]>(() => Promise.resolve({ scriptName: "app", version: 1 }));
+
+    await releases.put("dep_prev", PREVIOUS);
+
+    return {
+        deployed,
+        deps: deps(backendWith({ releaseTarget: () => Promise.resolve(releaseTarget(overrides)), rollbackDeployment }), { provisioner, releases }),
+        releases,
+        rollbackDeployment,
+    };
+};
+
+describe("rollback boundary", () => {
+    /**
+     * A rollback restores code, manifest and config as they were at that release.
+     * It never restores policy (suspension, plan, caps, edge rules, protection, access).
+     * `vitest` does not typecheck, so the key sets are pinned by `Record&lt;keyof T, true>`:
+     * adding a field to `StoredRelease` or `DeployManifest` is a `tsc` error here until the
+     * new field is listed, and listing it is the decision a reviewer has to make.
+     */
+    const STORED_RELEASE_FIELDS: Record<keyof StoredRelease, true> = { assets: true, bundle: true, manifest: true };
+    const MANIFEST_FIELDS: Record<keyof DeployManifest, true> = { bindings: true, compatibilityDate: true, compatibilityFlags: true, vars: true };
+
+    it("keeps the stored release and the manifest to their fixed field sets, with no policy fields", async () => {
+        expect(Object.keys(STORED_RELEASE_FIELDS)).toStrictEqual(["assets", "bundle", "manifest"]);
+        expect(Object.keys(MANIFEST_FIELDS)).toStrictEqual(["bindings", "compatibilityDate", "compatibilityFlags", "vars"]);
+
+        const { objects, store } = memoryReleaseStore();
+
+        await readLines(
+            await handleDeployRequest(
+                request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }),
+                deps(backendWith({}), { provisioner: capture().provisioner, releases: store }),
+            ),
+        );
+
+        const stored = JSON.parse(objects.get("releases/dep_new.json") ?? "null") as Record<string, unknown>;
+
+        expect(Object.keys(stored).filter((key) => !(key in STORED_RELEASE_FIELDS))).toStrictEqual([]);
+        expect(stored).toHaveProperty("bundle");
+        expect(stored).toHaveProperty("manifest");
+    });
+
+    it("reprovisions with the crons of the target deployment's row, and none when the row has none", async () => {
+        const withCrons = await setupRollbackBoundary({ cronSpecs: ["*/5 * * * *"] });
+
+        await rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, withCrons.deps);
+
+        expect(withCrons.deployed.at(-1)?.spec.crons).toStrictEqual(["*/5 * * * *"]);
+
+        const bare = await setupRollbackBoundary({});
+
+        await rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, bare.deps);
+
+        expect(bare.deployed.at(-1)?.spec.crons).toBeUndefined();
+    });
+
+    it("takes the crons from the row even when a stored release carries a cron field", async () => {
+        const fixture = await setupRollbackBoundary({});
+
+        // A stored release never holds crons (the type forbids it); a stray one must not win over the row.
+        await fixture.releases.put("dep_prev", { ...PREVIOUS, cronSpecs: ["0 0 * * *"] } as unknown as StoredRelease);
+
+        await rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, fixture.deps);
+
+        expect(fixture.deployed.at(-1)?.spec.crons).toBeUndefined();
+    });
+
+    it("completes a rollback reading only the backend and dependency keys it uses", async () => {
+        const fixture = await setupRollbackBoundary({});
+
+        // An allowlist, not a denylist of policy names: a future read called `planFor` or `edgeRulesFor` must fail too.
+        const BACKEND_KEYS = new Set(["placement", "releaseTarget", "resolveSecrets", "rollbackDeployment"]);
+        const DEPS_KEYS = new Set(["backend", "driverFor", "pacer", "releases", "resolveTelemetry"]);
+        const reads: string[] = [];
+        const violations: string[] = [];
+
+        const guard = <T extends object>(target: T, allowed: Set<string>): T =>
+            new Proxy(target, {
+                get(source, property, receiver) {
+                    if (typeof property === "string" && property !== "then") {
+                        reads.push(property);
+
+                        if (!allowed.has(property)) {
+                            violations.push(property);
+
+                            throw new Error(`rollback read an unexpected key: ${property}`);
+                        }
+                    }
+
+                    return Reflect.get(source, property, receiver) as unknown;
+                },
+            });
+
+        const guardedDeps = guard({ ...fixture.deps, backend: guard(fixture.deps.backend, BACKEND_KEYS) }, DEPS_KEYS);
+
+        await expect(rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, guardedDeps)).resolves.toStrictEqual({
+            scriptName: "app",
+            version: 1,
+        });
+        expect(fixture.rollbackDeployment).toHaveBeenCalledTimes(1);
+        expect(reads).toContain("releaseTarget");
+        // `resolveTelemetrySafely` swallows errors, so a disallowed read inside it is visible only here, not in the rejection.
+        expect(violations).toStrictEqual([]);
     });
 });
 
