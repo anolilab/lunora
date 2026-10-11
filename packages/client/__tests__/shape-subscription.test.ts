@@ -212,6 +212,52 @@ describe("lunoraClient subscribeShape", () => {
         expect(seen).toStrictEqual([]);
     });
 
+    it("keeps a shape's view and checkpoint when one of its parts carries an undecodable row", () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const client = makeClient();
+        const seen: Record<string, unknown>[][] = [];
+        const errors: { code?: string }[] = [];
+
+        client.subscribeShape({ name: "all" }, (rows) => seen.push(rows), { onError: (error) => errors.push(error) });
+        const socket = latestSocket();
+
+        socket.open();
+        const shapeId = frames(socket).find((frame) => frame.type === "shape_subscribe")?.id as string;
+
+        // Seed a valid row at checkpoint 5.
+        socket.receive({ epoch: "e1", pokeId: "seed", type: "pokeStart" });
+        socket.receive({ pokeId: "seed", rowsPatch: [{ key: "m1", op: "insert", table: "t", value: { _id: "m1" } }], shapeId, type: "pokePart" });
+        socket.receive({ checkpoint: 5, epoch: "e1", pokeId: "seed", type: "pokeEnd" });
+
+        // A live poke whose one shape carries a valid row AND a refused row. The
+        // decodable row must not land, because the checkpoint would advance past a
+        // row the view never held.
+        socket.receive({ epoch: "e1", pokeId: "live", type: "pokeStart" });
+        socket.receive({ pokeId: "live", rowsPatch: [{ key: "m2", op: "insert", table: "t", value: { _id: "m2" } }], shapeId, type: "pokePart" });
+        socket.receive({
+            pokeId: "live",
+            rowsPatch: [{ key: "bad", op: "insert", table: "t", value: ["$lunora.wire$", "bigint", "not-a-number"] }],
+            shapeId,
+            type: "pokePart",
+        });
+        socket.receive({ checkpoint: 9, epoch: "e1", pokeId: "live", type: "pokeEnd" });
+
+        expect(seen.at(-1)).toStrictEqual([{ _id: "m1" }]);
+        expect(errors.map((error) => error.code)).toContain("WIRE_DECODE_FAILED");
+
+        // The checkpoint stays at 5: a reconnect resumes from it, not from the refused poke's 9.
+        socket.triggerClose();
+        vi.runOnlyPendingTimers();
+        const resumed = latestSocket();
+
+        resumed.open();
+
+        expect(frames(resumed).find((frame) => frame.type === "shape_subscribe")).toMatchObject({ sinceCheckpoint: 5, sinceEpoch: "e1" });
+    });
+
     it("resumes from the last applied checkpoint on reconnect", () => {
         expect.assertions(2);
 

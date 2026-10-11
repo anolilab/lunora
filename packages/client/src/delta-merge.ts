@@ -26,6 +26,8 @@
  */
 
 import { ID_FIELD, insertionIndexFor, PAGE_FIELD, rowListOf } from "../../../shared/page-result";
+import { decodeWire } from "../../../shared/wire-codec";
+import type { ServerDataMessage } from "./types";
 
 /**
  * One row change as emitted by `@lunora/do`'s `broadcastDelta`. Mirrors
@@ -165,3 +167,40 @@ export type { MutationDelta };
  * the raw `{ key, op, table, row }` envelope as the query's value.
  */
 export const UNMERGEABLE_DELTA: unique symbol = Symbol("lunora.unmergeableDelta");
+
+/**
+ * Resolve a `data` or `delta` frame into the value the subscription should adopt.
+ *
+ * `serverBase` is the authoritative base, not the displayed value, which may carry
+ * an optimistic overlay: a delta describes a change to server truth, and the overlay
+ * is re-folded over the result afterwards.
+ *
+ * Returns the payload to commit, or {@link UNMERGEABLE_DELTA} when the frame is a row
+ * delta that cannot be spliced into the base. The caller must then re-snapshot.
+ */
+export const resolveDataPayload = (message: ServerDataMessage, serverBase: unknown): unknown => {
+    if ("data" in message && message.data !== undefined) {
+        // Wire-decode the snapshot so a `bytes`/`bigint` column arrives as a real value.
+        return decodeWire(message.data);
+    }
+
+    const delta = decodeWire(message.delta);
+
+    if (isMutationDelta(delta)) {
+        // No cached base is not a merge failure: there is nothing to corrupt. This is
+        // the legacy `broadcastDelta` fan-out, which stamps no cursor, so handing the
+        // change to an unseeded subscriber strands nothing. Asking for a snapshot here
+        // would turn every such broadcast into a re-subscribe.
+        if (serverBase === undefined) {
+            return delta;
+        }
+
+        // A base we hold and cannot splice into is the dangerous case: publishing the
+        // raw row envelope over a real result would never be reconciled, because a
+        // frame carrying a cursor advances past it. Ask for a snapshot instead.
+        return applyDelta(serverBase, delta) ?? UNMERGEABLE_DELTA;
+    }
+
+    // An opaque payload, such as a full result sent verbatim, replaces the base.
+    return delta;
+};
