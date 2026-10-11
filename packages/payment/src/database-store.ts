@@ -117,7 +117,8 @@ const readMinorUnits = (row: PaymentRow, key: string): bigint => {
         }
     }
 
-    return 0n;
+    // Every money column is required, so an absent one is a malformed row, not zero money.
+    throw new LunoraPaymentError("VALIDATION_ERROR", `payment store: \`${key}\` is missing`);
 };
 
 /**

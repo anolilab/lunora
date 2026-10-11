@@ -242,6 +242,21 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toThrow("`capturedMinor` is not a safe integer");
     });
 
+    it("refuses a stored session with a money column missing, rather than reading it as zero", async () => {
+        expect.assertions(1);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+
+        const row = await db.findFirst("payment_sessions", { provider: "stripe", providerSessionId: "pi_1" });
+
+        await db.patch(row!._id, { capturedMinor: null });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
     it("upserts in place rather than duplicating", async () => {
         expect.assertions(2);
 

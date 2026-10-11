@@ -402,6 +402,12 @@ the status does not survive the `runAction` hop on its own. Malformed deliveries
 (a missing provider event id) likewise surface as a `5xx` rather than a `400`,
 so every provider retries them instead of some treating a `400` as "stop".
 
+A money amount the store cannot hold — one beyond 2^53 minor units — is the other
+event that is acknowledged with `200` although nothing was written. A retry would
+fail the same way, so the result is `unstorable`, and the observer receives a
+`webhook.applied` with `reason: "unstorable"`. The amount is not in the ledger:
+recover it from the provider, and alert on that observer event.
+
 The orphan retry is **bounded to exactly one**. The row may never appear at all —
 a subscription created before the integration existed, a store reset, a
 completed-but-unpaid checkout whose create event never arrives — and an event

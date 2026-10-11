@@ -240,11 +240,7 @@ const adoptOrphanSession = async (
  * retry, so retrying only keeps the event undelivered. Nothing was written: that case answers
  * `unstorable`, so the provider stops and the observer records the reason. Any other failure rethrows.
  */
-const writeSession = async (
-    store: PaymentStore,
-    session: PaymentSession,
-    refund: undefined | { release: () => Promise<unknown> },
-): Promise<ApplyResult | undefined> => {
+const writeSession = async (store: PaymentStore, session: PaymentSession, refund: RefundFold | undefined): Promise<ApplyResult | undefined> => {
     try {
         await store.upsertPaymentSession(session);
 
