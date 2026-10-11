@@ -44,6 +44,7 @@ const PURGED_TABLES = [
     "boxes",
     "buildLogs",
     "builds",
+    "catalogInstalls",
     "cloudflareAccounts",
     "dashboards",
     "deployKeys",
@@ -835,6 +836,7 @@ describe("deleting what a certificate belongs to", () => {
             aliasOwnership: [],
             buildLogs: [],
             builds: [],
+            catalogInstalls: [],
             deployments: [],
             domains: [
                 { _id: "dom_1", organizationId: "org_1", projectId: "proj_1", ...certified },

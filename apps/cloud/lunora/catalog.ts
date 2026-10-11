@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { RELEASE_LEASE_MS } from "../src/deploy/lease";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -143,6 +143,17 @@ export const finishInstall = internalMutation
             }
         }
     });
+
+/**
+ * Whether an install still holds its project's claim (SYSTEM). A claim taken over
+ * after its lease is deleted, so a takeover is visible as a missing row: the old
+ * install's row id never comes back, which makes this a generation check.
+ */
+export const holdsClaim = internalQuery.input({ installId: v.id("catalogInstalls") }).query(async ({ ctx: context, args: { installId } }): Promise<boolean> => {
+    const row = (await context.db.get(installId)) as InstallRow | null;
+
+    return row?.status === "installing";
+});
 
 /** Give up a claim whose install did not go live (SYSTEM). */
 export const abandonInstall = internalMutation

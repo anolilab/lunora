@@ -89,6 +89,13 @@ export interface DeployHandlerDeps extends ReleaseDeps {
     healthCheck?: (url: string) => Promise<boolean>;
 
     /**
+     * Whether a failed release may be reverted to the one before it. Omit to allow
+     * it. The catalog install answers `false` once a newer install has taken its
+     * project, so the older release is not put back over the newer one.
+     */
+    mayRevert?: () => Promise<boolean>;
+
+    /**
      * Count a failed release by the step it failed at and a bounded reason, for
      * the platform's own provisioning-failure rate (GAPS.md E1). Fire-and-forget
      * like `analytics`: it must not throw and is never awaited.
@@ -140,9 +147,17 @@ const settleFailedConverge = async (
 ): Promise<void> => {
     deps.provisionFailed?.(outcome.provisioned ? "verify" : "converge", outcome.reason);
 
-    if (outcome.provisioned) {
-        await revertFailedRelease(input, deps, write);
+    if (!outcome.provisioned) {
+        return;
     }
+
+    if (deps.mayRevert !== undefined && !(await deps.mayRevert())) {
+        write({ deploymentId: input.deploymentId, event: "not_reverted", reason: "a newer install has taken the project; its previous release stays" });
+
+        return;
+    }
+
+    await revertFailedRelease(input, deps, write);
 };
 
 /** What a release ships: the deploy request body minus its credential, whichever transport carried it. */

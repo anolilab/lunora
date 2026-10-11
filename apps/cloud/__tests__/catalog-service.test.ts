@@ -357,6 +357,7 @@ describe(installApp, () => {
             finish: vi.fn<InstallPorts["finish"]>(async (installId: string, deploymentId: string) => {
                 calls["finish"]?.push({ deploymentId, installId });
             }),
+            holdsClaim: vi.fn<InstallPorts["holdsClaim"]>(async () => true),
             inFlight: vi.fn<InstallPorts["inFlight"]>(async () => false),
             mintReleaseKey: vi.fn<InstallPorts["mintReleaseKey"]>(async () => {
                 return { id: "key_1", key: "lk_install_1" };

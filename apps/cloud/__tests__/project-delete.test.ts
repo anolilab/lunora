@@ -37,6 +37,7 @@ const makeCtx = (tables: Record<string, Row[]>): { ctx: MutationCtx; deleted: st
             aliasOwnership: facade("aliasOwnership"),
             buildLogs: facade("buildLogs"),
             builds: facade("builds"),
+            catalogInstalls: facade("catalogInstalls"),
             delete: (id: string) => {
                 deleted.push(id);
 

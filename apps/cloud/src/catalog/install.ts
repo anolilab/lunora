@@ -83,12 +83,14 @@ export interface InstallPorts {
     claim: (claim: { installedBy: string; slug: string; version: string }) => Promise<{ busy: true } | { busy: false; installId: string }>;
     /** Mark the claim live with its deployment. */
     finish: (installId: string, deploymentId: string) => Promise<void>;
+    /** Whether this install still holds its project's claim. Once a newer install takes the claim over, this one must not write again. */
+    holdsClaim: (installId: string) => Promise<boolean>;
     /** Whether the project already has a release in flight. */
     inFlight: () => Promise<boolean>;
     /** Mint a release key scoped to this install's project. */
     mintReleaseKey: (installId: string) => Promise<{ id: string; key: string }>;
-    /** Run the deploy core with the key. */
-    release: (request: InstallRelease, key: string) => Promise<ReleaseOutcome>;
+    /** Run the deploy core with the key. The deploy core reverts a failed release only while `installId` still holds the claim. */
+    release: (request: InstallRelease, key: string, installId: string) => Promise<ReleaseOutcome>;
     /** Remove a secret the install created. */
     removeSecret: (name: string) => Promise<void>;
     /** Put a secret back exactly as it was. */
@@ -395,12 +397,21 @@ const inSequence = async <T>(items: ReadonlyArray<T>, task: (item: T) => Promise
     await inSequence(rest, task);
 };
 
-/** Put the project's secrets back the way the install found them. Best effort: each step is tried. */
-const restore = async (ports: InstallPorts, touched: string[], snapshot: Map<string, SealedSecret>): Promise<void> => {
-    await inSequence(touched, (name) => {
+/**
+ * Put the project's secrets back the way the install found them. Best effort: each
+ * step is tried. A step is skipped once this install no longer holds the claim,
+ * because a newer install owns the secrets from then on. An unreadable claim counts
+ * as lost, so a restore never writes on a guess.
+ */
+const restore = async (ports: InstallPorts, installId: string, touched: string[], snapshot: Map<string, SealedSecret>): Promise<void> => {
+    await inSequence(touched, async (name) => {
+        if (!(await ports.holdsClaim(installId).catch(() => false))) {
+            return;
+        }
+
         const previous = snapshot.get(name);
 
-        return (previous === undefined ? ports.removeSecret(name) : ports.restoreSecret(previous)).catch(() => {});
+        await (previous === undefined ? ports.removeSecret(name) : ports.restoreSecret(previous)).catch(() => {});
     });
 };
 
@@ -465,7 +476,7 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
             await ports.storeSecret(name, plan.secrets[name] ?? "");
         });
     } catch {
-        await restore(ports, touched, snapshot);
+        await restore(ports, installId, touched, snapshot);
 
         return internal("could not store the install's secrets");
     }
@@ -475,7 +486,7 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
     try {
         minted = await ports.mintReleaseKey(installId);
     } catch {
-        await restore(ports, touched, snapshot);
+        await restore(ports, installId, touched, snapshot);
 
         return internal("could not mint a release key");
     }
@@ -483,7 +494,7 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
     let outcome: ReleaseOutcome;
 
     try {
-        outcome = await ports.release(plan.request, minted.key);
+        outcome = await ports.release(plan.request, minted.key, installId);
     } catch (error) {
         outcome = { deploymentId: "", error: error instanceof Error ? error.message : "the release did not complete", status: "failed" };
     } finally {
@@ -492,7 +503,7 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
     }
 
     if (outcome.status !== "live") {
-        await restore(ports, touched, snapshot);
+        await restore(ports, installId, touched, snapshot);
         await abandon();
 
         return { error: outcome.error ?? "the release did not go live", kind: "internal", ok: false };

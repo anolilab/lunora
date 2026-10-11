@@ -229,6 +229,30 @@ describe("handler: one stable Worker per project", () => {
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
     });
 
+    it("does not re-provision the previous release once the caller refuses the revert", async () => {
+        const { deployed, provisioner } = capture();
+        const { store } = memoryReleaseStore();
+
+        await store.put("dep_prev", PREVIOUS);
+
+        const lines = await readLines(
+            await handleDeployRequest(
+                request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }),
+                deps(
+                    backendWith({
+                        createDeployment: () => Promise.resolve({ deploymentId: "dep_new", previousDeploymentId: "dep_prev", version: 2 }),
+                    }),
+                    { healthCheck: () => Promise.resolve(false), mayRevert: () => Promise.resolve(false), provisioner, releases: store },
+                ),
+            ),
+        );
+
+        // Only the broken release was put on the Worker: the older one is not put back over a newer install.
+        expect(deployed.map(({ bundle }) => bundle)).toStrictEqual(["export default { v: 2 }"]);
+        expect(lines).toContainEqual(expect.objectContaining({ deploymentId: "dep_new", event: "not_reverted" }));
+        expect(lines.some((line) => line["event"] === "reverted")).toBe(false);
+    });
+
     it("leaves the only release up when a first deploy fails its health check", async () => {
         const { deployed, provisioner } = capture();
 

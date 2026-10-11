@@ -60,6 +60,7 @@ const portsWith = (overrides: Partial<InstallPorts> = {}) => {
         finish: vi.fn<InstallPorts["finish"]>(async () => {
             calls.push("finish");
         }),
+        holdsClaim: vi.fn<InstallPorts["holdsClaim"]>(async () => true),
         inFlight: vi.fn<InstallPorts["inFlight"]>(async () => false),
         mintReleaseKey: vi.fn<InstallPorts["mintReleaseKey"]>(async () => {
             calls.push("mint");
@@ -294,6 +295,31 @@ describe(runInstall, () => {
         expect(ports.revokeReleaseKey).toHaveBeenCalledWith("inst_1", "key_1");
         expect(ports.abandon).toHaveBeenCalledWith("inst_1");
         expect(ports.finish).not.toHaveBeenCalled();
+    });
+
+    it("leaves the secrets alone once a newer install has taken the claim", async () => {
+        const previous: SealedSecret = { ciphertext: "old", iv: "iv", name: "TOKEN" };
+        const { ports } = portsWith({
+            holdsClaim: vi.fn<InstallPorts["holdsClaim"]>(async () => false),
+            release: vi.fn<InstallPorts["release"]>(async () => {
+                return { deploymentId: "", error: "the health check failed", status: "failed" as const };
+            }),
+            snapshotSecrets: vi.fn<InstallPorts["snapshotSecrets"]>(async () => [previous]),
+        });
+        const input = baseInput({
+            artifact: artifactWith({
+                bindings: [{ binding: "ASSETS", type: "assets" }],
+                form: { secrets: [{ label: "Token", name: "TOKEN", required: true }], vars: [] },
+            }),
+            values: { secrets: { TOKEN: "a" }, vars: {} },
+        });
+
+        const result = await runInstall(input, ports);
+
+        expect(result).toMatchObject({ kind: "internal", ok: false });
+        expect(ports.restoreSecret).not.toHaveBeenCalled();
+        expect(ports.removeSecret).not.toHaveBeenCalled();
+        expect(ports.release).toHaveBeenCalledWith(expect.anything(), "dk_secret", "inst_1");
     });
 
     it("revokes the key even when the release throws", async () => {

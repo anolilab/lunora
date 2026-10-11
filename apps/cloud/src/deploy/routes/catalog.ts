@@ -197,8 +197,10 @@ const installPorts = (
 
             return { id, key };
         },
-        release: async (request, key) => {
-            const started = await startRelease(request, { key, organizationId }, deps);
+        holdsClaim: (installId) => context.runQuery<boolean>(internal.catalog.holdsClaim, { installId }),
+        release: async (request, key, installId) => {
+            const mayRevert = () => context.runQuery<boolean>(internal.catalog.holdsClaim, { installId });
+            const started = await startRelease(request, { key, organizationId }, { ...deps, mayRevert });
 
             if ("error" in started) {
                 return { deploymentId: "", error: started.error, status: "failed" };

@@ -144,6 +144,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "catalog:abandonInstall": lunora_catalog_5.abandonInstall as unknown as RegisteredLunoraFunction,
     "catalog:claimInstall": lunora_catalog_5.claimInstall as unknown as RegisteredLunoraFunction,
     "catalog:finishInstall": lunora_catalog_5.finishInstall as unknown as RegisteredLunoraFunction,
+    "catalog:holdsClaim": lunora_catalog_5.holdsClaim as unknown as RegisteredLunoraFunction,
     "catalog:installs": lunora_catalog_5.installs as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_6.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_6.register as unknown as RegisteredLunoraFunction,
@@ -493,6 +494,12 @@ if (typeof source["buildId"] !== "string") return DEFER;
 return { "buildId": source["buildId"] };
 });
 installCompiledValidatorMap(lunora_catalog_5.abandonInstall.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["installId"] !== "string") return DEFER;
+return { "installId": source["installId"] };
+});
+installCompiledValidatorMap(lunora_catalog_5.holdsClaim.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["installId"] !== "string") return DEFER;
@@ -1228,6 +1235,7 @@ export interface Caller {
         abandonInstall: (args: { installId: Id<"catalogInstalls"> }) => Promise<void>;
         claimInstall: (args: { installedBy: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; slug: unknown; version: unknown }) => Promise<{ busy: true; } | { busy: false; installId: string; }>;
         finishInstall: (args: { deploymentId: unknown; installId: Id<"catalogInstalls"> }) => Promise<void>;
+        holdsClaim: (args: { installId: Id<"catalogInstalls"> }) => Promise<boolean>;
         installs: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: string; createdAt: number; deploymentId: string; installedBy: string; organizationId: string; projectId: string; slug: string; version: string }[]>;
     };
     cells: {
@@ -1548,6 +1556,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         abandonInstall: (args) => callRegistered(context, "catalog:abandonInstall", args),
         claimInstall: (args) => callRegistered(context, "catalog:claimInstall", args),
         finishInstall: (args) => callRegistered(context, "catalog:finishInstall", args),
+        holdsClaim: (args) => callRegistered(context, "catalog:holdsClaim", args),
         installs: (args) => callRegistered(context, "catalog:installs", args),
     },
     cells: {
