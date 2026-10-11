@@ -9,7 +9,7 @@ describe("lunoraClient auth admin calls on a closed client", () => {
         "setAuthUserRole",
         "banAuthUser",
         "unbanAuthUser",
-        "setAuthUserPassword",
+        "setAuthUserPassword", // gitleaks:allow — a method name, not a credential
         "removeAuthUser",
         "impersonateAuthUser",
         "revokeAuthSession",
