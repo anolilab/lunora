@@ -11,8 +11,12 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+const HEX_DIGITS = /^[\da-f]*$/iu;
+
 const hexToBytes = (hex: string): Uint8Array => {
-    if (hex.length % 2 !== 0) {
+    // `parseInt` maps a non-hex pair to NaN, and `Uint8Array` stores that as 0, so a
+    // malformed key would import silently as a different key. Reject it here.
+    if (hex.length % 2 !== 0 || !HEX_DIGITS.test(hex)) {
         throw new Error("SECRET_ENCRYPTION_KEY must be hex");
     }
 
