@@ -118,12 +118,14 @@ interface AdvisorBrowserUrlAccess {
 ```ts
 interface AdvisorCallEdge {
     conditional?: true;
-    delayMs?: number;
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
-    passesCursor?: true;
     reason?: string;
+    schedule?: {
+        argKeys?: string[];
+        delayMs?: number;
+    };
     scope: AdvisorCallSiteScope;
     target?: string;
 }
@@ -576,8 +578,10 @@ interface AdvisorQueryRead {
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
-    indexBounds?: string[];
-    indexName?: string;
+    index?: {
+        bounds?: string[];
+        name?: string;
+    };
     line: number;
     scope: AdvisorCallSiteScope;
     table: string;

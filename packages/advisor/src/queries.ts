@@ -31,13 +31,12 @@ export interface AdvisorQueryRead {
     hasIndex: boolean;
 
     /**
-     * The comparators the `.withIndex(...)` range callback calls on its index
-     * parameter (`eq`, `lt`, …). `undefined` when there is no `.withIndex(...)` or
-     * the callback is not a function literal. An absent callback is an open range.
+     * The chain's `.withIndex(...)`, present exactly when the chain has one. `name` is
+     * the literal index name, or `undefined` when it is not a string literal. `bounds`
+     * are the comparators its range callback calls: `[]` for a bare `.withIndex(name)`
+     * (an open range), `undefined` when the callback cannot be read.
      */
-    indexBounds?: string[];
-    /** The literal index name given to `.withIndex(...)`; `undefined` when it is not a string literal. */
-    indexName?: string;
+    index?: { bounds?: string[]; name?: string };
     /** 1-based line of the `query(...)` call, or `0` when unknown. */
     line: number;
     /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */

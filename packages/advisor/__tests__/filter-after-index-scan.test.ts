@@ -15,7 +15,7 @@ const read = (overrides: Partial<AdvisorQueryRead> = {}): AdvisorQueryRead => {
         filterFields: ["expiresAt"],
         hasFilter: true,
         hasIndex: true,
-        indexName: "by_owner",
+        index: { bounds: ["eq"], name: "by_owner" },
         line: 12,
         scope: { kind: "export", name: "mine" },
         table: "sessions",
@@ -45,23 +45,31 @@ describe("filter_after_index_scan", () => {
         expect(filterAfterIndexScan.run(context([read({ filterFields: ["ownerId"] })]))).toHaveLength(0);
     });
 
-    it("says nothing without a filter, without filter evidence, or without an index", () => {
+    it("says nothing without a filter, without filter evidence, or without an index name", () => {
         expect.assertions(3);
 
         expect(filterAfterIndexScan.run(context([read({ hasFilter: false, filterFields: undefined })]))).toHaveLength(0);
         expect(filterAfterIndexScan.run(context([read({ filterFields: undefined })]))).toHaveLength(0);
-        expect(filterAfterIndexScan.run(context([read({ indexName: undefined })]))).toHaveLength(0);
+        expect(filterAfterIndexScan.run(context([read({ index: { bounds: ["eq"] } })]))).toHaveLength(0);
     });
 
-    it("leaves a primary-key filter to filter_on_primary_key", () => {
+    it("never reports the _id part of a predicate, so a pure primary-key filter is silent", () => {
         expect.assertions(1);
 
-        expect(filterAfterIndexScan.run(context([read({ filtersPrimaryKey: true })]))).toHaveLength(0);
+        expect(filterAfterIndexScan.run(context([read({ filterFields: ["_id"], filtersPrimaryKey: true })]))).toHaveLength(0);
+    });
+
+    it("reports the uncovered field of a mixed predicate, and not its _id", () => {
+        expect.assertions(1);
+
+        const findings = filterAfterIndexScan.run(context([read({ filterFields: ["_id", "expiresAt"], filtersPrimaryKey: true })]));
+
+        expect(findings[0]?.metadata).toMatchObject({ filteredFields: ["expiresAt"] });
     });
 
     it("skips an index the schema does not declare", () => {
         expect.assertions(1);
 
-        expect(filterAfterIndexScan.run(context([read({ indexName: "by_nothing" })]))).toHaveLength(0);
+        expect(filterAfterIndexScan.run(context([read({ index: { bounds: ["eq"], name: "by_nothing" } })]))).toHaveLength(0);
     });
 });

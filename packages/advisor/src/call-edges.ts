@@ -22,18 +22,22 @@ import type { AdvisorCallSiteScope } from "./call-site-scope";
 export interface AdvisorCallEdge {
     /** `true` when the hop may not take effect on every pass. */
     conditional?: true;
-    /** The literal delay, in milliseconds, of a `runAfter` dispatch; absent for `runAt` or a non-literal delay. */
-    delayMs?: number;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+
     /** What the edge draws: a function call, a scheduled dispatch, an enqueue, a publish, or a service use. */
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call, or `0` when unknown. */
     line: number;
-    /** `true` when a scheduled dispatch's args mention a cursor, i.e. the sweep carries its progress forward. */
-    passesCursor?: true;
     /** Why the target could not be read statically — set exactly when `target` is absent. */
     reason?: string;
+
+    /**
+     * The facts of a scheduled dispatch, present on `schedule` edges only. `delayMs` is
+     * the literal `runAfter` delay. `argKeys` are the top-level property names of the
+     * args object, `[]` when there are none, and `undefined` when they cannot be read.
+     */
+    schedule?: { argKeys?: string[]; delayMs?: number };
     /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
     scope: AdvisorCallSiteScope;
     /** The `namespace:export` function key (or queue/topic/service name) the edge points at. */

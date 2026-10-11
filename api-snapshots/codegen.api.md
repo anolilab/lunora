@@ -715,8 +715,10 @@ interface QueryReadIR {
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
-    indexBounds?: string[];
-    indexName?: string;
+    index?: {
+        bounds?: string[];
+        name?: string;
+    };
     line: number;
     scope: CallSiteScope;
     table: string;
@@ -2291,12 +2293,14 @@ const CAPABILITY_ROWS: readonly [
 ```ts
 interface CallEdgeIR {
     conditional?: true;
-    delayMs?: number;
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
-    passesCursor?: true;
     reason?: string;
+    schedule?: {
+        argKeys?: string[];
+        delayMs?: number;
+    };
     scope: CallSiteScope;
     target?: string;
 }

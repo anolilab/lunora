@@ -41,20 +41,33 @@ describe("schedule edge delay and cursor facts", () => {
     it("reads the literal delay of a runAfter", () => {
         expect.assertions(1);
 
-        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, {});")[0]).toMatchObject({ delayMs: 100, target: "tick:tick" });
+        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, {});")[0]).toMatchObject({
+            schedule: { argKeys: [], delayMs: 100 },
+            target: "tick:tick",
+        });
     });
 
     it("leaves the delay absent for runAt and for a non-literal delay", () => {
         expect.assertions(2);
 
-        expect(schedulesOf("await ctx.scheduler.runAt(Date.now(), internal.tick.tick, {});")[0]?.delayMs).toBeUndefined();
-        expect(schedulesOf("await ctx.scheduler.runAfter(args.wait, internal.tick.tick, {});")[0]?.delayMs).toBeUndefined();
+        expect(schedulesOf("await ctx.scheduler.runAt(Date.now(), internal.tick.tick, {});")[0]?.schedule?.delayMs).toBeUndefined();
+        expect(schedulesOf("await ctx.scheduler.runAfter(args.wait, internal.tick.tick, {});")[0]?.schedule?.delayMs).toBeUndefined();
     });
 
-    it("flags a dispatch whose args mention a cursor, and omits the flag otherwise", () => {
+    it("records the top-level arg keys of an object-literal args value", () => {
         expect.assertions(2);
 
-        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, { cursor: args.cursor });")[0]?.passesCursor).toBe(true);
-        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, {});")[0]).not.toHaveProperty("passesCursor");
+        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, { cursor: args.cursor, limit: 5 });")[0]?.schedule?.argKeys).toStrictEqual([
+            "cursor",
+            "limit",
+        ]);
+        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, {});")[0]?.schedule?.argKeys).toStrictEqual([]);
+    });
+
+    it("leaves the arg keys unknown when the args are not an object literal, or spread one", () => {
+        expect.assertions(2);
+
+        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, args);")[0]?.schedule?.argKeys).toBeUndefined();
+        expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, { ...args });")[0]?.schedule?.argKeys).toBeUndefined();
     });
 });

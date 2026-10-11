@@ -65,17 +65,43 @@ const runEdge = (method: string, reference: TsNode | undefined): CallSiteEdge | 
         : undefined;
 };
 
-/** A cursor in a scheduled dispatch's args — the progress a re-arming sweep carries from one run to the next. */
-const CURSOR_ARGUMENT = /cursor/iu;
+/**
+ * The top-level property names of a dispatch's args object: `[]` when there are no
+ * args, and `undefined` when they are not an object literal, or contain a spread
+ * whose keys cannot be read. The cursor decision belongs to the lint, not here.
+ */
+const argumentKeysOf = (args: TsNode | undefined): string[] | undefined => {
+    if (args === undefined) {
+        return [];
+    }
+
+    if (!Node.isObjectLiteralExpression(args)) {
+        return undefined;
+    }
+
+    const keys: string[] = [];
+
+    for (const property of args.getProperties()) {
+        if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
+            return undefined;
+        }
+
+        keys.push(property.getName());
+    }
+
+    return keys;
+};
 
 /**
- * The literal delay of a `runAfter` and whether its args (third argument) mention
- * a cursor. Both are facts the self-reschedule lint reads; `runAt` has no delay.
+ * The schedule facts of a dispatch: the literal `runAfter` delay, and the arg keys.
+ * `runAt` has no delay, so only `runAfter` carries one.
  */
-const scheduleFactsOf = (method: string, first: TsNode | undefined, args: TsNode | undefined): Pick<CallEdgeIR, "delayMs" | "passesCursor"> => {
+const scheduleFactsOf = (method: string, first: TsNode | undefined, args: TsNode | undefined): Pick<CallEdgeIR, "schedule"> => {
     return {
-        ...(method === "runAfter" && first !== undefined && Node.isNumericLiteral(first) ? { delayMs: first.getLiteralValue() } : {}),
-        ...(args !== undefined && CURSOR_ARGUMENT.test(args.getText()) ? { passesCursor: true as const } : {}),
+        schedule: {
+            argKeys: argumentKeysOf(args),
+            ...(method === "runAfter" && first !== undefined && Node.isNumericLiteral(first) ? { delayMs: first.getLiteralValue() } : {}),
+        },
     };
 };
 

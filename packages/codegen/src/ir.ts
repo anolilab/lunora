@@ -913,23 +913,21 @@ export interface CallEdgeIR {
      */
     conditional?: true;
 
-    /**
-     * The literal delay of a `ctx.scheduler.runAfter(<n>, …)` in milliseconds.
-     * Absent for `runAt`, or when the delay is not a numeric literal.
-     */
-    delayMs?: number;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call. */
     line: number;
+    reason?: string;
 
     /**
-     * `true` when a scheduled dispatch's args (its third argument) mention a
-     * cursor. Set only, never `false`. Read by the self-reschedule lint.
+     * The facts of a scheduled dispatch, present on `schedule` edges only. `delayMs`
+     * is the literal `runAfter` delay (absent for `runAt` or a non-literal delay).
+     * `argKeys` are the top-level property names of the dispatch's args object:
+     * `[]` when there are no args, and `undefined` when the args are not an object
+     * literal (or spread into one), so a lint can tell "no cursor" from "cannot tell".
      */
-    passesCursor?: true;
-    reason?: string;
+    schedule?: { argKeys?: string[]; delayMs?: number };
     /** Who the call runs on behalf of. */
     scope: CallSiteScope;
     target?: string;
@@ -1075,13 +1073,13 @@ export interface QueryReadIR {
     hasIndex: boolean;
 
     /**
-     * The comparators the `.withIndex(...)` range callback calls on its index
-     * parameter (`q.eq`, `q.lt`, …), sorted and de-duplicated. `undefined` when
-     * the chain has no `.withIndex(...)` or the callback is not a function literal.
+     * The chain's `.withIndex(…)`, present exactly when the chain has one. `name` is
+     * the literal index name, or `undefined` when it is not a string literal.
+     * `bounds` are the comparators its range callback calls on the index parameter,
+     * sorted and de-duplicated: `[]` for a bare `.withIndex(name)` (the widest range),
+     * `undefined` when the callback exists but cannot be read.
      */
-    indexBounds?: string[];
-    /** The literal index name passed to `.withIndex(...)`, or `undefined` when it is not a string literal or the chain has no `.withIndex(...)`. */
-    indexName?: string;
+    index?: { bounds?: string[]; name?: string };
     /** 1-based line of the `query(...)` call. */
     line: number;
     /** Who the read runs on behalf of. */

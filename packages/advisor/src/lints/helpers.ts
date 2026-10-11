@@ -14,7 +14,12 @@ interface CallSiteRow {
     scope: AdvisorCallSiteScope;
 }
 
-/** Writes that take a row out of, or move it within, the range a read selects. Only these let a sweep make progress. */
+/**
+ * Writes that can take a row out of, or move it within, the range a read selects.
+ * `patch` is included although only some patches move a row out of a range: the
+ * lint cannot read which field a patch sets, so a patch counts as progress. A sweep
+ * that patches a field the range does not depend on is therefore not reported.
+ */
 const ROW_CHANGING_WRITES: ReadonlySet<string> = new Set(["delete", "deleteMany", "hardDelete", "patch", "patchMany", "patchWhere", "replace"]);
 
 /**
@@ -251,9 +256,12 @@ export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: str
 export const shardKindsByTable = (schema: AdvisorSchema): ReadonlyMap<string, string | undefined> =>
     new Map(schema.tables.map((table) => [table.name, table.shardKind]));
 
+/** The `namespace:export` key of one export, the form call edges and cron targets carry. */
+export const functionKey = (file: string, exportName: string): string => `${sanitizeNamespace(file)}:${exportName}`;
+
 /** `namespace:export` keys of the functions a read or write runs on behalf of, one per export that reaches its site. */
 export const functionKeysOf = (file: string, scope: AdvisorCallSiteScope): string[] =>
-    callSiteCallers(scope).map((exportName) => `${sanitizeNamespace(file)}:${exportName}`);
+    callSiteCallers(scope).map((exportName) => functionKey(file, exportName));
 
 /**
  * Every function key that runs without a request: a call edge schedules it, or a cron
@@ -266,18 +274,20 @@ export const scheduledFunctionKeys = (
     new Set([...(callEdges ?? []).flatMap((edge) => (edge.kind === "schedule" && edge.target !== undefined ? [edge.target] : [])), ...(cronTargets ?? [])]);
 
 /**
- * True when the function(s) reading `table` in `file` also run a row-changing write
- * against the same table. Such a sweep can drain the rows it selects, so a lint
- * that would otherwise call it unbounded must hold its verdict.
+ * The `file:function:table` keys of every row-changing write, one per function that
+ * runs it. Built once per run, so a lint asks a per-function question with a set lookup.
+ *
+ * A write counts only in its own file. A write in a helper file that a sweep calls is
+ * not seen, so a sweep that deletes through a helper is still reported. That is a
+ * known false positive, documented in the lint docs.
  */
-export const writesRowsReadBy = (writes: ReadonlyArray<AdvisorTableWrite> | undefined, read: Pick<AdvisorQueryRead, "file" | "scope" | "table">): boolean => {
-    const readers = callSiteCallers(read.scope);
-
-    return (writes ?? []).some(
-        (write) =>
-            write.file === read.file &&
-            write.table === read.table &&
-            ROW_CHANGING_WRITES.has(write.method) &&
-            callSiteCallers(write.scope).some((caller) => readers.includes(caller)),
+export const rowChangingWriteKeys = (writes: ReadonlyArray<AdvisorTableWrite> | undefined): ReadonlySet<string> =>
+    new Set(
+        (writes ?? []).flatMap((write) =>
+            ROW_CHANGING_WRITES.has(write.method) ? callSiteCallers(write.scope).map((caller) => `${write.file}:${caller}:${write.table}`) : [],
+        ),
     );
-};
+
+/** True when a function that reads `read.table` in its file also runs a row-changing write against that table. */
+export const readRowsChanged = (rowChanged: ReadonlySet<string>, read: Pick<AdvisorQueryRead, "file" | "scope" | "table">): boolean =>
+    callSiteCallers(read.scope).some((caller) => rowChanged.has(`${read.file}:${caller}:${read.table}`));

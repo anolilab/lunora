@@ -801,7 +801,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             ? undefined
             : toAdvisorContext({
                   adminRoutes: discoverAdminRoutes(project, lunoraDirectory),
-                  cronTargets: crons.flatMap((job) => (job.functionPath === undefined ? [] : [job.functionPath])),
                   aiRawRuns: discoverAiRawRuns(project, lunoraDirectory),
                   aiToolSideEffects: discoverAiToolSideEffects(project, lunoraDirectory),
                   argumentDerivedFetches: discoverArgumentDerivedFetches(project, lunoraDirectory),
@@ -814,6 +813,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
                   containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
                   containers,
+                  cronTargets: crons.flatMap((job) => (job.functionPath === undefined ? [] : [job.functionPath])),
                   exportSinks: discoverExportSinks(project, lunoraDirectory),
                   staleMigrationImports: discoverStaleMigrationImports(project, lunoraDirectory),
                   failOpenGuards: discoverFailOpenGuards(project, lunoraDirectory),

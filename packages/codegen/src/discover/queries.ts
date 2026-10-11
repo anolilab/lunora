@@ -51,11 +51,11 @@ const isDatabaseQueryCall = (call: CallExpression): boolean => {
 };
 
 /**
- * Walk the fluent chain rooted at a `query(...)` call and collect the method
- * names invoked on it. A `query(...)` call can only ever be the *expression* of
+ * Walk the fluent chain rooted at a `query(...)` call and collect the calls made
+ * on it, in chain order. A `query(...)` call can only ever be the *expression* of
  * the enclosing `PropertyAccessExpression` (never its name), so reaching a
  * property-access parent followed by a call parent unambiguously continues the
- * chain — `query("t").withIndex(...).filter(...)` yields `["withIndex", "filter"]`.
+ * chain — `query("t").withIndex(...).filter(...)` yields the two calls.
  */
 const chainCalls = (queryCall: CallExpression): CallExpression[] => {
     const calls: CallExpression[] = [];
@@ -133,7 +133,7 @@ const indexBoundsOf = (callback: TsNode, parameter: string): string[] => {
     return [...bounds].toSorted((a, b) => a.localeCompare(b));
 };
 
-/** The fields a `.filter(…)` predicate reads off its row parameter, sorted and de-duplicated. */
+/** The fields a `.filter(…)` predicate reads off its row parameter. */
 const filterFieldsOf = (predicate: TsNode, parameter: string): string[] => {
     const fields = new Set<string>();
 
@@ -145,44 +145,50 @@ const filterFieldsOf = (predicate: TsNode, parameter: string): string[] => {
         }
     }
 
-    return [...fields].toSorted((a, b) => a.localeCompare(b));
+    return [...fields];
 };
 
 /**
- * The range comparators of a chain's `.withIndex(…)`. A `.withIndex(name)` with no
- * callback is the widest range there is, so it reads as no bounds at all (`[]`);
- * `undefined` means the chain has no `.withIndex(…)` or its callback cannot be read.
+ * The `.withIndex(…)` of a chain: its literal name, and the comparators its range
+ * callback calls. A `.withIndex(name)` with no callback is the widest range there
+ * is, so its bounds are `[]`. Bounds are `undefined` when the callback exists but
+ * cannot be read. The whole field is absent when the chain has no `.withIndex(…)`.
  */
-const boundsOf = (withIndex: CallExpression | undefined, callback: TsNode | undefined, parameter: string | undefined): string[] | undefined => {
+const indexOf = (withIndex: CallExpression | undefined): QueryReadIR["index"] => {
     if (withIndex === undefined) {
         return undefined;
     }
 
+    const [nameArgument, callback] = withIndex.getArguments();
+    const parameter = rowParameterOf(callback);
+    const name = nameArgument !== undefined && Node.isStringLiteral(nameArgument) ? nameArgument.getLiteralText() : undefined;
+
     if (callback === undefined) {
-        return [];
+        return { bounds: [], name };
     }
 
-    return parameter === undefined ? undefined : indexBoundsOf(callback, parameter);
+    return { bounds: parameter === undefined ? undefined : indexBoundsOf(callback, parameter), name };
 };
 
 /**
- * The literal index name, range bounds and filter fields of a read's chain. Each
- * is `undefined` when the chain does not carry it or the feeder cannot read it
- * statically, so a lint with no evidence reports nothing.
+ * The fields every literal `.filter(…)` predicate of a chain reads, sorted and
+ * de-duplicated. A chain can filter more than once, and each predicate's fields
+ * count. `undefined` when the chain has no filter, or none of its predicates is a
+ * function literal the feeder can read.
  */
-const indexAndFilterOf = (calls: ReadonlyArray<CallExpression>): Pick<QueryReadIR, "filterFields" | "indexBounds" | "indexName"> => {
-    const withIndex = calls.find((call) => methodNameOf(call) === "withIndex");
-    const predicate = calls.find((call) => methodNameOf(call) === "filter")?.getArguments()[0];
-    const [indexArgument, rangeCallback] = withIndex?.getArguments() ?? [];
-    const indexName = indexArgument !== undefined && Node.isStringLiteral(indexArgument) ? indexArgument.getLiteralText() : undefined;
-    const indexParameter = rowParameterOf(rangeCallback);
-    const rowParameter = rowParameterOf(predicate);
+const filterFieldsOfChain = (filters: ReadonlyArray<CallExpression>): string[] | undefined => {
+    const readable = filters.flatMap((call) => {
+        const predicate = call.getArguments()[0];
+        const parameter = rowParameterOf(predicate);
 
-    return {
-        filterFields: predicate === undefined || rowParameter === undefined ? undefined : filterFieldsOf(predicate, rowParameter),
-        indexBounds: boundsOf(withIndex, rangeCallback, indexParameter),
-        indexName,
-    };
+        return predicate === undefined || parameter === undefined ? [] : filterFieldsOf(predicate, parameter);
+    });
+
+    if (readable.length === 0) {
+        return undefined;
+    }
+
+    return [...new Set(readable)].toSorted((a, b) => a.localeCompare(b));
 };
 
 /**
@@ -198,40 +204,15 @@ const indexAndFilterOf = (calls: ReadonlyArray<CallExpression>): Pick<QueryReadI
 const PRIMARY_KEY_PREDICATE_RE = /\b[A-Za-z_$][\w$]*\._id\s*===?[^=]/u;
 
 /**
- * Whether the chain's `.filter()` predicate tests `_id`.
+ * Whether any of the chain's `.filter()` predicates tests `_id`.
  *
  * `.query("user").filter((d) => d._id === args.userId).first()` is a full scan
  * for a row that is directly addressable by `ctx.db.get` — always wrong, never
  * a judgement call, and invisible to `filter_without_index`, which sees only
  * that a filter has no index.
  */
-const filtersPrimaryKeyOf = (queryCall: CallExpression): boolean => {
-    let node: TsNode = queryCall;
-
-    for (;;) {
-        const parent = node.getParent();
-
-        if (!parent || !Node.isPropertyAccessExpression(parent)) {
-            return false;
-        }
-
-        const callParent = parent.getParent();
-
-        if (!callParent || !Node.isCallExpression(callParent)) {
-            return false;
-        }
-
-        if (parent.getName() === "filter") {
-            const predicate = callParent.getArguments()[0];
-
-            if (predicate && PRIMARY_KEY_PREDICATE_RE.test(predicate.getText())) {
-                return true;
-            }
-        }
-
-        node = callParent;
-    }
-};
+const filtersPrimaryKeyOf = (calls: ReadonlyArray<CallExpression>): boolean =>
+    calls.some((call) => methodNameOf(call) === "filter" && PRIMARY_KEY_PREDICATE_RE.test(call.getArguments()[0]?.getText() ?? ""));
 
 /** The literal table name from a `query("table")` call, or `""` when the argument is not a string literal. */
 const tableOf = (queryCall: CallExpression): string => {
@@ -258,18 +239,20 @@ const discoverQueries = (project: Project, lunoraDirectory: string, functions: R
 
         const calls = chainCalls(call);
         const methods = calls.map((chained) => methodNameOf(chained));
-        const hasFilter = methods.includes("filter");
+        const filters = calls.filter((chained) => methodNameOf(chained) === "filter");
+        const hasFilter = filters.length > 0;
 
         return {
             file,
-            filtersPrimaryKey: hasFilter && filtersPrimaryKeyOf(call),
+            filterFields: hasFilter ? filterFieldsOfChain(filters) : undefined,
+            filtersPrimaryKey: hasFilter && filtersPrimaryKeyOf(calls),
             hasFilter,
             hasIndex: methods.some((method) => INDEX_METHODS.has(method)),
+            index: indexOf(calls.find((chained) => methodNameOf(chained) === "withIndex")),
             line: call.getStartLineNumber(),
             scope: callSiteScopeOf(call),
             table: tableOf(call),
             terminal: methods.findLast((method) => TERMINAL_METHODS.has(method)),
-            ...indexAndFilterOf(calls),
         };
     });
 

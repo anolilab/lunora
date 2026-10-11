@@ -9,29 +9,32 @@ import selfRescheduleWithoutProgress from "../src/lints/static/self-reschedule-w
 
 const schema = fromServerSchema(defineSchema({ jobs: defineTable({ name: v.string() }) }));
 
-/** A guarded `runAfter(delay, tick)` from inside `tick` of file `jobs/sweep`. */
+/** A guarded `runAfter(delay, tick)` from inside `tick` of file `jobs/sweep`, with no args keys by default. */
 const selfEdge = (overrides: Partial<AdvisorCallEdge> = {}): AdvisorCallEdge => {
     return {
         conditional: true,
-        delayMs: 100,
         file: "jobs/sweep",
         kind: "schedule",
         line: 12,
+        schedule: { argKeys: [], delayMs: 100 },
         scope: { kind: "export", name: "tick" },
         target: "jobs_sweep:tick",
         ...overrides,
     };
 };
 
+/** A read of `jobs` in `tick`, so the function has something it re-reads on every run. */
+const selects: AdvisorQueryRead = { file: "jobs/sweep", hasFilter: false, hasIndex: false, line: 4, scope: { kind: "export", name: "tick" }, table: "jobs" };
+
 const context = (overrides: Partial<LintContext> = {}): LintContext => {
-    return { schema, ...overrides };
+    return { queries: [selects], schema, ...overrides };
 };
 
 describe("self_reschedule_without_progress", () => {
     it("finds nothing without call edges", () => {
         expect.assertions(1);
 
-        expect(selfRescheduleWithoutProgress.run(context())).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run({ schema })).toHaveLength(0);
     });
 
     it("flags a guarded self-reschedule on a short delay with no cursor", () => {
@@ -49,39 +52,57 @@ describe("self_reschedule_without_progress", () => {
         expect(findings[0]?.detail).toContain("100 ms");
     });
 
-    it("says nothing at or above one second, or for a runAt dispatch with no delay", () => {
+    it("says nothing at or above one second, or without a literal delay", () => {
         expect.assertions(2);
 
-        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ delayMs: 1000 })] }))).toHaveLength(0);
-        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ delayMs: undefined })] }))).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: [], delayMs: 1000 } })] }))).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: [] } })] }))).toHaveLength(0);
     });
 
-    it("says nothing when the re-arming passes a cursor", () => {
-        expect.assertions(1);
+    it("says nothing when the args carry a cursor key, under any of the usual names", () => {
+        expect.assertions(3);
 
-        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ passesCursor: true })] }))).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: ["cursor"], delayMs: 100 } })] }))).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: ["continueCursor"], delayMs: 100 } })] }))).toHaveLength(
+            0,
+        );
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: ["next_cursor"], delayMs: 100 } })] }))).toHaveLength(0);
     });
 
-    it("says nothing when the function removes a row it selects", () => {
+    it("still flags a key that only mentions a cursor, such as a reset flag or a mouse cursor", () => {
+        expect.assertions(2);
+
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: ["resetCursor"], delayMs: 100 } })] }))).toHaveLength(1);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: ["cursorX"], delayMs: 100 } })] }))).toHaveLength(1);
+    });
+
+    it("says nothing when the args cannot be read, since there is no evidence either way", () => {
         expect.assertions(1);
 
-        const selects: AdvisorQueryRead = {
-            file: "jobs/sweep",
-            hasFilter: false,
-            hasIndex: false,
-            line: 4,
-            scope: { kind: "export", name: "tick" },
-            table: "jobs",
-        };
-        const deletes: AdvisorTableWrite = {
-            file: "jobs/sweep",
-            line: 14,
-            method: "delete",
-            scope: { kind: "export", name: "tick" },
-            table: "jobs",
-        };
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { delayMs: 100 } })] }))).toHaveLength(0);
+    });
 
-        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()], queries: [selects], tableWrites: [deletes] }))).toHaveLength(0);
+    it("says nothing when the function removes a row it reads", () => {
+        expect.assertions(1);
+
+        const deletes: AdvisorTableWrite = { file: "jobs/sweep", line: 14, method: "delete", scope: { kind: "export", name: "tick" }, table: "jobs" };
+
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()], tableWrites: [deletes] }))).toHaveLength(0);
+    });
+
+    it("says nothing when the function has no reads, since there is nothing to re-read", () => {
+        expect.assertions(1);
+
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()], queries: [] }))).toHaveLength(0);
+    });
+
+    it("says nothing when the function calls out to another function, which may make the progress", () => {
+        expect.assertions(1);
+
+        // The batch-drain shape: the action calls a mutation that deletes, then re-arms itself.
+        const callsOut: AdvisorCallEdge = { file: "jobs/sweep", kind: "call", line: 10, scope: { kind: "export", name: "tick" }, target: "jobs_batch:drop" };
+
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge(), callsOut] }))).toHaveLength(0);
     });
 
     it("leaves an unconditional self-dispatch to dispatch_cycle, and a guarded one to this rule", () => {
@@ -91,8 +112,8 @@ describe("self_reschedule_without_progress", () => {
         const guarded = selfEdge();
 
         expect(selfRescheduleWithoutProgress.run(context({ callEdges: [unconditional] }))).toHaveLength(0);
-        expect(dispatchCycle.run(context({ callEdges: [unconditional] }))).toHaveLength(1);
-        expect(dispatchCycle.run(context({ callEdges: [guarded] }))).toHaveLength(0);
+        expect(dispatchCycle.run({ callEdges: [unconditional], schema })).toHaveLength(1);
+        expect(dispatchCycle.run({ callEdges: [guarded], schema })).toHaveLength(0);
         expect(selfRescheduleWithoutProgress.run(context({ callEdges: [guarded] }))).toHaveLength(1);
     });
 

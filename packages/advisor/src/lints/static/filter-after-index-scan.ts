@@ -8,13 +8,16 @@ import { callSiteFields, queryReadLocation } from "../helpers";
  * read. Usually the index was meant to cover the filtered field, and the range is
  * just open. Extending the index with that field lets the read seek instead.
  *
- * `filter_without_index` covers the unindexed case. A `.filter()` on the primary
- * key is `filter_on_primary_key`'s, which points at `ctx.db.get`. Both are skipped
- * here so each read gets one finding.
+ * `filter_without_index` covers the unindexed case. The `_id` part of a predicate is
+ * not a column of any index: it is `filter_on_primary_key`'s, which points at
+ * `ctx.db.get`, so `_id` is never reported here. A predicate that tests `_id` and an
+ * uncovered field is still reported, for the field.
  *
  * Reported at INFO: a filter is sometimes the right tool, for a predicate an index
  * cannot express (a comparison on a second column, a computed value). The finding
- * asks the author to decide, rather than assuming the index is wrong.
+ * asks the author to decide, rather than assuming the index is wrong. A read with an
+ * open range can also be reported by `unbounded_collect_on_open_range`, which asks
+ * for a bound instead. The two findings have different fixes, so both stay.
  *
  * Runs only when the codegen feeder supplied reads (`context.queries` present).
  */
@@ -30,26 +33,28 @@ const filterAfterIndexScan: Lint = {
     run: (context) => {
         const findings = [];
 
-        for (const read of context.queries ?? []) {
-            if (!read.hasFilter || !read.hasIndex || read.table === "" || read.indexName === undefined || read.filterFields === undefined) {
-                continue;
-            }
+        // The declared btree indexes of each table, built once rather than searched per read.
+        const indexesByTable = new Map(
+            context.schema.tables.map((table) => [
+                table.name,
+                new Map(table.indexes.filter((index) => index.kind === "index").map((index) => [index.name, index.fields])),
+            ]),
+        );
 
-            if (read.filtersPrimaryKey === true) {
+        for (const read of context.queries ?? []) {
+            if (!read.hasFilter || read.table === "" || read.index?.name === undefined || read.filterFields === undefined) {
                 continue;
             }
 
             // An index this schema does not declare is `index_references_unknown_field`'s business, not this rule's.
-            const index = context.schema.tables
-                .find((table) => table.name === read.table)
-                ?.indexes.find((candidate) => candidate.name === read.indexName && candidate.kind === "index");
+            const fields = indexesByTable.get(read.table)?.get(read.index.name);
 
-            if (index === undefined) {
+            if (fields === undefined) {
                 continue;
             }
 
-            const covered = new Set(index.fields);
-            const uncovered = read.filterFields.filter((field) => !covered.has(field));
+            const covered = new Set(fields);
+            const uncovered = read.filterFields.filter((field) => field !== "_id" && !covered.has(field));
 
             if (uncovered.length === 0) {
                 continue;
@@ -58,8 +63,8 @@ const filterAfterIndexScan: Lint = {
             findings.push(
                 emit(filterAfterIndexScan, {
                     cacheKey: `filter_after_index_scan:${read.file}:${read.line.toString()}:${read.table}`,
-                    detail: `Query on "${read.table}" at ${queryReadLocation(read)} narrows with index "${read.indexName}" and then filters on ${uncovered.map((field) => `"${field}"`).join(", ")}, which the index does not cover. The filter reads every row the index range returns and keeps only those that match.`,
-                    metadata: { ...callSiteFields(read), filteredFields: uncovered, indexName: read.indexName, table: read.table },
+                    detail: `Query on "${read.table}" at ${queryReadLocation(read)} narrows with index "${read.index.name}" and then filters on ${uncovered.map((field) => `"${field}"`).join(", ")}, which the index does not cover. The filter reads every row the index range returns and keeps only those that match.`,
+                    metadata: { ...callSiteFields(read), filteredFields: uncovered, indexName: read.index.name, table: read.table },
                 }),
             );
         }

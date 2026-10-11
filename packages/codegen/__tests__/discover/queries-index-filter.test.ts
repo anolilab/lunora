@@ -36,6 +36,11 @@ const FUNCTIONS = `
         handler: (ctx) => ctx.db.query("sessions").withIndex("by_expiry").collect(),
     });
 
+    export const twoFilters = query({
+        args: {},
+        handler: (ctx) => ctx.db.query("sessions").filter(isLive).filter((r) => r.expiresAt < 9).collect(),
+    });
+
     export const bareFilter = query({
         args: {},
         handler: (ctx) => ctx.db.query("sessions").filter(isExpired).collect(),
@@ -62,14 +67,26 @@ describe("discoverQueries index and filter evidence", () => {
     it("records the literal index name and the comparators its range callback calls", () => {
         expect.assertions(2);
 
-        expect(readIn("openRange")).toMatchObject({ indexBounds: ["gt"], indexName: "by_expiry" });
-        expect(readIn("boundedRange")?.indexBounds).toStrictEqual(["gt", "lt"]);
+        expect(readIn("openRange")?.index).toStrictEqual({ bounds: ["gt"], name: "by_expiry" });
+        expect(readIn("boundedRange")?.index?.bounds).toStrictEqual(["gt", "lt"]);
     });
 
     it("reports a bare withIndex with no callback as open: no comparators at all", () => {
         expect.assertions(1);
 
-        expect(readIn("bareIndex")).toMatchObject({ indexBounds: [], indexName: "by_expiry" });
+        expect(readIn("bareIndex")?.index).toStrictEqual({ bounds: [], name: "by_expiry" });
+    });
+
+    it("leaves the index absent on a chain with no withIndex", () => {
+        expect.assertions(1);
+
+        expect(readIn("bareFilter")?.index).toBeUndefined();
+    });
+
+    it("unions the fields of every literal filter on a chain, and reads past a non-literal first one", () => {
+        expect.assertions(1);
+
+        expect(readIn("twoFilters")?.filterFields).toStrictEqual(["expiresAt"]);
     });
 
     it("records the fields the filter predicate reads off its row parameter", () => {
@@ -81,7 +98,7 @@ describe("discoverQueries index and filter evidence", () => {
     it("leaves evidence undefined when the index name or filter predicate is not a literal", () => {
         expect.assertions(3);
 
-        expect(readIn("computedIndex")).toMatchObject({ indexName: undefined, indexBounds: ["eq"] });
+        expect(readIn("computedIndex")?.index).toStrictEqual({ bounds: ["eq"], name: undefined });
         expect(readIn("bareFilter")?.filterFields).toBeUndefined();
         expect(readIn("openRange")?.filterFields).toBeUndefined();
     });

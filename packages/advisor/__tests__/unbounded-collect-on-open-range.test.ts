@@ -8,14 +8,13 @@ import unboundedCollectOnOpenRange from "../src/lints/static/unbounded-collect-o
 
 const schema = fromServerSchema(defineSchema({ sessions: defineTable({ expiresAt: v.number() }).index("by_expiry", ["expiresAt"]) }));
 
-/** An open `withIndex` collect in export `expire` of file `sweep`, server-driven by default. */
+/** An open `withIndex` collect in export `expire` of file `sweep`, internal by default. */
 const read = (overrides: Partial<AdvisorQueryRead> = {}): AdvisorQueryRead => {
     return {
         file: "sweep",
         hasFilter: false,
         hasIndex: true,
-        indexBounds: ["gt"],
-        indexName: "by_expiry",
+        index: { bounds: ["gt"], name: "by_expiry" },
         line: 7,
         scope: { kind: "export", name: "expire" },
         table: "sessions",
@@ -29,6 +28,7 @@ const context = (overrides: Partial<LintContext> = {}): LintContext => {
     return { schema, ...overrides };
 };
 
+/** A scheduler edge that drives `sweep:expire` from another file. */
 const scheduled: AdvisorCallEdge = { file: "kick", kind: "schedule", line: 3, scope: { kind: "export", name: "start" }, target: "sweep:expire" };
 
 describe("unbounded_collect_on_open_range", () => {
@@ -46,23 +46,19 @@ describe("unbounded_collect_on_open_range", () => {
     it("flags a public-visibility read that a scheduled dispatch runs", () => {
         expect.assertions(1);
 
-        const findings = unboundedCollectOnOpenRange.run(context({ callEdges: [scheduled], queries: [read({ visibility: "public" })] }));
-
-        expect(findings).toHaveLength(1);
+        expect(unboundedCollectOnOpenRange.run(context({ callEdges: [scheduled], queries: [read({ visibility: "public" })] }))).toHaveLength(1);
     });
 
     it("flags a public read that a cron job fires", () => {
         expect.assertions(1);
 
-        const findings = unboundedCollectOnOpenRange.run(context({ cronTargets: ["sweep:expire"], queries: [read({ visibility: "public" })] }));
-
-        expect(findings).toHaveLength(1);
+        expect(unboundedCollectOnOpenRange.run(context({ cronTargets: ["sweep:expire"], queries: [read({ visibility: "public" })] }))).toHaveLength(1);
     });
 
     it("flags a bare withIndex with no range callback, which is the widest open range", () => {
         expect.assertions(1);
 
-        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexBounds: [] })] }))).toHaveLength(1);
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ index: { bounds: [], name: "by_expiry" } })] }))).toHaveLength(1);
     });
 
     it("says nothing about a public function that nothing schedules", () => {
@@ -71,10 +67,20 @@ describe("unbounded_collect_on_open_range", () => {
         expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ visibility: "public" })] }))).toHaveLength(0);
     });
 
+    it("treats an eq-only range as a lookup: silent when internal, flagged only when the server schedules it", () => {
+        expect.assertions(2);
+
+        // One value's rows is a lookup, not a sweep, so an internal function alone does not make it one.
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ index: { bounds: ["eq"], name: "by_expiry" } })] }))).toHaveLength(0);
+        expect(
+            unboundedCollectOnOpenRange.run(context({ callEdges: [scheduled], queries: [read({ index: { bounds: ["eq"], name: "by_expiry" } })] })),
+        ).toHaveLength(1);
+    });
+
     it("says nothing when the range has an upper bound", () => {
         expect.assertions(1);
 
-        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexBounds: ["gt", "lt"] })] }))).toHaveLength(0);
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ index: { bounds: ["gt", "lt"], name: "by_expiry" } })] }))).toHaveLength(0);
     });
 
     it("says nothing when the chain caps or pages the read", () => {
@@ -98,8 +104,8 @@ describe("unbounded_collect_on_open_range", () => {
     it("stays silent without the evidence it needs", () => {
         expect.assertions(3);
 
-        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexBounds: undefined })] }))).toHaveLength(0);
-        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ indexName: undefined })] }))).toHaveLength(0);
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ index: { name: "by_expiry" } })] }))).toHaveLength(0);
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ index: undefined })] }))).toHaveLength(0);
         expect(unboundedCollectOnOpenRange.run(context())).toHaveLength(0);
     });
 });
