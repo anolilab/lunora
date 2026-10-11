@@ -65,6 +65,19 @@ export const DeployKeysSection = ({ organizationId, preloaded }: SectionProps<Re
         })();
     };
 
+    /** Revoke one key. A failed revoke leaves the key live, so the failure is shown, not dropped. */
+    const handleRevoke = (id: NonNullable<typeof keys>[number]["_id"]): void => {
+        setError(null);
+
+        void (async () => {
+            try {
+                await revokeKey.mutate({ id, organizationId });
+            } catch (error_: unknown) {
+                setError(error_ instanceof Error ? error_.message : "revoke failed");
+            }
+        })();
+    };
+
     return (
         <div className="flex flex-col gap-6">
             <Card>
@@ -116,7 +129,7 @@ export const DeployKeysSection = ({ organizationId, preloaded }: SectionProps<Re
                                                         <Button
                                                             className="text-destructive hover:text-destructive"
                                                             onClick={() => {
-                                                                void revokeKey.mutate({ id: key._id, organizationId });
+                                                                handleRevoke(key._id);
                                                             }}
                                                             size="sm"
                                                             variant="ghost"
