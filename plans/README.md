@@ -19,29 +19,32 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                      | Title                                                  | Remaining                                                                   |
-| ----------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| [460](./460-cloudflare-artifacts.md)      | Cloudflare Artifacts as an action-only `ctx.artifacts` | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid) |
-| [463](./463-experimental-graduation.md)   | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages       |
-| [166](./166-enterprise-auth-saml-scim.md) | Enterprise auth: SAML SSO + SCIM                       | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated               |
+| Plan                                       | Title                                                  | Remaining                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| [460](./460-cloudflare-artifacts.md)       | Cloudflare Artifacts as an action-only `ctx.artifacts` | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
+| [463](./463-experimental-graduation.md)    | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
+| [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                       | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
+| [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                  | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
 
 ## Open (TODO)
 
-| Plan                                              | Title                                                       | Notes                                                    |
-| ------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
-| [135](./135-stable-1.0-roadmap.md)                | Road to stable 1.0.0                                        | umbrella; phase/exit-criteria tracker for `alpha → main` |
-| [306](./306-pluggable-queue-drivers.md)           | Pluggable queue-driver package                              | P2                                                       |
-| [332](./332-payment-conformance-spike.md)         | Spike: what a payment-provider conformance suite asserts    | spike; deliverable is a decision                         |
-| [168](./168-cross-shard-transactions-spike.md)    | Cross-shard transaction story                               | spike; decision first                                    |
-| [078](./078-custom-scalar-types.md)               | Custom scalar types (`v.custom`)                            | not shipped                                              |
-| [089](./089-promise-pipelining-batch.md)          | Promise pipelining over the batch transport                 | draft, design-only                                       |
-| [160](./160-adapter-voice-agent-consolidation.md) | Consolidate the voice/agent surface across the 5 adapters   | deferred                                                 |
-| [364](./364-studio-conversational-assistant.md)   | Conversational assistant for the Studio                     | P3                                                       |
-| [033](./033-stream.md)                            | Cloudflare Stream (video)                                   | P3, deferred                                             |
-| [037](./037-realtime-calls-webrtc.md)             | Cloudflare Realtime / Calls (WebRTC)                        | P3, deferred                                             |
-| [133](./133-live-cdc-and-do-consumes-do.md)       | Live CDC ingest + DO-consumes-DO shape                      | P3, demand-gated                                         |
-| [169](./169-collab-crdt.md)                       | `@lunora/collab` (CRDT / collaborative editing)             | demand-gated                                             |
-| [453](./453-embedded-runtime.md)                  | In-process runtime as an embedded (browser / device) target | phase 1 shipped; rest demand-gated                       |
+| Plan                                              | Title                                                       | Notes                                                         |
+| ------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
+| [466](./466-local-replica-client-wiring.md)       | Wire `@lunora/replica` into every client                    | decisions D1–D6 open; Phase 0 first                           |
+| [467](./467-client-split-remaining-clusters.md)   | Finish splitting `lunora-client.ts`                         | replay engine, frame handlers, admin surface; decisions D1–D3 |
+| [135](./135-stable-1.0-roadmap.md)                | Road to stable 1.0.0                                        | umbrella; phase/exit-criteria tracker for `alpha → main`      |
+| [306](./306-pluggable-queue-drivers.md)           | Pluggable queue-driver package                              | P2                                                            |
+| [332](./332-payment-conformance-spike.md)         | Spike: what a payment-provider conformance suite asserts    | spike; deliverable is a decision                              |
+| [168](./168-cross-shard-transactions-spike.md)    | Cross-shard transaction story                               | spike; decision first                                         |
+| [078](./078-custom-scalar-types.md)               | Custom scalar types (`v.custom`)                            | not shipped                                                   |
+| [089](./089-promise-pipelining-batch.md)          | Promise pipelining over the batch transport                 | draft, design-only                                            |
+| [160](./160-adapter-voice-agent-consolidation.md) | Consolidate the voice/agent surface across the 5 adapters   | deferred                                                      |
+| [364](./364-studio-conversational-assistant.md)   | Conversational assistant for the Studio                     | P3                                                            |
+| [033](./033-stream.md)                            | Cloudflare Stream (video)                                   | P3, deferred                                                  |
+| [037](./037-realtime-calls-webrtc.md)             | Cloudflare Realtime / Calls (WebRTC)                        | P3, deferred                                                  |
+| [133](./133-live-cdc-and-do-consumes-do.md)       | Live CDC ingest + DO-consumes-DO shape                      | P3, demand-gated                                              |
+| [169](./169-collab-crdt.md)                       | `@lunora/collab` (CRDT / collaborative editing)             | demand-gated                                                  |
+| [453](./453-embedded-runtime.md)                  | In-process runtime as an embedded (browser / device) target | phase 1 shipped; rest demand-gated                            |
 
 ## Reference designs
 

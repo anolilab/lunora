@@ -1,3 +1,14 @@
+## @lunora/client [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.194...@lunora/client@1.0.0-alpha.195) (2026-10-10)
+
+### Bug Fixes
+
+* **client:** fail batch slots with an unreadable body instead of throwing ([#1102](https://github.com/anolilab/lunora/issues/1102)) ([0169483](https://github.com/anolilab/lunora/commit/01694835bf164c5f02d0a14eea34849e5a283bfe))
+* **client:** keep the server code when a service error's data will not decode ([#1103](https://github.com/anolilab/lunora/issues/1103)) ([00af913](https://github.com/anolilab/lunora/commit/00af9130c287114307dc8972bd5c96b73736ef87))
+
+### Code Refactoring
+
+* **client:** move module-level helpers out of lunora-client ([#1100](https://github.com/anolilab/lunora/issues/1100)) ([c61354b](https://github.com/anolilab/lunora/commit/c61354b58a8ae03c3ffe9f52eabbe9548cf2aa95)), closes [#1104](https://github.com/anolilab/lunora/issues/1104)
+
 ## @lunora/client [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.193...@lunora/client@1.0.0-alpha.194) (2026-10-10)
 
 

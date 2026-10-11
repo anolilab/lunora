@@ -10,7 +10,7 @@
  * React Native, Node.js).
  */
 
-import type { ConnectionStatus } from "./lunora-client";
+import type { ConnectionStatus } from "./connection-state";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -532,7 +532,7 @@ class TabCoordinator {
         //
         // The status broadcast is not redundant: `emitConnectionStatus` fires
         // only on a CHANGE, and `onBecomeLeader` announces once. A tab opened
-        // later therefore heard nothing, left `leaderStatus` undefined, and
+        // later therefore heard nothing, left `leader.status` undefined, and
         // `computeStatus()` answered `"idle"` forever — reporting disconnected
         // while the app was fully live, and never producing the
         // transitioned-to-connected edge that flushes an offline queue, so a
@@ -685,5 +685,5 @@ class TabCoordinator {
     }
 }
 
-export type { TabCoordinatorOptions };
 export { TabCoordinator };
+export type { TabCoordinatorOptions };

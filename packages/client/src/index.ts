@@ -6,8 +6,10 @@ export type { AsyncStorageQueryCacheOptions } from "./async-storage-query-cache"
 export { createAsyncStorageQueryCache } from "./async-storage-query-cache";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
 export { createCallRunner } from "./call-runner";
+export type { BatchSlot } from "./call-wire";
 export type { ClientQueryRef } from "./client-query-store";
 export { createClientQuery } from "./client-query-store";
+export type { ConnectionStatus } from "./connection-state";
 export { TabCoordinator } from "./cross-tab";
 export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";
@@ -29,17 +31,13 @@ export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {
     ActionCallOptions,
-    BatchSlot,
     ClientDebugShard,
     ClientDebugSnapshot,
     ClientDebugSubscription,
-    ConnectionStatus,
-    LunoraClientError,
     MutationCallOptions,
     MutationSettledEvent,
     ReplayCredential,
     ReplayIdentityVerdict,
-    SyncWatermark,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";
@@ -56,6 +54,7 @@ export { createReconnect } from "./reconnect";
 export { default as createSnapshotPrecondition } from "./snapshot-precondition";
 export type { StreamHandle, StreamIterable } from "./stream";
 export { createStream, DEFAULT_MAX_BUFFER } from "./stream";
+export type { SyncWatermark } from "./subscription";
 export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
 export { SubscriptionRegistry } from "./subscription";
 export type {
@@ -133,3 +132,4 @@ export type {
     WorkflowStepDetail,
     WsTokenProvider,
 } from "./types";
+export type { LunoraClientError } from "./wire-errors";

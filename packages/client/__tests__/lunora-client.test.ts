@@ -3791,7 +3791,7 @@ describe("lunoraClient", () => {
 
         // `subscribeScheduledJobs` used to run a second, hand-rolled
         // socket-lifecycle implementation alongside the shard path's
-        // (`ensureSocket`/`openSocket`/`handleDisconnect`/`startHeartbeat`) —
+        // (`ensureSocket`/`openSocket`/`handleDisconnect`/`managed-socket` helpers) —
         // plan 231-D pinned the divergence with characterization tests below
         // but deliberately didn't extract (the shard `ShardConnection` record
         // threads through dozens of call sites; generalizing it blind was

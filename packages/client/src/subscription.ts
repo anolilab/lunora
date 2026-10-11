@@ -244,3 +244,38 @@ export class SubscriptionRegistry {
         this.byId.clear();
     }
 }
+
+/**
+ * Wrap a subscriber's callback in a fresh closure, so registering it in a
+ * `Set` gives THIS subscriber its own slot.
+ *
+ * Registering the caller's own function directly deduped two consumers that
+ * passed the SAME reference — a module-level handler, a `useCallback`-stable
+ * one — down to a single Set entry, so the first `unsubscribe()` emptied the
+ * set and tore the shared registration out from under the second consumer.
+ * Passes `undefined` through so an unset `onError`/`onCheckpoint` stays unset.
+ */
+export function wrapSubscriber<A>(callback: (argument: A) => void): (argument: A) => void;
+
+export function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined;
+
+export function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined {
+    if (callback === undefined) {
+        return undefined;
+    }
+
+    return (argument: A): void => {
+        callback(argument);
+    };
+}
+
+/** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
+export const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
+    for (const errorCallback of callbacks) {
+        try {
+            errorCallback(error);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
+};

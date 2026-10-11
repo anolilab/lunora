@@ -13328,7 +13328,7 @@ abstract class ShardDO {
      * A `false` can leave a `pokeStart` on the wire with no `pokeEnd` behind it
      * (the throw is per frame). That is safe by construction on the client: parts
      * are buffered and applied only at `pokeEnd`, so an abandoned poke leaves the
-     * view untouched, and `handlePokeStart` evicts the oldest buffer once the map
+     * view untouched, and `PokeAssembler.start` (packages/client/src/shape-state.ts) evicts the oldest buffer once the map
      * exceeds its cap — the abandoned ones are always the oldest.
      */
     private sendPoke(

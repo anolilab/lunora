@@ -98,6 +98,31 @@ describe("client batch transport (088)", () => {
         expect(slots[1]?.ok).toBe(false);
     });
 
+    it("fails a slot whose body is null, empty, or missing, without throwing", async () => {
+        expect.assertions(4);
+
+        // §4.2: a slot body is `{ result }` or `{ error }`. A `null` body threw a
+        // TypeError from `"error" in inner`, which abandoned the whole batch, and an
+        // empty object read as a successful call with no value.
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+            jsonResponse({
+                results: [
+                    { body: null, id: 0, status: 200 },
+                    { body: {}, id: 1, status: 200 },
+                    { body: { result: encodeWire(7n) }, id: 2, status: 200 },
+                    { id: 3, status: 200 },
+                ],
+            }),
+        );
+
+        const slots = await client(fetchMock).batch([{ fn: fnRef("docs:a") }, { fn: fnRef("docs:b") }, { fn: fnRef("docs:c") }, { fn: fnRef("docs:d") }]);
+
+        expect(slots[0]?.ok).toBe(false);
+        expect(slots[1]?.ok).toBe(false);
+        expect(slots[2]).toStrictEqual({ ok: true, value: 7n });
+        expect(slots[3]?.ok).toBe(false);
+    });
+
     it("rejects the whole batch (not per-slot) when the worker returns a batch-level error", async () => {
         expect.assertions(2);
 
