@@ -30,12 +30,15 @@ data, erases it, cancels a pending erasure, and sees the requests they have open
 
 | File                        | Role                                                                    |
 | --------------------------- | ----------------------------------------------------------------------- |
-| `lunora/schema.ts`          | `tasks`, the export parts table, and `privacyExtension`                 |
+| `lunora/schema.ts`          | `tasks`, the export parts table, rate limits, and `privacyExtension`    |
+| `lunora/tasks.ts`           | the task list the subject owns                                          |
 | `lunora/privacy.ts`         | the dataset, `definePrivacy`, and the workflow handlers                 |
 | `lunora/privacy-ports.ts`   | the ports over `ctx.db`, and the wire format for workflow steps         |
-| `lunora/privacy-api.ts`     | the client functions and the internal `privacyTick` and `privacyPort`   |
+| `lunora/requests.ts`        | the client functions, and the internal `privacyTick` and `privacyPort`  |
 | `lunora/workflows.ts`       | `privacyExport` and `privacyErasure`, built from the package's handlers |
 | `lunora/crons.ts`           | the daily deadline sweep                                                |
+| `lunora/subject.ts`         | the subject and session age, taken from the caller's session            |
+| `lunora/limits.ts`          | the rate limit every public write shares                                |
 | `__tests__/privacy.test.ts` | export, download, erasure, cancel and the session check                 |
 
 ## Run it
