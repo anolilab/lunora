@@ -16,11 +16,15 @@ import { canCancel, canExtend, erasureGraceUntil, isTerminal, transition } from 
 interface RequestRecord {
     readonly dueAt: Date;
     readonly erasureGraceUntil?: Date;
+    /** When the archive stops being downloadable. */
+    readonly expiresAt?: Date;
     readonly extendedDueAt?: Date;
     readonly id: string;
     readonly reason?: string;
     readonly receivedAt: Date;
     readonly status: RequestStatus;
+    /** Where the finished archive is kept, once the request is ready. */
+    readonly storageKey?: string;
     readonly subjectId: string;
     readonly type: RequestType;
 }

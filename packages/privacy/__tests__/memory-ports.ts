@@ -48,6 +48,7 @@ export const memoryFiles = (): StorePort & { files: Map<string, Uint8Array | str
 
             return typeof value === "string" ? value : undefined;
         },
+        signedUrl: async (key, ttlSeconds) => `https://files.test/${key}?ttl=${String(ttlSeconds)}`,
     };
 };
 

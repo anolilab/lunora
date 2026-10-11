@@ -225,10 +225,18 @@ interface ManifestDataset {
 
 ```ts
 interface Privacy {
+    readonly admin: {
+        readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
+        readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
+    };
     readonly cancelRequest: (input: {
         requestId: string;
     }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
+    readonly downloadUrl: (input: {
+        requestId: string;
+        subjectId: string;
+    }) => Promise<string>;
     readonly extendRequest: (input: {
         reason: string;
         requestId: string;
@@ -302,11 +310,13 @@ type PrivacyTableName = "archive" | "events" | "holds" | "requests" | "tombstone
 interface RequestRecord {
     readonly dueAt: Date;
     readonly erasureGraceUntil?: Date;
+    readonly expiresAt?: Date;
     readonly extendedDueAt?: Date;
     readonly id: string;
     readonly reason?: string;
     readonly receivedAt: Date;
     readonly status: RequestStatus;
+    readonly storageKey?: string;
     readonly subjectId: string;
     readonly type: RequestType;
 }
@@ -389,6 +399,7 @@ interface StorePort {
         readonly name: string;
     }) => Promise<string>;
     readonly read: (requestId: string, name: string) => Promise<string | undefined>;
+    readonly signedUrl: (key: string, ttlSeconds: number) => Promise<string>;
 }
 ```
 

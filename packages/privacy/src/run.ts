@@ -33,6 +33,8 @@ interface StorePort {
     readonly put: (requestId: string, file: { readonly data: Uint8Array | string; readonly name: string }) => Promise<string>;
     /** The text of a file written earlier in the same request, or `undefined` if it is not there. */
     readonly read: (requestId: string, name: string) => Promise<string | undefined>;
+    /** A short-lived link to a stored file. The caller decides the lifetime, and the link is checked by the host. */
+    readonly signedUrl: (key: string, ttlSeconds: number) => Promise<string>;
 }
 
 /** The run's shared inputs. */
@@ -58,6 +60,9 @@ interface ErasureOutcome {
 }
 
 const partName = (dataset: Dataset): string => `parts/${dataset.id}.json`;
+
+/** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
+const EXPORT_EXPIRY_MS: number = 7 * 24 * 60 * 60 * 1000;
 
 const retentionText = (dataset: Dataset): string => {
     const names = [
@@ -152,7 +157,7 @@ const runExport = async (context: RunContext, datasets: ReadonlyArray<Dataset>, 
         const archiveKey = await assembleExport(context, datasets, request);
 
         status = transition(status, "ready");
-        await context.store.update(request.id, { status });
+        await context.store.update(request.id, { expiresAt: new Date(context.now().getTime() + EXPORT_EXPIRY_MS), status, storageKey: archiveKey });
         await context.store.addEvent(request.id, context.now(), "ready");
 
         return { archiveKey, status };
@@ -207,3 +212,5 @@ const runErasure = async (context: RunContext, datasets: ReadonlyArray<Dataset>,
 };
 
 export { assembleExport, collectPart, type DataPort, type ErasureOutcome, type ExportOutcome, type RunContext, runErasure, runExport, type StorePort };
+
+export { EXPORT_EXPIRY_MS };

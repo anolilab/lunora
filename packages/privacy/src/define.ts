@@ -17,7 +17,7 @@ import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
 import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
-import { assembleExport, collectPart, runErasure, runExport } from "./run";
+import { assembleExport, collectPart, EXPORT_EXPIRY_MS, runErasure, runExport } from "./run";
 
 /** The app's erasure settings. The defaults are the decided values (D3 and the sign-in window). */
 interface ErasureOptions {
@@ -51,8 +51,17 @@ interface PrivacyWorkflowContext {
 
 /** The bound API. */
 interface Privacy {
+    /** Operator views and actions. Each one is for the operator's own console, not the subject. */
+    readonly admin: {
+        /** Every request that is not yet terminal. */
+        readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
+        /** Re-run a failed export or erasure. The Art. 12(3) clock keeps running throughout. */
+        readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
+    };
     readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
+    /** The subject's download link for a finished export. Refused for anyone but the subject, and once expired. */
+    readonly downloadUrl: (input: { requestId: string; subjectId: string }) => Promise<string>;
     readonly extendRequest: (input: { reason: string; requestId: string }) => Promise<RequestRecord>;
     readonly requestErasure: (input: { sessionAgeMs: number; subjectId: string }) => Promise<RequestRecord>;
     readonly requestExport: (input: { subjectId: string }) => Promise<RequestRecord>;
@@ -66,6 +75,9 @@ interface Privacy {
         readonly exportHandler: (context: PrivacyWorkflowContext) => Promise<void>;
     };
 }
+
+/** A download link lives fifteen minutes (the plan's D5). */
+const DOWNLOAD_TTL_SECONDS = 15 * 60;
 
 const DEFAULT_GRACE_DAYS = 14;
 const DEFAULT_DRAIN_BUDGET_DAYS = 3;
@@ -130,7 +142,14 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
 
             const archiveKey = await context.step.do("assemble", async () => assembleExport(runContext, config.datasets, record));
 
-            await context.step.do("ready", async () => setStatus(record, transition("processing", "ready"), archiveKey));
+            await context.step.do("ready", async () => {
+                await config.store.update(record.id, {
+                    expiresAt: new Date(config.now().getTime() + EXPORT_EXPIRY_MS),
+                    status: transition("processing", "ready"),
+                    storageKey: archiveKey,
+                });
+                await config.store.addEvent(record.id, config.now(), "ready", archiveKey);
+            });
         } catch (error) {
             await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
         }
@@ -224,6 +243,41 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
             const record = await requireRequest(requestId);
 
             return runExport(contextFor(record), config.datasets, record);
+        },
+
+        admin: {
+            open: async () => config.store.listOpen(),
+
+            retry: async (requestId) => {
+                const record = await requireRequest(requestId);
+
+                if (record.status !== "failed") {
+                    throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
+                }
+
+                return record.type === "export"
+                    ? runExport(contextFor(record), config.datasets, record)
+                    : runErasure(contextFor(record), config.datasets, record);
+            },
+        },
+
+        downloadUrl: async ({ requestId, subjectId }) => {
+            const record = await requireRequest(requestId);
+
+            // A request for someone else reads as not found, so a caller cannot probe which ids exist.
+            if (record.subjectId !== subjectId || record.type !== "export") {
+                throw new LunoraError("NOT_FOUND", `No export with id ${requestId}.`);
+            }
+
+            if (record.status !== "ready" || record.storageKey === undefined) {
+                throw new LunoraError("UNPROCESSABLE", "This export is not ready to download.");
+            }
+
+            if (record.expiresAt !== undefined && config.now().getTime() > record.expiresAt.getTime()) {
+                throw new LunoraError("UNPROCESSABLE", "This export has expired. Request a new one.");
+            }
+
+            return config.files.signedUrl(record.storageKey, DOWNLOAD_TTL_SECONDS);
         },
 
         tick: async () => {
