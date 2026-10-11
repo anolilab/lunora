@@ -47,9 +47,16 @@ export interface InstallInput {
     values: InstallValues;
 }
 
-/** A stored secret as it was before this install touched it, sealed, so it can be put back. */
+/** The environment an install writes its secrets to. */
+const INSTALL_ENVIRONMENT = "production";
+
+/**
+ * A stored secret row as it was before this install touched it, sealed, with the
+ * environment it belongs to, so it is put back into that same environment.
+ */
 export interface SealedSecret {
     ciphertext: string;
+    environment: "all" | "dev" | "preview" | "production";
     iv: string;
     name: string;
 }
@@ -93,11 +100,11 @@ export interface InstallPorts {
     release: (request: InstallRelease, key: string, installId: string) => Promise<ReleaseOutcome>;
     /** Remove a secret the install created. */
     removeSecret: (name: string) => Promise<void>;
-    /** Put a secret back exactly as it was. */
+    /** Put a secret row back exactly as it was, in the environment it came from. */
     restoreSecret: (secret: SealedSecret) => Promise<void>;
     /** Revoke the key minted for this install. */
     revokeReleaseKey: (installId: string, id: string) => Promise<void>;
-    /** The sealed current value of each named secret that exists. */
+    /** The sealed raw rows of each named secret that exists, in whatever environment each one is. */
     snapshotSecrets: (names: string[]) => Promise<SealedSecret[]>;
     /** Names of the project's production secrets. */
     storedSecretNames: () => Promise<string[]>;
@@ -467,9 +474,11 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
     let snapshot = new Map<string, SealedSecret>();
 
     try {
+        // The install writes only its own environment's rows. An "all" row it shadows is not
+        // touched, so the snapshot holds the install-environment rows alone.
         const sealed = await ports.snapshotSecrets(names);
 
-        snapshot = new Map(sealed.map((secret) => [secret.name, secret]));
+        snapshot = new Map(sealed.filter((secret) => secret.environment === INSTALL_ENVIRONMENT).map((secret) => [secret.name, secret]));
 
         await inSequence(names, async (name) => {
             touched.push(name);

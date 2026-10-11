@@ -242,7 +242,7 @@ describe(runInstall, () => {
     });
 
     it("puts back a secret that existed before the install, and removes one it created, when storing fails", async () => {
-        const previous: SealedSecret = { ciphertext: "old", iv: "iv", name: "TOKEN" };
+        const previous: SealedSecret = { ciphertext: "old", environment: "production", iv: "iv", name: "TOKEN" };
         const { ports } = portsWith({
             snapshotSecrets: vi.fn<InstallPorts["snapshotSecrets"]>(async () => [previous]),
             storeSecret: vi.fn<InstallPorts["storeSecret"]>(async (name: string) => {
@@ -298,7 +298,7 @@ describe(runInstall, () => {
     });
 
     it("leaves the secrets alone once a newer install has taken the claim", async () => {
-        const previous: SealedSecret = { ciphertext: "old", iv: "iv", name: "TOKEN" };
+        const previous: SealedSecret = { ciphertext: "old", environment: "production", iv: "iv", name: "TOKEN" };
         const { ports } = portsWith({
             holdsClaim: vi.fn<InstallPorts["holdsClaim"]>(async () => false),
             release: vi.fn<InstallPorts["release"]>(async () => {

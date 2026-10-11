@@ -152,7 +152,7 @@ const parseInstallBody = (raw: unknown): { body: CatalogInstallBody; ok: true } 
  * are sealed here, at the edge, and written to the production environment; the
  * release key is one minted for this install alone, and it expires on its own.
  */
-const installPorts = (
+export const installPorts = (
     context: ReturnType<typeof requireContext>,
     organizationId: string,
     projectId: string,
@@ -219,7 +219,7 @@ const installPorts = (
         restoreSecret: async (secret) => {
             await context.runMutation(api.secrets.store, {
                 ciphertext: secret.ciphertext,
-                environment: "production",
+                environment: secret.environment,
                 iv: secret.iv,
                 name: secret.name,
                 organizationId,
@@ -229,17 +229,7 @@ const installPorts = (
         revokeReleaseKey: async (installId, id) => {
             await context.runMutation(internal.deploy_keys.removeInstallKey, { id, installId });
         },
-        snapshotSecrets: async (names) => {
-            const current = await context.runQuery<{ ciphertext: string; iv: string; name: string }[]>(api.secrets.listEncrypted, {
-                environment: "production",
-                organizationId,
-                projectId,
-            });
-
-            const wanted = new Set(names);
-
-            return current.filter((secret) => wanted.has(secret.name)) satisfies SealedSecret[];
-        },
+        snapshotSecrets: (names) => context.runQuery<SealedSecret[]>(internal.secrets.snapshotRows, { names, organizationId, projectId }),
         storedSecretNames: async () => {
             const rows = await storedSecrets();
 

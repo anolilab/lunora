@@ -272,6 +272,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "secrets:list": lunora_secrets_29.list as unknown as RegisteredLunoraFunction,
     "secrets:listEncrypted": lunora_secrets_29.listEncrypted as unknown as RegisteredLunoraFunction,
     "secrets:remove": lunora_secrets_29.remove as unknown as RegisteredLunoraFunction,
+    "secrets:snapshotRows": lunora_secrets_29.snapshotRows as unknown as RegisteredLunoraFunction,
     "secrets:store": lunora_secrets_29.store as unknown as RegisteredLunoraFunction,
     "sessions:get": lunora_sessions_30.get as unknown as RegisteredLunoraFunction,
     "sessions:list": lunora_sessions_30.list as unknown as RegisteredLunoraFunction,
@@ -1433,6 +1434,7 @@ export interface Caller {
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
         listEncrypted: (args: { deployKey?: unknown; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; iv: string; name: string; }[]>;
         remove: (args: { id: Id<"secrets">; organizationId: Id<"organizations"> }) => Promise<void>;
+        snapshotRows: (args: { names: Array<unknown>; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string; }[]>;
         store: (args: { ciphertext: unknown; environment?: "all" | "production" | "preview" | "dev"; iv: unknown; name: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
     };
     sessions: {
@@ -1755,6 +1757,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         list: (args) => callRegistered(context, "secrets:list", args),
         listEncrypted: (args) => callRegistered(context, "secrets:listEncrypted", args),
         remove: (args) => callRegistered(context, "secrets:remove", args),
+        snapshotRows: (args) => callRegistered(context, "secrets:snapshotRows", args),
         store: (args) => callRegistered(context, "secrets:store", args),
     },
     sessions: {

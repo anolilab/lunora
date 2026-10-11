@@ -1,6 +1,6 @@
 import { secretsForKind } from "../src/secrets/select";
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -113,6 +113,30 @@ export const listEncrypted = query
             return secretsForKind(page as SecretRow[], environment ?? "production").map((secret) => {
                 return { ciphertext: secret.ciphertext, iv: secret.iv, name: secret.name };
             });
+        },
+    );
+
+/**
+ * The raw rows of the named secrets, every environment, ciphertext included, for the
+ * app catalog's rollback. `listEncrypted` merges "all" rows into a kind's view, so a
+ * snapshot taken from it cannot say which environment a row came from. Internal:
+ * only the install route calls it, after it has checked the caller's role.
+ */
+export const snapshotRows = internalQuery
+    .input({ names: v.array(boundedString(LIMITS.name)), organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .query(
+        async ({
+            ctx: context,
+            args: { names, organizationId, projectId },
+        }): Promise<{ ciphertext: string; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string }[]> => {
+            const wanted = new Set(names);
+            const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
+
+            return (page as SecretRow[])
+                .filter((secret) => wanted.has(secret.name))
+                .map((secret) => {
+                    return { ciphertext: secret.ciphertext, environment: secret.environment, iv: secret.iv, name: secret.name };
+                });
         },
     );
 
