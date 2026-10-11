@@ -1,13 +1,19 @@
 # Plan 475 — The dispatcher must fail closed when the control plane is not configured
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** PARTIAL on `feat/cloud-dispatcher-fail-closed`. Workstreams A, B (test), D shipped; C not done.
+**Status:** PARTIAL on `feat/cloud-dispatcher-fail-closed`. Workstreams A, B (test), D shipped; C not done. The PR #1122
+review round is closed: one control-plane decision per request, one 503 refusal shape, a missing lineage secret counted
+as a misconfiguration rather than `forged`, and the counter read back. Still open: the staging and production
+`CONTROL_PLANE_URL` hosts (the user provides them), and the drill and counter check in C.
 
 - **A shipped.** `LUNORA_ENVIRONMENT` is in all three `dispatcher.wrangler.jsonc` blocks. Outside `development`
   (absent or unrecognised counts as enforced) a request without a control plane gets 503 `control_plane_unconfigured`,
-  `retry-after: 30`, logged once per isolate, counted in `PLATFORM_METRICS` (`control_plane_unconfigured` kind). The gate
-  runs before routing, so custom and redirect domains are refused too. Lineage follows §4.3: a header with no
-  `LUNORA_LINEAGE_SECRET` outside `development` gets 503 `lineage_unverifiable`, logged. No header is unaffected.
+  `retry-after: 30`, logged once per isolate, counted in `PLATFORM_METRICS` (`control_plane_unconfigured` kind, `setting`
+  `control_plane`) and read back by `GET /v1/platform/metrics` as `controlPlaneUnconfigured`. The gate runs before
+  routing, so custom and redirect domains are refused too. Lineage follows §4.3: a header with no
+  `LUNORA_LINEAGE_SECRET` outside `development` gets 503 `lineage_unverifiable`, `retry-after: 30`, counted with
+  `setting` `lineage_secret` and logged once per isolate. It is not counted as `forged`, which stays for headers that
+  fail verification. No header is unaffected.
 - **B shipped, and RED.** `__tests__/dispatcher-config.test.ts` enforces the rules. It fails on the two
   `<replace-with-…-control-plane-url>` values (staging and production). No hostname was guessed. The only known
   production candidate is `https://cloud.lunora.app` (the control plane's OTLP endpoint in `wrangler.jsonc`), which is
