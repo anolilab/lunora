@@ -18,13 +18,17 @@ describe("tick", () => {
         const store = memoryRequests();
         let clock = new Date("2026-04-10T00:00:00.000Z");
         const privacy = definePrivacy({
-            data: memoryData({ tasks: 0 }),
             datasets: [tasks],
-            files: memoryFiles(),
-            newId: () => "r1",
-            now: () => clock,
-            store,
-        });
+            ports: () => {
+                return {
+                    data: memoryData({ tasks: 0 }),
+                    files: memoryFiles(),
+                    newId: () => "r1",
+                    now: () => clock,
+                    store,
+                };
+            },
+        })(undefined);
 
         await privacy.requestExport({ subjectId: "u1" });
         // Deadline is 10 May; seven days before it is 3 May.
@@ -40,13 +44,17 @@ describe("tick", () => {
         const store = memoryRequests();
         let clock = new Date("2026-04-10T00:00:00.000Z");
         const privacy = definePrivacy({
-            data: memoryData({ tasks: 0 }),
             datasets: [tasks],
-            files: memoryFiles(),
-            newId: () => "r2",
-            now: () => clock,
-            store,
-        });
+            ports: () => {
+                return {
+                    data: memoryData({ tasks: 0 }),
+                    files: memoryFiles(),
+                    newId: () => "r2",
+                    now: () => clock,
+                    store,
+                };
+            },
+        })(undefined);
 
         await privacy.requestExport({ subjectId: "u1" });
         clock = new Date(new Date("2026-05-10T00:00:00.000Z").getTime() + DAY_MS);
@@ -60,13 +68,17 @@ describe("tick", () => {
         const store = memoryRequests();
         const clock = new Date("2026-04-10T00:00:00.000Z");
         const privacy = definePrivacy({
-            data: memoryData({ tasks: 0 }),
             datasets: [tasks],
-            files: memoryFiles(),
-            newId: () => "r3",
-            now: () => clock,
-            store,
-        });
+            ports: () => {
+                return {
+                    data: memoryData({ tasks: 0 }),
+                    files: memoryFiles(),
+                    newId: () => "r3",
+                    now: () => clock,
+                    store,
+                };
+            },
+        })(undefined);
 
         await privacy.requestExport({ subjectId: "u1" });
         store.rows.set("r3", { ...store.rows.get("r3")!, status: "completed" });

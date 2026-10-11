@@ -26,17 +26,21 @@ const build = (rows: Readonly<Record<string, number>> = EMPTY_TABLES) => {
     const data = memoryData(rows);
     let counter = 0;
     const privacy = definePrivacy({
-        data,
         datasets: [tasks],
-        files,
-        newId: () => {
-            counter += 1;
-            return `req-${String(counter)}`;
+        ports: () => {
+            return {
+                data,
+                files,
+                newId: () => {
+                    counter += 1;
+                    return `req-${String(counter)}`;
+                },
+                now: () => now,
+                store,
+            };
         },
-        now: () => now,
         presets: [eu(), germany()],
-        store,
-    });
+    })(undefined);
 
     return { data, files, privacy, store };
 };

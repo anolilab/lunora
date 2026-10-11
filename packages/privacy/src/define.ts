@@ -28,23 +28,35 @@ interface ErasureOptions {
     readonly graceDays?: number;
 }
 
-/** Everything `definePrivacy` needs from the app. */
-interface PrivacyConfig {
+/** The ports one invocation binds: the app's data, storage, requests and clock. */
+interface PrivacyPorts {
     readonly data: DataPort;
+    readonly files: StorePort;
+    readonly newId: () => string;
+    readonly now: () => Date;
+    readonly store: RequestStore;
+    /** Where erased subjects are tombstoned, so a restored backup can be erased again. Optional; `restore` needs it. */
+    readonly tombstones?: TombstonePort;
+}
+
+/**
+ * Everything `definePrivacy` needs from the app. The ports depend on the invocation: a
+ * mutation's `ctx.db` exists only inside that call, so `ports` runs once per call with
+ * the caller's context.
+ */
+interface PrivacyConfig<C> {
     readonly datasets: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
     /** Tables left out of the export and erasure, each with the reason the reviewer reads. */
     readonly exclude?: Readonly<Record<string, string>>;
-    readonly files: StorePort;
-    readonly newId: () => string;
-    readonly now: () => Date;
+    readonly ports: (context: C) => PrivacyPorts;
     readonly presets?: ReadonlyArray<PrivacyPreset>;
-    readonly store: RequestStore;
     /** The identifier the archive shows for the subject. Defaults to the subject id itself. */
     readonly subjectKey?: (subjectId: string) => string;
-    /** Where erased subjects are tombstoned, so a restored backup can be erased again. Optional; `restore` needs it. */
-    readonly tombstones?: TombstonePort;
 }
+
+/** Binds an invocation's context into the API. Call it once per invocation: `privacyFor(ctx).requestExport(...)`. */
+type PrivacyFor<C> = (context: C) => Privacy;
 
 /** The step surface a Workflow handler receives. Matches the native `WorkflowStep` methods the package uses. */
 interface PrivacyWorkflowContext {
@@ -93,8 +105,11 @@ const DEFAULT_FRESH_AGE_MS = 24 * 60 * 60 * 1000;
 /** Warn an operator this long before a request's deadline. */
 const DEADLINE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Bind the config into the API. Pure construction: nothing runs until a method is called. */
-const definePrivacy = (config: PrivacyConfig): Privacy => {
+/**
+ * Bind the settings into a factory. Pure construction: nothing runs until a method is
+ * called, and each call of the factory binds the ports for that invocation.
+ */
+const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
     const rules = new Map<string, RetentionRule>();
 
     for (const preset of config.presets ?? []) {
@@ -109,228 +124,233 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
         graceDays: config.erasure?.graceDays ?? DEFAULT_GRACE_DAYS,
     };
     const subjectKey = config.subjectKey ?? ((subjectId: string) => subjectId);
-    const base = { data: config.data, files: config.files, now: config.now, rules, store: config.store };
 
-    const contextFor = (record: RequestRecord): RunContext => {
-        return { ...base, subjectKey: subjectKey(record.subjectId) };
-    };
+    const bind = (ports: PrivacyPorts): Privacy => {
+        const base = { data: ports.data, files: ports.files, now: ports.now, rules, store: ports.store };
 
-    const requireRequest = async (requestId: string): Promise<RequestRecord> => {
-        const record = await config.store.get(requestId);
+        const eraseDataset = async (dataset: Dataset, subjectId: string): Promise<void> => {
+            await drainUntilEmpty(() => ports.data.eraseBatch(dataset, subjectId, ports.now()));
+        };
 
-        if (record === undefined) {
-            throw new LunoraError("NOT_FOUND", `No privacy request with id ${requestId}.`);
-        }
+        const contextFor = (record: RequestRecord): RunContext => {
+            return { ...base, subjectKey: subjectKey(record.subjectId) };
+        };
 
-        return record;
-    };
+        const requireRequest = async (requestId: string): Promise<RequestRecord> => {
+            const record = await ports.store.get(requestId);
 
-    const setStatus = async (record: RequestRecord, status: RequestStatus, detail?: string): Promise<void> => {
-        await config.store.update(record.id, { status });
-        await config.store.addEvent(record.id, config.now(), status, detail);
-    };
-
-    const markFailed = async (record: RequestRecord, message: string): Promise<void> => {
-        await setStatus(record, "failed", message);
-    };
-
-    const exportHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
-        const { requestId } = context.params;
-        const record = await context.step.do("load", async () => requireRequest(requestId));
-        const runContext = contextFor(record);
-
-        try {
-            await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
-
-            for (const dataset of config.datasets) {
-                // Each dataset is one step: its rows go to storage, so the step returns nothing large.
-                // eslint-disable-next-line no-await-in-loop -- durable steps run in order by design
-                await context.step.do(`collect:${dataset.id}`, async () => collectPart(runContext, dataset, record));
+            if (record === undefined) {
+                throw new LunoraError("NOT_FOUND", `No privacy request with id ${requestId}.`);
             }
 
-            const archiveKey = await context.step.do("assemble", async () => assembleExport(runContext, config.datasets, record));
+            return record;
+        };
 
-            await context.step.do("ready", async () => {
-                await config.store.update(record.id, {
-                    expiresAt: new Date(config.now().getTime() + EXPORT_EXPIRY_MS),
-                    status: transition("processing", "ready"),
-                    storageKey: archiveKey,
-                });
-                await config.store.addEvent(record.id, config.now(), "ready", archiveKey);
-            });
-        } catch (error) {
-            await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
-        }
-    };
+        const setStatus = async (record: RequestRecord, status: RequestStatus, detail?: string): Promise<void> => {
+            await ports.store.update(record.id, { status });
+            await ports.store.addEvent(record.id, ports.now(), status, detail);
+        };
 
-    const erasureHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
-        const { requestId } = context.params;
-        const record = await context.step.do("load", async () => requireRequest(requestId));
+        const markFailed = async (record: RequestRecord, message: string): Promise<void> => {
+            await setStatus(record, "failed", message);
+        };
 
-        if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
-            await context.step.sleepUntil("grace", record.erasureGraceUntil);
+        const exportHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
+            const { requestId } = context.params;
+            const record = await context.step.do("load", async () => requireRequest(requestId));
+            const runContext = contextFor(record);
 
-            // A subject who cancelled during the grace leaves the request cancelled, so the erasure stops here.
-            const current = await context.step.do("recheck", async () => requireRequest(requestId));
-
-            if (current.status !== "grace") {
-                return;
-            }
-        }
-
-        try {
-            await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
-
-            for (const dataset of erasureOrder(config.datasets)) {
-                // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
-                const drain = async (): Promise<void> => {
-                    await drainUntilEmpty(() => config.data.eraseBatch(dataset, record.subjectId, config.now()));
-                };
-
-                // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
-                await context.step.do(`erase:${dataset.id}`, drain);
-            }
-
-            await context.step.do("verify", async () => {
-                const remaining: Record<string, number> = {};
+            try {
+                await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
 
                 for (const dataset of config.datasets) {
-                    // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
-                    Object.assign(remaining, await config.data.remaining(dataset, record.subjectId));
+                    // Each dataset is one step: its rows go to storage, so the step returns nothing large.
+                    // eslint-disable-next-line no-await-in-loop -- durable steps run in order by design
+                    await context.step.do(`collect:${dataset.id}`, async () => collectPart(runContext, dataset, record));
                 }
 
-                const verdict = verifyErasure(remaining);
+                const archiveKey = await context.step.do("assemble", async () => assembleExport(runContext, config.datasets, record));
 
-                await setStatus(record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
+                await context.step.do("ready", async () => {
+                    await ports.store.update(record.id, {
+                        expiresAt: new Date(ports.now().getTime() + EXPORT_EXPIRY_MS),
+                        status: transition("processing", "ready"),
+                        storageKey: archiveKey,
+                    });
+                    await ports.store.addEvent(record.id, ports.now(), "ready", archiveKey);
+                });
+            } catch (error) {
+                await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
+            }
+        };
 
-                if (verdict.complete && config.tombstones !== undefined) {
-                    await config.tombstones.add(tombstoneKeyOf(record.subjectId), config.now());
-                }
-            });
-        } catch (error) {
-            await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
-        }
-    };
+        const erasureHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
+            const { requestId } = context.params;
+            const record = await context.step.do("load", async () => requireRequest(requestId));
 
-    return {
-        cancelRequest: async ({ requestId }) => cancelRequest(config.store, { id: requestId, now: config.now() }),
+            if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
+                await context.step.sleepUntil("grace", record.erasureGraceUntil);
 
-        coverage: (tables, exclusions = {}) => {
-            const allExclusions = { ...config.exclude, ...exclusions };
-            const classifications: Record<string, TableClassification | undefined> = {};
+                // A subject who cancelled during the grace leaves the request cancelled, so the erasure stops here.
+                const current = await context.step.do("recheck", async () => requireRequest(requestId));
 
-            for (const dataset of config.datasets) {
-                for (const table of dataset.tableNames) {
-                    classifications[table] = { dataset: dataset.id };
+                if (current.status !== "grace") {
+                    return;
                 }
             }
 
-            for (const [table, reason] of Object.entries(allExclusions)) {
-                classifications[table] = { excluded: reason };
-            }
+            try {
+                await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
 
-            return checkCoverage(tables, classifications);
-        },
-
-        extendRequest: async ({ requestId, reason }) => extendRequest(config.store, { id: requestId, now: config.now(), reason }),
-
-        requestErasure: async ({ sessionAgeMs, subjectId }) =>
-            openRequest(config.store, {
-                erasure,
-                id: config.newId(),
-                now: config.now(),
-                sessionAgeMs,
-                subjectId,
-                type: "erasure",
-            }),
-
-        requestExport: async ({ subjectId }) => openRequest(config.store, { id: config.newId(), now: config.now(), subjectId, type: "export" }),
-
-        restore: async ({ restoredSubjectIds }) => {
-            if (config.tombstones === undefined) {
-                throw new LunoraError("BAD_REQUEST", "restore needs a tombstone store: pass `tombstones` to definePrivacy.");
-            }
-
-            const subjects = await subjectsToReerase(restoredSubjectIds, config.tombstones);
-
-            for (const subjectId of subjects) {
-                // Re-erase each subject's rows in the same order a first erasure uses.
                 for (const dataset of erasureOrder(config.datasets)) {
-                    // eslint-disable-next-line no-await-in-loop -- one drain per dataset, in order
-                    await drainUntilEmpty(() => config.data.eraseBatch(dataset, subjectId, config.now()));
+                    // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
+                    // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
+                    await context.step.do(`erase:${dataset.id}`, async () => eraseDataset(dataset, record.subjectId));
                 }
+
+                await context.step.do("verify", async () => {
+                    const remaining: Record<string, number> = {};
+
+                    for (const dataset of config.datasets) {
+                        // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
+                        Object.assign(remaining, await ports.data.remaining(dataset, record.subjectId));
+                    }
+
+                    const verdict = verifyErasure(remaining);
+
+                    await setStatus(record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
+
+                    if (verdict.complete && ports.tombstones !== undefined) {
+                        await ports.tombstones.add(tombstoneKeyOf(record.subjectId), ports.now());
+                    }
+                });
+            } catch (error) {
+                await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
             }
+        };
 
-            return subjects;
-        },
+        return {
+            cancelRequest: async ({ requestId }) => cancelRequest(ports.store, { id: requestId, now: ports.now() }),
 
-        runErasure: async (requestId) => {
-            const record = await requireRequest(requestId);
-            const outcome = await runErasure(contextFor(record), config.datasets, record);
+            coverage: (tables, exclusions = {}) => {
+                const allExclusions = { ...config.exclude, ...exclusions };
+                const classifications: Record<string, TableClassification | undefined> = {};
 
-            if (outcome.status === "completed" && config.tombstones !== undefined) {
-                await config.tombstones.add(tombstoneKeyOf(record.subjectId), config.now());
-            }
+                for (const dataset of config.datasets) {
+                    for (const table of dataset.tableNames) {
+                        classifications[table] = { dataset: dataset.id };
+                    }
+                }
 
-            return outcome;
-        },
+                for (const [table, reason] of Object.entries(allExclusions)) {
+                    classifications[table] = { excluded: reason };
+                }
 
-        runExport: async (requestId) => {
-            const record = await requireRequest(requestId);
+                return checkCoverage(tables, classifications);
+            },
 
-            return runExport(contextFor(record), config.datasets, record);
-        },
+            extendRequest: async ({ requestId, reason }) => extendRequest(ports.store, { id: requestId, now: ports.now(), reason }),
 
-        admin: {
-            open: async () => config.store.listOpen(),
+            requestErasure: async ({ sessionAgeMs, subjectId }) =>
+                openRequest(ports.store, {
+                    erasure,
+                    id: ports.newId(),
+                    now: ports.now(),
+                    sessionAgeMs,
+                    subjectId,
+                    type: "erasure",
+                }),
 
-            retry: async (requestId) => {
+            requestExport: async ({ subjectId }) => openRequest(ports.store, { id: ports.newId(), now: ports.now(), subjectId, type: "export" }),
+
+            restore: async ({ restoredSubjectIds }) => {
+                if (ports.tombstones === undefined) {
+                    throw new LunoraError("BAD_REQUEST", "restore needs a tombstone store: pass `tombstones` to definePrivacy.");
+                }
+
+                const subjects = await subjectsToReerase(restoredSubjectIds, ports.tombstones);
+
+                for (const subjectId of subjects) {
+                    // Re-erase each subject's rows in the same order a first erasure uses.
+                    for (const dataset of erasureOrder(config.datasets)) {
+                        // eslint-disable-next-line no-await-in-loop -- one drain per dataset, in order
+                        await eraseDataset(dataset, subjectId);
+                    }
+                }
+
+                return subjects;
+            },
+
+            runErasure: async (requestId) => {
+                const record = await requireRequest(requestId);
+                const outcome = await runErasure(contextFor(record), config.datasets, record);
+
+                if (outcome.status === "completed" && ports.tombstones !== undefined) {
+                    await ports.tombstones.add(tombstoneKeyOf(record.subjectId), ports.now());
+                }
+
+                return outcome;
+            },
+
+            runExport: async (requestId) => {
                 const record = await requireRequest(requestId);
 
-                if (record.status !== "failed") {
-                    throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
+                return runExport(contextFor(record), config.datasets, record);
+            },
+
+            admin: {
+                open: async () => ports.store.listOpen(),
+
+                retry: async (requestId) => {
+                    const record = await requireRequest(requestId);
+
+                    if (record.status !== "failed") {
+                        throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
+                    }
+
+                    return record.type === "export"
+                        ? runExport(contextFor(record), config.datasets, record)
+                        : runErasure(contextFor(record), config.datasets, record);
+                },
+            },
+
+            downloadUrl: async ({ requestId, subjectId }) => {
+                const record = await requireRequest(requestId);
+
+                // A request for someone else reads as not found, so a caller cannot probe which ids exist.
+                if (record.subjectId !== subjectId || record.type !== "export") {
+                    throw new LunoraError("NOT_FOUND", `No export with id ${requestId}.`);
                 }
 
-                return record.type === "export"
-                    ? runExport(contextFor(record), config.datasets, record)
-                    : runErasure(contextFor(record), config.datasets, record);
+                if (record.status !== "ready" || record.storageKey === undefined) {
+                    throw new LunoraError("UNPROCESSABLE", "This export is not ready to download.");
+                }
+
+                if (record.expiresAt !== undefined && ports.now().getTime() > record.expiresAt.getTime()) {
+                    throw new LunoraError("UNPROCESSABLE", "This export has expired. Request a new one.");
+                }
+
+                return ports.files.signedUrl(record.storageKey, DOWNLOAD_TTL_SECONDS);
             },
-        },
 
-        downloadUrl: async ({ requestId, subjectId }) => {
-            const record = await requireRequest(requestId);
+            tick: async () => {
+                const now = ports.now().getTime();
+                const open = await ports.store.listOpen();
+                const overdue = open.filter((record) => isOverdue(record.receivedAt, record.extendedDueAt !== undefined, record.status, ports.now()));
+                const approaching = open.filter((record) => {
+                    const due = effectiveDueAt(record.receivedAt, record.extendedDueAt !== undefined).getTime();
 
-            // A request for someone else reads as not found, so a caller cannot probe which ids exist.
-            if (record.subjectId !== subjectId || record.type !== "export") {
-                throw new LunoraError("NOT_FOUND", `No export with id ${requestId}.`);
-            }
+                    return due - now <= DEADLINE_WARNING_MS && due >= now;
+                });
 
-            if (record.status !== "ready" || record.storageKey === undefined) {
-                throw new LunoraError("UNPROCESSABLE", "This export is not ready to download.");
-            }
+                return { approaching, overdue };
+            },
 
-            if (record.expiresAt !== undefined && config.now().getTime() > record.expiresAt.getTime()) {
-                throw new LunoraError("UNPROCESSABLE", "This export has expired. Request a new one.");
-            }
-
-            return config.files.signedUrl(record.storageKey, DOWNLOAD_TTL_SECONDS);
-        },
-
-        tick: async () => {
-            const now = config.now().getTime();
-            const open = await config.store.listOpen();
-            const overdue = open.filter((record) => isOverdue(record.receivedAt, record.extendedDueAt !== undefined, record.status, config.now()));
-            const approaching = open.filter((record) => {
-                const due = effectiveDueAt(record.receivedAt, record.extendedDueAt !== undefined).getTime();
-
-                return due - now <= DEADLINE_WARNING_MS && due >= now;
-            });
-
-            return { approaching, overdue };
-        },
-
-        workflows: { erasureHandler, exportHandler },
+            workflows: { erasureHandler, exportHandler },
+        };
     };
+
+    return (context) => bind(config.ports(context));
 };
 
-export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig, type PrivacyWorkflowContext };
+export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig, type PrivacyFor, type PrivacyPorts, type PrivacyWorkflowContext };

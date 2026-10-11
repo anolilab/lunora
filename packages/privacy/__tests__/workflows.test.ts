@@ -49,17 +49,21 @@ const setup = (rows: Readonly<Record<string, number>> = EMPTY_TABLES, failCollec
         : data;
     let counter = 0;
     const privacy = definePrivacy({
-        data: failing,
         datasets: [tasks],
-        files,
-        newId: () => {
-            counter += 1;
-            return `req-${String(counter)}`;
+        ports: () => {
+            return {
+                data: failing,
+                files,
+                newId: () => {
+                    counter += 1;
+                    return `req-${String(counter)}`;
+                },
+                now: () => now,
+                store,
+            };
         },
-        now: () => now,
         presets: [eu()],
-        store,
-    });
+    })(undefined);
 
     return { data, files, privacy, store };
 };
