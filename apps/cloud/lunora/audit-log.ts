@@ -41,11 +41,16 @@ export const record = internalMutation
         });
     });
 
+/** Newest entries one read returns. */
+const AUDIT_LOG_PAGE = 200;
+
 /** An organization's audit-log entries, newest first (members only). */
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<AuditRow[]> => {
     await assertMember(context, organizationId);
 
-    const { page } = await context.db.auditLog.findMany({ where: { organizationId } });
+    // Newest first in the query, bounded: reading the whole history and sorting it in
+    // memory breaks past one page, and the Activity tab only shows recent entries.
+    const { page } = await context.db.auditLog.findMany({ limit: AUDIT_LOG_PAGE, orderBy: [{ createdAt: "desc" }], where: { organizationId } });
 
-    return page.toSorted((a, b) => b.createdAt - a.createdAt);
+    return page;
 });
