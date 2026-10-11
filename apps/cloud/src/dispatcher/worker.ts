@@ -54,6 +54,26 @@ interface DispatcherEnv {
     USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
 }
 
+/** The control plane once both its URL and token are set. Nothing below `serve` re-reads the environment for it. */
+interface ConfiguredControlPlane {
+    customDomainResolver: (hostname: string) => Promise<CustomDomainRoute | null>;
+    kind: "configured";
+    planResolver: (scriptName: string) => Promise<ScriptFacts>;
+    token: string;
+    url: string;
+}
+
+/** What {@link buildResolvers} decides for one request: a configured control plane, or the settings that are missing. */
+type ControlPlaneState = ConfiguredControlPlane | { kind: "unconfigured"; missing: string };
+
+/**
+ * The one shape for a 503 the dispatcher refuses with: a stable `error` code and a
+ * message. `retryAfter` is set where the caller should come back, so every refusal
+ * is handled by the same client code.
+ */
+const refuse = (code: string, message: string, options: { retryAfter?: string } = {}): Response =>
+    Response.json({ error: code, message }, { headers: options.retryAfter === undefined ? undefined : { "retry-after": options.retryAfter }, status: 503 });
+
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
 
 const SUSPENDED = (): Response => new Response("this deployment is suspended — see your billing page", { status: 503 });
@@ -212,16 +232,12 @@ ${failed ? `<p class="e">That password did not match.</p>` : ""}
  * attacker. Without it every attempt keys on the dispatcher, which neither
  * isolates one grinder nor stops them throttling everybody else.
  */
-const passwordAccepted = async (password: string, scriptName: string, env: DispatcherEnv, clientIp: null | string): Promise<boolean> => {
-    if (!env.CONTROL_PLANE_URL) {
-        return false;
-    }
-
+const passwordAccepted = async (password: string, scriptName: string, plane: ConfiguredControlPlane, clientIp: null | string): Promise<boolean> => {
     try {
-        const response = await fetch(`${stripTrailingSlashes(env.CONTROL_PLANE_URL)}/v1/tenants/preview-auth`, {
+        const response = await fetch(`${stripTrailingSlashes(plane.url)}/v1/tenants/preview-auth`, {
             body: JSON.stringify({ password, scriptName }),
             headers: {
-                authorization: `Bearer ${env.CONTROL_PLANE_TOKEN ?? ""}`,
+                authorization: `Bearer ${plane.token}`,
                 "content-type": "application/json",
                 "x-lunora-client-ip": clientIp ?? "unknown",
             },
@@ -242,11 +258,11 @@ const passwordAccepted = async (password: string, scriptName: string, env: Dispa
 };
 
 /** Handle the login form POST: verify, then mint the cookie. */
-const handlePreviewLogin = async (request: Request, scriptName: string, env: DispatcherEnv): Promise<Response> => {
+const handlePreviewLogin = async (request: Request, scriptName: string, plane: ConfiguredControlPlane): Promise<Response> => {
     const form = await request.formData().catch(() => undefined);
     const password = form?.get("password");
 
-    if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, env, request.headers.get("cf-connecting-ip")))) {
+    if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, plane, request.headers.get("cf-connecting-ip")))) {
         return previewLoginPage(true);
     }
 
@@ -254,66 +270,71 @@ const handlePreviewLogin = async (request: Request, scriptName: string, env: Dis
     return new Response(null, {
         headers: {
             location: "/",
-            "set-cookie": previewCookieHeader(await signPreviewToken(scriptName, env.CONTROL_PLANE_TOKEN ?? "")),
+            "set-cookie": previewCookieHeader(await signPreviewToken(scriptName, plane.token)),
         },
         status: 303,
     });
 };
 
-const guardProtectedPreview = async (request: Request, url: URL, scriptName: string, env: DispatcherEnv): Promise<Response | undefined> => {
+const guardProtectedPreview = async (request: Request, url: URL, scriptName: string, plane: ConfiguredControlPlane): Promise<Response | undefined> => {
     if (request.method === "POST" && url.pathname === PREVIEW_AUTH_PATH) {
-        return handlePreviewLogin(request, scriptName, env);
+        return handlePreviewLogin(request, scriptName, plane);
     }
 
     const cookie = readCookie(request.headers.get("cookie"));
 
-    if (cookie !== undefined && (await verifyPreviewToken(cookie, scriptName, env.CONTROL_PLANE_TOKEN ?? ""))) {
+    if (cookie !== undefined && (await verifyPreviewToken(cookie, scriptName, plane.token))) {
         return undefined;
     }
 
     return previewLoginPage(false);
 };
 
-// Per-isolate plan + custom-domain resolvers, rebuilt only when the control-plane
-// config changes.
-let planResolver: ((scriptName: string) => Promise<ScriptFacts>) | undefined;
-let customDomainResolver: ((hostname: string) => Promise<CustomDomainRoute | null>) | undefined;
-let resolverKey = "";
+// The configured control plane for this isolate, rebuilt only when its URL or token changes: the
+// plan and custom-domain resolvers cache per control plane, so a rebuild on every request would
+// throw the cache away.
+let configured: ConfiguredControlPlane | undefined;
 
-const buildResolvers = (env: DispatcherEnv): void => {
-    if (!env.CONTROL_PLANE_URL || !env.CONTROL_PLANE_TOKEN) {
-        planResolver = undefined;
-        customDomainResolver = undefined;
-        resolverKey = "";
+/**
+ * Decide once per request whether the control plane is configured. A missing URL or token is
+ * reported as `unconfigured` with the setting names, so the caller decides what that means.
+ */
+const buildResolvers = (env: DispatcherEnv): ControlPlaneState => {
+    const { CONTROL_PLANE_TOKEN: token, CONTROL_PLANE_URL: url } = env;
 
-        return;
+    if (!url || !token) {
+        const missing = [...(url ? [] : ["control plane URL (CONTROL_PLANE_URL)"]), ...(token ? [] : ["control plane token (CONTROL_PLANE_TOKEN secret)"])];
+
+        return { kind: "unconfigured", missing: missing.join(" and ") };
     }
 
-    const key = `${env.CONTROL_PLANE_URL}|${env.CONTROL_PLANE_TOKEN}`;
+    const current = configured;
 
-    if (resolverKey !== key) {
-        const options = { controlPlaneToken: env.CONTROL_PLANE_TOKEN, controlPlaneUrl: env.CONTROL_PLANE_URL };
-
-        planResolver = createPlanResolver(options);
-        customDomainResolver = createCustomDomainResolver(options);
-        resolverKey = key;
+    if (current?.url === url && current.token === token) {
+        return current;
     }
+
+    const options = { controlPlaneToken: token, controlPlaneUrl: url };
+
+    configured = {
+        customDomainResolver: createCustomDomainResolver(options),
+        kind: "configured",
+        planResolver: createPlanResolver(options),
+        token,
+        url,
+    };
+
+    return configured;
 };
 
 /**
  * Refuse every request when the control plane is not configured outside
  * `development` (plan 475 §4.2). Without it no plan, suspension, cap, preview
  * gate or custom domain can be checked, so serving at the free tier would
- * silently turn all of them into no-ops. A 503 with `retry-after` is the
- * refusal `refusalFor` already uses for "retry later"; the body names the
- * missing setting so the operator needs nothing else to fix it.
+ * silently turn all of them into no-ops. The body names the missing setting so
+ * the operator needs nothing else to fix it.
  */
-const controlPlaneUnconfigured = (env: DispatcherEnv): Response => {
-    const missing = [
-        ...(env.CONTROL_PLANE_URL ? [] : ["control plane URL (CONTROL_PLANE_URL)"]),
-        ...(env.CONTROL_PLANE_TOKEN ? [] : ["control plane token (CONTROL_PLANE_TOKEN secret)"]),
-    ].join(" and ");
-
+const controlPlaneUnconfigured = (env: DispatcherEnv, missing: string): Response => {
     if (!unconfiguredLogged) {
         unconfiguredLogged = true;
         console.error(`[dispatcher] refusing all traffic: ${missing} not set for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
@@ -321,15 +342,8 @@ const controlPlaneUnconfigured = (env: DispatcherEnv): Response => {
 
     recordControlPlaneUnconfigured(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default" });
 
-    return Response.json(
-        { error: "control_plane_unconfigured", message: `${missing} not set for this environment` },
-        { headers: { "retry-after": "30" }, status: 503 },
-    );
+    return refuse("control_plane_unconfigured", `${missing} not set for this environment`, { retryAfter: "30" });
 };
-
-/** The refusal for a request when the control plane is not configured outside `development`, or `undefined` to route it. */
-const unconfiguredRefusal = (env: DispatcherEnv): Response | undefined =>
-    planResolver === undefined && enforced(env) ? controlPlaneUnconfigured(env) : undefined;
 
 /**
  * Answer a redirect-only custom domain (GAPS.md B1), or `undefined` to route
@@ -340,12 +354,12 @@ const unconfiguredRefusal = (env: DispatcherEnv): Response | undefined =>
  * status — this runs before the dispatch try/catch, so an invalid row would
  * otherwise 500 every request for that hostname instead of falling through.
  */
-const redirectOnlyDomain = async (url: URL, appDomain: string): Promise<Response | undefined> => {
-    if (!customDomainResolver || url.hostname.toLowerCase().endsWith(`.${appDomain}`)) {
+const redirectOnlyDomain = async (url: URL, appDomain: string, plane: ConfiguredControlPlane | undefined): Promise<Response | undefined> => {
+    if (plane === undefined || url.hostname.toLowerCase().endsWith(`.${appDomain}`)) {
         return undefined;
     }
 
-    const custom = await customDomainResolver(url.hostname.toLowerCase());
+    const custom = await plane.customDomainResolver(url.hostname.toLowerCase());
 
     // Refused before any redirect: a suspended org's redirect domains answer as its tenants do.
     if (custom?.suspended === true) {
@@ -375,10 +389,10 @@ const recursionReports = new Map<string, number>();
  * log (`POST /v1/tenants/recursion`, admin-token gated; the control plane maps
  * the script to its org from its own rows). Best-effort and throttled.
  */
-const reportRecursionStop = (env: DispatcherEnv, scriptName: string, depth: number, context: WaitUntil | undefined): void => {
+const reportRecursionStop = (plane: ConfiguredControlPlane | undefined, scriptName: string, depth: number, context: WaitUntil | undefined): void => {
     const now = Date.now();
 
-    if (!env.CONTROL_PLANE_URL || !env.CONTROL_PLANE_TOKEN || now - (recursionReports.get(scriptName) ?? 0) < RECURSION_REPORT_WINDOW_MS) {
+    if (plane === undefined || now - (recursionReports.get(scriptName) ?? 0) < RECURSION_REPORT_WINDOW_MS) {
         return;
     }
 
@@ -388,9 +402,9 @@ const reportRecursionStop = (env: DispatcherEnv, scriptName: string, depth: numb
 
     recursionReports.set(scriptName, now);
 
-    const sent = fetch(`${stripTrailingSlashes(env.CONTROL_PLANE_URL)}/v1/tenants/recursion`, {
+    const sent = fetch(`${stripTrailingSlashes(plane.url)}/v1/tenants/recursion`, {
         body: JSON.stringify({ depth, scriptName }),
-        headers: { authorization: `Bearer ${env.CONTROL_PLANE_TOKEN}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${plane.token}`, "content-type": "application/json" },
         method: "POST",
     }).catch(() => undefined);
 
@@ -409,6 +423,7 @@ const admitLineage = async (
     route: { recursion?: "allow"; scriptName: string },
     env: DispatcherEnv,
     context: WaitUntil | undefined,
+    plane: ConfiguredControlPlane | undefined,
 ): Promise<Response | { lineage: Lineage; request: Request }> => {
     const cell = env.LUNORA_CELL ?? "default";
     const header = request.headers.get(LINEAGE_HEADER);
@@ -420,7 +435,7 @@ const admitLineage = async (
         console.error(`[dispatcher] refusing a lineage header: LUNORA_LINEAGE_SECRET not set for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
         recordRecursion(env.PLATFORM_METRICS, { cell, depth: 0, outcome: "forged" });
 
-        return Response.json({ error: "lineage_unverifiable", message: "LUNORA_LINEAGE_SECRET not set for this environment" }, { status: 503 });
+        return refuse("lineage_unverifiable", "LUNORA_LINEAGE_SECRET not set for this environment", { retryAfter: "30" });
     }
 
     const inbound = await readLineage(header, env.LUNORA_LINEAGE_SECRET, Date.now());
@@ -436,7 +451,7 @@ const admitLineage = async (
     if (lineage.depth >= MAX_LINEAGE_DEPTH) {
         if (route.recursion !== "allow") {
             recordRecursion(env.PLATFORM_METRICS, { cell, depth: lineage.depth, outcome: "terminated" });
-            reportRecursionStop(env, route.scriptName, lineage.depth, context);
+            reportRecursionStop(plane, route.scriptName, lineage.depth, context);
 
             return Response.json(
                 { depth: lineage.depth, error: "loop detected: this request re-entered Lunora Cloud too many times in one chain" },
@@ -469,27 +484,42 @@ const refusalFor = (plan: string | undefined): Response | undefined => {
     }
 
     if (plan === undefined || !SERVABLE_PLANS.has(plan)) {
-        return new Response("this deployment is temporarily unavailable", { headers: { "retry-after": "30" }, status: 503 });
+        return refuse("temporarily_unavailable", "this deployment is temporarily unavailable", { retryAfter: "30" });
     }
 
     return undefined;
 };
 
-/** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
-const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
-    buildResolvers(env);
-
-    // Fail closed before anything is routed, custom and redirect domains included.
-    const unconfigured = unconfiguredRefusal(env);
-
-    if (unconfigured) {
-        return unconfigured;
+/** The protection gate for a protected preview, or `undefined`. Needs a configured control plane: the cookie is keyed by its token. */
+const protectionGate = async (
+    request: Request,
+    url: URL,
+    route: { protected?: boolean; scriptName: string },
+    plane: ConfiguredControlPlane | undefined,
+): Promise<Response | undefined> => {
+    if (plane === undefined || route.protected !== true) {
+        return undefined;
     }
 
+    return guardProtectedPreview(request, url, route.scriptName, plane);
+};
+
+/** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
+const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
+    // The one decision on the control plane for this request. Fail closed before anything is routed,
+    // custom and redirect domains included, outside `development`.
+    const control = buildResolvers(env);
+
+    if (control.kind === "unconfigured" && enforced(env)) {
+        return controlPlaneUnconfigured(env, control.missing);
+    }
+
+    // A configured control plane, or — only under `development` — none at all, which serves the free tier.
+    const plane = control.kind === "configured" ? control : undefined;
     const url = new URL(request.url);
     const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
 
-    const redirect = await redirectOnlyDomain(url, appDomain);
+    const redirect = await redirectOnlyDomain(url, appDomain, plane);
 
     if (redirect) {
         return redirect;
@@ -498,11 +528,11 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
     const route = await resolveTenant(url.hostname, {
         appDomain,
         resolveCustomDomain: async (hostname) => {
-            const custom = await customDomainResolver?.(hostname);
+            const custom = await plane?.customDomainResolver(hostname);
 
             return custom?.scriptName ?? null;
         },
-        resolvePlan: planResolver,
+        resolvePlan: plane?.planResolver,
     });
 
     if (!route) {
@@ -513,9 +543,9 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
     // served. `suspended` is a suspended or over-cap org; `unknown` a script no
     // verified row serves; anything else a lookup that failed or answered
     // nonsense — refused, never served on a default tier. Without a control plane
-    // the free tier applies only under `development`; every other environment was
-    // refused above, before routing.
-    const plan = planResolver === undefined ? "free" : route.plan;
+    // (`plane` undefined) only the environment's `development` gets here, and it
+    // is the one place the free tier is served.
+    const plan = plane === undefined ? "free" : route.plan;
     const refused = refusalFor(plan);
 
     if (refused) {
@@ -529,18 +559,16 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
     //
     // Gated BEFORE dispatch, deliberately: a check inside the tenant would run
     // the tenant's own code (and bill for it) on every unauthenticated probe.
-    if (route.protected === true && env.CONTROL_PLANE_TOKEN) {
-        const gate = await guardProtectedPreview(request, url, route.scriptName, env);
+    const gate = await protectionGate(request, url, route, plane);
 
-        if (gate) {
-            return gate;
-        }
+    if (gate) {
+        return gate;
     }
 
     // Recursion protection (plan 365 W5): the invocation's depth, from a verified
     // lineage header or 0 for a request from outside. Decided here, server-side,
     // before the tenant runs — so a refused loop never bills the tenant invocation.
-    const lineage = await admitLineage(request, route, env, context);
+    const lineage = await admitLineage(request, route, env, context, plane);
 
     if (lineage instanceof Response) {
         return lineage;
