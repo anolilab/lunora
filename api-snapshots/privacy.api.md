@@ -32,10 +32,26 @@ type DataOrigin = "provided" | "observed" | "derived" | "inferred";
 type ExportArticle = "15" | "20";
 ```
 
+### `InvalidTransitionError` (class)
+
+```ts
+class InvalidTransitionError extends Error {
+    readonly from: RequestStatus;
+    readonly to: RequestStatus;
+    constructor(from: RequestStatus, to: RequestStatus);
+}
+```
+
 ### `LegalBasis` (type)
 
 ```ts
 type LegalBasis = "consent" | "contract" | "legal_obligation" | "legitimate_interest";
+```
+
+### `MIN_DRAIN_BUDGET_DAYS` (const)
+
+```ts
+const MIN_DRAIN_BUDGET_DAYS = 3;
 ```
 
 ### `PrivacyPolicy` (interface)
@@ -57,6 +73,24 @@ interface PrivacyPreset {
     readonly policy?: Partial<PrivacyPolicy>;
     readonly retention: ReadonlyArray<RetentionRule>;
 }
+```
+
+### `PrivacyTableName` (type)
+
+```ts
+type PrivacyTableName = "archive" | "events" | "holds" | "requests" | "tombstones";
+```
+
+### `RequestStatus` (type)
+
+```ts
+type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled";
+```
+
+### `RequestType` (type)
+
+```ts
+type RequestType = "export" | "erasure";
 ```
 
 ### `RetainDirective` (interface)
@@ -110,6 +144,18 @@ const addCalendarMonths: (date: Date, months: number) => Date;
 const articlesFor: (origin: DataOrigin, legalBasis: LegalBasis) => ReadonlyArray<ExportArticle>;
 ```
 
+### `canCancel` (const)
+
+```ts
+const canCancel: (type: RequestType, status: RequestStatus) => boolean;
+```
+
+### `canExtend` (const)
+
+```ts
+const canExtend: (receivedAt: Date, now: Date, alreadyExtended: boolean) => boolean;
+```
+
 ### `checkCoverage` (const)
 
 ```ts
@@ -122,10 +168,40 @@ const checkCoverage: (tables: ReadonlyArray<string>, classifications: Readonly<R
 const dueAt: (receivedAt: Date) => Date;
 ```
 
+### `effectiveDueAt` (const)
+
+```ts
+const effectiveDueAt: (receivedAt: Date, extended: boolean) => Date;
+```
+
+### `erasureGraceUntil` (const)
+
+```ts
+const erasureGraceUntil: (receivedAt: Date, graceDays: number, drainBudgetDays: number) => Date;
+```
+
 ### `extendedDueAt` (const)
 
 ```ts
 const extendedDueAt: (receivedAt: Date) => Date;
+```
+
+### `isOverdue` (const)
+
+```ts
+const isOverdue: (receivedAt: Date, extended: boolean, status: RequestStatus, now: Date) => boolean;
+```
+
+### `isTerminal` (const)
+
+```ts
+const isTerminal: (status: RequestStatus) => boolean;
+```
+
+### `privacyExtension` (const)
+
+```ts
+const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDefinition>, "privacy">;
 ```
 
 ### `retain` (const)
@@ -140,6 +216,12 @@ const retain: (rule: string, options?: {
 
 ```ts
 const retainUntil: (rule: RetentionRule, from: Date) => Date;
+```
+
+### `transition` (const)
+
+```ts
+const transition: (from: RequestStatus, to: RequestStatus) => RequestStatus;
 ```
 
 ## `@lunora/privacy/de`

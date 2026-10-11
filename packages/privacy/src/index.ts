@@ -9,5 +9,19 @@ export { checkCoverage } from "./coverage";
  * the jurisdiction presets live at `./eu` and `./de`.
  */
 export { addCalendarMonths, dueAt, extendedDueAt } from "./deadlines";
+export type { RequestStatus, RequestType } from "./lifecycle";
+export {
+    canCancel,
+    canExtend,
+    effectiveDueAt,
+    erasureGraceUntil,
+    InvalidTransitionError,
+    isOverdue,
+    isTerminal,
+    MIN_DRAIN_BUDGET_DAYS,
+    transition,
+} from "./lifecycle";
 export type { PrivacyPolicy, PrivacyPreset, RetainDirective, RetentionRule, RetentionStart } from "./rules";
 export { retain, retainUntil } from "./rules";
+export type { PrivacyTableName } from "./tables";
+export { privacyExtension } from "./tables";
