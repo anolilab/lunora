@@ -29,12 +29,15 @@ const upgrade = (host = "acme.lunora.app"): Request => new Request(`https://${ho
 interface FakeEnv {
     DISPATCHER: { get: ReturnType<typeof vi.fn> };
     LUNORA_APP_DOMAIN: string;
+    LUNORA_ENVIRONMENT: string;
     USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
 }
 
 const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics?: AnalyticsEngineDatasetLike): FakeEnv => {
     return {
+        // No control plane in these tests: the `development` free tier (plan 475).
         LUNORA_APP_DOMAIN: "lunora.app",
+        LUNORA_ENVIRONMENT: "development",
         DISPATCHER: { get: vi.fn<DispatchNamespaceGet>().mockReturnValue({ fetch: fetchImpl }) },
         USAGE_ANALYTICS: analytics,
     };
@@ -82,7 +85,11 @@ describe("dispatcher WebSocket pass-through", () => {
 
     it("404s an upgrade to an unknown hostname without calling the namespace", async () => {
         const get = vi.fn<DispatchNamespaceGet>();
-        const response = await dispatcher.fetch(upgrade("lunora.app"), { LUNORA_APP_DOMAIN: "lunora.app", DISPATCHER: { get } });
+        const response = await dispatcher.fetch(upgrade("lunora.app"), {
+            LUNORA_APP_DOMAIN: "lunora.app",
+            LUNORA_ENVIRONMENT: "development",
+            DISPATCHER: { get },
+        });
 
         expect(response.status).toBe(404);
         expect(get).not.toHaveBeenCalled();

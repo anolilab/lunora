@@ -28,7 +28,9 @@ type DispatchNamespaceGet = (
 const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics: AnalyticsEngineDatasetLike): Record<string, unknown> => {
     return {
         DISPATCHER: { get: vi.fn<DispatchNamespaceGet>().mockReturnValue({ fetch: fetchImpl }) },
+        // No control plane here on purpose: this is the `development` free tier (plan 475).
         LUNORA_APP_DOMAIN: "lunora.app",
+        LUNORA_ENVIRONMENT: "development",
         USAGE_ANALYTICS: analytics,
     };
 };

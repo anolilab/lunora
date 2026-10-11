@@ -74,7 +74,9 @@ const makeEnv = (tenant: (request: Request) => Promise<Response>, extra: Record<
     return {
         env: {
             DISPATCHER: { get: vi.fn<Get>().mockReturnValue({ fetch: tenant }) },
+            // `development` by default: most cases here run without a control plane (plan 475).
             LUNORA_APP_DOMAIN: "lunora.app",
+            LUNORA_ENVIRONMENT: "development",
             LUNORA_LINEAGE_SECRET: SECRET,
             PLATFORM_METRICS: { writeDataPoint },
             ...extra,

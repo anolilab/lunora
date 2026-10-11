@@ -29,13 +29,16 @@
         { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" },
         { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },
     ],
+    // Top level is `wrangler dev` only (CI always deploys with `--env`), so it is the one
+    // place `development` may appear: it serves the free tier without a control plane.
     "vars": {
         "LUNORA_APP_DOMAIN": "lunora.app",
-        // Control-plane base URL — enables per-plan runtime limits (GET /v1/tenants/plan).
-        // Set CONTROL_PLANE_TOKEN as a secret: `wrangler secret put CONTROL_PLANE_TOKEN -c dispatcher.wrangler.jsonc`.
+        "LUNORA_ENVIRONMENT": "development",
+        // Control-plane base URL is set per deployed environment below. Unset here on purpose:
+        // the dispatcher refuses all traffic outside `development` when it is missing (plan 475).
+        // Set CONTROL_PLANE_TOKEN as a secret: `wrangler secret put CONTROL_PLANE_TOKEN -c dispatcher.wrangler.jsonc --env <name>`.
         // LUNORA_LINEAGE_SECRET (recursion protection) is a secret too, the same value
-        // as on the Outbound Worker; unset → lineage is ignored and nothing is refused.
-        "CONTROL_PLANE_URL": "https://lunora-cloud.example.workers.dev",
+        // as on the Outbound Worker; outside `development` a lineage header is refused without it.
     },
     // Route all hostnames through the dispatcher (subdomains + custom hostnames).
     "routes": [{ "pattern": "*/*", "zone_name": "lunora.app" }],
@@ -62,6 +65,7 @@
             "vars": {
                 "CONTROL_PLANE_URL": "<replace-with-staging-control-plane-url>",
                 "LUNORA_APP_DOMAIN": "staging.lunora.app",
+                "LUNORA_ENVIRONMENT": "staging",
             },
         },
         "production": {
@@ -80,6 +84,7 @@
             "vars": {
                 "CONTROL_PLANE_URL": "<replace-with-production-control-plane-url>",
                 "LUNORA_APP_DOMAIN": "lunora.app",
+                "LUNORA_ENVIRONMENT": "production",
             },
         },
     },

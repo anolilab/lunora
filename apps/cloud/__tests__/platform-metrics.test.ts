@@ -93,8 +93,10 @@ describe("dispatcher platform metrics", () => {
                     return { fetch: fetchImpl };
                 },
             },
+            // No control plane here, so this is the `development` free tier (plan 475).
             LUNORA_APP_DOMAIN: "lunora.app",
             LUNORA_CELL: "eu-1",
+            LUNORA_ENVIRONMENT: "development",
             ...(metrics ? { PLATFORM_METRICS: metrics } : {}),
         };
     };

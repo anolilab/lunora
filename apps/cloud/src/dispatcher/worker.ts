@@ -3,7 +3,7 @@ import type { AnalyticsEngineDatasetLike } from "../targets/cloudflare-wfp/analy
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../targets/cloudflare-wfp/analytics";
 import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
 import { createCustomDomainResolver, createPlanResolver, resolveTenant, SERVABLE_PLANS } from "../targets/cloudflare-wfp/route";
-import { recordDispatch, recordRecursion } from "../telemetry/platform-metrics";
+import { recordControlPlaneUnconfigured, recordDispatch, recordRecursion } from "../telemetry/platform-metrics";
 import type { Lineage } from "./lineage";
 import { formatLineageParameter, LINEAGE_HEADER, MAX_LINEAGE_DEPTH, newLineageRoot, readLineage } from "./lineage";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
@@ -36,7 +36,17 @@ interface DispatcherEnv {
     LUNORA_APP_DOMAIN?: string;
     /** Cell name stamped into the `X-Lunora-Id` debug header (GAPS.md B3). */
     LUNORA_CELL?: string;
-    /** HMAC key shared with the Outbound Worker (plan 365 W5). Absent → lineage is not verified and nothing is refused. A secret. */
+
+    /**
+     * The deployment's environment (`production` | `staging` | `development`). Explicit, never inferred from the
+     * hostname (plan 475 §4.1). Only `development` relaxes the fail-closed gates; anything else, or absent, enforces them.
+     */
+    LUNORA_ENVIRONMENT?: string;
+
+    /**
+     * HMAC key shared with the Outbound Worker (plan 365 W5). Absent → a lineage header is ignored under `development`
+     * and refused elsewhere (plan 475 §4.3). A secret.
+     */
     LUNORA_LINEAGE_SECRET?: string;
     /** Platform self-metrics dataset (GAPS.md E1, `src/telemetry/platform-metrics.ts`). Optional. */
     PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
@@ -47,6 +57,16 @@ interface DispatcherEnv {
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
 
 const SUSPENDED = (): Response => new Response("this deployment is suspended — see your billing page", { status: 503 });
+
+/**
+ * Whether this dispatcher must refuse what it cannot verify. Only an explicit
+ * `development` (`wrangler dev`) relaxes the gates; an absent or unrecognised
+ * value enforces them, so a misconfigured deploy fails closed (plan 475 §4.1).
+ */
+const enforced = (env: DispatcherEnv): boolean => env.LUNORA_ENVIRONMENT !== "development";
+
+/** Set once per isolate: the refusal is logged once, the counter is written on every refusal. */
+let unconfiguredLogged = false;
 
 /**
  * Trim trailing slashes before joining a path onto a base URL.
@@ -264,6 +284,7 @@ const buildResolvers = (env: DispatcherEnv): void => {
     if (!env.CONTROL_PLANE_URL || !env.CONTROL_PLANE_TOKEN) {
         planResolver = undefined;
         customDomainResolver = undefined;
+        resolverKey = "";
 
         return;
     }
@@ -278,6 +299,37 @@ const buildResolvers = (env: DispatcherEnv): void => {
         resolverKey = key;
     }
 };
+
+/**
+ * Refuse every request when the control plane is not configured outside
+ * `development` (plan 475 §4.2). Without it no plan, suspension, cap, preview
+ * gate or custom domain can be checked, so serving at the free tier would
+ * silently turn all of them into no-ops. A 503 with `retry-after` is the
+ * refusal `refusalFor` already uses for "retry later"; the body names the
+ * missing setting so the operator needs nothing else to fix it.
+ */
+const controlPlaneUnconfigured = (env: DispatcherEnv): Response => {
+    const missing = [
+        ...(env.CONTROL_PLANE_URL ? [] : ["control plane URL (CONTROL_PLANE_URL)"]),
+        ...(env.CONTROL_PLANE_TOKEN ? [] : ["control plane token (CONTROL_PLANE_TOKEN secret)"]),
+    ].join(" and ");
+
+    if (!unconfiguredLogged) {
+        unconfiguredLogged = true;
+        console.error(`[dispatcher] refusing all traffic: ${missing} not set for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
+    }
+
+    recordControlPlaneUnconfigured(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default" });
+
+    return Response.json(
+        { error: "control_plane_unconfigured", message: `${missing} not set for this environment` },
+        { headers: { "retry-after": "30" }, status: 503 },
+    );
+};
+
+/** The refusal for a request when the control plane is not configured outside `development`, or `undefined` to route it. */
+const unconfiguredRefusal = (env: DispatcherEnv): Response | undefined =>
+    planResolver === undefined && enforced(env) ? controlPlaneUnconfigured(env) : undefined;
 
 /**
  * Answer a redirect-only custom domain (GAPS.md B1), or `undefined` to route
@@ -360,6 +412,17 @@ const admitLineage = async (
 ): Promise<Response | { lineage: Lineage; request: Request }> => {
     const cell = env.LUNORA_CELL ?? "default";
     const header = request.headers.get(LINEAGE_HEADER);
+
+    // A lineage header that cannot be verified is refused outside `development`
+    // (plan 475 §4.3). Ordinary traffic carries no header, so it is unaffected;
+    // refusing all traffic on a missing secret would turn a typo into an outage.
+    if (header !== null && !env.LUNORA_LINEAGE_SECRET && enforced(env)) {
+        console.error(`[dispatcher] refusing a lineage header: LUNORA_LINEAGE_SECRET not set for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
+        recordRecursion(env.PLATFORM_METRICS, { cell, depth: 0, outcome: "forged" });
+
+        return Response.json({ error: "lineage_unverifiable", message: "LUNORA_LINEAGE_SECRET not set for this environment" }, { status: 503 });
+    }
+
     const inbound = await readLineage(header, env.LUNORA_LINEAGE_SECRET, Date.now());
 
     if (inbound.status === "invalid") {
@@ -416,6 +479,13 @@ const refusalFor = (plan: string | undefined): Response | undefined => {
 const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
     buildResolvers(env);
 
+    // Fail closed before anything is routed, custom and redirect domains included.
+    const unconfigured = unconfiguredRefusal(env);
+
+    if (unconfigured) {
+        return unconfigured;
+    }
+
     const url = new URL(request.url);
     const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
 
@@ -442,8 +512,9 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
     // Admission (GAPS.md C1, plan 365 W3): only a verified servable plan is
     // served. `suspended` is a suspended or over-cap org; `unknown` a script no
     // verified row serves; anything else a lookup that failed or answered
-    // nonsense — refused, never served on a default tier. With no control plane
-    // configured at all (local dev) there is nothing to ask, and the free tier applies.
+    // nonsense — refused, never served on a default tier. Without a control plane
+    // the free tier applies only under `development`; every other environment was
+    // refused above, before routing.
     const plan = planResolver === undefined ? "free" : route.plan;
     const refused = refusalFor(plan);
 

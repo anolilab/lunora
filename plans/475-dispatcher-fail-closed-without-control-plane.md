@@ -1,7 +1,21 @@
 # Plan 475 — The dispatcher must fail closed when the control plane is not configured
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** TODO
+**Status:** PARTIAL on `feat/cloud-dispatcher-fail-closed`. Workstreams A, B (test), D shipped; C not done.
+
+- **A shipped.** `LUNORA_ENVIRONMENT` is in all three `dispatcher.wrangler.jsonc` blocks. Outside `development`
+  (absent or unrecognised counts as enforced) a request without a control plane gets 503 `control_plane_unconfigured`,
+  `retry-after: 30`, logged once per isolate, counted in `PLATFORM_METRICS` (`control_plane_unconfigured` kind). The gate
+  runs before routing, so custom and redirect domains are refused too. Lineage follows §4.3: a header with no
+  `LUNORA_LINEAGE_SECRET` outside `development` gets 503 `lineage_unverifiable`, logged. No header is unaffected.
+- **B shipped, and RED.** `__tests__/dispatcher-config.test.ts` enforces the rules. It fails on the two
+  `<replace-with-…-control-plane-url>` values (staging and production). No hostname was guessed. The only known
+  production candidate is `https://cloud.lunora.app` (the control plane's OTLP endpoint in `wrangler.jsonc`), which is
+  inferred, not confirmed. Substitute the real URLs before deploy.
+- **D shipped.** The 503 body names the missing setting (URL, token, or both).
+- **C not done.** It is an ops drill (staging drill, production counter check).
+- Choices made: `development` is set only at the top level (`wrangler dev`), and the top-level `CONTROL_PLANE_URL`
+  placeholder was dropped. Existing dispatcher test fixtures without a control plane now declare `development`.
 
 ## 0. Headline finding
 
@@ -54,15 +68,15 @@ Size: **H** (suspension and access enforcement). Small to fix.
 
 1. **Explicit environment, not an inferred one.** Add `LUNORA_ENVIRONMENT` (`production` | `staging` | `development`)
    as a `vars` entry in each environment block of `dispatcher.wrangler.jsonc`.
-   *Rejected:* detecting "local" from the hostname or `request.cf`. Both can be spoofed or change.
+   _Rejected:_ detecting "local" from the hostname or `request.cf`. Both can be spoofed or change.
 2. **Missing control plane = refuse, unless `development`.** In `production` and `staging`, a dispatcher without the
    resolver answers `503` with `retry-after: 30` and a stable error code (`control_plane_unconfigured`). It logs once
    per isolate and increments a `PLATFORM_METRICS` counter.
-   *Rejected:* keep serving at the free tier and alert. An alert arrives after the bypass has already served traffic.
+   _Rejected:_ keep serving at the free tier and alert. An alert arrives after the bypass has already served traffic.
 3. **Lineage follows the same rule.** In `production` and `staging`, a missing `LUNORA_LINEAGE_SECRET` refuses requests
    that carry a lineage header and logs an error. Requests with no lineage header are unaffected, so the loop guard is
    restored without blocking ordinary traffic.
-   *Rejected:* refuse all traffic without the secret. That turns a secret typo into a full outage.
+   _Rejected:_ refuse all traffic without the secret. That turns a secret typo into a full outage.
 
 ## 5. Workstreams
 
@@ -89,19 +103,19 @@ framework matrix does not describe it.
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 1 | Workstreams A, B and D, with unit and config tests | `pnpm --filter @lunora/cloud run test` green, including a test that fails on the old `"free"` fallback (verify by reverting the line once) |
-| 2 | Staging drill: remove `CONTROL_PLANE_URL` from a staging dispatcher version, confirm 503 for a tenant and for a suspended org, restore it, confirm recovery | Recorded drill output: refused while unconfigured, served after restore |
-| 3 | Production rollout and a check that no tenant was served while unconfigured (via the new counter) | Counter is zero for the deploy window |
+| Phase | Work                                                                                                                                                        | Gate                                                                                                                                       |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | Workstreams A, B and D, with unit and config tests                                                                                                          | `pnpm --filter @lunora/cloud run test` green, including a test that fails on the old `"free"` fallback (verify by reverting the line once) |
+| 2     | Staging drill: remove `CONTROL_PLANE_URL` from a staging dispatcher version, confirm 503 for a tenant and for a suspended org, restore it, confirm recovery | Recorded drill output: refused while unconfigured, served after restore                                                                    |
+| 3     | Production rollout and a check that no tenant was served while unconfigured (via the new counter)                                                           | Counter is zero for the deploy window                                                                                                      |
 
 ## 8. Risks & STOP conditions
 
 - **STOP** if the staging drill shows a tenant served while the control plane is unconfigured. The design is wrong
   somewhere; re-scope rather than patch the test.
-- **Risk:** a real staging deploy missing a var becomes an outage. *Mitigate:* the config test in B runs in CI and blocks
+- **Risk:** a real staging deploy missing a var becomes an outage. _Mitigate:_ the config test in B runs in CI and blocks
   the merge; the rollout order in C catches the rest.
-- **Risk:** `development` set in production by mistake. *Mitigate:* the test in B asserts that only the `development`
+- **Risk:** `development` set in production by mistake. _Mitigate:_ the test in B asserts that only the `development`
   block may carry it.
 - **Perf watch:** none expected; the change adds one branch per request.
 
