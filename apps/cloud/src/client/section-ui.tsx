@@ -10,23 +10,29 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { captureEvent } from "./analytics";
 import { formatDateTime, formatRelativeTime } from "./format";
-import { rowClassName } from "./section-styles";
+import { rowClassName, rowDividerClassName } from "./section-styles";
 import { useScreen } from "./tabs";
 
 /**
  * Shared presentation primitives for the dashboard section bodies, so every tab
  * renders lists, form fields, status, and errors the same way. Behaviour lives
  * in the sections themselves; this file is purely how they look — one source of
- * truth for the row rhythm, the mono-uppercase field labels, the status tones,
- * and the plan-gate upsell.
+ * truth for the row rhythm, the caps-locked labels, the status tones (dot + pill),
+ * the key/value blocks, and the plan-gate upsell.
  */
 
-/** The list wrapper for {@link Row}s — no bullets, no gaps (rows carry their own rule). */
-export const RowList = ({ children }: { children: ReactNode }): ReactElement => <ul className="m-0 grid list-none gap-0 p-0">{children}</ul>;
+/** The bordered block that holds a list of rows. Shared by {@link RowList} and {@link KeyValueList}. */
+const BLOCK = "overflow-hidden rounded-xl border border-border bg-background/40";
+
+/** The list wrapper for {@link Row}s: a bordered block with hairline dividers between rows. */
+export const RowList = ({ children }: { children: ReactNode }): ReactElement => (
+    <ul className={cn("m-0 grid list-none gap-0 p-0", BLOCK, rowDividerClassName)}>{children}</ul>
+);
 
 /** One non-interactive data row. */
 export const Row = ({ children, className }: { children: ReactNode; className?: string }): ReactElement => (
@@ -36,10 +42,10 @@ export const Row = ({ children, className }: { children: ReactNode; className?: 
 /** Pushes a trailing action cluster to the right edge of a {@link Row}. */
 export const RowActions = ({ children }: { children: ReactNode }): ReactElement => <span className="ml-auto flex items-center gap-1">{children}</span>;
 
-/** Stacked form field — a mono-uppercase label over its control (instrument look). */
+/** Stacked form field — a caps-locked label over its control. */
 export const Field = ({ children, htmlFor, label }: { children: ReactNode; htmlFor?: string; label: ReactNode }): ReactElement => (
     <div className="grid gap-1.5">
-        <Label className="font-mono text-[11px] tracking-[0.07em] text-muted-foreground uppercase" htmlFor={htmlFor}>
+        <Label className={cn(COLUMN_LABEL, "text-muted-foreground")} htmlFor={htmlFor}>
             {label}
         </Label>
         {children}
@@ -102,27 +108,68 @@ export const FormError = ({ message }: { message: null | string }): ReactElement
 
 type StatusTone = "danger" | "info" | "neutral" | "success" | "warning";
 
-const TONE_CLASS: Record<StatusTone, string> = {
-    danger: "border-destructive/30 text-destructive",
-    info: "border-info/40 text-info",
+const TONE_PILL: Record<StatusTone, string> = {
+    danger: "border-destructive/20 bg-destructive/10 text-destructive",
+    info: "border-info/20 bg-info/10 text-info",
     neutral: "",
-    success: "border-success/30 text-success",
-    warning: "border-warning/40 text-warning",
+    success: "border-success/20 bg-success/10 text-success",
+    warning: "border-warning/20 bg-warning/10 text-warning",
 };
 
+const TONE_DOT: Record<StatusTone, string> = {
+    danger: "bg-destructive shadow-[0_0_0_3px_color-mix(in_oklab,var(--destructive)_22%,transparent)]",
+    info: "bg-info shadow-[0_0_0_3px_color-mix(in_oklab,var(--info)_22%,transparent)]",
+    neutral: "bg-muted-foreground/60",
+    success: "bg-success shadow-[0_0_0_3px_color-mix(in_oklab,var(--success)_22%,transparent)]",
+    warning: "bg-warning shadow-[0_0_0_3px_color-mix(in_oklab,var(--warning)_22%,transparent)]",
+};
+
+/** A small coloured status dot with a soft halo. Decorative: pair it with a text label. */
+export const StatusDot = ({ className, tone = "neutral" }: { className?: string; tone?: StatusTone }): ReactElement => (
+    <span aria-hidden className={cn("inline-block size-2 shrink-0 rounded-full", TONE_DOT[tone], className)} />
+);
+
 /**
- * A lifecycle-status chip that colours the *value* by tone (never the row). Use
- * for meaningful states (verified/failed/on) and let the `neutral` tone (a plain
- * secondary chip) carry categorical labels like a role or kind.
+ * A lifecycle-status pill that colours the *value* by tone (never the row), led by a
+ * {@link StatusDot}. Use for meaningful states (verified/failed/on) and let the
+ * `neutral` tone (a plain secondary chip) carry categorical labels like a role or kind.
  */
 export const StatusBadge = ({ children, tone = "neutral" }: { children: ReactNode; tone?: StatusTone }): ReactElement =>
     tone === "neutral" ? (
         <Badge variant="secondary">{children}</Badge>
     ) : (
-        <Badge className={cn("bg-transparent", TONE_CLASS[tone])} variant="outline">
+        <Badge className={cn("gap-1.5", TONE_PILL[tone])} variant="outline">
+            <StatusDot className="size-1.5 shadow-none" tone={tone} />
             {children}
         </Badge>
     );
+
+/** A small count chip, shown beside a section label. */
+const CountChip = ({ children }: { children: ReactNode }): ReactElement => (
+    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-muted px-1.5 font-mono text-[11px] text-muted-foreground tabular-nums">
+        {children}
+    </span>
+);
+
+/** A caps-locked section heading, with an optional count chip and a right-aligned slot. */
+export const SectionLabel = ({ action, children, count }: { action?: ReactNode; children: ReactNode; count?: number }): ReactElement => (
+    <div className="flex items-center gap-2">
+        <h3 className={cn("m-0 text-muted-foreground", COLUMN_LABEL)}>{children}</h3>
+        {count === undefined ? null : <CountChip>{count}</CountChip>}
+        {action ? <div className="ml-auto flex items-center gap-2">{action}</div> : null}
+    </div>
+);
+
+/** A bordered block of label/value rows, with hairline dividers between them. */
+export const KeyValueList = ({ children }: { children: ReactNode }): ReactElement => <dl className={cn("m-0 grid", BLOCK)}>{children}</dl>;
+
+/** One row of a {@link KeyValueList}: a muted monospace label beside its value. */
+export const KeyValueRow = ({ children, label }: { children: ReactNode; label: ReactNode }): ReactElement => (
+    <div className="grid grid-cols-[minmax(11.5rem,38%)_1fr] border-b border-border/70 last:border-b-0">
+        <dt className="border-e whitespace-nowrap border-border/70 bg-muted/25 px-4 py-2.5 font-mono text-[13px] text-muted-foreground">{label}</dt>
+        <dd className="m-0 min-w-0 px-4 py-2.5 font-mono text-[13px] break-words text-foreground">{children}</dd>
+    </div>
+);
 
 /**
  * The plan-gate upsell shown when a tab needs a feature the org's plan lacks.

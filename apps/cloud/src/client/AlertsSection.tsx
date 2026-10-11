@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -18,7 +19,6 @@ import { isUsageAlertMeter } from "../telemetry/usage-alerts";
 import { AsyncList } from "./AsyncList";
 import { ColumnHeader } from "./ColumnHeader";
 import { formatDateTime } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge, Upsell } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";

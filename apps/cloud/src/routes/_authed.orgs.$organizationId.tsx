@@ -6,6 +6,7 @@ import type { ReactElement } from "react";
 import { useEffect } from "react";
 
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -127,13 +128,23 @@ const OrganizationLayout = (): ReactElement => {
     return (
         <DashboardLayout
             commands={paletteCommands}
-            eyebrow={activeTab?.group}
+            eyebrow={
+                activeTab ? (
+                    <>
+                        <HugeiconsIcon icon={activeTab.icon} strokeWidth={1.75} />
+                        {activeTab.group}
+                    </>
+                ) : undefined
+            }
             sidebarHeader={<OrgSwitcher organizations={organizationList} orgId={organizationId as OrgId} />}
-            sidebarNav={TAB_GROUPS.map((group) => (
-                <SidebarGroup key={group}>
-                    <SidebarGroupLabel className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">{group}</SidebarGroupLabel>
+            sidebarNav={TAB_GROUPS.map((group, index) => (
+                <SidebarGroup className="py-1" key={group}>
+                    {/* In the icon rail the group labels fold away, so a short hairline
+                        marks where one group ends and the next begins. */}
+                    {index > 0 ? <div aria-hidden className="mx-auto my-2 hidden h-px w-6 bg-sidebar-border group-data-[collapsible=icon]:block" /> : null}
+                    <SidebarGroupLabel className={cn(COLUMN_LABEL, "text-muted-foreground/80")}>{group}</SidebarGroupLabel>
                     <SidebarGroupContent>
-                        <SidebarMenu>
+                        <SidebarMenu className="gap-0.5">
                             {(TABS_BY_GROUP[group] ?? []).map((entry) => {
                                 const isActive = activeSegment === entry.id;
 
@@ -141,18 +152,13 @@ const OrganizationLayout = (): ReactElement => {
                                     <SidebarMenuItem key={entry.id}>
                                         <SidebarMenuButton
                                             // Inactive nav is muted (colour-as-hierarchy); the active tab keeps
-                                            // full contrast and gets a single aurora-violet edge accent — the
-                                            // one expressive colour moment in the chrome.
-                                            className={cn(
-                                                !isActive && "text-muted-foreground",
-                                                isActive &&
-                                                    "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-[var(--aurora-violet)]",
-                                            )}
+                                            // full contrast on a raised tile.
+                                            className={cn(!isActive && "text-sidebar-foreground")}
                                             isActive={isActive}
                                             render={<Link params={{ organizationId }} to={entry.to} />}
                                             tooltip={entry.label}
                                         >
-                                            <HugeiconsIcon icon={entry.icon} strokeWidth={2} />
+                                            <HugeiconsIcon icon={entry.icon} strokeWidth={1.75} />
                                             <span>{entry.label}</span>
                                         </SidebarMenuButton>
                                     </SidebarMenuItem>

@@ -1,6 +1,8 @@
 import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+
 import { captureEvent } from "./analytics";
 import { useScreen } from "./tabs";
 import type { TimeRange, TimeRangePreset } from "./time-range";
@@ -66,7 +68,7 @@ export const useTimeRange = (): TimeRangeContextValue => {
     return value;
 };
 
-/** The preset picker control (1h / 24h / 7d). Renders the shared segmented buttons. */
+/** The preset picker control (1h / 24h / 7d): the segmented `ToggleGroup`. */
 export const TimeRangePicker = (): ReactElement => {
     const { preset, setPreset } = useTimeRange();
     // Read here, in the leaf, rather than in the provider: the provider sits
@@ -76,25 +78,30 @@ export const TimeRangePicker = (): ReactElement => {
     const screen = useScreen();
 
     return (
-        <div aria-label="Time range" className="time-range" role="group">
+        <ToggleGroup<TimeRangePreset>
+            aria-label="Time range"
+            onValueChange={(values) => {
+                // Single-select, and a window is always chosen: pressing the active
+                // segment again (which empties the group) keeps the current one.
+                const [next] = values;
+
+                if (values.length === 0 || next === preset) {
+                    return;
+                }
+
+                // Whether the default window is the right default, and which tab
+                // makes people reach past it. A picker nobody touches on Logs and
+                // everybody touches on Metrics is a per-screen default waiting to be set.
+                captureEvent("studio_time_range_changed", { from: preset, preset: next, screen });
+                setPreset(next);
+            }}
+            value={[preset]}
+        >
             {TIME_RANGE_PRESETS.map((spec) => (
-                <button
-                    aria-pressed={spec.id === preset}
-                    className={`time-range-btn${spec.id === preset ? " active" : ""}`}
-                    key={spec.id}
-                    onClick={() => {
-                        // Whether the default window is the right default, and
-                        // which tab makes people reach past it. A picker nobody
-                        // touches on Logs and everybody touches on Metrics is a
-                        // per-screen default waiting to be set.
-                        captureEvent("studio_time_range_changed", { from: preset, preset: spec.id, screen });
-                        setPreset(spec.id);
-                    }}
-                    type="button"
-                >
+                <ToggleGroupItem<TimeRangePreset> key={spec.id} value={spec.id}>
                     {spec.label}
-                </button>
+                </ToggleGroupItem>
             ))}
-        </div>
+        </ToggleGroup>
     );
 };

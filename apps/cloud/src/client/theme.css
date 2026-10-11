@@ -1,16 +1,10 @@
 /**
- * Lunora Cloud studio styling — "Luna + Aurora" design system on Tailwind CSS v4.
+ * Lunora Cloud studio styling on Tailwind CSS v4.
  *
- * RECOVERED from the 2026-07-12..16 design session, which was never committed.
- * Loaded alongside the legacy `styles.css` during the port: this file supplies the
- * Tailwind engine, the Geist faces and the Aurora tokens, while `styles.css` keeps
- * the not-yet-ported screens rendering. It goes away as the last screen moves over.
- *
- * Vercel/Zeitwork-grade minimal control plane: Geist typography, a cool
- * blue-violet monochrome canvas, a single aurora-violet accent, SHARP corners on
- * chrome, hairline borders, no shadows. Both modes ship — dark is the default
- * (the `.dark` class on <html>, forced in __root); the top-bar toggle swaps to
- * the Ivory light theme.
+ * This file supplies the Tailwind engine, the Geist faces and the theme tokens. The
+ * app fills the viewport, with rounded cards on a hairline border, monospace numerics
+ * and a violet/blue accent pair. Both modes ship: dark is the default (`.dark` on <html>, rendered by __root), and the header
+ * toggle swaps to the Ivory light theme.
  *
  * The design is expressed as Tailwind utilities in the component JSX. This file
  * wires Tailwind + the canonical tokens (marketing/design-tokens/tokens.css,
@@ -28,7 +22,7 @@
 @import "../../../../marketing/design-tokens/tokens.css";
 /* shadcn/ui: overlay/animation utilities + the `.dark`-variant selector its
    components use. The theme itself comes from the tokens above, not from
-   `shadcn init` (whose neutral OKLCH block would override the Aurora palette). */
+   `shadcn init` (whose neutral OKLCH block would override this palette). */
 @import "tw-animate-css";
 /* React Flow structural styles for the project bindings graph (custom-themed nodes). */
 @import "@xyflow/react/dist/base.css";
@@ -44,15 +38,80 @@
     --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
     --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
 
-    /* Instrument corners (Braun / Teenage Engineering): structural chrome — cards,
-       panels, buttons, inputs, selects — is SHARP. Only dense data (badges, chips,
-       menu items, kbd) keeps a hairline 2–3px radius. This overrides the shared
-       0.5rem token scale for the control plane only; marketing keeps its own. */
-    --radius-sm: 2px;
-    --radius-md: 3px;
-    --radius-lg: 0px;
-    --radius-xl: 0px;
-    --radius-2xl: 0px;
+    /* Soft corners: controls (buttons, inputs, menu items) at 8px, cards and
+       popovers at 12–16px. Overrides the shared token scale for the control plane
+       only; marketing keeps its own. */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --radius-xl: 12px;
+    --radius-2xl: 16px;
+}
+
+/* `inline` so the utilities resolve the per-mode value where they are used. */
+@theme inline {
+    --shadow-card: var(--card-shadow);
+    --shadow-window: var(--card-shadow);
+}
+
+/*
+ * Token overrides. Unlayered on purpose: tokens.css declares `:root`/`.dark`
+ * inside `@layer base`, and an unlayered rule wins over any layered one
+ * regardless of source order.
+ */
+:root {
+    /* The copy-in auth UI reads `var(--radius, 0.5rem)`. */
+    --radius: 0.75rem;
+
+    /* Brand marks: the org logo tile and the account avatar. Both modes share them, since
+       white text sits on these saturated fills in either theme. */
+    --brand-gradient: linear-gradient(180deg, hsl(222 95% 66%), hsl(232 80% 52%));
+    --brand-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.25), 0 4px 14px -4px hsl(225 90% 55% / 0.7);
+    --avatar-gradient: radial-gradient(circle at 32% 28%, hsl(220 90% 88%), hsl(230 70% 62%) 45%, hsl(255 60% 34%));
+    --avatar-shadow: inset 0 -4px 8px hsl(240 60% 10% / 0.35), 0 2px 8px -2px hsl(250 80% 40% / 0.6);
+
+    --sidebar: transparent;
+    --sidebar-accent: hsl(0 0% 100% / 0.85);
+    --sidebar-border: hsl(240 16% 50% / 0.14);
+
+    --card-shadow: 0 1px 2px hsl(240 20% 20% / 0.04), 0 4px 16px -8px hsl(240 20% 20% / 0.08);
+
+    --chart-1: hsl(262 70% 58%);
+    --chart-2: hsl(215 80% 52%);
+    --chart-3: hsl(36 92% 48%);
+    --chart-4: hsl(152 60% 38%);
+    --chart-5: hsl(330 70% 54%);
+}
+
+.dark {
+    /* Night: a near-black canvas. */
+    --background: hsl(240 14% 4%);
+    --card: hsl(240 12% 6.5%);
+    --popover: hsl(240 12% 7.5%);
+    --secondary: hsl(240 8% 12%);
+    --muted: hsl(240 8% 11%);
+    --muted-foreground: hsl(232 10% 62%);
+    --accent: hsl(240 8% 13%);
+    --border: hsl(230 30% 96% / 0.085);
+    --input: hsl(230 30% 96% / 0.11);
+    --ring: hsl(264 88% 76%);
+
+    --sidebar: transparent;
+    --sidebar-foreground: hsl(232 14% 68%);
+    --sidebar-accent: hsl(235 20% 100% / 0.08);
+    --sidebar-accent-foreground: hsl(228 30% 97%);
+    --sidebar-border: hsl(230 40% 96% / 0.09);
+
+    --card-shadow: inset 0 1px 0 hsl(230 40% 96% / 0.035), 0 8px 24px -16px hsl(240 50% 2% / 0.8);
+
+    --chart-1: hsl(264 88% 76%);
+    --chart-2: hsl(214 92% 68%);
+    --chart-3: hsl(36 96% 60%);
+    --chart-4: hsl(152 62% 52%);
+    --chart-5: hsl(330 80% 68%);
+
+    --success: hsl(146 64% 52%);
 }
 
 @layer base {
@@ -72,7 +131,13 @@
 
     body {
         @apply bg-background text-foreground font-sans text-[14px] leading-[1.5] antialiased;
+        min-height: 100svh;
         text-rendering: optimizeLegibility;
+    }
+
+    /* Numeric readouts line up in columns. */
+    .font-mono {
+        font-variant-numeric: tabular-nums;
     }
 
     ::selection {
@@ -106,18 +171,11 @@
         @apply text-foreground no-underline;
     }
 
-    /* Form controls (bare in the JSX; the design system styles them here). */
+    /* Bare `<label>` elements. Mirrors COLUMN_LABEL in `src/lib/typography.ts`: CSS
+       cannot import it, so the two are kept in step by hand. */
     label {
-        @apply grid gap-1.5 font-mono text-[11px] tracking-[0.07em] text-muted-foreground uppercase;
+        @apply grid gap-1.5 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase;
     }
-
-    /* Form controls + data tables are shadcn components now (Input/Select/Table);
-       only the bare `<label>` above stays styled here for the instrument look. */
-}
-
-/* Small radius reserved for dense data (meter tracks). */
-:root {
-    --r-chip: 4px;
 }
 
 /* ── Usage meters (included-vs-used quota bars) ───── */
@@ -136,13 +194,13 @@
 
 .meter-track {
     background: var(--secondary);
-    border-radius: var(--r-chip);
+    border-radius: var(--radius-xs);
     height: 6px;
     overflow: hidden;
 }
 
 .meter-fill {
-    border-radius: var(--r-chip);
+    border-radius: var(--radius-xs);
     height: 100%;
     transition: width 240ms cubic-bezier(0.25, 0.1, 0.25, 1);
 }

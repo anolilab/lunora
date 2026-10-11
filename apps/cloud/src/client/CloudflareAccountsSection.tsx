@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import { api } from "../../lunora/_generated/api.js";
 import { canManage } from "./boxes";
@@ -16,10 +17,9 @@ import { accountTitle, missingPermissions, permissionLabel } from "./cloudflare-
 import { CloudflareUsageAlerts } from "./CloudflareUsageAlerts";
 import { ConnectCloudflareAccountDialog } from "./ConnectCloudflareAccountDialog";
 import { DisconnectCloudflareAccountDialog } from "./DisconnectCloudflareAccountDialog";
-import { COLUMN_LABEL } from "./section-styles";
+import { projectNamesByHost } from "./host-projects";
 import { HostEmpty, RelativeTime, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
-import { projectNamesByHost } from "./target-capabilities";
 import type { OrgId } from "./types";
 import { useMyRole } from "./use-boxes";
 

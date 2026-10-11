@@ -27,7 +27,7 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props):
     return (
         <DialogPrimitive.Backdrop
             className={cn(
-                "data-[ending-style]:animate-out data-[starting-style]:animate-in data-[ending-style]:fade-out-0 data-[starting-style]:fade-in-0 fixed inset-0 z-50 bg-black/50",
+                "data-[ending-style]:animate-out data-[starting-style]:animate-in data-[ending-style]:fade-out-0 data-[starting-style]:fade-in-0 fixed inset-0 z-50 bg-black/50 backdrop-blur-sm",
                 className,
             )}
             data-slot="dialog-overlay"
@@ -44,7 +44,7 @@ function DialogContent({ children, className, ...props }: DialogPrimitive.Popup.
             <DialogOverlay />
             <DialogPrimitive.Popup
                 className={cn(
-                    "bg-background data-[ending-style]:animate-out data-[starting-style]:animate-in data-[ending-style]:fade-out-0 data-[starting-style]:fade-in-0 fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border p-6 shadow-lg sm:max-w-lg",
+                    "bg-popover text-popover-foreground data-[ending-style]:animate-out data-[starting-style]:animate-in data-[ending-style]:fade-out-0 data-[starting-style]:fade-in-0 fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border p-6 shadow-window sm:max-w-lg",
                     className,
                 )}
                 data-slot="dialog-content"
@@ -53,7 +53,7 @@ function DialogContent({ children, className, ...props }: DialogPrimitive.Popup.
                 {children}
                 {showCloseButton ? (
                     <DialogPrimitive.Close
-                        className="ring-offset-background focus:ring-ring data-[open]:bg-accent data-[open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0"
+                        className="ring-offset-background focus:ring-ring data-[open]:bg-accent data-[open]:text-muted-foreground absolute top-4 right-4 rounded-md opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0"
                         data-slot="dialog-close"
                     >
                         <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />

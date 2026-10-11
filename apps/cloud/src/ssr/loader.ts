@@ -76,6 +76,25 @@ export const loadSession = createServerFn({ method: "GET" }).handler(async (): P
     }
 });
 
+/** Matches the `sidebar_state` cookie the shadcn sidebar writes on every toggle. */
+const SIDEBAR_COOKIE = /(?:^|;\s*)sidebar_state=([^;]*)/;
+
+/** Whether a `Cookie` header opens the shell sidebar. Only an explicit `true` does; no cookie means the icon rail. */
+export const parseSidebarOpen = (cookie: string): boolean => SIDEBAR_COOKIE.exec(cookie)?.[1] === "true";
+
+/**
+ * The request's sidebar state, read on the server so the first render and hydration
+ * agree. The browser cannot be asked the same question during render, because the
+ * sidebar writes its state to a cookie on toggle and a client read would differ from
+ * the tree the server sent. In the browser `parseSidebarOpen(document.cookie)` answers
+ * the same question with no request.
+ */
+export const loadSidebarOpen = createServerFn({ method: "GET" }).handler(async (): Promise<boolean> => {
+    const { getRequest } = await import("@tanstack/react-start/server");
+
+    return parseSidebarOpen(getRequest().headers.get("cookie") ?? "");
+});
+
 /**
  * The organization ids the signed-in caller is actually a member of.
  *

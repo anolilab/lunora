@@ -8,10 +8,10 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
-import { COLUMN_LABEL } from "./section-styles";
 import { Field, FormError, StatusBadge } from "./section-ui";
 import type { CellId, OrgId } from "./types";
 

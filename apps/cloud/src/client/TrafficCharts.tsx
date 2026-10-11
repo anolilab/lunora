@@ -1,9 +1,9 @@
 import type { ReactElement } from "react";
 
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { formatBytes, formatNumber, formatTime } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 
 /**
  * The rendering half of the Traffic tab — share bars and the volume chart.

@@ -4,10 +4,10 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { CloudflareAccountView } from "./cloudflare-accounts";
-import { COLUMN_LABEL } from "./section-styles";
 import { FormError, StatusBadge } from "./section-ui";
 import type { OrgId } from "./types";
 import type { UsageAlertProduct, UsageAlertsOverview, UsageAlertsResult } from "./usage-alerts";

@@ -1,8 +1,8 @@
 import type { ReturnOf } from "@lunora/client";
 
 import type { api } from "../../lunora/_generated/api.js";
-import type { CloudflarePermission } from "../provision-contract";
-import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../provision-contract";
+import type { CloudflarePermission } from "../cloudflare-permissions";
+import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../cloudflare-permissions";
 
 /** A connected Cloudflare account as `cloudflareAccounts.list` returns it — never its token. */
 export type CloudflareAccountView = ReturnOf<typeof api.cloudflare_accounts.list>[number];

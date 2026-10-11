@@ -1,12 +1,12 @@
 import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { authClient } from "../../lunora/auth-ui/client";
 import { SignInCard, SignUpCard } from "../../lunora/auth-ui/react/auth-cards";
 import { AuthUIProvider } from "../../lunora/auth-ui/react/provider";
-import { COLUMN_LABEL } from "./section-styles";
 
 /**
  * Sign-in / sign-up for the hosted studio.

@@ -5,12 +5,12 @@ import { useEffect, useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import { EdgeProtectionCard } from "./EdgeProtectionCard";
 import { countryFlag, countryName, formatMs, formatNumber, formatTime } from "./format";
-import { COLUMN_LABEL } from "./section-styles";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import type { ShareRow, StatusClassRow, VolumePoint } from "./TrafficCharts";
 import { ShareList, StatusBreakdown, VolumeChart } from "./TrafficCharts";

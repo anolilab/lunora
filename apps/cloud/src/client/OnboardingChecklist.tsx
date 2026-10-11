@@ -3,10 +3,10 @@ import { Link } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
-import { COLUMN_LABEL } from "./section-styles";
 import type { OrgId } from "./types";
 
 /**

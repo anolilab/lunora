@@ -6,12 +6,12 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { DashboardPanel } from "../telemetry/dashboards";
 import { DashboardBoard } from "./DashboardBoard";
-import { COLUMN_LABEL } from "./section-styles";
 import { Field, FieldForm, FormError } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";

@@ -163,14 +163,17 @@ const cookieHeaderFrom = (response: Response): string =>
 const verifyDevEmail = async (): Promise<void> => {
     const bearer = `Bearer ${await readAdminToken()}`;
     const headers = { authorization: bearer, "content-type": "application/json", origin: BASE_URL };
-    const listed = await fetch(`${BASE_URL}/_lunora/admin/auth/users?searchValue=${encodeURIComponent(DEV_EMAIL)}&searchField=email`, { headers });
+    const listed = await fetch(`${BASE_URL}/_lunora/admin/auth/users?search=${encodeURIComponent(DEV_EMAIL)}&searchField=email`, { headers });
 
     if (!listed.ok) {
         return;
     }
 
-    const { users }: { users?: { email?: string; emailVerified?: boolean; id?: string }[] } = await listed.json();
-    const user = users?.find((candidate) => candidate.email === DEV_EMAIL);
+    // The admin list answers `{ rows, total }` (`@lunora/auth` admin.ts). Reading a
+    // `users` key found nothing, so on a fresh database the account was never
+    // verified and the sign-in below failed with EMAIL_NOT_VERIFIED.
+    const { rows }: { rows?: { email?: string; emailVerified?: boolean; id?: string }[] } = await listed.json();
+    const user = rows?.find((candidate) => candidate.email === DEV_EMAIL);
 
     if (user?.id === undefined || user.emailVerified === true) {
         return;

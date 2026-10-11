@@ -33,24 +33,31 @@ export const OrgSwitcher = ({ orgId, organizations }: { organizations: ReadonlyA
     return (
         <>
             <details className="group relative" ref={detailsRef}>
-                <summary className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-card px-2.5 py-2 shadow-sm select-none hover:bg-accent [&::-webkit-details-marker]:hidden">
-                    <span className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground text-[11px] font-semibold text-background">
+                <summary className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-sidebar-border bg-sidebar-accent/60 p-1.5 pe-2.5 select-none hover:bg-sidebar-accent group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0 [&::-webkit-details-marker]:hidden">
+                    {/* The logo tile; in the icon rail it is all that shows. */}
+                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-(image:--brand-gradient) text-[12px] font-semibold text-white shadow-(--brand-shadow) group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:rounded-xl group-data-[collapsible=icon]:text-[14px]">
                         {initialOf(current?.name)}
                     </span>
-                    <span className="flex-1 truncate text-sm font-medium">{current ? current.name : "Organization"}</span>
+                    {/* `sr-only`, not `hidden`, in the rail: the name stays the summary's accessible name. */}
+                    <span className="flex-1 truncate text-sm font-medium group-data-[collapsible=icon]:sr-only">{current ? current.name : "Organization"}</span>
                     {current ? (
-                        <Badge className="shrink-0 font-mono text-[10px] tracking-[0.06em] uppercase" variant="secondary">
+                        <Badge className="shrink-0 font-mono text-[10px] tracking-[0.06em] uppercase group-data-[collapsible=icon]:hidden" variant="secondary">
                             {current.plan}
                         </Badge>
                     ) : null}
-                    <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={UnfoldMoreIcon} strokeWidth={2} />
+                    <HugeiconsIcon
+                        className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden"
+                        icon={UnfoldMoreIcon}
+                        strokeWidth={2}
+                    />
                 </summary>
-                <div className="absolute inset-x-0 top-[calc(100%+6px)] z-20 grid gap-0.5 rounded-lg border border-border bg-popover p-1 shadow-lg">
+                {/* Under the switcher when expanded; out to the right of the rail when collapsed. */}
+                <div className="absolute inset-x-0 top-[calc(100%+6px)] z-20 grid gap-0.5 rounded-xl border border-border bg-popover p-1 shadow-lg group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:right-auto group-data-[collapsible=icon]:left-[calc(100%+10px)] group-data-[collapsible=icon]:w-64">
                     <p className="m-0 px-2 pt-2 pb-1 font-mono text-[11px] tracking-[0.07em] text-muted-foreground uppercase">Organizations</p>
                     {organizations.map((organization) => (
                         <Link
                             activeProps={{ className: "bg-accent" }}
-                            className="flex items-center gap-2.5 rounded-md px-2 py-[7px] text-[13px] text-foreground no-underline hover:bg-accent"
+                            className="flex items-center gap-2.5 rounded-lg px-2 py-[7px] text-[13px] text-foreground no-underline hover:bg-accent"
                             key={organization._id}
                             params={{ organizationId: organization._id }}
                             to="/orgs/$organizationId/projects"
@@ -65,7 +72,7 @@ export const OrgSwitcher = ({ orgId, organizations }: { organizations: ReadonlyA
                         </Link>
                     ))}
                     <button
-                        className="mt-0.5 cursor-pointer rounded-md border-t border-border p-2 text-left font-mono text-[11px] tracking-[0.04em] text-muted-foreground uppercase hover:text-foreground"
+                        className="mt-0.5 cursor-pointer rounded-lg border-t border-border p-2 text-left font-mono text-[11px] tracking-[0.04em] text-muted-foreground uppercase hover:text-foreground"
                         onClick={() => {
                             // Collapse the native disclosure, then open the panel over the page.
                             detailsRef.current?.removeAttribute("open");

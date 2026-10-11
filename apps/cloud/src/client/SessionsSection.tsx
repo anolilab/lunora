@@ -6,12 +6,13 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { COLUMN_LABEL } from "@/lib/typography";
 
 import { api } from "../../lunora/_generated/api.js";
 import { ColumnHeader } from "./ColumnHeader";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatMs, formatNumber, formatTime } from "./format";
-import { COLUMN_LABEL, rowClassName } from "./section-styles";
+import { rowClassName, rowDividerClassName } from "./section-styles";
 import { StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";
@@ -52,7 +53,7 @@ const SessionTurns = ({ organizationId, sessionId }: { organizationId: OrgId; se
     return (
         // An ordered list, because a conversation's turns are ordered — but it borrows
         // the shared row metrics so its rhythm matches every other list in the studio.
-        <ol className="m-0 grid list-none gap-0 p-0">
+        <ol className={`m-0 grid list-none gap-0 p-0 ${rowDividerClassName}`}>
             {turns.map((turn, index) => {
                 const tokens = tokenSummary(turn.promptTokens, turn.completionTokens);
 

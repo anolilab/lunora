@@ -10,22 +10,23 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { api } from "../../lunora/_generated/api.js";
+import { BoxDetail } from "./BoxDetail";
 import type { BoxView, MemberRole } from "./boxes";
-import { canDiagnose, canManage } from "./boxes";
+import { canDiagnose, canManage, pickBox } from "./boxes";
 import { BoxListItem } from "./BoxListItem";
 import { DiagnoseBoxDialog } from "./DiagnoseBoxDialog";
 import { EnrolBoxDialog } from "./EnrolBoxDialog";
+import { projectNamesByHost } from "./host-projects";
 import { RenameBoxDialog } from "./RenameBoxDialog";
 import { RevokeBoxDialog } from "./RevokeBoxDialog";
-import { HostEmpty } from "./section-ui";
+import { HostEmpty, RowList, SectionLabel } from "./section-ui";
 import type { SectionProps } from "./tabs";
-import { projectNamesByHost } from "./target-capabilities";
 import { useBoxDomain, useMyRole } from "./use-boxes";
 
 /** Stable empty list for a box with no projects (a fresh `[]` per row trips react-perf). */
 const NO_PROJECTS: ReadonlyArray<string> = [];
 
-interface BoxListProps {
+interface BoxBrowserProps {
     boxes: ReadonlyArray<BoxView>;
     domain?: string;
     onDiagnose: (box: BoxView) => void;
@@ -35,30 +36,59 @@ interface BoxListProps {
     role: MemberRole | undefined;
 }
 
-/** The boxes, each with the actions the caller's role allows on it. */
-const BoxList = ({ boxes, domain, onDiagnose, onRename, onRevoke, projectsByBox, role }: BoxListProps): ReactElement => (
-    <ul className="m-0 grid list-none p-0">
-        {boxes.map((box) => (
-            <BoxListItem
-                box={box}
-                diagnose={canDiagnose(role, box)}
-                domain={domain}
-                key={box._id}
-                manage={canManage(role)}
-                onDiagnose={() => {
-                    onDiagnose(box);
-                }}
-                onRename={() => {
-                    onRename(box);
-                }}
-                onRevoke={() => {
-                    onRevoke(box);
-                }}
-                projects={projectsByBox.get(box._id) ?? NO_PROJECTS}
-            />
-        ))}
-    </ul>
-);
+/** The boxes as a list beside the picked box's detail, with the actions the caller's role allows on it. */
+const BoxBrowser = ({ boxes, domain, onDiagnose, onRename, onRevoke, projectsByBox, role }: BoxBrowserProps): ReactElement => {
+    const [selectedId, setSelectedId] = useState<null | string>(null);
+    const selected = pickBox(boxes, selectedId);
+
+    return (
+        <div className="grid gap-6 lg:grid-cols-[minmax(15rem,20rem)_1fr]">
+            <div className="grid content-start gap-2.5">
+                <SectionLabel count={boxes.length}>Servers</SectionLabel>
+                <RowList>
+                    {boxes.map((box) => (
+                        <BoxListItem
+                            box={box}
+                            key={box._id}
+                            onSelect={() => {
+                                setSelectedId(box._id);
+                                // Below `lg` the detail stacks under the list, so a pick would
+                                // otherwise change content the reader cannot see.
+                                if (globalThis.matchMedia?.("(max-width: 1023px)").matches) {
+                                    // After the commit, so the scroll lands on the newly selected box.
+                                    requestAnimationFrame(() => {
+                                        document.querySelector("#box-detail")?.scrollIntoView({ block: "start" });
+                                    });
+                                }
+                            }}
+                            selected={box._id === selected?._id}
+                        />
+                    ))}
+                </RowList>
+            </div>
+            {selected ? (
+                <div className="min-w-0" id="box-detail">
+                    <BoxDetail
+                        box={selected}
+                        diagnose={canDiagnose(role, selected)}
+                        domain={domain}
+                        manage={canManage(role)}
+                        onDiagnose={() => {
+                            onDiagnose(selected);
+                        }}
+                        onRename={() => {
+                            onRename(selected);
+                        }}
+                        onRevoke={() => {
+                            onRevoke(selected);
+                        }}
+                        projects={projectsByBox.get(selected._id) ?? NO_PROJECTS}
+                    />
+                </div>
+            ) : null}
+        </div>
+    );
+};
 
 /**
  * Boxes tab (plan 458 W9): the organization's own servers that `celld-vps`
@@ -114,7 +144,7 @@ export const BoxesSection = ({ organizationId, preloaded }: SectionProps<ReturnO
         );
     } else {
         body = (
-            <BoxList
+            <BoxBrowser
                 boxes={boxes}
                 domain={domain}
                 onDiagnose={setDiagnosing}
