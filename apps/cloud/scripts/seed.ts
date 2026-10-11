@@ -453,7 +453,15 @@ const ensureDeployment = async (
 };
 
 /**
- * Ensure the project has a verified custom domain, so the Domains tab is populated.
+ * Ensure the project has a custom domain, so the Domains tab is populated.
+ *
+ * **It stays pending.** Verification is `POST /v1/domains/verify`, which resolves
+ * the DNS TXT record over DoH before it calls `domains:markVerified`, and no local
+ * hostname has that record. `domains:markVerified` itself is an `internalMutation`,
+ * so the public RPC endpoint answers it as not registered, as it does every
+ * internal function. Calling it from here failed the first run against a fresh
+ * database once `domains:add` had succeeded, and every later run passed only because
+ * the domain then existed and the step returned early.
  *
  * **Best-effort, and skipped rather than fatal.** `domains:add` requires the
  * `customDomains` entitlement, and entitlements resolve from the org's *synced
@@ -495,12 +503,7 @@ const ensureDomain = async (
         throw error;
     }
 
-    // Verification normally waits on a DNS TXT record and a Cloudflare custom-hostname
-    // callback. Neither exists locally, so mark it verified directly — otherwise the
-    // domain sits "pending" forever and the tab shows nothing useful.
-    await rpc<unknown>(cookie, "domains:markVerified", { id: added.id, organizationId, verified: true });
-
-    console.info(`  domain      ${DOMAIN_HOSTNAME} (created, verified)`);
+    console.info(`  domain      ${DOMAIN_HOSTNAME} (created, pending verification — add TXT ${added.txtName} to verify)`);
 };
 
 /**
