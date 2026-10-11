@@ -35,3 +35,5 @@ export type { PrivacyPolicy, PrivacyPreset, RetainDirective, RetentionRule, Rete
 export { retain, retainUntil } from "./rules";
 export type { PrivacyTableName } from "./tables";
 export { privacyExtension } from "./tables";
+export { runErasure, runExport } from "./run";
+export type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";

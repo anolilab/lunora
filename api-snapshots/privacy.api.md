@@ -50,6 +50,18 @@ interface CoverageProblem {
 type DataOrigin = "provided" | "observed" | "derived" | "inferred";
 ```
 
+### `DataPort` (interface)
+
+```ts
+interface DataPort {
+    collect: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, ReadonlyArray<Readonly<Record<string, unknown>>>>>>;
+    eraseBatch: (dataset: Dataset, subjectId: string, now: Date) => Promise<{
+        readonly hasMore: boolean;
+    }>;
+    remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
+}
+```
+
 ### `Dataset` (interface)
 
 ```ts
@@ -110,6 +122,15 @@ type Disposition = {
 const ERASE_BATCH = 100;
 ```
 
+### `ErasureOutcome` (interface)
+
+```ts
+interface ErasureOutcome {
+    readonly leftover: ReadonlyArray<string>;
+    readonly status: RequestStatus;
+}
+```
+
 ### `ErasureSettings` (interface)
 
 ```ts
@@ -124,6 +145,15 @@ interface ErasureSettings {
 
 ```ts
 type ExportArticle = "15" | "20";
+```
+
+### `ExportOutcome` (interface)
+
+```ts
+interface ExportOutcome {
+    readonly archiveKey?: string;
+    readonly status: RequestStatus;
+}
 ```
 
 ### `InvalidTransitionError` (class)
@@ -276,6 +306,30 @@ interface RetentionRule {
 
 ```ts
 type RetentionStart = "endOfCalendarYear" | "from";
+```
+
+### `RunContext` (interface)
+
+```ts
+interface RunContext {
+    readonly data: DataPort;
+    readonly files: StorePort;
+    readonly now: () => Date;
+    readonly rules: ReadonlyMap<string, RetentionRule>;
+    readonly store: RequestStore;
+    readonly subjectKey: string;
+}
+```
+
+### `StorePort` (interface)
+
+```ts
+interface StorePort {
+    put: (requestId: string, file: {
+        readonly data: Uint8Array;
+        readonly name: string;
+    }) => Promise<string>;
+}
 ```
 
 ### `SummaryDataset` (interface)
@@ -512,6 +566,18 @@ const retain: (rule: string, options?: {
 
 ```ts
 const retainUntil: (rule: RetentionRule, from: Date) => Date;
+```
+
+### `runErasure` (const)
+
+```ts
+const runErasure: (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord) => Promise<ErasureOutcome>;
+```
+
+### `runExport` (const)
+
+```ts
+const runExport: (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord) => Promise<ExportOutcome>;
 ```
 
 ### `storageObjectsDataset` (const)
