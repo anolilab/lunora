@@ -264,4 +264,94 @@ describe("a catalog install's badge follows its deployment", () => {
 
         expect(store.rows("catalogInstalls")).toMatchObject([{ _id: "install_2", status: "installing" }]);
     });
+
+    it("restores a rolled-back catalog install's row to live, re-created from the release's provenance", async () => {
+        const store = storeWith(
+            {
+                ...catalogProject,
+                deployments: [
+                    {
+                        _id: "dep_catalog",
+                        alias: "counter",
+                        catalogInstalledBy: "user_owner",
+                        catalogSlug: "counter",
+                        catalogVersion: "1.1.0",
+                        createdAt: 2,
+                        kind: "production",
+                        organizationId: ORG,
+                        projectId: "proj_1",
+                        scriptName: "counter-prod",
+                        status: "live",
+                    },
+                    {
+                        _id: "dep_catalog_old",
+                        alias: "counter",
+                        catalogInstalledBy: "user_owner",
+                        catalogSlug: "counter",
+                        catalogVersion: "1.0.0",
+                        createdAt: 1,
+                        kind: "production",
+                        organizationId: ORG,
+                        projectId: "proj_1",
+                        scriptName: "counter-prod",
+                        status: "superseded",
+                    },
+                ],
+            },
+            { userId: "user_owner" },
+        );
+
+        await rollback.handler(store.ctx, { id: "dep_catalog_old" as Id<"deployments">, organizationId: ORG as Id<"organizations"> });
+
+        expect(store.rows("catalogInstalls")).toStrictEqual([
+            {
+                _id: "catalogInstalls_new_1",
+                activeKey: "live:catalogInstalls_new_1",
+                createdAt: 1000,
+                deploymentId: "dep_catalog_old",
+                installedBy: "user_owner",
+                organizationId: ORG,
+                projectId: "proj_1",
+                slug: "counter",
+                status: "live",
+                version: "1.0.0",
+            },
+        ]);
+    });
+
+    it("touches no install row when a rollback moves a project with no catalog release", async () => {
+        const store = storeWith(
+            {
+                ...catalogProject,
+                deployments: [
+                    {
+                        _id: "dep_p2_live",
+                        alias: "app",
+                        createdAt: 2,
+                        kind: "production",
+                        organizationId: ORG,
+                        projectId: "proj_2",
+                        scriptName: "app-prod",
+                        status: "live",
+                    },
+                    {
+                        _id: "dep_p2_old",
+                        alias: "app",
+                        createdAt: 1,
+                        kind: "production",
+                        organizationId: ORG,
+                        projectId: "proj_2",
+                        scriptName: "app-prod",
+                        status: "superseded",
+                    },
+                ],
+            },
+            { userId: "user_owner" },
+        );
+
+        await rollback.handler(store.ctx, { id: "dep_p2_old" as Id<"deployments">, organizationId: ORG as Id<"organizations"> });
+
+        expect(store.writes.filter((write) => write.table === "catalogInstalls")).toStrictEqual([]);
+        expect(store.rows("catalogInstalls")).toStrictEqual(catalogProject.catalogInstalls);
+    });
 });

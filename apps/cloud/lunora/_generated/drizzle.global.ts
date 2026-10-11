@@ -162,6 +162,9 @@ export const deployments = sqliteTable("deployments", {
     failedAt: real("failedAt"),
     destroyedAt: real("destroyedAt"),
     teardownAt: real("teardownAt"),
+    catalogInstalledBy: text("catalogInstalledBy"),
+    catalogSlug: text("catalogSlug"),
+    catalogVersion: text("catalogVersion"),
 }, (t) => ({
     by_status: index("by_status").on(t.status),
     by_script: index("by_script").on(t.scriptName),

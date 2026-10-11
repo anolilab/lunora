@@ -14,6 +14,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import type { BadgeInstall, InstallBadgeStore } from "../catalog/install-badge";
+import { endInstallBadge, restoreInstallBadge } from "../catalog/install-badge";
 import type { ControlPlaneStore } from "../d1-store";
 import type { DeployKind, DeployManifest, TargetId } from "../provision-contract";
 import { BINDING_SUPPORT, storedTarget } from "../provision-contract";
@@ -269,14 +271,28 @@ const resumeTarget = (row: HaltRow, aliasRows: { live: DeploymentRow | undefined
     return chosen;
 };
 
+/** The catalog install badge over the control-plane store (`src/catalog/install-badge.ts` holds the rule). */
+const installBadgeOf = (database: ControlPlaneStore): InstallBadgeStore => {
+    return {
+        delete: (id) => database.delete(id, "catalogInstalls"),
+        insert: async (row) => (await database.insert("catalogInstalls", row)) as string,
+        installsOf: (projectId) => drainTable<BadgeInstall>(database, "catalogInstalls", { where: { projectId } }),
+        patch: (id, values) => database.patch(id, values, "catalogInstalls"),
+    };
+};
+
 /** Record a resume onto a release other than the live one, as a rollback records it: it becomes live and the project points at it. */
 const recordResumedOnto = async (deps: HaltConvergeDeps, target: DeploymentRow, live: DeploymentRow | undefined, now: number): Promise<void> => {
+    const badge = installBadgeOf(deps.database);
+
     if (live !== undefined && live._id !== target._id) {
         await deps.database.patch(live._id, { status: "superseded", supersededAt: now, updatedAt: now }, "deployments");
+        await endInstallBadge(badge, live);
     }
 
     if (live?._id !== target._id) {
         await deps.database.patch(target._id, { liveAt: now, status: "live", updatedAt: now }, "deployments");
+        await restoreInstallBadge(badge, target, now);
 
         if (target.kind === "production") {
             await deps.database.patch(target.projectId, { activeDeploymentId: target._id, activeScriptName: target.scriptName }, "projects");

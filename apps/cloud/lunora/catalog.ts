@@ -132,6 +132,12 @@ export const finishInstall = internalMutation
 
         // A live row keys on its own install id, so no claim on the project can match it.
         await context.db.patch(installId, { activeKey: `live:${installId}`, deploymentId, status: "live" });
+        // Keep the install's provenance on its release, so a rollback back onto it can show the badge again.
+        await context.db.patch(deploymentId as Id<"deployments">, {
+            catalogInstalledBy: row.installedBy,
+            catalogSlug: row.slug,
+            catalogVersion: row.version,
+        });
 
         // A project runs one production release, so the new live row replaces every earlier one.
         const rows = await collectAll<InstallRow>((cursor) => context.db.catalogInstalls.findMany({ cursor, where: { projectId: row.projectId } }));

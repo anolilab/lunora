@@ -133,3 +133,11 @@ signed under `lunora-catalog-artifact:v1`. `runtime` is `worker` unless it says 
 `organizationId`, `projectId`, `slug`, `version`, `status` (`installing` | `live`),
 `deploymentId`, `createdAt`, `installedBy` (user id). Indexed by org and by project.
 Only `live` rows are listed.
+
+The badge follows the deployment (`src/catalog/install-badge.ts`, the one place the rule
+lives). A live row is removed when its deployment is superseded or fails, and restored
+when that deployment goes live again: by an activation, a rollback, or a resume onto
+another release after an emergency stop. A restore re-creates the row from the
+deployment's provenance (`catalogSlug`, `catalogVersion`, `catalogInstalledBy`, written
+by `finishInstall`). A catalog release that went live before that provenance was recorded
+has none, so its badge stays off until the app is installed again.

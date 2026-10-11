@@ -103,6 +103,13 @@ export const deployTables = {
         // (GAPS.md A1 / §2.3). The sweep only acts on `destroyed`/`failed` rows
         // where this is unset, so it is crash-safe idempotent.
         teardownAt: v.optional(v.number()),
+        // The catalog app this release was installed from, written by `finishInstall` once the
+        // install's release is up. Absent on every other release, and on catalog releases that
+        // went live before this was recorded. A rollback or activation back onto the release
+        // re-creates its install badge from these (`src/catalog/install-badge.ts`).
+        catalogInstalledBy: v.optional(v.string()),
+        catalogSlug: v.optional(v.string()),
+        catalogVersion: v.optional(v.string()),
     })
         .global()
         // A host's deployments: disconnecting an account reads them.

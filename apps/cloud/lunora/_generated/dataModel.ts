@@ -169,6 +169,9 @@ export interface Doc_deployments {
     failedAt?: number;
     destroyedAt?: number;
     teardownAt?: number;
+    catalogInstalledBy?: string;
+    catalogSlug?: string;
+    catalogVersion?: string;
 }
 
 export interface Doc_halts {
@@ -1225,6 +1228,9 @@ export interface Insert_deployments {
     failedAt?: number;
     destroyedAt?: number;
     teardownAt?: number;
+    catalogInstalledBy?: string;
+    catalogSlug?: string;
+    catalogVersion?: string;
 }
 
 export interface Insert_halts {

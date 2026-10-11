@@ -10,11 +10,11 @@
  * - `live`: the release is up. `activeKey` is `live:` followed by the install's id, and
  *   `deploymentId` names the deployment, which is the `deployments` row's id.
  * - removed, not moved to another status: a `live` row is deleted when its deployment is
- *   superseded (an activation or a rollback moves off it) or fails, because the app is no
- *   longer serving. `lunora/deployments.ts` does this. A row never leaves `installing` for
- *   a deployment event, so a claim is only ever ended by its own install.
- * A rollback back onto a superseded catalog deployment finds no row, so its badge stays
- * off until the app is installed again.
+ *   superseded (an activation, a rollback, or a resume moves off it) or fails, because the
+ *   app is no longer serving. A row is re-created when its deployment goes live again, from
+ *   the provenance `finishInstall` wrote onto the deployment. Both rules are in
+ *   `src/catalog/install-badge.ts`. A row never leaves `installing` for a deployment event,
+ *   so a claim is only ever ended by its own install.
  *
  * Composed into the schema by `lunora/schema.ts`.
  */

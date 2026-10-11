@@ -4,6 +4,8 @@ import { isDataMovementPath } from "../src/admin/proxy";
 import { highestPlan } from "../src/billing/plans";
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
+import type { BadgeInstall, InstallBadgeStore } from "../src/catalog/install-badge";
+import { endInstallBadge, restoreInstallBadge } from "../src/catalog/install-badge";
 import { previewExpiry } from "../src/deploy/preview";
 import { PLAIN_WORKER_NO_ADMIN, RUNTIME_LABELS, storedRuntime } from "../src/project-runtime";
 import type { TargetId } from "../src/provision-contract";
@@ -682,28 +684,15 @@ const projectNameOf = async (context: MutationContext, projectId: Id<"projects">
     return project?.name ?? "project";
 };
 
-/**
- * Keep a catalog install's badge in step with its deployment. A live install row names
- * the deployment it went live as. When that deployment is superseded or fails, the
- * install no longer serves, so its row is removed, the way `finishInstall` removes a
- * superseded install when the next one goes live.
- *
- * Only `live` rows are touched. An `installing` row belongs to its install's claim, and
- * `finishInstall` is what marks it live, so a deployment going live needs no write here.
- * A deployment no install row names matches nothing, so a project with no catalog
- * install is untouched.
- */
-const settleCatalogInstall = async (context: MutationContext, deployment: Pick<DeploymentRow, "_id" | "projectId">): Promise<void> => {
-    const installs = await collectAll<{ _id: Id<"catalogInstalls">; deploymentId?: string; status: string }>((cursor) =>
-        context.db.catalogInstalls.findMany({ cursor, where: { projectId: deployment.projectId } }),
-    );
-
-    for (const install of installs) {
-        if (install.status === "live" && install.deploymentId === deployment._id) {
-            // eslint-disable-next-line no-await-in-loop -- a handful of installs per project
-            await context.db.delete(install._id);
-        }
-    }
+/** The catalog install badge over this mutation's database (`src/catalog/install-badge.ts` holds the rule). */
+const installBadgeOf = (context: MutationContext): InstallBadgeStore => {
+    return {
+        delete: (id) => context.db.delete(id as Id<"catalogInstalls">),
+        insert: async (row) => await context.db.insert("catalogInstalls", row),
+        installsOf: (projectId) =>
+            collectAll<BadgeInstall>((cursor) => context.db.catalogInstalls.findMany({ cursor, where: { projectId: projectId as Id<"projects"> } })),
+        patch: (id, values) => context.db.patch(id as Id<"catalogInstalls">, values),
+    };
 };
 
 /**
@@ -742,8 +731,10 @@ export const activate = mutation
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
             // eslint-disable-next-line no-await-in-loop -- the same small batch
-            await settleCatalogInstall(context, other);
+            await endInstallBadge(installBadgeOf(context), other);
         }
+
+        await restoreInstallBadge(installBadgeOf(context), deployment, now);
 
         const project = (await context.db.get(deployment.projectId)) as null | { activeDeploymentId?: string; name?: string };
         const movesPointer = deployment.kind === "production" && project?.activeDeploymentId !== id;
@@ -814,10 +805,11 @@ export const rollback = internalMutation
 
         if (replaced && replaced._id !== id) {
             await context.db.patch(replaced._id, { status: "superseded", supersededAt: now, updatedAt: now });
-            await settleCatalogInstall(context, replaced);
+            await endInstallBadge(installBadgeOf(context), replaced);
         }
 
         await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
+        await restoreInstallBadge(installBadgeOf(context), target, now);
         await pointProjectAt(context, target);
         await context.db.insert("auditLog", {
             action: "deployment.rollback",
@@ -1021,7 +1013,7 @@ export const updateStatus = mutation
         });
 
         if ((status === "superseded" || status === "failed") && existing.status !== status) {
-            await settleCatalogInstall(context, existing);
+            await endInstallBadge(installBadgeOf(context), existing);
         }
 
         // Notify the org's `deploy` rules, but only on the transition INTO failed.
