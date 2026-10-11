@@ -322,8 +322,15 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
 installCompiledValidatorMap(lunora_account_0.eraseUser.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["operator"] !== undefined) {
+if (typeof source["operator"] !== "boolean") return DEFER;
+__val1 = source["operator"];
+__has1 = true;
+}
 if (typeof source["userId"] !== "string") return DEFER;
-return { "userId": source["userId"] };
+return { ...(__has1 ? { "operator": __val1 } : {}), "userId": source["userId"] };
 });
 installCompiledValidatorMap(lunora_alerts_1.anomalyBaselines.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1212,7 +1219,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     account: {
-        eraseUser: (args: { userId: string }) => Promise<{ erased: false; soleOwnerOf: { id: string; name: string }[] } | { erased: true; }>;
+        eraseUser: (args: { operator?: boolean; userId: string }) => Promise<{ erased: false; soleOwnerOf: { id: string; name: string }[] } | { erased: true; retainedOwnerOf?: { id: string; name: string }[] }>;
         exportMine: (args?: {}) => Promise<Record<string, unknown>>;
     };
     alerts: {

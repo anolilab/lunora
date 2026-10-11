@@ -88,19 +88,29 @@ export const handleAccountExportRoute = async (request: Request, environment: Ro
 
 /**
  * `POST /v1/account/erase` — remove what the control plane holds about a user
- * whose account is being deleted (`account.eraseUser`). Called in-process by the
- * authentication layer's before-delete hook, with the admin token. Answers 409,
- * naming the organizations, while the user is the only owner of any.
+ * whose account is being deleted (`account.eraseUser`). Called in-process with
+ * the admin token, by the authentication layer's before-delete hook and, with
+ * `operator: true`, by the operator's `removeUser`. Answers 409, naming the
+ * organizations, while a self-service user is the only owner of any; an
+ * operator removal is never refused and answers with the organizations whose
+ * owner membership it kept (`retainedOwnerOf`).
  */
 export const handleAccountEraseRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | { userId?: unknown };
+    const body = (await request.json().catch(() => null)) as null | { operator?: unknown; userId?: unknown };
 
     if (typeof body?.userId !== "string" || body.userId === "") {
         return jsonError(400, "userId is required");
     }
 
-    const result = await context.runMutation<EraseUserResult>(internal.account.eraseUser, { userId: body.userId });
+    if (body.operator !== undefined && typeof body.operator !== "boolean") {
+        return jsonError(400, "operator must be a boolean");
+    }
+
+    const result = await context.runMutation<EraseUserResult>(internal.account.eraseUser, {
+        userId: body.userId,
+        ...(body.operator === true ? { operator: true } : {}),
+    });
 
     if (!result.erased) {
         const names = result.soleOwnerOf.map((organization) => `"${organization.name}"`).join(", ");
@@ -114,5 +124,5 @@ export const handleAccountEraseRoute = async (request: Request, environment: Rou
         );
     }
 
-    return Response.json({ erased: true });
+    return Response.json(result.retainedOwnerOf === undefined ? { erased: true } : { erased: true, retainedOwnerOf: result.retainedOwnerOf });
 };

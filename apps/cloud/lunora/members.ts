@@ -56,6 +56,31 @@ export const remove = mutation
     });
 
 /**
+ * The `target` of a `member.set-role` audit entry: the membership row's id and
+ * the new role, `{members id} → {role}`.
+ *
+ * Entries written before this format name the member by their user id instead,
+ * `{user id} → {role}`. Both shapes are plain strings to every reader (the
+ * Activity tab and the account export show `target` as written), so an old
+ * entry still displays. The member id names no person: the row is deleted when
+ * the member leaves or their account is erased, and the id resolves to nothing
+ * afterwards. Old-shape entries are rewritten by `account.eraseUser`
+ * ({@link legacySetRoleTargetRole}), which replaces the user id with the
+ * deleted-user placeholder.
+ */
+export const setRoleAuditTarget = (memberId: string, role: string): string => `${memberId} → ${role}`;
+
+/**
+ * The role in an old-shape `member.set-role` target that names `userId`
+ * (`{user id} → {role}`), or `undefined` when the target is anything else.
+ */
+export const legacySetRoleTargetRole = (target: string | undefined, userId: string): string | undefined => {
+    const prefix = `${userId} → `;
+
+    return target?.startsWith(prefix) ? target.slice(prefix.length) : undefined;
+};
+
+/**
  * Change a member's role (owner only). Demoting the last owner is refused —
  * an org must always have one.
  */
@@ -89,6 +114,6 @@ export const setRole = mutation
             actorUserId: caller.userId,
             createdAt: context.now,
             organizationId: caller.organizationId,
-            target: `${target.userId} → ${newRole}`,
+            target: setRoleAuditTarget(target._id, newRole),
         });
     });
