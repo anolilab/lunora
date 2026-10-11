@@ -15,6 +15,8 @@ export { defineDataset, erasureOrder } from "./dataset";
  * the jurisdiction presets live at `./eu` and `./de`.
  */
 export { addCalendarMonths, dueAt, extendedDueAt } from "./deadlines";
+export type { ErasureOptions, Privacy, PrivacyConfig } from "./define";
+export { definePrivacy } from "./define";
 export type { Disposition, VerifyResult } from "./erasure";
 export { dispositionOf, drainUntilEmpty, ERASE_BATCH, verifyErasure } from "./erasure";
 export type { RequestStatus, RequestType } from "./lifecycle";
@@ -33,7 +35,7 @@ export type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 export { cancelRequest, extendRequest, openRequest } from "./requests";
 export type { PrivacyPolicy, PrivacyPreset, RetainDirective, RetentionRule, RetentionStart } from "./rules";
 export { retain, retainUntil } from "./rules";
+export type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
+export { runErasure, runExport } from "./run";
 export type { PrivacyTableName } from "./tables";
 export { privacyExtension } from "./tables";
-export { runErasure, runExport } from "./run";
-export type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";

@@ -122,6 +122,16 @@ type Disposition = {
 const ERASE_BATCH = 100;
 ```
 
+### `ErasureOptions` (interface)
+
+```ts
+interface ErasureOptions {
+    readonly drainBudgetDays?: number;
+    readonly freshAgeMs?: number;
+    readonly graceDays?: number;
+}
+```
+
 ### `ErasureOutcome` (interface)
 
 ```ts
@@ -208,6 +218,46 @@ interface ManifestDataset {
     readonly recipients: ReadonlyArray<string>;
     readonly restricted: boolean;
     readonly retention: string;
+}
+```
+
+### `Privacy` (interface)
+
+```ts
+interface Privacy {
+    readonly cancelRequest: (input: {
+        requestId: string;
+    }) => Promise<RequestRecord>;
+    readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
+    readonly extendRequest: (input: {
+        reason: string;
+        requestId: string;
+    }) => Promise<RequestRecord>;
+    readonly requestErasure: (input: {
+        sessionAgeMs: number;
+        subjectId: string;
+    }) => Promise<RequestRecord>;
+    readonly requestExport: (input: {
+        subjectId: string;
+    }) => Promise<RequestRecord>;
+    readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
+    readonly runExport: (requestId: string) => Promise<ExportOutcome>;
+}
+```
+
+### `PrivacyConfig` (interface)
+
+```ts
+interface PrivacyConfig {
+    readonly data: DataPort;
+    readonly datasets: ReadonlyArray<Dataset>;
+    readonly erasure?: ErasureOptions;
+    readonly files: StorePort;
+    readonly newId: () => string;
+    readonly now: () => Date;
+    readonly presets?: ReadonlyArray<PrivacyPreset>;
+    readonly store: RequestStore;
+    readonly subjectKey?: (subjectId: string) => string;
 }
 ```
 
@@ -459,6 +509,12 @@ const checkCoverage: (tables: ReadonlyArray<string>, classifications: Readonly<R
 
 ```ts
 const defineDataset: (id: string, spec: DatasetSpec) => Dataset;
+```
+
+### `definePrivacy` (const)
+
+```ts
+const definePrivacy: (config: PrivacyConfig) => Privacy;
 ```
 
 ### `dispositionOf` (const)
