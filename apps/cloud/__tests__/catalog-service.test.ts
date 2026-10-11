@@ -149,8 +149,12 @@ const indexStateDb = (): { rows: IndexStateRow[]; store: IndexStateStore } => {
     const ctx = {
         db: {
             catalogIndexState: {
-                findMany: ({ where }: { where: { indexUrl: string } }) =>
-                    Promise.resolve({ continueCursor: null, isDone: true, page: rows.filter((row) => row.indexUrl === where.indexUrl) }),
+                findMany: ({ where }: { where: Partial<Pick<IndexStateRow, "indexUrl" | "keyId">> }) =>
+                    Promise.resolve({
+                        continueCursor: null,
+                        isDone: true,
+                        page: rows.filter((row) => Object.entries(where).every(([field, value]) => row[field as keyof IndexStateRow] === value)),
+                    }),
             },
             insert: (_table: string, document: Omit<IndexStateRow, "_id">) => {
                 if (rows.some((row) => row.indexUrl === document.indexUrl)) {
@@ -466,6 +470,36 @@ describe(listCatalog, () => {
             [INDEX_URL, NOW],
             [OTHER_INDEX_URL, NOW - 60 * 60 * 1000],
         ]);
+    });
+});
+
+describe("advanceIndexState", () => {
+    const OLDER = NOW - 60 * 60 * 1000;
+
+    it("refuses an older index from key A after a newer index from key B, so a retired key cannot replay", async () => {
+        const { rows, store } = indexStateDb();
+
+        await expect(store.advance(INDEX_URL, "catalog-b", NOW)).resolves.toStrictEqual({ accepted: true });
+        await expect(store.advance(INDEX_URL, "catalog-a", OLDER)).resolves.toStrictEqual({ accepted: false });
+        expect(rows.map((row) => [row.keyId, row.issuedAt])).toStrictEqual([["catalog-b", NOW]]);
+    });
+
+    it("accepts an index from a new key at or above the URL maximum, and moves the mark to that key", async () => {
+        const { rows, store } = indexStateDb();
+
+        await store.advance(INDEX_URL, "catalog-a", OLDER);
+
+        await expect(store.advance(INDEX_URL, "catalog-c", NOW)).resolves.toStrictEqual({ accepted: true });
+        await expect(store.advance(INDEX_URL, "catalog-c", NOW)).resolves.toStrictEqual({ accepted: true });
+        expect(rows.map((row) => [row.keyId, row.issuedAt])).toStrictEqual([["catalog-c", NOW]]);
+    });
+
+    it("keeps the watermark independent across index URLs", async () => {
+        const { store } = indexStateDb();
+
+        await store.advance(INDEX_URL, "catalog-b", NOW);
+
+        await expect(store.advance(OTHER_INDEX_URL, "catalog-a", OLDER)).resolves.toStrictEqual({ accepted: true });
     });
 });
 

@@ -179,10 +179,13 @@ interface IndexStateRow {
 
 /**
  * Record a verified catalog index for its URL, and say whether it may be served (SYSTEM).
- * `issuedAt` only moves forward. An index older than the stored one is refused. An equal
- * one is accepted without a write, so refreshing the same index never fails. The row is
- * shared by every isolate, which is what stops a cold isolate serving an older index than
- * another one has seen.
+ * The watermark is per URL and shared by every signing key: `issuedAt` only moves forward,
+ * and an index older than the stored one is refused whichever key signed it. So a retired
+ * key that is still trusted cannot replay an older index past a newer one signed by another
+ * key. An equal one is accepted without a write, so refreshing the same index never fails.
+ * `keyId` is updated to the key that signed the newest index, for audit. The row is shared
+ * by every isolate, which is what stops a cold isolate serving an older index than another
+ * one has seen.
  */
 export const advanceIndexState = internalMutation
     .input({ indexUrl: boundedString(LIMITS.url), issuedAt: v.number(), keyId: boundedString(LIMITS.id) })
@@ -216,7 +219,7 @@ export const advanceIndexState = internalMutation
 
             return { accepted: true };
         } catch (error) {
-            // The unique URL key refused the insert: another isolate recorded this index between the read and this write.
+            // The unique URL index refused the insert: another isolate recorded this URL's index between the read and this write.
             const raced = await holderOf();
 
             if (raced === undefined) {
