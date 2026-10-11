@@ -10,8 +10,11 @@
 import type { LunoraErrorCode } from "@lunora/errors";
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire } from "../../../shared/wire-codec";
+import { isSlotEnvelope } from "./call-wire";
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
-import { retryAfterHeaderMs } from "./wire-errors";
+import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";
+import { retryAfterHeaderMs, slotError } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -204,6 +207,52 @@ const undecodableResultError = (cause: unknown): LunoraError => {
 
 /** Whether `error` reports a committed reply whose result did not decode (see {@link undecodableResultError}). */
 const isUndecodableResult = (error: unknown): error is LunoraError => error instanceof Error && undecodableResults.has(error);
+
+/** A batch's answered slots keyed by slot index. A body that is not a readable envelope is left out, because the server never answered that slot (§4.3). */
+export const indexReplaySlots = (results: { body?: unknown; id?: number }[]): Map<number, RpcEnvelopeBody> => {
+    const bySlot = new Map<number, RpcEnvelopeBody>();
+
+    for (const entry of results) {
+        if (typeof entry.id === "number" && isSlotEnvelope(entry.body)) {
+            bySlot.set(entry.id, entry.body);
+        }
+    }
+
+    return bySlot;
+};
+
+/**
+ * What a batch slot means for the queued write it answers. `unanswered` means the
+ * server never replied (retry under the same mutationId). `refused` carries the
+ * server's verdict as an error. `accepted` carries the envelope to settle.
+ */
+export type ReplaySlotVerdict = { error: LunoraClientError; kind: "refused" } | { inner: RpcEnvelopeBody; kind: "accepted" } | { kind: "unanswered" };
+
+export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlotVerdict => {
+    if (inner === undefined) {
+        return { kind: "unanswered" };
+    }
+
+    if ("error" in inner) {
+        return { error: slotError(inner), kind: "refused" };
+    }
+
+    return { inner, kind: "accepted" };
+};
+
+/**
+ * Decode an accepted slot's result. A result the codec refuses still means the write
+ * committed, so it is reported as an undecodable success, not a failure to retry.
+ */
+export type ReplayResultDecode = { error: LunoraError; kind: "undecodable" } | { kind: "value"; value: unknown };
+
+export const decodeReplayResult = (inner: RpcEnvelopeBody): ReplayResultDecode => {
+    try {
+        return { kind: "value", value: decodeWire(inner.result) };
+    } catch (error: unknown) {
+        return { error: undecodableResultError(error), kind: "undecodable" };
+    }
+};
 
 export {
     defaultReplayRetryDelayMs,

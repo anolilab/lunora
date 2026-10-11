@@ -10,7 +10,7 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { BatchSlot } from "./call-wire";
-import { demuxBatchResults, encodeCallArgs, isEncodable, isSlotEnvelope, replayExpectation } from "./call-wire";
+import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./call-wire";
 import {
     ARCHITECTURE_PATH,
     AUTH_ACCOUNTS_PATH,
@@ -136,11 +136,14 @@ import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import { createReconnect } from "./reconnect";
 import type { RpcEnvelopeBody } from "./replay";
 import {
+    decodeReplayResult,
     defaultReplayRetryDelayMs,
+    indexReplaySlots,
     isTransientReplayFailure,
     isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
     replayRetryDelayMs,
+    replaySlotVerdict,
     undecodableResultError,
     unparseableResponseError,
     utf8ByteLength,
@@ -209,7 +212,7 @@ import type {
     WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter, slotError } from "./wire-errors";
+import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter } from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -8687,41 +8690,30 @@ class LunoraClient {
         shardKey: string | undefined,
         authToken: null | string,
     ): QueuedMutation[] {
-        const bySlot = new Map<number, RpcEnvelopeBody>();
-
-        for (const entry of results) {
-            // A body that is not a readable envelope is a slot the server never answered
-            // (§4.3): leave it out so the item is requeued under the same mutationId.
-            if (typeof entry.id === "number" && isSlotEnvelope(entry.body)) {
-                bySlot.set(entry.id, entry.body);
-            }
-        }
-
+        const bySlot = indexReplaySlots(results);
         const requeue: QueuedMutation[] = [];
         let accepted = false;
         let refused = false;
 
         for (const [index, item] of items.entries()) {
-            const inner = bySlot.get(index);
+            const verdict = replaySlotVerdict(bySlot.get(index));
 
-            if (inner === undefined) {
-                // The server never returned this slot — it may or may not have
-                // committed; retry under the same `mutationId` (idempotent).
+            if (verdict.kind === "unanswered") {
+                // The server never returned this slot. It may or may not have committed,
+                // so retry under the same `mutationId` (idempotent).
                 requeue.push(item);
-            } else if ("error" in inner) {
-                const error = slotError(inner);
+            } else if (verdict.kind === "refused") {
+                refused ||= isAuthReplayFailure(verdict.error);
 
-                refused ||= isAuthReplayFailure(error);
-
-                if (this.shouldRequeueReplayFailure(error, authToken)) {
-                    this.noteReplayRetryDelay(shardKey, error, authToken);
+                if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
+                    this.noteReplayRetryDelay(shardKey, verdict.error, authToken);
                     requeue.push(item);
                 } else {
-                    this.settleReplayTerminal(item, error);
+                    this.settleReplayTerminal(item, verdict.error);
                 }
             } else {
                 accepted = true;
-                this.settleReplayBatchResult(item, inner);
+                this.settleReplayBatchResult(item, verdict.inner);
             }
         }
 
@@ -8741,17 +8733,15 @@ class LunoraClient {
      * own write DID commit.
      */
     private settleReplayBatchResult(item: QueuedMutation, inner: RpcEnvelopeBody): void {
-        let value: unknown;
+        const decoded = decodeReplayResult(inner);
 
-        try {
-            value = decodeWire(inner.result);
-        } catch (error) {
-            this.settleReplayUndecodable(item, undecodableResultError(error), inner.commitCursor);
+        if (decoded.kind === "undecodable") {
+            this.settleReplayUndecodable(item, decoded.error, inner.commitCursor);
 
             return;
         }
 
-        this.settleReplaySuccess(item, value, inner.commitCursor);
+        this.settleReplaySuccess(item, decoded.value, inner.commitCursor);
     }
 }
 
