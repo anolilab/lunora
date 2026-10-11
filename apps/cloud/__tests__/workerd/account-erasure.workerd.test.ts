@@ -17,6 +17,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { MutationCtx, QueryCtx } from "../../lunora/_generated/server";
 import { DELETED_ACTOR, eraseUser, OWNERLESS_ACTION, soleOwnedOrganizations } from "../../lunora/account";
 import schema from "../../lunora/schema";
+import { authExistingUserIds, ensureAuth } from "../../src/auth";
 import { buildExec, controlPlaneDatabase } from "../../src/d1-store";
 
 const database = controlPlaneDatabase(env.DB);
@@ -95,5 +96,34 @@ describe("account erasure (workerd, real D1)", () => {
 
         // Idempotent: a second run (the sweep re-running a finished cleanup) changes nothing and flags nothing new.
         await expect(eraseUser.handler(context(), { userId: "usr_me" })).resolves.toStrictEqual({ ownerless: [] });
+    });
+});
+
+/**
+ * The sweep erases every member this lookup leaves out, so it is checked against
+ * the real auth plane over the real D1: an `in` lookup that silently matched
+ * nothing would read every user as deleted.
+ */
+describe("auth user lookup for the orphaned-membership sweep (workerd, real D1)", () => {
+    it("answers exactly the ids that still have a user row", async () => {
+        const authEnv = { AUTH_SECRET: "s".repeat(32), DB: env.DB, LUNORA_ORIGIN_URL: "https://cloud.test" };
+        const instance = await ensureAuth(authEnv, "https://cloud.test");
+        const { adapter } = await instance.$context;
+        const now = new Date();
+        const ids = Array.from({ length: 105 }, (_, index) => `usr_live_${String(index)}`);
+
+        for (const id of ids) {
+            // eslint-disable-next-line no-await-in-loop -- seeding, one row at a time
+            await adapter.create({
+                data: { createdAt: now, email: `${id}@example.test`, emailVerified: true, id, name: id, updatedAt: now },
+                forceAllowId: true,
+                model: "user",
+            });
+        }
+
+        // More ids than one `in` chunk, or one D1 statement, holds: the chunking is exercised too.
+        const existing = await authExistingUserIds(authEnv)([...ids, "usr_missing"]);
+
+        expect([...existing].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(ids.toSorted((a, b) => a.localeCompare(b)));
     });
 });
