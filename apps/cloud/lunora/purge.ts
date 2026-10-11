@@ -9,21 +9,32 @@ import type { MutationCtx as MutationContext } from "./_generated/server.js";
  * to go through a structural view of the one method it calls. That cast lives
  * here, once, rather than at each caller.
  *
- * The reads are one page per table: both callers purge rows scoped to a single
- * organization or project, which stays well inside the page cap. A table that
- * could exceed it needs {@link collectAll}, not this.
+ * Each table is read page by page until a read holds nothing new. A deleted row
+ * drops out of the next read, so a table larger than one page is cleared in full.
+ * The seen-set makes a store that keeps a deleted row (a double, for one) stop
+ * after the pass that found it rather than re-deleting it forever.
  */
 export const purgeScopedRows = async (context: MutationContext, tables: ReadonlyArray<TableName>, where: Record<string, unknown>): Promise<void> => {
     for (const table of tables) {
         const facade = context.db[table] as unknown as {
             findMany: (query: { where: Record<string, unknown> }) => Promise<{ page: { _id: string }[] }>;
         };
-        // eslint-disable-next-line no-await-in-loop -- sequential per-table purge keeps the writer simple
-        const { page: rows } = await facade.findMany({ where });
+        const seen = new Set<string>();
 
-        for (const row of rows) {
-            // eslint-disable-next-line no-await-in-loop -- sequential deletes; a single scope's volumes are small
-            await context.db.delete(row._id as never);
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- sequential per-table purge keeps the writer simple
+            const { page: rows } = await facade.findMany({ where });
+            const fresh = rows.filter((row) => !seen.has(row._id));
+
+            if (fresh.length === 0) {
+                break;
+            }
+
+            for (const row of fresh) {
+                seen.add(row._id);
+                // eslint-disable-next-line no-await-in-loop -- sequential deletes; a single scope's volumes are small
+                await context.db.delete(row._id as never);
+            }
         }
     }
 };
