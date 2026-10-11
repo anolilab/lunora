@@ -64,10 +64,17 @@ const createChannelRequest = async (body: Record<string, unknown>): Promise<{ id
         method: "POST",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    const payload = (await response.json().catch(() => null)) as { error?: string; id?: string; signingSecret?: string } | null;
 
-    if (!response.ok || !payload?.id) {
-        throw new Error(payload?.error ?? `could not create channel (HTTP ${String(response.status)})`);
+    if (!response.ok) {
+        const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+
+        throw new Error(failure?.error ?? `could not create channel (HTTP ${String(response.status)})`);
+    }
+
+    const payload = (await response.json().catch(() => null)) as { id?: string; signingSecret?: string } | null;
+
+    if (!payload?.id) {
+        throw new Error(`could not create channel (HTTP ${String(response.status)})`);
     }
 
     return payload.signingSecret === undefined ? { id: payload.id } : { id: payload.id, signingSecret: payload.signingSecret };
