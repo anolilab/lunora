@@ -56,8 +56,14 @@ export const invite = mutation
         role,
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"invitations">; token: string }> => {
-        const { organizationId: memberOrganizationId, userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+        const { organizationId: memberOrganizationId, role: callerRole, userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
         const { now } = context;
+
+        // An admin may invite members, but the owner role is the org's top grant:
+        // only an owner can hand it out (the accept path copies the invited role).
+        if (arguments_.role === "owner" && callerRole !== "owner") {
+            throw new LunoraError("FORBIDDEN", "only an owner can invite an owner");
+        }
         const token = randomSecret();
 
         const id = await context.db.insert("invitations", {

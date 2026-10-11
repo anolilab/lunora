@@ -49,8 +49,24 @@ export const remove = mutation
     .use(rateLimit("api"))
     .input({ id: v.id("members"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
-        await assertMember(context, organizationId, ["owner", "admin"]);
+        const caller = await assertMember(context, organizationId, ["owner", "admin"]);
+
         await assertRowInOrg(context, id, organizationId, "member");
+
+        const target = (await context.db.get(id)) as MemberRow | null;
+
+        // Removing an owner is an owner's decision, and the org must keep one owner.
+        if (target?.role === "owner") {
+            if (caller.role !== "owner") {
+                throw new LunoraError("FORBIDDEN", "only an owner can remove an owner");
+            }
+
+            const { page } = await context.db.members.findMany({ where: { organizationId } });
+
+            if (page.filter((member) => member.role === "owner").length <= 1) {
+                throw new LunoraError("CONFLICT", "cannot remove the last owner");
+            }
+        }
 
         await context.db.delete(id);
     });
