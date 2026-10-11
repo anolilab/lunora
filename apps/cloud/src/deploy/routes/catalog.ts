@@ -284,6 +284,13 @@ export const handleCatalogInstallRoute = async (request: Request, environment: R
         return Response.json({ error: parsed.error, ...(parsed.field === undefined ? {} : { field: parsed.field }) }, { status: 400 });
     }
 
+    const session = await currentAuth()?.api.getSession({ headers: request.headers });
+    const installedBy = session?.user?.id;
+
+    if (!installedBy) {
+        return jsonError(401, "not signed in");
+    }
+
     const deps = deployDeps(context, environment, pacer);
 
     if (!deps) {
@@ -294,13 +301,6 @@ export const handleCatalogInstallRoute = async (request: Request, environment: R
 
     if (!secretKey) {
         return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
-    }
-
-    const session = await currentAuth()?.api.getSession({ headers: request.headers });
-    const installedBy = session?.user?.id;
-
-    if (!installedBy) {
-        return jsonError(401, "not signed in");
     }
 
     const { body } = parsed;
