@@ -389,6 +389,7 @@
                 "LUNORA_OTLP_ENDPOINT": "<replace-with-production-control-plane-url>",
                 // Same origin as above — `SchedulerDO` dispatches its job
                 // callbacks here, and refuses to schedule at all without it.
+                // TODO: set AUTH_URL to the production control-plane URL (see apps/cloud/src/auth.ts). Until then, better-auth derives its origin from the first request per isolate.
                 "LUNORA_ORIGIN_URL": "<replace-with-production-control-plane-url>",
                 // PostHog ingest host for the Worker's server-side capture.
                 // `POSTHOG_PROJECT_TOKEN` is a secret (`wrangler secret put`);
