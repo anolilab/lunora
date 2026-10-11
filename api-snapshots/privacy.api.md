@@ -35,6 +35,44 @@ interface CoverageProblem {
 type DataOrigin = "provided" | "observed" | "derived" | "inferred";
 ```
 
+### `Dataset` (interface)
+
+```ts
+interface Dataset extends DatasetSpec {
+    readonly id: string;
+    readonly phase: DatasetPhase;
+    readonly placement: DatasetPlacement;
+    readonly recipients: ReadonlyArray<string>;
+    readonly tableNames: ReadonlyArray<string>;
+}
+```
+
+### `DatasetPhase` (type)
+
+```ts
+type DatasetPhase = "quiesce" | "erase" | "tombstone";
+```
+
+### `DatasetPlacement` (type)
+
+```ts
+type DatasetPlacement = "subject" | "root" | "global";
+```
+
+### `DatasetSpec` (interface)
+
+```ts
+interface DatasetSpec {
+    readonly legalBasis: LegalBasis;
+    readonly origin: DataOrigin;
+    readonly phase?: DatasetPhase;
+    readonly placement?: DatasetPlacement;
+    readonly purpose: string;
+    readonly recipients?: ReadonlyArray<string>;
+    readonly tables: Readonly<Record<string, TableSpec>>;
+}
+```
+
 ### `ErasureSettings` (interface)
 
 ```ts
@@ -223,6 +261,22 @@ interface TableClassification {
 }
 ```
 
+### `TableErasure` (type)
+
+```ts
+type TableErasure = "delete" | "anonymise" | RetainDirective;
+```
+
+### `TableSpec` (interface)
+
+```ts
+interface TableSpec {
+    readonly erase?: TableErasure;
+    readonly omit?: ReadonlyArray<string>;
+    readonly origin?: DataOrigin;
+}
+```
+
 ### `addCalendarMonths` (const)
 
 ```ts
@@ -289,6 +343,12 @@ const cancelRequest: (store: RequestStore, input: {
 const checkCoverage: (tables: ReadonlyArray<string>, classifications: Readonly<Record<string, TableClassification | undefined>>) => ReadonlyArray<CoverageProblem>;
 ```
 
+### `defineDataset` (const)
+
+```ts
+const defineDataset: (id: string, spec: DatasetSpec) => Dataset;
+```
+
 ### `dueAt` (const)
 
 ```ts
@@ -305,6 +365,12 @@ const effectiveDueAt: (receivedAt: Date, extended: boolean) => Date;
 
 ```ts
 const erasureGraceUntil: (receivedAt: Date, graceDays: number, drainBudgetDays: number) => Date;
+```
+
+### `erasureOrder` (const)
+
+```ts
+const erasureOrder: (datasets: ReadonlyArray<Dataset>) => ReadonlyArray<Dataset>;
 ```
 
 ### `extendRequest` (const)

@@ -4,6 +4,8 @@ export type { DataOrigin, ExportArticle, LegalBasis } from "./articles";
 export { articlesFor } from "./articles";
 export type { CoverageProblem, TableClassification } from "./coverage";
 export { checkCoverage } from "./coverage";
+export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
+export { defineDataset, erasureOrder } from "./dataset";
 
 /**
  * `@lunora/privacy`: data-subject rights for Lunora apps. Export (GDPR Art. 15
