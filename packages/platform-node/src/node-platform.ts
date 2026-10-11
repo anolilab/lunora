@@ -17,6 +17,7 @@ import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
+import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
 import { createNodeShardKvStore } from "./node-kv-store";
@@ -75,6 +76,17 @@ export interface NodePlatform<
     close: () => void;
     /** In-process shard directory (see `createNodeShardRegistry` for what it can and cannot do). */
     directory: ShardDirectory;
+
+    /**
+     * The scheduler dispatch route, served in-process: `Request` in, shard
+     * response out, no listener. It answers the path `@lunora/dispatch` and
+     * `@lunora/scheduler` POST to. Pass it to `dispatchQueueBatch` as
+     * `fetchImpl` so a queue handler's `message.run` / `ctx.run` reaches the
+     * shard; the env you pass there must carry `LUNORA_ORIGIN_URL` and the same
+     * `LUNORA_ADMIN_TOKEN` as `dispatch.adminToken`. Every request is refused
+     * unless `dispatch` supplies a secret.
+     */
+    dispatch: (request: Request) => Promise<Response>;
 
     /**
      * Wait for every promise handed to `shard.waitUntil` to settle.
@@ -136,6 +148,23 @@ export interface NodePlatform<
 }
 
 /**
+ * The secrets the dispatch route authenticates with. With neither, the route
+ * refuses everything.
+ *
+ * Queue and topic delivery authenticates with `adminToken` alone:
+ * `@lunora/dispatch` always sends `Bearer <LUNORA_ADMIN_TOKEN>` and never signs,
+ * so the value here must match the token the caller puts on the env it passes
+ * `dispatchQueueBatch`. `schedulerSecret` only verifies a signed body, which the
+ * scheduler's own delivery sends; queue delivery never does.
+ */
+export interface NodePlatformDispatchOptions {
+    /** `LUNORA_ADMIN_TOKEN`. The bearer queue and topic delivery sends, so it must match the caller's env. */
+    adminToken?: string;
+    /** `LUNORA_SCHEDULER_SECRET`. When set, a signed body is verified against it. Queue delivery does not sign. */
+    schedulerSecret?: string;
+}
+
+/**
  * Options for {@link createNodePlatform} — the shard host's (`path`,
  * `shardKey`, `onAlarm`), the scheduler's (`onDispatch`), and the shard
  * registry's (`directory`, `onAlarm`, `onFetch`). Both delivery hooks are
@@ -151,6 +180,9 @@ export type NodePlatformOptions<
     Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
     Workflows extends Record<string, { isLunoraWorkflow: true }> = Record<string, never>,
 > = {
+    /** Secrets for the dispatch route. Omit to leave the route refusing every request. */
+    dispatch?: NodePlatformDispatchOptions;
+
     /**
      * Database file the `.global()` tables live in — its own file, never a
      * shard's, because a table every shard reads must not be inside any one of
@@ -208,6 +240,15 @@ export const createNodePlatform = <
         });
 
         const { directory } = registry;
+
+        // In-process: the route's `invoke` reaches the shard through the same
+        // directory the fan-out coordinator uses, so no listener is involved.
+        const dispatch = createNodeDispatchRoute({
+            adminToken: options.dispatch?.adminToken,
+            defaultShardKey: "__root__",
+            invoke: createShardInvoke(directory, options.onFetch !== undefined),
+            schedulerSecret: options.dispatch?.schedulerSecret,
+        });
         const { socket: sockets } = createNodeSocketHost(database);
         const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
@@ -272,6 +313,7 @@ export const createNodePlatform = <
             capabilities: NODE_CAPABILITIES,
             close,
             directory,
+            dispatch: (request) => dispatch(request),
             drain,
             globalTables,
             kv,
