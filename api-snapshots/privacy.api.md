@@ -54,11 +54,11 @@ type DataOrigin = "provided" | "observed" | "derived" | "inferred";
 
 ```ts
 interface DataPort {
-    collect: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, ReadonlyArray<Readonly<Record<string, unknown>>>>>>;
-    eraseBatch: (dataset: Dataset, subjectId: string, now: Date) => Promise<{
+    readonly collect: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, ReadonlyArray<Readonly<Record<string, unknown>>>>>>;
+    readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date) => Promise<{
         readonly hasMore: boolean;
     }>;
-    remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
+    readonly remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
 }
 ```
 
@@ -242,6 +242,10 @@ interface Privacy {
     }) => Promise<RequestRecord>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
     readonly runExport: (requestId: string) => Promise<ExportOutcome>;
+    readonly workflows: {
+        readonly erasureHandler: (context: PrivacyWorkflowContext) => Promise<void>;
+        readonly exportHandler: (context: PrivacyWorkflowContext) => Promise<void>;
+    };
 }
 ```
 
@@ -375,10 +379,11 @@ interface RunContext {
 
 ```ts
 interface StorePort {
-    put: (requestId: string, file: {
-        readonly data: Uint8Array;
+    readonly put: (requestId: string, file: {
+        readonly data: Uint8Array | string;
         readonly name: string;
     }) => Promise<string>;
+    readonly read: (requestId: string, name: string) => Promise<string | undefined>;
 }
 ```
 
@@ -680,4 +685,24 @@ const EU_RESPONSE_MONTHS = 1;
 
 ```ts
 const eu: () => PrivacyPreset;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `PrivacyWorkflowContext` (interface)
+
+```ts
+interface PrivacyWorkflowContext {
+    readonly params: {
+        readonly requestId: string;
+    };
+    readonly step: {
+        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
+    };
+}
 ```

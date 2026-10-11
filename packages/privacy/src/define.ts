@@ -1,18 +1,23 @@
 /**
  * `definePrivacy`: binds an app's datasets, presets and ports into one object the
- * app's mutations and workflows call. Each method is a thin wrapper over the
- * tested service and run functions, so the Cloudflare layer only supplies ports.
+ * app's mutations and workflows call. The methods are thin wrappers over the tested
+ * services and run functions, so the Cloudflare layer only supplies ports and the
+ * `defineWorkflow` registration.
  */
 import { LunoraError } from "@lunora/errors";
 
 import type { CoverageProblem, TableClassification } from "./coverage";
 import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
+import { erasureOrder } from "./dataset";
+import { drainUntilEmpty, verifyErasure } from "./erasure";
+import type { RequestStatus } from "./lifecycle";
+import { transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
-import type { DataPort, ErasureOutcome, ExportOutcome, StorePort } from "./run";
-import { runErasure, runExport } from "./run";
+import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
+import { assembleExport, collectPart, runErasure, runExport } from "./run";
 
 /** The app's erasure settings. The defaults are the decided values (D3 and the sign-in window). */
 interface ErasureOptions {
@@ -35,6 +40,15 @@ interface PrivacyConfig {
     readonly subjectKey?: (subjectId: string) => string;
 }
 
+/** The step surface a Workflow handler receives. Matches the native `WorkflowStep` methods the package uses. */
+interface PrivacyWorkflowContext {
+    readonly params: { readonly requestId: string };
+    readonly step: {
+        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
+    };
+}
+
 /** The bound API. */
 interface Privacy {
     readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
@@ -44,6 +58,11 @@ interface Privacy {
     readonly requestExport: (input: { subjectId: string }) => Promise<RequestRecord>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
     readonly runExport: (requestId: string) => Promise<ExportOutcome>;
+    /** The durable handlers the app registers with `defineWorkflow`. Each step is memoised by name. */
+    readonly workflows: {
+        readonly erasureHandler: (context: PrivacyWorkflowContext) => Promise<void>;
+        readonly exportHandler: (context: PrivacyWorkflowContext) => Promise<void>;
+    };
 }
 
 const DEFAULT_GRACE_DAYS = 14;
@@ -66,12 +85,10 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
         graceDays: config.erasure?.graceDays ?? DEFAULT_GRACE_DAYS,
     };
     const subjectKey = config.subjectKey ?? ((subjectId: string) => subjectId);
-    const context = {
-        data: config.data,
-        files: config.files,
-        now: config.now,
-        rules,
-        store: config.store,
+    const base = { data: config.data, files: config.files, now: config.now, rules, store: config.store };
+
+    const contextFor = (record: RequestRecord): RunContext => {
+        return { ...base, subjectKey: subjectKey(record.subjectId) };
     };
 
     const requireRequest = async (requestId: string): Promise<RequestRecord> => {
@@ -82,6 +99,82 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
         }
 
         return record;
+    };
+
+    const setStatus = async (record: RequestRecord, status: RequestStatus, detail?: string): Promise<void> => {
+        await config.store.update(record.id, { status });
+        await config.store.addEvent(record.id, config.now(), status, detail);
+    };
+
+    const markFailed = async (record: RequestRecord, message: string): Promise<void> => {
+        await setStatus(record, "failed", message);
+    };
+
+    const exportHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
+        const { requestId } = context.params;
+        const record = await context.step.do("load", async () => requireRequest(requestId));
+        const runContext = contextFor(record);
+
+        try {
+            await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
+
+            for (const dataset of config.datasets) {
+                // Each dataset is one step: its rows go to storage, so the step returns nothing large.
+                // eslint-disable-next-line no-await-in-loop -- durable steps run in order by design
+                await context.step.do(`collect:${dataset.id}`, async () => collectPart(runContext, dataset, record));
+            }
+
+            const archiveKey = await context.step.do("assemble", async () => assembleExport(runContext, config.datasets, record));
+
+            await context.step.do("ready", async () => setStatus(record, transition("processing", "ready"), archiveKey));
+        } catch (error) {
+            await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
+        }
+    };
+
+    const erasureHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
+        const { requestId } = context.params;
+        const record = await context.step.do("load", async () => requireRequest(requestId));
+
+        if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
+            await context.step.sleepUntil("grace", record.erasureGraceUntil);
+
+            // A subject who cancelled during the grace leaves the request cancelled, so the erasure stops here.
+            const current = await context.step.do("recheck", async () => requireRequest(requestId));
+
+            if (current.status !== "grace") {
+                return;
+            }
+        }
+
+        try {
+            await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
+
+            for (const dataset of erasureOrder(config.datasets)) {
+                // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
+                const drain = async (): Promise<void> => {
+                    await drainUntilEmpty(() => config.data.eraseBatch(dataset, record.subjectId, config.now()));
+                };
+
+                // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
+                await context.step.do(`erase:${dataset.id}`, drain);
+            }
+
+            await context.step.do("verify", async () => {
+                const remaining: Record<string, number> = {};
+
+                for (const dataset of config.datasets) {
+                    // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
+                    Object.assign(remaining, await config.data.remaining(dataset, record.subjectId));
+                }
+
+                const verdict = verifyErasure(remaining);
+
+                await setStatus(record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
+            });
+        } catch (error) {
+            await context.step.do("fail", async () => markFailed(record, error instanceof Error ? error.message : String(error)));
+        }
     };
 
     return {
@@ -120,15 +213,17 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
         runErasure: async (requestId) => {
             const record = await requireRequest(requestId);
 
-            return runErasure({ ...context, subjectKey: subjectKey(record.subjectId) }, config.datasets, record);
+            return runErasure(contextFor(record), config.datasets, record);
         },
 
         runExport: async (requestId) => {
             const record = await requireRequest(requestId);
 
-            return runExport({ ...context, subjectKey: subjectKey(record.subjectId) }, config.datasets, record);
+            return runExport(contextFor(record), config.datasets, record);
         },
+
+        workflows: { erasureHandler, exportHandler },
     };
 };
 
-export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig };
+export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig, type PrivacyWorkflowContext };

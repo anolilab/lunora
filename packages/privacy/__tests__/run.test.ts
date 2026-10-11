@@ -75,8 +75,8 @@ const memoryRequests = (): RequestStore & { events: string[]; rows: Map<string, 
     };
 };
 
-const memoryFiles = (): StorePort & { files: Map<string, Uint8Array> } => {
-    const files = new Map<string, Uint8Array>();
+const memoryFiles = (): StorePort & { files: Map<string, Uint8Array | string> } => {
+    const files = new Map<string, Uint8Array | string>();
 
     return {
         files,
@@ -84,6 +84,11 @@ const memoryFiles = (): StorePort & { files: Map<string, Uint8Array> } => {
             files.set(`${requestId}/${file.name}`, file.data);
 
             return `${requestId}/${file.name}`;
+        },
+        read: async (requestId, name) => {
+            const value = files.get(`${requestId}/${name}`);
+
+            return typeof value === "string" ? value : undefined;
         },
     };
 };
@@ -121,7 +126,7 @@ describe(runExport, () => {
         const outcome = await runExport(contextFor(port, requests, files), [tasks], request());
 
         expect(outcome).toMatchObject({ archiveKey: "r1/export.zip", status: "ready" });
-        expect([...files.files.keys()]).toStrictEqual(["r1/export.zip", "r1/summary.pdf"]);
+        expect([...files.files.keys()]).toStrictEqual(expect.arrayContaining(["r1/export.zip", "r1/summary.pdf"]));
     });
 
     it("writes the table rows and a manifest that tags each dataset's articles", async () => {
@@ -132,7 +137,7 @@ describe(runExport, () => {
         requests.rows.set("r1", request());
         await runExport(contextFor(port, requests, files), [tasks], request());
 
-        const extracted = unzipSync(files.files.get("r1/export.zip")!);
+        const extracted = unzipSync(files.files.get("r1/export.zip") as Uint8Array);
         const manifest = JSON.parse(new TextDecoder().decode(extracted["manifest.json"])) as { datasets: { articles: string[]; id: string }[] };
 
         expect(Object.keys(extracted).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
