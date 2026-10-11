@@ -4,6 +4,14 @@ import { connectionKey } from "./connection-state";
 import type { SubscriptionErrorCallback, SyncWatermark } from "./subscription";
 import type { RowOp, ServerPokeEndMessage, ServerPokePartMessage, ServerPokeStartMessage } from "./types";
 
+/**
+ * Buffer key for an in-flight poke. The connection has to be in the key: `pokeId` is a per-DO
+ * counter that also resets on eviction, so a multi-shard client (one socket per shard, one map)
+ * sees two shards mint `poke-1` concurrently. Keyed by `pokeId` alone, their frames interleave into
+ * one buffer: one shard applies the other's epoch, and the other finds no buffer for its parts.
+ */
+const pokeBufferKey = (shardKey: string | undefined, pokeId: string): string => `${connectionKey(shardKey)}\u0000${pokeId}`;
+
 /** Apply a shape's buffered row-ops to its keyed view in order: a delete removes the key, an upsert sets it (a value-less upsert is skipped — membership-only signal). */
 export const applyRowOpsToView = (rows: Map<string, Record<string, unknown>>, ops: RowOp[]): void => {
     for (const op of ops) {
@@ -68,14 +76,6 @@ export interface PokeBuffer {
     /** Shapes a part carried a row the codec refused for, with the reason — their slice of the poke is refused whole at `pokeEnd`. */
     undecodable: Map<string, unknown>;
 }
-
-/**
- * Buffer key for an in-flight poke. The connection has to be in the key: `pokeId` is a per-DO
- * counter that also resets on eviction, so a multi-shard client (one socket per shard, one map)
- * sees two shards mint `poke-1` concurrently. Keyed by `pokeId` alone, their frames interleave into
- * one buffer: one shard applies the other's epoch, and the other finds no buffer for its parts.
- */
-export const pokeBufferKey = (shardKey: string | undefined, pokeId: string): string => `${connectionKey(shardKey)}\u0000${pokeId}`;
 
 /**
  * Buffers a poke between `pokeStart` and `pokeEnd`, so its parts apply atomically

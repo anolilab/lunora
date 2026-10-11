@@ -947,7 +947,7 @@ class LunoraClient {
 
     private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
 
-    /** In-flight pokes, keyed by connection and `pokeId`. See `pokeBufferKey` in shape-state.ts. */
+    /** In-flight pokes, keyed by connection and `pokeId`. The key rule is in shape-state.ts. */
     private readonly pokeAssembler = new PokeAssembler(LunoraClient.MAX_POKE_BUFFERS);
 
     private nextShapeId = 0;
