@@ -24,6 +24,7 @@ import { boxSession, retireBox } from "../boxes/session-client";
 import { runBoxSuspensionSweep } from "../boxes/suspension-sweep";
 import { manifestUrlOf } from "../boxes/urls";
 import type { ControlPlaneEnv } from "../control-plane-env";
+import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
 import { resolveAdminToken } from "../deploy/admin-token";
 import { deployRuleAlert, HALT_CONVERGE_WINDOW_MS, runHaltConverges, syncSuspensionHalts } from "../deploy/halt";
@@ -35,13 +36,15 @@ import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
+import { runDomainSweep } from "../domains/sweep";
+import { createDohResolver } from "../domains/verify";
 import { edgeBudget } from "../edge/protection";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
 import { readHalted, readLiveDeployments, resourceRefOf, withoutHalted } from "../fanout/live";
 import { runTenantCrons } from "../fanout/tenant-crons";
 import { deliverAlert } from "../mail/notify";
+import { runNotificationSweep } from "../notifications/sweep";
 import { storedTarget } from "../provision-contract";
-import type { ControlPlaneDatabase } from "../store";
 import { boxDnsFromEnv } from "../targets/celld-vps/dns";
 import { storeRowReader } from "../targets/placement";
 import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
@@ -54,9 +57,6 @@ import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics"
 import { orgAdminEmails } from "../telemetry/recipients";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUsageAlertSweep } from "../telemetry/usage-alert-sweep";
-import { createDohResolver } from "../domains/verify";
-import { runDomainSweep } from "../domains/sweep";
-import { runNotificationSweep } from "../notifications/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
 
 /** The Worker's own entry, as far as a scheduled run reaches it. */
@@ -86,12 +86,10 @@ const EVERY_SIX_HOURS = "0 */6 * * *";
  * provision box, for `cloudflare-wfp`) stay pending. The `teardownAt` stamp
  * makes the sweep crash-safe idempotent.
  */
-const sweepTeardown = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB || !env.RELEASES) {
+const sweepTeardown = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    if (!env.RELEASES) {
         return;
     }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
 
     await runTeardownSweep(
         teardownPorts(
@@ -128,12 +126,8 @@ const currentPeriodStart = (): number => {
  * `runReadbackUsageSweep` drains the deployments once, reads a bounded number
  * of scopes at a time, and isolates each (scope, family)'s failure.
  */
-const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    await runReadbackUsageSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), registeredFleets(env, { metering: "readback" }), {
+const sweepUsageRollback = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    await runReadbackUsageSweep(database, registeredFleets(env, { metering: "readback" }), {
         now: Date.now(),
         onScopeFailed: (target, scope, reason) => {
             // eslint-disable-next-line no-console -- a failed scope keeps its checkpoint; this is its only record
@@ -158,12 +152,11 @@ const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
  * webhook that funds these accounts — still needs the live credit-pack product
  * ids; this is the enforcement + recovery half).
  */
-const sweepOverageReconciliation = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB || !env.CREEM_API_KEY) {
+const sweepOverageReconciliation = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    if (!env.CREEM_API_KEY) {
         return;
     }
 
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const periodStart = currentPeriodStart();
     const { accounts, inputs, suspension } = await buildOverageReconcileData(database, periodStart);
 
@@ -186,7 +179,7 @@ const sweepOverageReconciliation = async (env: ControlPlaneEnv): Promise<void> =
  * trusted system context, so it patches directly. An "owners & admins" email
  * row is resolved from the members and the auth plane (`deliverAlertRows`).
  */
-const deliverFiredAlerts = async (env: ControlPlaneEnv, database: ControlPlaneDatabase, deliveries: ReadonlyArray<AlertDelivery>, now: number): Promise<void> =>
+const deliverFiredAlerts = async (env: ControlPlaneEnv, database: ControlPlaneStore, deliveries: ReadonlyArray<AlertDelivery>, now: number): Promise<void> =>
     deliverAlertRows(database, deliveries, now, {
         adminEmails: async (organizationId) => orgAdminEmails(database, organizationId, authUserEmails(env)),
         deliver: async (delivery, recipients) => deliverAlert(env, delivery, recipients),
@@ -198,12 +191,7 @@ const deliverFiredAlerts = async (env: ControlPlaneEnv, database: ControlPlaneDa
  * pure `runUptimeSweep` does the probe→record→fire; the edge supplies the real
  * `fetch` + D1 and delivers over each alert's channel, stamping the outcome.
  */
-const sweepUptime = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+const sweepUptime = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const now = Date.now();
     const { deliveries } = await runUptimeSweep(database, { fetch: globalThis.fetch, now });
 
@@ -217,12 +205,7 @@ const sweepUptime = async (env: ControlPlaneEnv): Promise<void> => {
  * 0 with no new spans). The pure `runAlertSweep` does the evaluate→fire/clear over
  * the shared `alertRuleState` latch; the edge supplies the real D1 and delivers.
  */
-const sweepAlerts = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+const sweepAlerts = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const now = Date.now();
     const { deliveries } = await runAlertSweep(database, { now });
 
@@ -235,12 +218,7 @@ const sweepAlerts = async (env: ControlPlaneEnv): Promise<void> => {
  * `error_anomaly` / `storage_anomaly` rules. Hourly, on the bucket the readback
  * ledger is filled at.
  */
-const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+const sweepAnomalies = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const now = Date.now();
     const { deliveries, transitions } = await runAnomalySweep(database, { cell: env.LUNORA_CELL ?? "default", now });
 
@@ -254,12 +232,7 @@ const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
  * with its threshold and fire it once per month. Hourly, beside the readback
  * that fills the ledger it reads.
  */
-const sweepUsageAlerts = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+const sweepUsageAlerts = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const now = Date.now();
     const { deliveries, incomplete } = await runUsageAlertSweep(database, { now });
 
@@ -278,14 +251,10 @@ const sweepUsageAlerts = async (env: ControlPlaneEnv): Promise<void> => {
  * tick also rows that were unavailable. Without the zone and token, rows record
  * why nothing was applied.
  */
-const sweepEdgeRules = async (env: ControlPlaneEnv, controller: ScheduledControllerLike): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
+const sweepEdgeRules = async (database: ControlPlaneStore, env: ControlPlaneEnv, controller: ScheduledControllerLike): Promise<void> => {
     // Only `cloudflare-wfp`'s fleet fronts tenants with the platform edge.
     const edge = registeredFleet("cloudflare-wfp", env)?.edge;
-    const counts = await runEdgeRuleSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+    const counts = await runEdgeRuleSweep(database, {
         appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
         budgets: { ddos_l7: edgeBudget(env.LUNORA_DDOS_OVERRIDE_BUDGET), rate_limit: edgeBudget(env.LUNORA_RATE_LIMIT_RULE_BUDGET) },
         ...(edge ? { edge } : {}),
@@ -307,12 +276,7 @@ const sweepEdgeRules = async (env: ControlPlaneEnv, controller: ScheduledControl
  * whose original delivering request died mid-send — before this existed such a
  * row stayed `firing` and nobody was ever told.
  */
-const sweepAlertDrain = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+const sweepAlertDrain = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const now = Date.now();
     const { deliveries } = await runAlertDrain(database, { now });
 
@@ -363,15 +327,15 @@ const sweepBackup = async (env: ControlPlaneEnv): Promise<void> => {
  * target driver's `reach` (on `cloudflare-wfp`, its fleet's dispatch namespace when
  * bound — the cron fan-out's path — else its public URL).
  */
-const sweepTenantBackups = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB || !env.TENANT_BACKUPS) {
+const sweepTenantBackups = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    if (!env.TENANT_BACKUPS) {
         return;
     }
 
     const offsite = offsiteBucket(env);
     const result = await runTenantBackupSweep({
         bucket: env.TENANT_BACKUPS,
-        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        database,
         log: (line) => {
             // eslint-disable-next-line no-console -- the sweep's per-tenant failures are only visible here, in Workers Logs
             console.warn(line);
@@ -400,14 +364,10 @@ const sweepTenantBackups = async (env: ControlPlaneEnv): Promise<void> => {
  * whose box is revoked or gone and rewrite the live boxes' records. Reconciling
  * the zone no-ops, with a log line, without `LUNORA_BOX_ZONE_ID` and a token.
  */
-const sweepBoxes = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
+const sweepBoxes = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const result = await runBoxSweep({
         retire: (boxId) => retireBox(env.BOX_SESSION, boxId, "this box's organization was deleted; the box is no longer managed"),
-        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        database,
         dns: boxDnsFromEnv(env),
         log: (line) => {
             // eslint-disable-next-line no-console -- the sweep's skips and failures are only visible here, in Workers Logs
@@ -427,16 +387,16 @@ const sweepBoxes = async (env: ControlPlaneEnv): Promise<void> => {
  * `waitUntil`, which the runtime cuts off ~30 s after the response; this is
  * what carries a fleet the rest of the way. No-ops without the box bindings.
  */
-const sweepHostdRollouts = async (env: ControlPlaneEnv): Promise<void> => {
+const sweepHostdRollouts = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const namespace = env.BOX_SESSION;
     const origin = env.LUNORA_ORIGIN_URL;
 
-    if (!env.DB || namespace === undefined || origin === undefined) {
+    if (namespace === undefined || origin === undefined) {
         return;
     }
 
     const results = await resumeHostdRollouts({
-        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        database,
         dispatch: upgradeDispatch(namespace),
         manifestUrlFor: (releaseId) => manifestUrlOf(origin, releaseId),
     });
@@ -451,12 +411,8 @@ const sweepHostdRollouts = async (env: ControlPlaneEnv): Promise<void> => {
  * `deploy` rules, once per box per release. The rows are delivered by the
  * every-minute alert drain, as the release path's own alerts are.
  */
-const sweepOutdatedBoxes = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    const { fired } = await runOutdatedBoxAlerts(controlPlaneDatabase(env.DB as D1DatabaseLike), { now: Date.now() });
+const sweepOutdatedBoxes = async (database: ControlPlaneStore): Promise<void> => {
+    const { fired } = await runOutdatedBoxAlerts(database, { now: Date.now() });
 
     if (fired > 0) {
         // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
@@ -470,13 +426,9 @@ const sweepOutdatedBoxes = async (env: ControlPlaneEnv): Promise<void> => {
  * it — `cloudflare-wfp`'s SaaS zone, when this cell has one. No-ops without
  * the database.
  */
-const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
+const sweepCertificates = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const result = await runCertificateSweep({
-        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        database,
         issuerOf: (recorded) => localIssuer(recorded, (target) => registeredFleet(target, env)),
         log: (line) => {
             // eslint-disable-next-line no-console -- a failed certificate read is only visible here, in Workers Logs
@@ -495,14 +447,14 @@ const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
  * matches its organizations' suspension, so a suspended org's fleets stop and
  * a recovered one's start again. No-ops without the box sessions bound.
  */
-const sweepBoxSuspensions = async (env: ControlPlaneEnv): Promise<void> => {
+const sweepBoxSuspensions = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const namespace = env.BOX_SESSION;
 
-    if (!env.DB || namespace === undefined) {
+    if (namespace === undefined) {
         return;
     }
 
-    const result = await runBoxSuspensionSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+    const result = await runBoxSuspensionSweep(database, {
         log: (line) => {
             // eslint-disable-next-line no-console -- a failed push is only visible here; the next tick retries it
             console.warn(line);
@@ -524,12 +476,7 @@ const sweepBoxSuspensions = async (env: ControlPlaneEnv): Promise<void> => {
  * Hourly, after the suspension crons on the same tick; the dispatcher's 503
  * holds until the block lands.
  */
-const sweepEdgeBlocks = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+const sweepEdgeBlocks = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const log = (line: string): void => {
         // eslint-disable-next-line no-console -- a failed block or restore is only visible here and on the domain row
         console.warn(line);
@@ -554,12 +501,11 @@ const sweepEdgeBlocks = async (env: ControlPlaneEnv): Promise<void> => {
  * within one or two. No-ops without the `RELEASES` bucket: a stub is generated
  * from the stored manifests, and without them the classes it must keep are unknown.
  */
-const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB || !env.RELEASES) {
+const sweepHalts = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    if (!env.RELEASES) {
         return;
     }
 
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
     const cell = env.LUNORA_CELL ?? "default";
     // Every cell's control plane runs this sweep over the same rows: each acts on its own cell's organizations.
@@ -605,12 +551,12 @@ const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
  * Sample the build and deploy queues into the platform's own metrics (GAPS.md
  * E1). Skipped — no D1 read at all — without the `PLATFORM_METRICS` binding.
  */
-const sampleQueueDepth = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB || !env.PLATFORM_METRICS) {
+const sampleQueueDepth = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    if (!env.PLATFORM_METRICS) {
         return;
     }
 
-    const depth = await readQueueDepth(controlPlaneDatabase(env.DB as D1DatabaseLike));
+    const depth = await readQueueDepth(database);
 
     recordQueueDepth(env.PLATFORM_METRICS, { ...depth, cell: env.LUNORA_CELL ?? "default" });
 };
@@ -620,12 +566,8 @@ const sampleQueueDepth = async (env: ControlPlaneEnv): Promise<void> => {
  * over each channel's destination. Rows are queued by the lifecycle mutations;
  * this sweep is the only place they leave the control plane.
  */
-const sweepNotifications = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    await runNotificationSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+const sweepNotifications = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    await runNotificationSweep(database, {
         fetch: globalThis.fetch,
         now: Date.now(),
         secretKey: env.SECRET_ENCRYPTION_KEY,
@@ -638,12 +580,8 @@ const sweepNotifications = async (env: ControlPlaneEnv): Promise<void> => {
  * failed repeatedly, so a DNS record removed after go-live is noticed without
  * anyone clicking Verify.
  */
-const sweepDomains = async (env: ControlPlaneEnv): Promise<void> => {
-    if (!env.DB) {
-        return;
-    }
-
-    await runDomainSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+const sweepDomains = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    await runDomainSweep(database, {
         appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
         now: Date.now(),
         resolve: createDohResolver(),
@@ -661,60 +599,73 @@ const sweepDomains = async (env: ControlPlaneEnv): Promise<void> => {
  * tenant cron fan-out is *not* here — it needs a driver's in-network `dispatch`
  * and stays a separate branch in {@link runScheduled}.
  */
-const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: ScheduledControllerLike) => Promise<void> }[] = [
-    { cron: EVERY_HOUR, run: sweepTeardown },
-    { cron: EVERY_HOUR, run: sweepUsageRollback },
-    { cron: EVERY_SIX_HOURS, run: sweepOverageReconciliation },
+
+/**
+ * One sweep's run. The store is built once per invocation by {@link runScheduled}
+ * and is `undefined` only when no control-plane D1 is bound.
+ */
+type SweepRun = (database: ControlPlaneStore | undefined, env: ControlPlaneEnv, controller: ScheduledControllerLike) => Promise<void>;
+
+/** Adapt a sweep that needs the store: with no store bound it is skipped, the same as its old `if (!env.DB)` guard. */
+const withStore =
+    (run: (database: ControlPlaneStore, env: ControlPlaneEnv, controller: ScheduledControllerLike) => Promise<void>): SweepRun =>
+    (database, env, controller) =>
+        database === undefined ? Promise.resolve() : run(database, env, controller);
+
+const SCHEDULED_SWEEPS: { cron: string; run: SweepRun }[] = [
+    { cron: EVERY_HOUR, run: withStore(sweepTeardown) },
+    { cron: EVERY_HOUR, run: withStore(sweepUsageRollback) },
+    { cron: EVERY_SIX_HOURS, run: withStore(sweepOverageReconciliation) },
     // Control-plane backup. Rides the existing 6-hourly trigger rather than
     // claiming a fourth cron (Cloudflare caps a Worker at three).
-    { cron: EVERY_SIX_HOURS, run: sweepBackup },
+    { cron: EVERY_SIX_HOURS, run: (_database, env) => sweepBackup(env) },
     // Tenant data snapshots. Hourly so a fleet is covered in bounded slices
     // (`MAX_BACKUPS_PER_TICK`); each project is still snapshotted once a day,
     // because the sweep only takes projects that are due.
-    { cron: EVERY_HOUR, run: sweepTenantBackups },
+    { cron: EVERY_HOUR, run: withStore(sweepTenantBackups) },
     // Box DNS reconcile (plan 458 G13): the backstop that removes any box record
     // a revoke or an org purge left behind, within the hour. On the hours the
     // six-hourly trigger also fires, that invocation runs it instead, ahead of
     // the org purge — see scheduled() — so the two never overlap.
     {
         cron: EVERY_HOUR,
-        run: async (env, controller) => {
+        run: withStore(async (database, env, controller) => {
             if (!sixHourlyTickRunsBoxSweep(controller.scheduledTime)) {
-                await sweepBoxes(env);
+                await sweepBoxes(database, env);
             }
-        },
+        }),
     },
     // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
-    { cron: EVERY_MINUTE, run: sweepNotifications },
-    { cron: EVERY_HOUR, run: sweepDomains },
-    { cron: EVERY_HOUR, run: sweepHostdRollouts },
+    { cron: EVERY_MINUTE, run: withStore(sweepNotifications) },
+    { cron: EVERY_HOUR, run: withStore(sweepDomains) },
+    { cron: EVERY_HOUR, run: withStore(sweepHostdRollouts) },
     // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
-    { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
+    { cron: EVERY_HOUR, run: withStore(sweepOutdatedBoxes) },
     // Custom-domain certificates still validating or deploying (GAPS.md B1).
-    { cron: EVERY_HOUR, run: sweepCertificates },
+    { cron: EVERY_HOUR, run: withStore(sweepCertificates) },
     // Suspended organizations blocked at the edge, recovered ones restored (plan 365 W8).
-    { cron: EVERY_HOUR, run: sweepEdgeBlocks },
+    { cron: EVERY_HOUR, run: withStore(sweepEdgeBlocks) },
     // Anomaly scores over the last completed hour (plan 365 W4). It reads the hour
     // BEFORE this tick, so the usage rollback writing this tick's rows alongside
     // it lands in the next bucket rather than racing this one.
-    { cron: EVERY_HOUR, run: sweepAnomalies },
+    { cron: EVERY_HOUR, run: withStore(sweepAnomalies) },
     // Monthly usage thresholds, against the ledger the previous tick's readback filled.
-    { cron: EVERY_HOUR, run: sweepUsageAlerts },
-    { cron: EVERY_MINUTE, run: sweepUptime },
+    { cron: EVERY_HOUR, run: withStore(sweepUsageAlerts) },
+    { cron: EVERY_MINUTE, run: withStore(sweepUptime) },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —
     // rides the existing every-minute trigger (no new cron, stays within the cap).
-    { cron: EVERY_MINUTE, run: sweepAlerts },
+    { cron: EVERY_MINUTE, run: withStore(sweepAlerts) },
     // The release path's own alerts, which are raised inside mutations and so
     // cannot be delivered where they are fired — plus anything an earlier
     // delivery dropped. Rides the existing every-minute trigger.
-    { cron: EVERY_MINUTE, run: sweepAlertDrain },
+    { cron: EVERY_MINUTE, run: withStore(sweepAlertDrain) },
     // Edge rules (plan 365 W7): settings and anomaly engagements applied within a minute.
-    { cron: EVERY_MINUTE, run: sweepEdgeRules },
+    { cron: EVERY_MINUTE, run: withStore(sweepEdgeRules) },
     // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
-    { cron: EVERY_MINUTE, run: sampleQueueDepth },
+    { cron: EVERY_MINUTE, run: withStore(sampleQueueDepth) },
     // A suspension or recovery reaches customer boxes within a minute (plan 365).
-    { cron: EVERY_MINUTE, run: sweepBoxSuspensions },
+    { cron: EVERY_MINUTE, run: withStore(sweepBoxSuspensions) },
 ];
 
 /**
@@ -756,10 +707,10 @@ const drainBuildQueue = async (env: ControlPlaneEnv, context: ExecutionContextLi
 };
 
 /** Tick every due tenant cron of every `fanout: "dispatcher"` target, over its fleet's in-network `dispatch`. */
-const fanOutTenantCrons = async (env: ControlPlaneEnv): Promise<void> => {
+const fanOutTenantCrons = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const fleets = registeredFleets(env, { fanout: "dispatcher" }).flatMap(({ dispatch, id }) => (dispatch ? [{ dispatch, target: id }] : []));
 
-    if (fleets.length === 0 || !env.DB) {
+    if (fleets.length === 0) {
         return;
     }
 
@@ -771,8 +722,29 @@ const fanOutTenantCrons = async (env: ControlPlaneEnv): Promise<void> => {
         live: withoutHalted(live, halted),
         now: new Date(),
         secretEncryptionKey: env.SECRET_ENCRYPTION_KEY,
-        store: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        store: database,
     });
+};
+
+/** The box sweep that runs ahead of the org purge; a failure is logged and the next tick retries it. */
+const sweepBoxesBeforePurge = (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> =>
+    sweepBoxes(database, env).catch((error: unknown) => {
+        // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
+        console.error("[sweep] box sweep before the org purge failed", error);
+    });
+
+/** The emergency-stop sweep, handed to `waitUntil` when the context has it so the tenant fan-out does not wait behind it. */
+const runHaltSweep = async (database: ControlPlaneStore, env: ControlPlaneEnv, context: ExecutionContextLike): Promise<void> => {
+    const halts = sweepHalts(database, env).catch((error: unknown) => {
+        // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
+        console.error("[halt] halt sweep failed", error);
+    });
+
+    if (context.waitUntil) {
+        context.waitUntil(halts);
+    } else {
+        await halts;
+    }
 };
 
 /**
@@ -786,17 +758,19 @@ export const runScheduled = async (
     context: ExecutionContextLike,
     worker: ScheduledWorker,
 ): Promise<void> => {
+    // The control plane store, built once for this invocation. With no D1 bound the
+    // store sweeps are skipped, which is what each one used to check for itself.
+    const database = env.DB ? controlPlaneDatabase(env.DB as D1DatabaseLike) : undefined;
+    const everyMinute = controller.cron === EVERY_MINUTE;
+
     // The org purge (`organizations.purgeDeleted`, a code cron on this tick)
     // hard-deletes an erased organization's boxes, but a mutation cannot close
     // their sessions or remove their DNS records. The box sweep does both for
     // every organization past the same cutoff, so it runs first; its hourly run
     // is the backstop for anything this pass could not finish, and stands down
     // on this tick's hour so the two invocations never sweep at once.
-    if (controller.cron === EVERY_SIX_HOURS) {
-        await sweepBoxes(env).catch((error: unknown) => {
-            // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
-            console.error("[sweep] box sweep before the org purge failed", error);
-        });
+    if (controller.cron === EVERY_SIX_HOURS && database !== undefined) {
+        await sweepBoxesBeforePurge(database, env);
     }
 
     // The control plane's own code crons fire on their declared expression.
@@ -817,7 +791,7 @@ export const runScheduled = async (
     // it, which is safe because every one of them is idempotent by design.
     const swept = await Promise.allSettled(
         SCHEDULED_SWEEPS.filter((sweep) => sweep.cron === controller.cron).map(async (sweep) => {
-            await sweep.run(env, controller);
+            await sweep.run(database, env, controller);
         }),
     );
 
@@ -828,7 +802,7 @@ export const runScheduled = async (
         }
     }
 
-    if (controller.cron === EVERY_MINUTE) {
+    if (everyMinute) {
         const drained = drainBuildQueue(env, context, worker).catch((error: unknown) => {
             // eslint-disable-next-line no-console -- see drainBuildQueue
             console.error("[builds] build dispatch failed", error);
@@ -844,17 +818,8 @@ export const runScheduled = async (
     // Emergency stops and resumes (`sweepHalts`). Handed to `waitUntil` rather
     // than run with the sweeps above: a converge is a provision job that can take
     // minutes, and the tenant cron fan-out below must not wait behind it.
-    if (controller.cron === EVERY_MINUTE) {
-        const halts = sweepHalts(env).catch((error: unknown) => {
-            // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
-            console.error("[halt] halt sweep failed", error);
-        });
-
-        if (context.waitUntil) {
-            context.waitUntil(halts);
-        } else {
-            await halts;
-        }
+    if (everyMinute && database !== undefined) {
+        await runHaltSweep(database, env, context);
     }
 
     // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
@@ -862,7 +827,7 @@ export const runScheduled = async (
     // drops `triggers.crons` for namespaced workers, so this is the only path
     // that fires their cron jobs. Special-cased (not in SCHEDULED_SWEEPS)
     // because it needs a fleet's in-network `dispatch`.
-    if (controller.cron === EVERY_MINUTE) {
-        await fanOutTenantCrons(env);
+    if (everyMinute && database !== undefined) {
+        await fanOutTenantCrons(database, env);
     }
 };
