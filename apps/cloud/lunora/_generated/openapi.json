@@ -62,6 +62,61 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/_lunora/rpc#account:exportMine": {
+      "post": {
+        "description": "Invoke the `query` `account:exportMine` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "account:exportMine",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "account:exportMine",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: account:exportMine",
+        "tags": [
+          "account"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#alerts:anomalyBaselines": {
       "post": {
         "description": "Invoke the `query` `alerts:anomalyBaselines` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -9961,6 +10016,10 @@
     }
   },
   "tags": [
+    {
+      "description": "Operations declared in `lunora/account`.",
+      "name": "account"
+    },
     {
       "description": "Operations declared in `lunora/alerts`.",
       "name": "alerts"
