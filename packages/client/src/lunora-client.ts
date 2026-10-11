@@ -154,7 +154,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition, routeErrorFrame } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -6700,25 +6700,23 @@ class LunoraClient {
     }
 
     private handleErrorMessage(message: ServerErrorMessage): void {
-        // Stream-scoped errors arrive on the same `error` envelope as subscription
-        // errors. The route is decided from the frame and what holds its id, and each
-        // branch below only performs the effect for its route.
-        const { id } = message;
-        const stream = id === undefined ? undefined : this.streams.get(id);
-        const state = id === undefined ? undefined : this.subscriptions.getById(id);
-        const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
-        const route = routeErrorFrame(message, { shape: shapeState !== undefined, stream: stream !== undefined, subscription: state !== undefined });
+        // Token-expiry rejection (sent just before the server closes the socket
+        // with code 4001). Surface it to listeners; the close handler also fires
+        // and arms the reconnect, so nothing else to do here.
+        const errorCode = (message.error as { code?: unknown } | undefined)?.code;
 
-        // Token-expiry rejection (sent just before the server closes the socket with code
-        // 4001). Surface it to listeners; the close handler also fires and arms the
-        // reconnect, so nothing else to do here.
-        if (route === "tokenExpired") {
+        if (errorCode === "TOKEN_EXPIRED") {
             this.notifyTokenExpired();
 
             return;
         }
 
-        if (route === "stream" && stream && id !== undefined) {
+        // Stream-scoped errors arrive on the same `error` envelope as
+        // subscription errors; dispatch by id-prefix lookup.
+        const { id } = message;
+        const stream = id === undefined ? undefined : this.streams.get(id);
+
+        if (stream && id !== undefined) {
             stream.handle.fail(buildStreamError(message));
             this.forgetStream(id);
 
@@ -6730,7 +6728,9 @@ class LunoraClient {
         // subscriber's onError so the UI can react instead of silently
         // never receiving data; the registration is left in place so a
         // later reconnect with proper credentials can still succeed.
-        if (route === "subscription" && state) {
+        const state = id === undefined ? undefined : this.subscriptions.getById(id);
+
+        if (state) {
             const subscriptionError = buildSubscriptionError(message);
 
             // Snapshot the identity and key BEFORE fanning. `fanSubscriptionError`
@@ -6764,10 +6764,13 @@ class LunoraClient {
             return;
         }
 
-        // Shape subscriptions are keyed in their own map (`shape_*` ids). A rejected
-        // `shape_subscribe` (unknown shape, RLS-denied, cross-shard-invalid) must reach the
-        // subscriber's `onError`, or the shape hangs with no data.
-        if (route === "shape" && shapeState) {
+        // A shape subscription is keyed in its own map (`shape_*` ids), so the
+        // lookup above misses it. Without this a rejected `shape_subscribe`
+        // (unknown shape, RLS-denied, cross-shard-invalid) would never reach the
+        // subscriber's `onError` and the shape would silently hang with no data.
+        const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
+
+        if (shapeState) {
             fanSubscriptionError(shapeState.errorCallbacks, buildSubscriptionError(message));
         }
     }

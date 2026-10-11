@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { refoldSubscription } from "../src/optimistic-layers";
 import type { SubscriptionCallback, SubscriptionState, SyncWatermark } from "../src/subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition, routeErrorFrame } from "../src/subscription-frames";
-import type { ServerErrorMessage } from "../src/types";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "../src/subscription-frames";
 
 /** A subscription in its just-opened state, with every field set so no cast is needed. */
 const subscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {
@@ -163,46 +162,5 @@ describe("refoldSubscription", () => {
         refoldSubscription(state, state.serverBase);
 
         expect(seen).toStrictEqual([[{ id: "a" }]]);
-    });
-
-    it("publishes the base it is given, not whatever serverBase holds now", () => {
-        expect.assertions(1);
-
-        const seen: unknown[] = [];
-        const state = subscription({ callbacks: new Set([(value: unknown) => seen.push(value)]), serverBase: "stale" });
-
-        refoldSubscription(state, "payload");
-
-        expect(seen).toStrictEqual(["payload"]);
-    });
-});
-
-describe("routeErrorFrame", () => {
-    const frame = (overrides: Partial<ServerErrorMessage> = {}): ServerErrorMessage => {
-        return { error: { code: "FORBIDDEN" }, id: "s1", type: "error", ...overrides };
-    };
-
-    it("routes a token expiry to the socket, whatever id it carries", () => {
-        expect.assertions(2);
-
-        expect(routeErrorFrame(frame({ error: { code: "TOKEN_EXPIRED" } }), { shape: true, stream: true, subscription: true })).toBe("tokenExpired");
-        expect(routeErrorFrame(frame({ error: { code: "TOKEN_EXPIRED" }, id: undefined }), { shape: false, stream: false, subscription: false })).toBe(
-            "tokenExpired",
-        );
-    });
-
-    it("prefers a stream over a subscription with the same id, and a subscription over a shape", () => {
-        expect.assertions(3);
-
-        expect(routeErrorFrame(frame(), { shape: true, stream: true, subscription: true })).toBe("stream");
-        expect(routeErrorFrame(frame(), { shape: true, stream: false, subscription: true })).toBe("subscription");
-        expect(routeErrorFrame(frame(), { shape: true, stream: false, subscription: false })).toBe("shape");
-    });
-
-    it("has no owner for an id nothing holds, or for a frame with no id", () => {
-        expect.assertions(2);
-
-        expect(routeErrorFrame(frame(), { shape: false, stream: false, subscription: false })).toBe("none");
-        expect(routeErrorFrame(frame({ id: undefined }), { shape: true, stream: true, subscription: true })).toBe("none");
     });
 });

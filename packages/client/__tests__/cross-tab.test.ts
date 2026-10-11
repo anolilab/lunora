@@ -101,6 +101,44 @@ const delay = (ms: number): Promise<void> =>
         setTimeout(resolve, ms);
     });
 
+// --- Socket that records each frame the client sends, so a test can read the resume frame. ---
+const createFrameWebSocket = (sent: string[]): typeof WebSocket => {
+    class WS {
+        public readyState = 0;
+
+        private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+        public constructor() {
+            setTimeout(() => {
+                this.readyState = 1;
+
+                for (const listener of this.listeners.get("open") ?? []) {
+                    listener();
+                }
+            }, 0);
+        }
+
+        public addEventListener(type: string, listener: (event?: unknown) => void): void {
+            this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+        }
+
+        // eslint-disable-next-line class-methods-use-this -- test double: only records what was sent
+        public send(data: string): void {
+            sent.push(data);
+        }
+
+        public close(): void {
+            this.readyState = 3;
+
+            for (const listener of this.listeners.get("close") ?? []) {
+                listener({ code: 1000 });
+            }
+        }
+    }
+
+    return WS as unknown as typeof WebSocket;
+};
+
 describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
     it("a leader steps down when it receives a heartbeat from a lexicographically-smaller tabId", async () => {
         expect.assertions(3);
@@ -1406,4 +1444,42 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             client.close();
         }
     });
+});
+
+describe("follower epoch rule (cross-tab)", () => {
+    it("a follower promoted after a cursor-less epoch frame resumes without that epoch", async () => {
+        expect.assertions(2);
+
+        const sent: string[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
+        const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL, WebSocket: createFrameWebSocket(sent) });
+        const rogue = new BroadcastChannel(clientChannel(client));
+
+        try {
+            client.subscribe(fnRef("counter:get"), {}, () => undefined);
+
+            const key = SubscriptionRegistry.key("counter:get", {});
+
+            // A mixed-version leader's cursor-less frame carries an epoch. The epoch
+            // must not be adopted without the cursor it belongs to.
+            rogue.postMessage({ data: 5, epoch: "e9", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
+            await delay(10);
+
+            // A later frame carries a cursor and no epoch.
+            rogue.postMessage({ cursor: 5, data: 6, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
+
+            // The leader stops. This client promotes after the leader timeout and resubscribes.
+            await delay(3500);
+
+            const subscribe = sent
+                .map((frame) => JSON.parse(frame) as { query?: Record<string, unknown>; type?: string })
+                .find((frame) => frame.type === "subscribe");
+
+            expect(subscribe?.query).toMatchObject({ sinceSeq: 5 });
+            expect(subscribe?.query).not.toHaveProperty("sinceEpoch");
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    }, 10_000);
 });
