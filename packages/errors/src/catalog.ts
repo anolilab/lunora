@@ -583,6 +583,18 @@ export const ERROR_CATALOG = {
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
+    /** App catalog: a fetched file could not be read. Internal: the message can carry the upstream's own failure text. */
+    FETCH: { internal: true, status: 502, title: "Catalog fetch failed" },
+    /** App catalog: the signed index or manifest is signed by a key the control plane does not trust, or the signature does not verify. */
+    BAD_SIGNATURE: { status: 422, title: "Catalog signature does not verify" },
+    UNKNOWN_KEY: { status: 422, title: "Catalog signed by an unknown key" },
+    /** App catalog: a fetched file does not hash to the digest its signed manifest names. */
+    HASH_MISMATCH: { status: 422, title: "Catalog file hash mismatch" },
+    /** App catalog: the signed index is malformed, stale, or dated in the future. */
+    INVALID_INDEX: { status: 502, title: "Invalid catalog index" },
+    /** App catalog: a manifest is malformed or names something it may not. */
+    INVALID_MANIFEST: { status: 422, title: "Invalid catalog manifest" },
+    UNSUPPORTED_FORMAT: { status: 422, title: "Unsupported catalog format" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */
     INVALID_SCHEDULE_ID: { status: 400, title: "Invalid schedule id" },
     RATE_LIMITED: { status: 429, title: "Rate limited" },
