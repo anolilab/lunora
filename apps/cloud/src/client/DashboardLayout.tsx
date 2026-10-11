@@ -105,7 +105,7 @@ export const DashboardLayout = ({
                         the rail to this layout rather than the viewport edge; `z-20`
                         lifts it over the sticky header so the org switcher, which opens
                         out to the right of the collapsed rail, is not painted under it. */}
-                    <Sidebar className="absolute z-20 h-full" collapsible="icon">
+                    <Sidebar className="absolute z-20 h-full" collapsible="icon" variant="inset">
                         <SidebarHeader className="gap-2">
                             {sidebarHeader}
                             {commands.length > 0 ? (

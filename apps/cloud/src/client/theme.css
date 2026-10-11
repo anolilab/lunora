@@ -52,6 +52,7 @@
 /* `inline` so the utilities resolve the per-mode value where they are used. */
 @theme inline {
     --shadow-card: var(--card-shadow);
+    --shadow-window: var(--card-shadow);
 }
 
 /*
