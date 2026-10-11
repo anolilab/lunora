@@ -36,7 +36,7 @@ export interface ProjectOption {
 }
 
 /** A refused install is a value, so the form can show its `field`; only a transport failure throws. */
-type InstallOutcome = { field?: string; message: string; ok: false } | { generated: string[]; kept: string[]; ok: true };
+type InstallResponse = { field?: string; message: string; ok: false } | { generated: string[]; kept: string[]; ok: true };
 
 interface CatalogInstallFormProps {
     form: CatalogForm;
@@ -48,7 +48,7 @@ interface CatalogInstallFormProps {
 }
 
 /** The outcome an install's final event carries, or `null` for an event that is only a step. */
-const outcomeOf = (event: InstallEvent): InstallOutcome | null => {
+const outcomeOf = (event: InstallEvent): InstallResponse | null => {
     if (event.event === "result") {
         return { generated: event.generated, kept: event.kept, ok: true };
     }
@@ -64,11 +64,11 @@ const outcomeOf = (event: InstallEvent): InstallOutcome | null => {
  * Read an install's event stream to its outcome, handing each phase to `onPhase` as it
  * arrives. `rearm` is called before every read, so the caller's idle timer restarts.
  */
-const readInstallStream = async (body: ReadableStream<Uint8Array>, onPhase: (phase: InstallPhase) => void, rearm: () => void): Promise<InstallOutcome> => {
+const readInstallStream = async (body: ReadableStream<Uint8Array>, onPhase: (phase: InstallPhase) => void, rearm: () => void): Promise<InstallResponse> => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let pending = "";
-    let outcome: InstallOutcome | null = null;
+    let outcome: InstallResponse | null = null;
 
     while (outcome === null) {
         rearm();
@@ -100,7 +100,7 @@ const readInstallStream = async (body: ReadableStream<Uint8Array>, onPhase: (pha
  * the body is a stream of events. Each phase is handed to `onPhase` as it arrives, and
  * the stream's `result` or `error` event is the outcome.
  */
-const installRequest = async (body: Record<string, unknown>, onPhase: (phase: InstallPhase) => void): Promise<InstallOutcome> => {
+const installRequest = async (body: Record<string, unknown>, onPhase: (phase: InstallPhase) => void): Promise<InstallResponse> => {
     const idle = new AbortController();
     let timer = setTimeout(() => {
         idle.abort();
@@ -150,7 +150,7 @@ const installRequest = async (body: Record<string, unknown>, onPhase: (phase: In
 };
 
 /** The one line an install failure is shown on: the server's error, and the field it names if any. */
-const failureText = (outcome: InstallOutcome | null): null | string => {
+const failureText = (outcome: InstallResponse | null): null | string => {
     if (outcome === null || outcome.ok) {
         return null;
     }
@@ -226,7 +226,7 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
     const [keptNames, setKeptNames] = useState<string[]>([]);
     const [values, setValues] = useState(() => initialValues(form));
     const [pending, setPending] = useState(false);
-    const [outcome, setOutcome] = useState<InstallOutcome | null>(null);
+    const [outcome, setOutcome] = useState<InstallResponse | null>(null);
     const [phases, setPhases] = useState<InstallPhase[]>([]);
     const selectedProject = projects.find((project) => project._id === projectId);
     const fieldId = (kind: string, fieldName: string): string => `catalog-${slug}-${kind}-${fieldName}`;
@@ -274,7 +274,7 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
                 setPhases((current) => [...current, phase]);
             },
         )
-            .catch((error: unknown): InstallOutcome => {
+            .catch((error: unknown): InstallResponse => {
                 return {
                     message: error instanceof Error ? error.message : "could not install the app",
                     ok: false,

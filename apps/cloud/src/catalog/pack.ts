@@ -6,7 +6,7 @@
  */
 import { zipSync } from "fflate";
 
-import type { ArtifactFile, CatalogForm, CatalogManifest } from "./artifact";
+import type { ArtifactFile, CatalogForm, CatalogManifest, CatalogRuntime } from "./artifact";
 import { CATALOG_FORMAT, parseManifest } from "./artifact";
 import type { DetachedSignature } from "./signature";
 import { ARTIFACT_SIGNING_DOMAIN, sha256Hex, signPayload } from "./signature";
@@ -24,7 +24,7 @@ export interface PackInput {
     main: string;
     privateKey: CryptoKey;
     /** `lunora` for a Lunora app, `worker` for a plain Worker; absent means `worker`. */
-    runtime?: "lunora" | "worker";
+    runtime?: CatalogRuntime;
     slug: string;
     version: string;
 }

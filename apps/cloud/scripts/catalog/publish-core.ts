@@ -8,9 +8,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-import type { CatalogForm } from "../../src/catalog/artifact";
+import type { CatalogForm, CatalogRuntime } from "../../src/catalog/artifact";
 import { CATALOG_FORMAT, parseForm, verifyArtifact } from "../../src/catalog/artifact";
 import { MAX_NAME_LENGTH, MAX_SUMMARY_LENGTH } from "../../src/catalog/fields";
+import type { CatalogIndexEntry } from "../../src/catalog/index";
 import { packArtifact } from "../../src/catalog/pack";
 import type { DetachedSignature, TrustedCatalogKey } from "../../src/catalog/signature";
 import { INDEX_SIGNING_DOMAIN, sha256Hex, signPayload } from "../../src/catalog/signature";
@@ -66,7 +67,7 @@ export interface AppSpec {
     form?: CatalogForm;
     main: string;
     name: string;
-    runtime?: "lunora" | "worker";
+    runtime?: CatalogRuntime;
     slug: string;
     summary: string;
     version: string;
@@ -84,18 +85,6 @@ export interface PackedRelease {
     manifestBytes: Uint8Array;
     signature: DetachedSignature;
     spec: AppSpec;
-}
-
-/** One entry of the index, as the control plane reads it. */
-export interface IndexEntry {
-    artifactUrl: string;
-    manifestSha256: string;
-    manifestUrl: string;
-    name: string;
-    signatureUrl: string;
-    slug: string;
-    summary?: string;
-    version: string;
 }
 
 /** A complete, signed catalog: the listed releases (one per slug, its highest version) and the index over them. */
@@ -361,7 +350,7 @@ export const publishCatalog = async (input: PublishInput): Promise<PublishedCata
 
     const releases = [...latest.values()].toSorted((a, b) => a.spec.slug.localeCompare(b.spec.slug));
     const apps = await Promise.all(
-        releases.map(async (release): Promise<IndexEntry> => {
+        releases.map(async (release): Promise<CatalogIndexEntry> => {
             const { spec } = release;
             const stem = `${base}/${spec.slug}-${spec.version}`;
 

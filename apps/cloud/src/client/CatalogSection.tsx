@@ -9,7 +9,7 @@ import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api";
-import type { CatalogForm } from "../catalog/artifact";
+import type { CatalogApp, CatalogSkipped } from "../catalog/service";
 import { AsyncList } from "./AsyncList";
 import { canManage } from "./boxes";
 import { CatalogInstallForm } from "./CatalogInstallForm";
@@ -20,30 +20,8 @@ import { useMyRole } from "./use-boxes";
 /** Upper bound on the browse request, so a wedged route can't leave the list spinning. */
 const BROWSE_TIMEOUT_MS = 15_000;
 
-interface CatalogInstall {
-    deploymentId: string;
-    projectId: string;
-    version: string;
-}
-
-interface CatalogAppView {
-    form: CatalogForm;
-    installs: CatalogInstall[];
-    name: string;
-    slug: string;
-    summary?: string;
-    version: string;
-}
-
-/** An app the index lists but the browse cannot offer, with the reason it was left out. */
-interface CatalogSkipped {
-    reason: string;
-    slug: string;
-    version: string;
-}
-
 interface CatalogPayload {
-    apps: CatalogAppView[];
+    apps: CatalogApp[];
     skipped: CatalogSkipped[];
 }
 
@@ -58,7 +36,7 @@ const fetchCatalog = async (organizationId: OrgId): Promise<CatalogPayload> => {
         throw new Error(failure?.error ?? `could not load the catalog (HTTP ${String(response.status)})`);
     }
 
-    const payload = (await response.json().catch(() => null)) as { apps?: CatalogAppView[]; skipped?: CatalogSkipped[] } | null;
+    const payload = (await response.json().catch(() => null)) as { apps?: CatalogApp[]; skipped?: CatalogSkipped[] } | null;
 
     if (!payload?.apps) {
         throw new Error("the catalog answered without its apps");
@@ -68,7 +46,7 @@ const fetchCatalog = async (organizationId: OrgId): Promise<CatalogPayload> => {
 };
 
 interface CatalogRowProps {
-    app: CatalogAppView;
+    app: CatalogApp;
     canInstall: boolean;
     onInstall: (slug: string) => void;
     projectName: (projectId: string) => string;
@@ -106,7 +84,7 @@ const CatalogRow = ({ app, canInstall, onInstall, projectName }: CatalogRowProps
 };
 
 interface CatalogListProps {
-    apps: CatalogAppView[] | undefined;
+    apps: CatalogApp[] | undefined;
     canInstall: boolean;
     onInstall: (slug: string) => void;
     projectName: (projectId: string) => string;

@@ -86,7 +86,7 @@ export interface CatalogManifest {
      * Absent means `worker`: a plain Worker is the safe default, since a Lunora
      * binding on a Worker that does not export `ShardDO` fails its upload.
      */
-    runtime?: Runtime;
+    runtime?: CatalogRuntime;
     slug: string;
     version: string;
 }
@@ -333,14 +333,15 @@ const parseFileEntry = (entry: unknown, seen: ReadonlySet<string>): FieldResult<
 };
 
 /** The Worker runtimes a manifest may name. */
-type Runtime = "lunora" | "worker";
+/** The runtimes an app can target: a Lunora app, or a plain Worker. Absent in a manifest means `worker`. */
+export type CatalogRuntime = "lunora" | "worker";
 
-const isRuntime = (value: unknown): value is Runtime => value === "lunora" || value === "worker";
+const isRuntime = (value: unknown): value is CatalogRuntime => value === "lunora" || value === "worker";
 
 /** The scalar fields of a manifest, each checked against what the publisher writes. The slug and version come back typed. */
 const readHeader = (
     record: Record<string, unknown>,
-): { error: ArtifactError; ok: false } | { bindings: unknown[] | undefined; ok: true; runtime: Runtime | undefined; slug: string; version: string } => {
+): { error: ArtifactError; ok: false } | { bindings: unknown[] | undefined; ok: true; runtime: CatalogRuntime | undefined; slug: string; version: string } => {
     const known = new Set(["bindings", "files", "form", "format", "main", "runtime", "slug", "version"]);
     const unknown = Object.keys(record).filter((key) => !known.has(key));
 

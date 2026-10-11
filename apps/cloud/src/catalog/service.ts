@@ -141,10 +141,17 @@ export interface CatalogListDeps extends CatalogDeps {
     installs: (organizationId: string) => Promise<CatalogInstallRow[]>;
 }
 
+/** One of an organization's projects that runs a catalog app, as the browse shows it. */
+export interface CatalogAppInstall {
+    deploymentId: string;
+    projectId: string;
+    version: string;
+}
+
 /** An app the control plane can install: a verified index entry and a verified manifest. */
 export interface CatalogApp {
     form: CatalogForm;
-    installs: { deploymentId: string; projectId: string; version: string }[];
+    installs: CatalogAppInstall[];
     name: string;
     slug: string;
     summary?: string;
