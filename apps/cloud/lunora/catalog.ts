@@ -178,19 +178,20 @@ interface IndexStateRow {
 }
 
 /**
- * Record a verified catalog index for its URL and signing key, and say whether it may be
- * served (SYSTEM). The watermark is per (URL, key): `issuedAt` only moves forward for that
- * pair. An index older than the stored one for its key is refused. An equal one is accepted
- * without a write, so refreshing the same index never fails. A newer index signed by another
- * key does not move this key's watermark, and neither does the same key on another URL. The
- * row is shared by every isolate, which is what stops a cold isolate serving an older index
- * than another one has seen.
+ * Record a verified catalog index for its URL, and say whether it may be served (SYSTEM).
+ * The watermark is per URL and shared by every signing key: `issuedAt` only moves forward,
+ * and an index older than the stored one is refused whichever key signed it. So a retired
+ * key that is still trusted cannot replay an older index past a newer one signed by another
+ * key. An equal one is accepted without a write, so refreshing the same index never fails.
+ * `keyId` is updated to the key that signed the newest index, for audit. The row is shared
+ * by every isolate, which is what stops a cold isolate serving an older index than another
+ * one has seen.
  */
 export const advanceIndexState = internalMutation
     .input({ indexUrl: boundedString(LIMITS.url), issuedAt: v.number(), keyId: boundedString(LIMITS.id) })
     .mutation(async ({ ctx: context, args }): Promise<{ accepted: boolean }> => {
         const holderOf = async (): Promise<IndexStateRow | undefined> => {
-            const { page } = await context.db.catalogIndexState.findMany({ where: { indexUrl: args.indexUrl, keyId: args.keyId } });
+            const { page } = await context.db.catalogIndexState.findMany({ where: { indexUrl: args.indexUrl } });
 
             return (page as unknown as IndexStateRow[]).at(0);
         };
@@ -201,7 +202,7 @@ export const advanceIndexState = internalMutation
             }
 
             if (args.issuedAt > row.issuedAt) {
-                await context.db.patch(row._id, { issuedAt: args.issuedAt, updatedAt: context.now });
+                await context.db.patch(row._id, { issuedAt: args.issuedAt, keyId: args.keyId, updatedAt: context.now });
             }
 
             return { accepted: true };
@@ -218,7 +219,7 @@ export const advanceIndexState = internalMutation
 
             return { accepted: true };
         } catch (error) {
-            // The unique (URL, key) index refused the insert: another isolate recorded this key's index between the read and this write.
+            // The unique URL index refused the insert: another isolate recorded this URL's index between the read and this write.
             const raced = await holderOf();
 
             if (raced === undefined) {

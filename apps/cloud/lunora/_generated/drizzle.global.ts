@@ -918,5 +918,5 @@ export const catalogIndexState = sqliteTable("catalogIndexState", {
     keyId: text("keyId").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_url_key: uniqueIndex("by_url_key").on(t.indexUrl, t.keyId),
+    by_url: uniqueIndex("by_url").on(t.indexUrl),
 }));
