@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { Id } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
-import { createChannel, channels } from "../lunora/notifications";
 import { markVerified } from "../lunora/domains";
+import { channels, createChannel } from "../lunora/notifications";
 import withRateLimitStore from "./support/rate-limit-db";
 
 type Row = Record<string, unknown> & { _id: string };
@@ -29,9 +29,11 @@ const makeCtx = (options: FakeOptions = {}) => {
         notificationChannels: channelRows,
         projects,
     };
-    const filtered = (source: Row[], args?: { where?: Record<string, unknown> }): { page: Row[] } => ({
-        page: source.filter((row) => Object.entries(args?.where ?? {}).every(([key, value]) => row[key] === value)),
-    });
+    const filtered = (source: Row[], args?: { where?: Record<string, unknown> }): { page: Row[] } => {
+        return {
+            page: source.filter((row) => Object.entries(args?.where ?? {}).every(([key, value]) => row[key] === value)),
+        };
+    };
 
     const database = {
         delete: () => Promise.resolve(),
@@ -181,6 +183,7 @@ describe("createChannel", () => {
         });
 
         expect(inserted).toHaveLength(1);
+
         const doc = inserted[0]?.doc ?? {};
 
         expect(doc).toMatchObject({ secretCiphertext: "sealed-bytes", secretIv: "iv-bytes" });

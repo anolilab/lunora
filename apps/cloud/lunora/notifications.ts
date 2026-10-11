@@ -98,7 +98,7 @@ export const channels = query
     .query(async ({ ctx: context, args: { organizationId } }): Promise<{ canManage: boolean; channels: ChannelView[] }> => {
         const member = await assertMember(context, organizationId);
 
-        if (!(MANAGER_ROLES as readonly string[]).includes(member.role)) {
+        if (!(MANAGER_ROLES as ReadonlyArray<string>).includes(member.role)) {
             return { canManage: false, channels: [] };
         }
 
@@ -129,7 +129,7 @@ export const deliveries = query
     .query(async ({ ctx: context, args: { organizationId } }): Promise<DeliveryView[]> => {
         const member = await assertMember(context, organizationId);
 
-        if (!(MANAGER_ROLES as readonly string[]).includes(member.role)) {
+        if (!(MANAGER_ROLES as ReadonlyArray<string>).includes(member.role)) {
             return [];
         }
 

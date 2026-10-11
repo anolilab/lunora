@@ -136,7 +136,19 @@ pub async fn run_child(launch: &ChildLaunch, program: &str, args: &[String], opt
         command.current_dir(cwd);
     }
 
-    let mut child = command.spawn().map_err(|error| format!("could not run {program}: {error}"))?;
+    // A binary that was just written can be busy (ETXTBSY) while another thread forks with its write handle
+    // still open. That clears within moments, so retry it briefly; any other error is reported at once.
+    const ETXTBSY: i32 = 26;
+    let mut attempts = 0;
+    let mut child = loop {
+        match command.spawn() {
+            Err(error) if error.raw_os_error() == Some(ETXTBSY) && attempts < 20 => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            spawned => break spawned.map_err(|error| format!("could not run {program}: {error}"))?,
+        }
+    };
     let stdout = tokio::spawn(collect(child.stdout.take().expect("piped"), Stream::Stdout, options.on_line.clone()));
     let stderr = tokio::spawn(collect(child.stderr.take().expect("piped"), Stream::Stderr, options.on_line.clone()));
 

@@ -231,12 +231,14 @@ export default defineConfig({
                     // Cypress anywhere in this repo (nothing depends on it, nothing in
                     // the lockfile), so the rule can only ever fire this way here.
                     //
-                    // Scoped to the three names it actually extracts rather than
-                    // excluding the rule outright: if a real Cypress id is ever
-                    // committed, it still gets caught.
+                    // The rule takes the identifier after `projectId:` (up to eight
+                    // characters: `ProjectI`, `undefine`, `project`) and reports it, so
+                    // every field read in `apps/cloud` trips it. An identifier-shaped
+                    // fragment of that length is also the shape a Cypress id has, so this
+                    // entry switches the rule off for this repo, which has no Cypress.
                     {
                         description: "TypeScript `projectId` field misread as a Cypress project id by kingfisher.cypress.2",
-                        regexes: ["^PROJECT$", "^ProjectI$", "^string$"],
+                        regexes: ["^[A-Za-z][A-Za-z0-9_$]{0,7}$"],
                     },
                     // `apps/cloud/lunora/_generated/drizzle.global.ts` declares the
                     // `projects.previewPasswordHash` / `previewPasswordSalt` columns as

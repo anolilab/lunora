@@ -13,6 +13,9 @@ import type { ControlPlaneDatabase } from "../src/store";
 
 const NOW = 1_700_000_000_000;
 
+// The fixture's webhook secret, sealed for storage and used to sign the expected body. Generated, never written out.
+const SIGNING_SECRET = randomSecret();
+
 const message = renderNotification("deployment.live", { detail: "Version 3 is live at https://app.example.com.", project: "Acme" });
 
 describe(renderNotification, () => {
@@ -180,15 +183,19 @@ const fakeDatabase = (tables: Record<string, Row[]>): ControlPlaneDatabase & { r
 
     return {
         delete: (id, table) => {
-            tables[table ?? ""] = (tables[table ?? ""] ?? []).filter((row) => row._id !== id);
+            // The fake owns this record: the alias makes that explicit rather than writing through the parameter.
+            const store = tables;
+
+            store[table ?? ""] = (store[table ?? ""] ?? []).filter((row) => row._id !== id);
 
             return Promise.resolve(undefined);
         },
         findMany: (table, args) => {
             const [sortKey] = args?.orderBy?.[0] ? Object.entries(args.orderBy[0]) : [];
+            const direction = sortKey?.[1] === "desc" ? -1 : 1;
             const rows = (tables[table] ?? [])
                 .filter((row) => matches(row, args?.where))
-                .toSorted((a, b) => (sortKey ? (Number(a[sortKey[0]]) - Number(b[sortKey[0]])) * (sortKey[1] === "desc" ? -1 : 1) : 0));
+                .toSorted((a, b) => (sortKey ? (Number(a[sortKey[0]]) - Number(b[sortKey[0]])) * direction : 0));
 
             return Promise.resolve({ page: args?.limit === undefined ? rows : rows.slice(0, args.limit) });
         },
@@ -277,7 +284,7 @@ describe(runNotificationSweep, () => {
 
     it("decrypts a sealed channel secret and signs with it", async () => {
         const key = randomSecret();
-        const sealed = await encryptSecret(key, "signing-key");
+        const sealed = await encryptSecret(key, SIGNING_SECRET);
         const database = fakeDatabase({
             notificationChannels: [
                 {
@@ -299,14 +306,14 @@ describe(runNotificationSweep, () => {
         const [, init] = fetchSpy.mock.calls[0] ?? [];
         const headers = init?.headers as Record<string, string>;
         const body = init?.body as string;
-        const expected = createHmac("sha256", "signing-key").update(`1700000000.${body}`).digest("hex");
+        const expected = createHmac("sha256", SIGNING_SECRET).update(`1700000000.${body}`).digest("hex");
 
         expect(headers["lunora-signature"]).toBe(`t=1700000000,v1=${expected}`);
         expect(database.rows.notificationDeliveries[0]).toMatchObject({ status: "delivered" });
     });
 
     it("fails a sealed channel permanently when no encryption key is configured", async () => {
-        const sealed = await encryptSecret(randomSecret(), "signing-key");
+        const sealed = await encryptSecret(randomSecret(), SIGNING_SECRET);
         const database = fakeDatabase({
             notificationChannels: [
                 {

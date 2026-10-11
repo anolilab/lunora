@@ -18,7 +18,7 @@ export const interactiveRowClassName = cn(rowClassName, "cursor-pointer text-lef
 /**
  * The label voice: Geist Mono, ALL CAPS, tight tracking, tertiary size.
  *
- * One constant rather than the same class string repeated per `<TableHead>` — the
+ * One constant rather than the same class string repeated per `&lt;TableHead>` — the
  * design system treats labels as a single role, so they should have a single
  * definition. Applies to column headers and any other structural label.
  */

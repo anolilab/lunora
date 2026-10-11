@@ -1,4 +1,4 @@
-name: Catalog
+"name": "Catalog"
 
 # Packs and signs the app catalog's example apps and publishes the signed index
 # files as a build artifact. Nothing is published to a release or a host yet: the

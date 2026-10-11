@@ -28,16 +28,18 @@ export const pendingDeliveryRow = <TChannel extends string, TOrganization extend
     status: "pending";
     subject: string;
     updatedAt: number;
-} => ({
-    attempts: 0,
-    body: message.body,
-    channelId: channel._id,
-    createdAt: now,
-    event: message.event,
-    kind: channel.kind,
-    nextAttemptAt: now,
-    organizationId,
-    status: "pending",
-    subject: message.subject,
-    updatedAt: now,
-});
+} => {
+    return {
+        attempts: 0,
+        body: message.body,
+        channelId: channel._id,
+        createdAt: now,
+        event: message.event,
+        kind: channel.kind,
+        nextAttemptAt: now,
+        organizationId,
+        status: "pending",
+        subject: message.subject,
+        updatedAt: now,
+    };
+};

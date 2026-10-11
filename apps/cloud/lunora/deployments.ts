@@ -927,13 +927,17 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
 
     const expired = page.filter((deployment) => deployment.status !== "destroyed" && deployment.expiresAt != null && deployment.expiresAt < now);
 
+    // One name lookup per project, all at once, rather than one per expired preview.
+    const projectIds = [...new Set(expired.map((deployment) => deployment.projectId))];
+    const names = new Map(await Promise.all(projectIds.map(async (projectId) => [projectId, await projectNameOf(context, projectId)] as const)));
+
     for (const deployment of expired) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
         await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
         // eslint-disable-next-line no-await-in-loop -- see above
         await enqueueNotification(context, deployment.organizationId, "preview.expired", {
             detail: `Preview ${deployment.alias ?? deployment.scriptName} was removed after its expiry time.`,
-            project: await projectNameOf(context, deployment.projectId),
+            project: names.get(deployment.projectId) ?? "",
         });
     }
 
