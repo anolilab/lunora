@@ -877,17 +877,6 @@ const isZeroMoney: (a: Money) => boolean;
 const lunoraDatabaseToPaymentDatabase: (database: LunoraDatabaseLike) => PaymentDatabase;
 ```
 
-### `migrateLegacyPaymentTables` (const)
-
-```ts
-const migrateLegacyPaymentTables: (database: LunoraDatabaseLike, options?: {
-    batchSize?: number;
-}) => Promise<{
-    moved: number;
-    remaining: boolean;
-}>;
-```
-
 ### `money` (const)
 
 ```ts
