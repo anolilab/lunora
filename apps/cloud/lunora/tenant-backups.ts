@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { activeOperation, tenantBackupKey } from "../src/backup/tenant-policy";
 import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
@@ -22,45 +22,7 @@ import { boundedString, LIMITS } from "./validators";
 type OrgId = Id<"organizations">;
 type BackupId = Id<"tenantBackups">;
 
-interface BackupRow {
-    _id: BackupId;
-    alias: string;
-    bytes?: number;
-    completedAt?: number;
-    createdAt: number;
-    deploymentId: Id<"deployments">;
-    error?: string;
-    key: string;
-    offsiteError?: string;
-    offsiteStatus?: "failed" | "succeeded";
-    operation: "backup" | "restore";
-    organizationId: OrgId;
-    projectId: Id<"projects">;
-    restoreConflicts?: number;
-    restoreDeleted?: Record<string, number>;
-    restoredFrom?: BackupId;
-    restoreInserted?: number;
-    restoreRowErrors?: number;
-    status: "failed" | "running" | "succeeded";
-    trigger: "manual" | "pre-restore" | "scheduled";
-}
-
-interface DeploymentRow {
-    _id: Id<"deployments">;
-    adminToken?: string;
-    adminTokenCiphertext?: string;
-    adminTokenIv?: string;
-    alias?: string;
-    createdAt: number;
-    kind: string;
-    resourceRef?: string;
-    /** `.global()` rows answer SQL NULL for an unset column; absent is a Lunora app. */
-    runtime?: "worker" | null;
-    scriptName: string;
-    status: string;
-    target?: string;
-    url?: string;
-}
+type BackupRow = Document_<"tenantBackups">;
 
 /** What the router needs to reach a project's production Worker: its identity and the SEALED admin token (unsealed at the edge). */
 interface TenantTarget {
@@ -81,7 +43,7 @@ interface TenantTarget {
 const LIST_LIMIT = 100;
 
 /** A row as the studio sees it. The R2 key stays server-side; downloads go through the authorized route. */
-type BackupView = Omit<BackupRow, "key">;
+type BackupView = Omit<BackupRow, "_creationTime" | "key">;
 
 /** Named field by field, like `toDeploymentView`: a rest-spread would carry any future column to the wire. */
 const toView = (row: BackupRow): BackupView => {
@@ -121,7 +83,7 @@ const projectRows = async (context: QueryContext, projectId: Id<"projects">): Pr
  */
 const productionTarget = async (context: QueryContext, projectId: Id<"projects">): Promise<TenantTarget> => {
     const { page } = await context.db.deployments.findMany({ where: { projectId } }); // secret-scanner:allow -- domain field name
-    const live = (page as DeploymentRow[])
+    const live = page
         .filter((row) => row.kind === "production" && row.status === "live" && row.alias != null && row.url != null)
         .toSorted((a, b) => b.createdAt - a.createdAt)[0];
     const hasToken = live?.adminToken ?? (live?.adminTokenCiphertext && live.adminTokenIv);
@@ -168,7 +130,7 @@ export const list = query
 
         const { page } = await context.db.tenantBackups.findMany({ where: { organizationId, projectId } });
 
-        return (page as BackupRow[])
+        return page
             .toSorted((a, b) => b.createdAt - a.createdAt)
             .slice(0, LIST_LIMIT)
             .map((row) => toView(row));
@@ -229,7 +191,7 @@ export const beginRestore = internalMutation
         }): Promise<TenantTarget & { preRestoreBackupId: BackupId; preRestoreKey: string; restoreId: BackupId; sourceKey: string }> => {
             await assertMember(context, organizationId, ["owner", "admin"]);
 
-            const source = (await context.db.get(backupId)) as BackupRow | null;
+            const source = await context.db.get(backupId);
 
             if (source?.organizationId !== organizationId || source.operation !== "backup") {
                 throw new LunoraError("NOT_FOUND", "backup not found in this organization");
@@ -290,7 +252,7 @@ export const finish = internalMutation
     .mutation(async ({ ctx: context, args: { id, organizationId, ...outcome } }): Promise<null> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
-        const row = (await context.db.get(id)) as BackupRow | null;
+        const row = await context.db.get(id);
 
         if (row?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "backup not found in this organization");
@@ -319,7 +281,7 @@ export const authorizeDownload = internalMutation
     .mutation(async ({ ctx: context, args: { backupId, organizationId } }): Promise<{ alias: string; createdAt: number; key: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
-        const row = (await context.db.get(backupId)) as BackupRow | null;
+        const row = await context.db.get(backupId);
 
         if (row?.organizationId !== organizationId || row.operation !== "backup" || row.status !== "succeeded") {
             throw new LunoraError("NOT_FOUND", "backup not found in this organization");

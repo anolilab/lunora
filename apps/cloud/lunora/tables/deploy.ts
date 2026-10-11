@@ -6,23 +6,12 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { deployTarget, placementHost, storedProjectRuntime } from "./shared";
+import { deploymentStatus, deployTarget, placementHost, storedProjectRuntime } from "./shared";
 
 // One Durable Object or Workflow class a Worker binds (`src/deploy/worker-classes.ts`).
 const boundClass = v.object({ binding: v.string(), className: v.string(), sqlite: v.optional(v.boolean()), type: v.string() });
 
 const deploymentKind = v.union(v.literal("production"), v.literal("preview"), v.literal("dev"));
-
-const deploymentStatus = v.union(
-    v.literal("queued"),
-    v.literal("provisioning"),
-    v.literal("building"),
-    v.literal("verifying"),
-    v.literal("live"),
-    v.literal("superseded"),
-    v.literal("failed"),
-    v.literal("destroyed"),
-);
 
 const deployKeyType = v.union(v.literal("production"), v.literal("dev"), v.literal("preview"));
 

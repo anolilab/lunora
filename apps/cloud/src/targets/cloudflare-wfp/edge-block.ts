@@ -32,6 +32,7 @@
  * Box (`celld-vps`) and connected-account (`cloudflare-workers`) tenants are
  * never touched: their traffic does not cross the platform's zone.
  */
+import type { Doc as Document_ } from "../../../lunora/_generated/dataModel";
 import type { HostList } from "../../cloudflare/host-list";
 import type { ControlPlaneStore } from "../../d1-store";
 import { storedTarget } from "../../provision-contract";
@@ -72,30 +73,11 @@ export interface EdgeBlockPorts {
     zone?: SaasZone;
 }
 
-interface OrganizationRow {
-    _id: string;
-    suspendedAt?: null | number;
-}
+type OrganizationRow = Document_<"organizations">;
 
-interface DomainRow {
-    _id: string;
-    certificateIssuer?: null | string;
-    certificateScope?: null | string;
-    customHostnameId?: null | string;
-    edgeBlockedAt?: null | number;
-    edgeBlockError?: null | string;
-    hostname: string;
-    organizationId: string;
-    verifiedAt?: null | number;
-}
+type DomainRow = Document_<"domains">;
 
-interface DeploymentRow {
-    alias?: null | string;
-    organizationId: string;
-    scriptName: string;
-    status: string;
-    target?: null | string;
-}
+type DeploymentRow = Document_<"deployments">;
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, MAX_ERROR);
 

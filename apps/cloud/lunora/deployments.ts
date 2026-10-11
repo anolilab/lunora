@@ -9,50 +9,23 @@ import { PLAIN_WORKER_NO_ADMIN, RUNTIME_LABELS, storedRuntime } from "../src/pro
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
 import { isCellPlaced, resourceRefOf } from "../src/targets/placement";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { fireDeployAlerts } from "./alerts";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
-import { enqueueNotification } from "./notification-outbox";
 import { assertProjectNotHalted } from "./halts";
+import { enqueueNotification } from "./notification-outbox";
 import { collectAll } from "./paginate";
+import type { DEPLOYMENT_STATUSES} from "./tables/shared";
 import { storedProjectRuntime } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
-type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
+type DeploymentStatus = (typeof DEPLOYMENT_STATUSES)[number];
 
-interface DeploymentRow {
-    _id: Id<"deployments">;
-    adminToken?: string;
-    adminTokenCiphertext?: string;
-    adminTokenIv?: string;
-    alias?: string;
-    bindings?: { name: string; target?: string; type: string }[];
-    branch?: string;
-    bundleHash?: string;
-    createdAt: number;
-    createdBy: string;
-    cronSpecs?: null | string[];
-    /** The Durable Object classes the release binds, recorded at create; absent on rows from before. */
-    durableObjectClasses?: null | string[];
-    expiresAt?: number;
-    kind: "dev" | "preview" | "production";
-    organizationId: Id<"organizations">;
-    projectId: Id<"projects">;
-    /** `.global()` rows answer SQL NULL for an unset column; absent is a Lunora app. */
-    runtime?: "worker" | null;
-    scriptName: string;
-    status: DeploymentStatus;
-    target?: string;
-    updatedAt: number;
-    url?: string;
-    /** Set when the release was put on its Worker to be verified (`updateStatus`). */
-    verifyingAt?: null | number;
-    version?: number;
-}
+type DeploymentRow = Document_<"deployments">;
 
 /**
  * The releases that tell what the alias's one Worker is running: the newest
@@ -299,7 +272,7 @@ export const adminTarget = internalQuery
             // internal call runs under the session it was made with.
             await assertMember(context, organizationId, isDataMovementPath(adminPath) ? ["owner", "admin"] : ["owner", "admin", "member"]);
 
-            const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
+            const deployment = await context.db.get(deploymentId);
             const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
 
             // Live only: every release of an alias shares one Worker, and only the
@@ -424,7 +397,7 @@ export const planForScript = query
  * failed and nothing logged it: the `Promise&lt;DeploymentRow[]>` annotation is
  * compile-time only and strips nothing at the wire.
  */
-type DeploymentView = Omit<DeploymentRow, "adminToken" | "adminTokenCiphertext" | "adminTokenIv">;
+type DeploymentView = Omit<DeploymentRow, "_creationTime" | "adminToken" | "adminTokenCiphertext" | "adminTokenIv">;
 
 /** Drop the admin-token fields from a stored row. */
 export const toDeploymentView = (row: DeploymentRow): DeploymentView => {
@@ -693,7 +666,7 @@ export const activate = mutation
         id: v.id("deployments"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, id } }): Promise<void> => {
-        const deployment = (await context.db.get(id)) as DeploymentRow | null;
+        const deployment = await context.db.get(id);
 
         if (!deployment) {
             throw new LunoraError("NOT_FOUND", "deployment not found");
@@ -760,7 +733,7 @@ export const rollback = internalMutation
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
-        const target = (await context.db.get(id)) as DeploymentRow | null;
+        const target = await context.db.get(id);
 
         if (target?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
@@ -833,7 +806,7 @@ export const releaseTarget = internalQuery
             runtime?: "worker";
             target?: string;
         }> => {
-            const target = (await context.db.get(id)) as DeploymentRow | null;
+            const target = await context.db.get(id);
 
             if (target?.organizationId !== organizationId) {
                 throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
@@ -969,7 +942,7 @@ export const updateStatus = mutation
         url: v.optional(boundedString(LIMITS.url)),
     })
     .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
-        const existing = (await context.db.get(id)) as DeploymentRow | null;
+        const existing = await context.db.get(id);
 
         if (!existing) {
             throw new LunoraError("NOT_FOUND", "deployment not found");
@@ -1048,7 +1021,7 @@ export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS
         scriptName: string;
         url: string;
     }> => {
-        const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
+        const deployment = await context.db.get(deploymentId);
 
         if (!deployment) {
             return null;

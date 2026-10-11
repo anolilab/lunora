@@ -112,6 +112,25 @@ export const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.lite
 export const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"), v.literal("cloudflare-workers"));
 
 /**
+ * Every phase a `deployments` row can be in: the `DeploymentStatus` type is
+ * derived from it. The validator below repeats the literals on purpose, because
+ * codegen reads the validator's own type — a `v.union(...array.map(v.literal))`
+ * is erased to `unknown` there, and the generated `Doc` loses its status union.
+ */
+export const DEPLOYMENT_STATUSES = ["queued", "provisioning", "building", "verifying", "live", "superseded", "failed", "destroyed"] as const;
+
+export const deploymentStatus = v.union(
+    v.literal("queued"),
+    v.literal("provisioning"),
+    v.literal("building"),
+    v.literal("verifying"),
+    v.literal("live"),
+    v.literal("superseded"),
+    v.literal("failed"),
+    v.literal("destroyed"),
+);
+
+/**
  * A project runtime that is not the default: `PROJECT_RUNTIMES` in
  * `src/project-runtime.ts` minus `lunora`, which is stored as absence so every
  * row that predates the setting already reads as a Lunora app.
