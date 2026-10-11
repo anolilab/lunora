@@ -20,6 +20,21 @@ interface ArchiveFile {
 }
 ```
 
+### `AuthTableNames` (interface)
+
+```ts
+interface AuthTableNames {
+    readonly account?: string;
+    readonly apikey?: string;
+    readonly member?: string;
+    readonly passkey?: string;
+    readonly session?: string;
+    readonly teamMember?: string;
+    readonly twoFactor?: string;
+    readonly user?: string;
+}
+```
+
 ### `CoverageProblem` (interface)
 
 ```ts
@@ -63,6 +78,9 @@ type DatasetPlacement = "subject" | "root" | "global";
 
 ```ts
 interface DatasetSpec {
+    readonly files?: {
+        readonly prefix: string;
+    };
     readonly legalBasis: LegalBasis;
     readonly origin: DataOrigin;
     readonly phase?: DatasetPhase;
@@ -277,6 +295,12 @@ interface TableSpec {
 }
 ```
 
+### `actionCacheDataset` (const)
+
+```ts
+const actionCacheDataset: (table?: string) => Dataset;
+```
+
 ### `addCalendarMonths` (const)
 
 ```ts
@@ -287,6 +311,12 @@ const addCalendarMonths: (date: Date, months: number) => Date;
 
 ```ts
 const articlesFor: (origin: DataOrigin, legalBasis: LegalBasis) => ReadonlyArray<ExportArticle>;
+```
+
+### `authDataset` (const)
+
+```ts
+const authDataset: (names?: AuthTableNames) => Dataset;
 ```
 
 ### `buildArchive` (const)
@@ -347,6 +377,12 @@ const checkCoverage: (tables: ReadonlyArray<string>, classifications: Readonly<R
 
 ```ts
 const defineDataset: (id: string, spec: DatasetSpec) => Dataset;
+```
+
+### `documentHistoryDataset` (const)
+
+```ts
+const documentHistoryDataset: (table?: string) => Dataset;
 ```
 
 ### `dueAt` (const)
@@ -432,6 +468,12 @@ const retain: (rule: string, options?: {
 
 ```ts
 const retainUntil: (rule: RetentionRule, from: Date) => Date;
+```
+
+### `storageObjectsDataset` (const)
+
+```ts
+const storageObjectsDataset: (prefix: string) => Dataset;
 ```
 
 ### `transition` (const)

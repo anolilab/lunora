@@ -30,6 +30,8 @@ interface TableSpec {
 
 /** The description a module writes for its dataset. */
 interface DatasetSpec {
+    /** Object-storage files the subject owns, under a key prefix. Exported and erased alongside the tables. */
+    readonly files?: { readonly prefix: string };
     readonly legalBasis: LegalBasis;
     readonly origin: DataOrigin;
     readonly phase?: DatasetPhase;
@@ -68,8 +70,8 @@ const defineDataset = (id: string, spec: DatasetSpec): Dataset => {
 
     const tableNames = Object.keys(spec.tables);
 
-    if (tableNames.length === 0) {
-        throw new LunoraError("BAD_REQUEST", `Dataset "${id}" declares no tables.`);
+    if (tableNames.length === 0 && spec.files === undefined) {
+        throw new LunoraError("BAD_REQUEST", `Dataset "${id}" declares no tables or files.`);
     }
 
     return {

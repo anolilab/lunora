@@ -2,6 +2,8 @@ export type { ArchiveFile, Manifest, ManifestDataset, SummaryDataset } from "./a
 export { buildArchive, buildManifest, buildSummaryPdf, MANIFEST_FORMAT_VERSION } from "./archive";
 export type { DataOrigin, ExportArticle, LegalBasis } from "./articles";
 export { articlesFor } from "./articles";
+export type { AuthTableNames } from "./builtins";
+export { actionCacheDataset, authDataset, documentHistoryDataset, storageObjectsDataset } from "./builtins";
 export type { CoverageProblem, TableClassification } from "./coverage";
 export { checkCoverage } from "./coverage";
 export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
