@@ -66,8 +66,15 @@ export type DeployOutcome =
     { error: string; provisioned: boolean; reason: string; status: "failed" } | { result: DeployedRelease; status: "live" };
 
 export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDeploymentOptions): Promise<DeployOutcome> => {
+    // Progress is reporting, not control flow: a callback that throws (a dropped status
+    // write, say) must not turn a converged release into a "failed" outcome, or skip the
+    // terminal event.
     const emit = async (progress: DeployProgress): Promise<void> => {
-        await options.onProgress?.(progress);
+        try {
+            await options.onProgress?.(progress);
+        } catch {
+            // The returned outcome is authoritative; a failed progress write does not change it.
+        }
     };
 
     await emit({ phase: "queued" });
