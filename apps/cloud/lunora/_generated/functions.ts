@@ -99,6 +99,7 @@ export interface RegisteredLunoraFunction {
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "account:eraseUser": lunora_account_0.eraseUser as unknown as RegisteredLunoraFunction,
     "account:exportMine": lunora_account_0.exportMine as unknown as RegisteredLunoraFunction,
+    "account:soleOwnedOrganizations": lunora_account_0.soleOwnedOrganizations as unknown as RegisteredLunoraFunction,
     "alerts:anomalyBaselines": lunora_alerts_1.anomalyBaselines as unknown as RegisteredLunoraFunction,
     "alerts:createRule": lunora_alerts_1.createRule as unknown as RegisteredLunoraFunction,
     "alerts:createSilence": lunora_alerts_1.createSilence as unknown as RegisteredLunoraFunction,
@@ -320,6 +321,12 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
  * parser as a zero-allocation fast path; anything it can't model is deferred.
  */
 installCompiledValidatorMap(lunora_account_0.eraseUser.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["userId"] !== "string") return DEFER;
+return { "userId": source["userId"] };
+});
+installCompiledValidatorMap(lunora_account_0.soleOwnedOrganizations.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["userId"] !== "string") return DEFER;
@@ -1212,8 +1219,9 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     account: {
-        eraseUser: (args: { userId: string }) => Promise<{ erased: false; soleOwnerOf: { id: string; name: string }[] } | { erased: true; }>;
+        eraseUser: (args: { userId: string }) => Promise<{ ownerless: { id: string; name: string }[] }>;
         exportMine: (args?: {}) => Promise<Record<string, unknown>>;
+        soleOwnedOrganizations: (args: { userId: string }) => Promise<{ id: string; name: string }[]>;
     };
     alerts: {
         anomalyBaselines: (args: { organizationId: Id<"organizations"> }) => Promise<{ lastBucketStart: number; lastMean: number; lastScore: number; lastValue: number; samples: number; signal: "storage" | "requests" | "errors"; warmingUp: boolean }[]>;
@@ -1546,6 +1554,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     account: {
         eraseUser: (args) => callRegistered(context, "account:eraseUser", args),
         exportMine: (args) => callRegistered(context, "account:exportMine", args),
+        soleOwnedOrganizations: (args) => callRegistered(context, "account:soleOwnedOrganizations", args),
     },
     alerts: {
         anomalyBaselines: (args) => callRegistered(context, "alerts:anomalyBaselines", args),

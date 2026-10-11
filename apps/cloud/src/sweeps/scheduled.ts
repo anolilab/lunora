@@ -8,7 +8,7 @@ import type { D1DatabaseLike } from "@lunora/d1";
 import type { ExecutionContextLike, LunoraWorker, ScheduledControllerLike } from "@lunora/runtime";
 import { Creem } from "creem";
 
-import { authUserEmails } from "../auth";
+import { authExistingUserIds, authUserEmails } from "../auth";
 import { controlPlaneExport } from "../backup/control-plane-export";
 import { offsiteBucket } from "../backup/offsite";
 import { runBackupSweep } from "../backup/sweep";
@@ -58,6 +58,7 @@ import { orgAdminEmails } from "../telemetry/recipients";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUsageAlertSweep } from "../telemetry/usage-alert-sweep";
 import { runUptimeSweep } from "../uptime/sweep";
+import { runAccountErasureSweep } from "./account-erasure";
 
 /** The Worker's own entry, as far as a scheduled run reaches it. */
 type ScheduledWorker = Pick<LunoraWorker, "fetch" | "scheduled">;
@@ -710,6 +711,45 @@ const runBuildDrain = (tick: TickContext): Promise<void> =>
         console.error("[builds] build dispatch failed", error);
     });
 
+/** Where the sweep below reaches the account cleanup; never resolved, the request is handed to the Worker in-process. */
+const ACCOUNT_ERASE_URL = "https://control-plane.internal/v1/account/erase";
+
+/**
+ * Re-run the control plane's account cleanup for users whose account is gone but
+ * whose memberships remain (`./account-erasure.ts`), through the same in-process
+ * `POST /v1/account/erase` the after-delete hook calls. No-ops without the admin
+ * token the route is gated on.
+ */
+const sweepAccountErasure = async (tick: TickContext): Promise<void> => {
+    const token = tick.env.LUNORA_ADMIN_TOKEN;
+
+    if (tick.database === undefined || !token) {
+        return;
+    }
+
+    const result = await runAccountErasureSweep(tick.database, {
+        erase: async (userId) => {
+            const response = await tick.worker.fetch(
+                new Request(ACCOUNT_ERASE_URL, {
+                    body: JSON.stringify({ userId }),
+                    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+                    method: "POST",
+                }),
+                tick.env,
+                tick.context,
+            );
+
+            return response.ok;
+        },
+        existingUserIds: authExistingUserIds(tick.env),
+    });
+
+    if (result.failed.length > 0) {
+        // eslint-disable-next-line no-console -- the next tick retries them; this is the record that it had to
+        console.error("[account] cleanup of deleted accounts failed", result.failed.length);
+    }
+};
+
 const SCHEDULED_SWEEPS: { cron: string; run: (tick: TickContext) => Promise<void>; stage?: Stage }[] = [
     { cron: EVERY_HOUR, run: withStore(sweepTeardown) },
     { cron: EVERY_HOUR, run: withStore(sweepUsageRollback) },
@@ -751,6 +791,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (tick: TickContext) => Promise<void
     { cron: EVERY_HOUR, run: withStore(sweepAnomalies) },
     // Monthly usage thresholds, against the ledger the previous tick's readback filled.
     { cron: EVERY_HOUR, run: withStore(sweepUsageAlerts) },
+    // Account deletions whose after-delete cleanup did not finish: memberships of a user the auth layer no longer has.
+    { cron: EVERY_HOUR, run: sweepAccountErasure },
     { cron: EVERY_MINUTE, run: withStore(sweepUptime) },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

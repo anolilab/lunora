@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/internal";
-import { ACCOUNT_EXPORT_FORMAT, DELETED_ACTOR, eraseUser } from "../lunora/account";
-import { beforeAccountDeletion } from "../src/account-deletion";
+import { ACCOUNT_EXPORT_FORMAT, DELETED_ACTOR, eraseUser, OWNERLESS_ACTION, soleOwnedOrganizations } from "../lunora/account";
+import { afterAccountDeletion, beforeAccountDeletion } from "../src/account-deletion";
 import { ensureAuth } from "../src/auth";
 import type { AuthRecordReader } from "../src/deploy/routes/account";
 import { handleAccountEraseRoute, handleAccountExportRoute, readAccountProfile } from "../src/deploy/routes/account";
@@ -10,9 +10,10 @@ import type { RouterEnv } from "../src/deploy/routes/shared";
 import { makeCtx } from "./_helpers/fake-ctx";
 
 /**
- * Self-service account deletion and the account export's profile. The deletion
- * removes the user's memberships and takes their id out of the audit log, which
- * keeps its entries; it is refused while the user is an organization's only owner.
+ * Self-service account deletion and the account export's profile. Before the
+ * auth layer deletes the account, the deletion is refused while the user is an
+ * organization's only owner; after it, the cleanup removes the user's
+ * memberships and takes their id out of the audit log, which keeps its entries.
  */
 
 type AuthRecords = Record<string, Record<string, unknown>[]>;
@@ -79,32 +80,34 @@ const member = (id: string, organizationId: string, userId: string, role = "owne
 
 const deletes = (ops: ReturnType<typeof makeCtx>["ops"]): string[] => ops.flatMap((op) => (op.kind === "delete" ? [op.id] : []));
 
-describe("account erasure", () => {
-    it("refuses a sole owner, names the organization, and writes nothing", async () => {
+const inserts = (ops: ReturnType<typeof makeCtx>["ops"]) => ops.flatMap((op) => (op.kind === "insert" ? [op] : []));
+
+describe("account deletion check", () => {
+    it("names the organizations a sole owner holds, and writes nothing", async () => {
         const { ctx, ops } = makeCtx({
-            auditLog: [{ _id: "a1", actorUserId: "usr_me", organizationId: "org_1" }],
             members: [member("m1", "org_1", "usr_me"), member("m2", "org_1", "usr_other", "admin")],
             organizations: [{ _id: "org_1", name: "Acme" }],
         });
 
-        const result = await eraseUser.handler(ctx, { userId: "usr_me" });
-
-        expect(result).toStrictEqual({ erased: false, soleOwnerOf: [{ id: "org_1", name: "Acme" }] });
+        await expect(soleOwnedOrganizations.handler(ctx, { userId: "usr_me" })).resolves.toStrictEqual([{ id: "org_1", name: "Acme" }]);
         expect(ops).toStrictEqual([]);
     });
 
-    it("does not count an organization already scheduled for deletion", async () => {
-        const { ctx, ops } = makeCtx({
-            auditLog: [],
-            members: [member("m1", "org_1", "usr_me")],
-            organizations: [{ _id: "org_1", deletionRequestedAt: 5, name: "Acme" }],
+    it("does not count an organization already scheduled for deletion, or one with another owner", async () => {
+        const { ctx } = makeCtx({
+            members: [member("m1", "org_1", "usr_me"), member("m2", "org_2", "usr_me"), member("m3", "org_2", "usr_other")],
+            organizations: [
+                { _id: "org_1", deletionRequestedAt: 5, name: "Acme" },
+                { _id: "org_2", name: "Globex" },
+            ],
         });
 
-        await expect(eraseUser.handler(ctx, { userId: "usr_me" })).resolves.toStrictEqual({ erased: true });
-        expect(deletes(ops)).toStrictEqual(["m1"]);
+        await expect(soleOwnedOrganizations.handler(ctx, { userId: "usr_me" })).resolves.toStrictEqual([]);
     });
+});
 
-    it("removes every membership of a user who shares ownership, and no one else's", async () => {
+describe("account erasure", () => {
+    it("removes every membership of the user, and no one else's", async () => {
         const { ctx, ops } = makeCtx({
             auditLog: [],
             members: [
@@ -119,8 +122,9 @@ describe("account erasure", () => {
             ],
         });
 
-        await expect(eraseUser.handler(ctx, { userId: "usr_me" })).resolves.toStrictEqual({ erased: true });
+        await expect(eraseUser.handler(ctx, { userId: "usr_me" })).resolves.toStrictEqual({ ownerless: [] });
         expect(deletes(ops).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m3"]);
+        expect(inserts(ops)).toStrictEqual([]);
     });
 
     it("replaces the user as the audit actor and keeps the entries", async () => {
@@ -142,49 +146,117 @@ describe("account erasure", () => {
             { id: "a3", kind: "patch", patch: { actorUserId: DELETED_ACTOR } },
         ]);
     });
+
+    it("anonymises the audit actor before it removes the memberships the sweep finds the work by", async () => {
+        const { ctx, ops } = makeCtx({
+            auditLog: [{ _id: "a1", action: "project.create", actorUserId: "usr_me", organizationId: "org_1" }],
+            members: [member("m1", "org_1", "usr_me", "member")],
+            organizations: [{ _id: "org_1", name: "Acme" }],
+        });
+
+        await eraseUser.handler(ctx, { userId: "usr_me" });
+
+        expect(ops.map((op) => op.kind)).toStrictEqual(["patch", "delete"]);
+    });
+
+    it("never refuses: the account is already gone, so a sole owner's rows are removed too", async () => {
+        const { ctx, ops } = makeCtx({
+            auditLog: [],
+            members: [member("m1", "org_1", "usr_me")],
+            organizations: [{ _id: "org_1", deletionRequestedAt: 5, name: "Acme" }],
+        });
+
+        await expect(eraseUser.handler(ctx, { userId: "usr_me" })).resolves.toStrictEqual({ ownerless: [] });
+        expect(deletes(ops)).toStrictEqual(["m1"]);
+    });
+
+    it("records and returns an organization another owner left at the same moment", async () => {
+        // The check passed while usr_other was a co-owner; by the cleanup they have left.
+        const { ctx, ops } = makeCtx(
+            {
+                auditLog: [],
+                members: [member("m1", "org_1", "usr_me"), member("m2", "org_1", "usr_viewer", "member"), member("m3", "org_2", "usr_me")],
+                organizations: [
+                    { _id: "org_1", name: "Acme" },
+                    { _id: "org_2", deletionRequestedAt: 5, name: "Globex" },
+                ],
+            },
+            { now: 42 },
+        );
+
+        await expect(eraseUser.handler(ctx, { userId: "usr_me" })).resolves.toStrictEqual({ ownerless: [{ id: "org_1", name: "Acme" }] });
+        expect(inserts(ops)).toStrictEqual([
+            {
+                document: { action: OWNERLESS_ACTION, actorUserId: DELETED_ACTOR, createdAt: 42, organizationId: "org_1", target: "account-deletion" },
+                kind: "insert",
+                table: "auditLog",
+            },
+        ]);
+    });
 });
 
 describe("account erasure route", () => {
-    const environmentWith = (result: unknown): RouterEnv =>
+    const environmentWith = (answers: { check?: unknown; erase?: unknown }): RouterEnv =>
         ({
             __lunoraCtx: {
                 runAction: () => Promise.reject(new Error("unused")),
                 runMutation: (reference: unknown) =>
-                    reference === internal.account.eraseUser ? Promise.resolve(result) : Promise.reject(new Error("unexpected")),
-                runQuery: () => Promise.reject(new Error("unused")),
+                    reference === internal.account.eraseUser ? Promise.resolve(answers.erase) : Promise.reject(new Error("unexpected")),
+                runQuery: (reference: unknown) =>
+                    reference === internal.account.soleOwnedOrganizations ? Promise.resolve(answers.check) : Promise.reject(new Error("unexpected")),
             },
         }) as RouterEnv;
     const eraseRequest = (body: unknown): Request => new Request("https://cloud.test/v1/account/erase", { body: JSON.stringify(body), method: "POST" });
 
-    it("answers 409 naming the organizations a sole owner holds", async () => {
+    it("answers a check with 409 naming the organizations a sole owner holds", async () => {
         const response = await handleAccountEraseRoute(
-            eraseRequest({ userId: "usr_me" }),
-            environmentWith({ erased: false, soleOwnerOf: [{ id: "org_1", name: "Acme" }] }),
+            eraseRequest({ check: true, userId: "usr_me" }),
+            environmentWith({ check: [{ id: "org_1", name: "Acme" }] }),
         );
 
         expect(response.status).toBe(409);
         await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('"Acme"') });
     });
 
+    it("answers a check that passes without erasing anything", async () => {
+        const response = await handleAccountEraseRoute(eraseRequest({ check: true, userId: "usr_me" }), environmentWith({ check: [] }));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ erasable: true });
+    });
+
+    it("erases without a check, and answers the organizations left without an owner", async () => {
+        const ownerless = [{ id: "org_1", name: "Acme" }];
+        const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const response = await handleAccountEraseRoute(eraseRequest({ userId: "usr_me" }), environmentWith({ erase: { ownerless } }));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ erased: true, ownerless });
+        expect(error).toHaveBeenCalledWith(expect.stringContaining("without an owner"), ownerless);
+
+        error.mockRestore();
+    });
+
     it("refuses a body without a user id", async () => {
-        const response = await handleAccountEraseRoute(eraseRequest({}), environmentWith({ erased: true }));
+        const response = await handleAccountEraseRoute(eraseRequest({}), environmentWith({ erase: { ownerless: [] } }));
 
         expect(response.status).toBe(400);
     });
 });
 
-describe("account deletion hook", () => {
+describe("account deletion hooks", () => {
     beforeEach(() => {
         workerFetch.mockReset();
     });
 
-    it("is enabled on the auth instance, with the hook", async () => {
+    it("are enabled on the auth instance, before and after the deletion", async () => {
         await ensureAuth({ AUTH_SECRET: "s".repeat(32), DB: {}, LUNORA_ADMIN_TOKEN: "admin" }, "https://cloud.test");
 
-        const options = authState.createdOptions[0] as { user?: { deleteUser?: { beforeDelete?: unknown; enabled?: boolean } } };
+        const options = authState.createdOptions[0] as { user?: { deleteUser?: { afterDelete?: unknown; beforeDelete?: unknown; enabled?: boolean } } };
 
         expect(options.user?.deleteUser?.enabled).toBe(true);
         expect(options.user?.deleteUser?.beforeDelete).toBeTypeOf("function");
+        expect(options.user?.deleteUser?.afterDelete).toBeTypeOf("function");
     });
 
     it("refuses the deletion when the admin token is not configured", async () => {
@@ -192,7 +264,7 @@ describe("account deletion hook", () => {
         expect(workerFetch).not.toHaveBeenCalled();
     });
 
-    it("refuses the deletion with the route's message for a sole owner", async () => {
+    it("only checks before the deletion, and refuses it with the route's message for a sole owner", async () => {
         workerFetch.mockResolvedValue(Response.json({ error: 'You are the only owner of "Acme".' }, { status: 409 }));
 
         await expect(beforeAccountDeletion({ DB: {}, LUNORA_ADMIN_TOKEN: "admin" })({ id: "usr_me" })).rejects.toThrow('You are the only owner of "Acme".');
@@ -200,19 +272,41 @@ describe("account deletion hook", () => {
         const request = workerFetch.mock.calls[0]?.[0];
 
         expect(request?.headers.get("authorization")).toBe("Bearer admin");
-        await expect(request?.json()).resolves.toStrictEqual({ userId: "usr_me" });
+        await expect(request?.json()).resolves.toStrictEqual({ check: true, userId: "usr_me" });
     });
 
-    it("refuses the deletion when the erasure fails", async () => {
+    it("refuses the deletion when the check fails", async () => {
         workerFetch.mockResolvedValue(new Response("boom", { status: 500 }));
 
         await expect(beforeAccountDeletion({ DB: {}, LUNORA_ADMIN_TOKEN: "admin" })({ id: "usr_me" })).rejects.toThrow("Your account was not deleted");
     });
 
-    it("lets the deletion proceed once the control plane is cleared", async () => {
-        workerFetch.mockResolvedValue(Response.json({ erased: true }));
+    it("lets the deletion proceed once the check passes", async () => {
+        workerFetch.mockResolvedValue(Response.json({ erasable: true }));
 
         await expect(beforeAccountDeletion({ DB: {}, LUNORA_ADMIN_TOKEN: "admin" })({ id: "usr_me" })).resolves.toBeUndefined();
+    });
+
+    it("erases after the deletion", async () => {
+        workerFetch.mockResolvedValue(Response.json({ erased: true, ownerless: [] }));
+
+        await afterAccountDeletion({ DB: {}, LUNORA_ADMIN_TOKEN: "admin" })({ id: "usr_me" });
+
+        await expect(workerFetch.mock.calls[0]?.[0].json()).resolves.toStrictEqual({ userId: "usr_me" });
+    });
+
+    it("does not throw when the cleanup after the deletion fails, and logs it for the sweep", async () => {
+        const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const after = afterAccountDeletion({ DB: {}, LUNORA_ADMIN_TOKEN: "admin" });
+
+        workerFetch.mockResolvedValueOnce(new Response("boom", { status: 500 }));
+        workerFetch.mockRejectedValueOnce(new Error("evicted"));
+
+        await expect(after({ id: "usr_me" })).resolves.toBeUndefined();
+        await expect(after({ id: "usr_me" })).resolves.toBeUndefined();
+        expect(error).toHaveBeenCalledTimes(2);
+
+        error.mockRestore();
     });
 });
 

@@ -17,7 +17,7 @@ import { createAuth, ensureMigrated, lunoraD1Adapter } from "@lunora/auth";
 import { admin, inviteOnly, passkey, twoFactor } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
-import { beforeAccountDeletion } from "./account-deletion";
+import { afterAccountDeletion, beforeAccountDeletion } from "./account-deletion";
 
 /**
  * The slice of the worker `env` the auth build reads.
@@ -147,12 +147,14 @@ const authOptions = (env: AuthEnv, requestOrigin?: string): LunoraAuthOptions =>
         socialProviders: socialProviders(env),
         /*
          * Self-service account deletion (the auth UI's delete-account flow). The
-         * hook runs before any auth row is removed and clears what the control
-         * plane holds under the user id — or refuses while the user is the only
-         * owner of an organization. Built here, over this `env`, so every entry
-         * that builds the instance (fetch, the build runner, a cron) carries it.
+         * before hook runs before any auth row is removed and refuses while the
+         * user is the only owner of an organization; the after hook clears what
+         * the control plane holds under the user id once the account is gone
+         * (`src/account-deletion.ts` has the ordering). Built here, over this
+         * `env`, so every entry that builds the instance (fetch, the build runner,
+         * a cron) carries them.
          */
-        user: { deleteUser: { beforeDelete: beforeAccountDeletion(env), enabled: true } },
+        user: { deleteUser: { afterDelete: afterAccountDeletion(env), beforeDelete: beforeAccountDeletion(env), enabled: true } },
     };
 };
 
@@ -223,4 +225,37 @@ export const authUserEmails =
         );
 
         return users.flatMap((user) => (typeof user?.email === "string" ? [user.email] : []));
+    };
+
+/** Ids per `in` lookup: D1 caps a statement at 100 bound parameters. */
+const USER_LOOKUP_CHUNK = 90;
+
+/**
+ * Which of `userIds` still have a user row in the auth plane, for the
+ * orphaned-membership sweep. Bootstraps the instance the way
+ * {@link authUserEmails} does. A failed lookup rejects rather than answering
+ * an empty set: the caller treats an absent id as a deleted account and erases
+ * it, so a partial answer must never reach it.
+ */
+export const authExistingUserIds =
+    (env: AuthEnv) =>
+    async (userIds: ReadonlyArray<string>): Promise<Set<string>> => {
+        const origin = typeof env["LUNORA_ORIGIN_URL"] === "string" ? env["LUNORA_ORIGIN_URL"] : (env.AUTH_URL ?? "https://control-plane.internal");
+        const instance = await ensureAuth(env, new URL(origin).origin);
+        const context = await instance.$context;
+        const existing = new Set<string>();
+
+        for (let start = 0; start < userIds.length; start += USER_LOOKUP_CHUNK) {
+            const chunk = userIds.slice(start, start + USER_LOOKUP_CHUNK);
+            // eslint-disable-next-line no-await-in-loop -- one bounded lookup at a time
+            const users = await context.adapter.findMany<{ id?: unknown }>({ model: "user", where: [{ field: "id", operator: "in", value: chunk }] });
+
+            for (const user of users) {
+                if (typeof user.id === "string") {
+                    existing.add(user.id);
+                }
+            }
+        }
+
+        return existing;
     };

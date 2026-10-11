@@ -1,5 +1,5 @@
 import { internal } from "../../../lunora/_generated/internal";
-import type { EraseUserResult } from "../../../lunora/account";
+import type { EraseUserResult, SoleOwnedOrganization } from "../../../lunora/account";
 import { currentAuth } from "../../auth";
 import type { RouterEnv } from "./shared";
 import { jsonError, requireContext } from "./shared";
@@ -87,32 +87,50 @@ export const handleAccountExportRoute = async (request: Request, environment: Ro
 };
 
 /**
- * `POST /v1/account/erase` — remove what the control plane holds about a user
- * whose account is being deleted (`account.eraseUser`). Called in-process by the
- * authentication layer's before-delete hook, with the admin token. Answers 409,
- * naming the organizations, while the user is the only owner of any.
+ * `POST /v1/account/erase` — the control plane's half of an account deletion,
+ * called in-process with the admin token. Two calls, one on each side of the
+ * authentication layer deleting the account:
+ *
+ * - `{ userId, check: true }` from its before-delete hook: writes nothing, and
+ *   answers 409 naming the organizations while the user is the only owner of any
+ *   (`account.soleOwnedOrganizations`).
+ * - `{ userId }` from its after-delete hook and from the orphaned-membership
+ *   sweep: removes the memberships and anonymises the audit actor
+ *   (`account.eraseUser`), and answers the organizations that were left without
+ *   an owner.
  */
 export const handleAccountEraseRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | { userId?: unknown };
+    const body = (await request.json().catch(() => null)) as null | { check?: unknown; userId?: unknown };
 
     if (typeof body?.userId !== "string" || body.userId === "") {
         return jsonError(400, "userId is required");
     }
 
-    const result = await context.runMutation<EraseUserResult>(internal.account.eraseUser, { userId: body.userId });
+    if (body.check === true) {
+        const soleOwnerOf = await context.runQuery<SoleOwnedOrganization[]>(internal.account.soleOwnedOrganizations, { userId: body.userId });
 
-    if (!result.erased) {
-        const names = result.soleOwnerOf.map((organization) => `"${organization.name}"`).join(", ");
+        if (soleOwnerOf.length === 0) {
+            return Response.json({ erasable: true });
+        }
+
+        const names = soleOwnerOf.map((organization) => `"${organization.name}"`).join(", ");
 
         return Response.json(
             {
                 error: `You are the only owner of ${names}. Transfer ownership or delete the organization before deleting your account.`,
-                organizations: result.soleOwnerOf,
+                organizations: soleOwnerOf,
             },
             { status: 409 },
         );
     }
 
-    return Response.json({ erased: true });
+    const { ownerless } = await context.runMutation<EraseUserResult>(internal.account.eraseUser, { userId: body.userId });
+
+    if (ownerless.length > 0) {
+        // eslint-disable-next-line no-console -- the audit entry is in each organization's log; this is the operator's signal
+        console.error("[account] account deletion left organizations without an owner", ownerless);
+    }
+
+    return Response.json({ erased: true, ownerless });
 };
