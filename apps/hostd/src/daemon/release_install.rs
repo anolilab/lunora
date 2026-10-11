@@ -17,23 +17,64 @@ use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::BoxFuture;
 use super::capabilities::ChildLaunch;
-use super::child::{RunOptions, run_child};
+use super::child::{ChildResult, RunOptions, run_child};
 use super::config::{CURRENT_RELEASE_LINK, binary_path};
 use super::fleet_env::path_only;
 use super::job_error::{JobError, codes};
+use super::log::Logger;
 use crate::release::{Artifact, Envelope, Platform, ReleaseComponent, compare_versions, verify_artifact};
 use crate::wire::types::BoxVersions;
 
 /// `binary args`'s first output line, or `None` when it does not run (or exits non-zero, or hangs).
+/// Every `None` is logged with the stage that failed, so a CI log can tell a missing binary from a hang.
 pub async fn version_output(binary: &Path, args: &[&str]) -> Option<String> {
-    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-    let result = run_child(&ChildLaunch::DIRECT, &binary.to_string_lossy(), &args, RunOptions::new(path_only(), Duration::from_secs(10))).await.ok()?;
+    version_output_logged(binary, args, &Logger::stderr()).await
+}
 
-    (result.code == Some(0) && !result.timed_out).then(|| result.stdout.lines().next().unwrap_or_default().trim().to_owned())
+async fn version_output_logged(binary: &Path, args: &[&str], logger: &Logger) -> Option<String> {
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    let started = Instant::now();
+    let outcome = run_child(&ChildLaunch::DIRECT, &binary.to_string_lossy(), &args, RunOptions::new(path_only(), Duration::from_secs(10))).await;
+    let elapsed_ms = started.elapsed().as_millis();
+    let fail = |stage: &str, detail: &str| {
+        logger.warn(&format!("version probe failed: binary={} stage={stage} elapsed_ms={elapsed_ms} {detail}", binary.display()));
+    };
+
+    let result = match outcome {
+        Ok(result) => result,
+        Err(error) => {
+            fail("spawn", &format!("error={error}"));
+
+            return None;
+        }
+    };
+
+    if result.timed_out {
+        fail("timeout", &format!("exit={}", ended(&result)));
+
+        return None;
+    }
+
+    if result.code != Some(0) {
+        fail("exit", &format!("exit={}", ended(&result)));
+
+        return None;
+    }
+
+    Some(result.stdout.lines().next().unwrap_or_default().trim().to_owned())
+}
+
+/// How a child ended, for a log line: its exit code, or the signal that ended it.
+fn ended(result: &ChildResult) -> String {
+    match (result.code, result.signal) {
+        (Some(code), _) => format!("code {code}"),
+        (None, Some(signal)) => format!("signal {signal}"),
+        (None, None) => "unknown".to_owned(),
+    }
 }
 
 /// A version string as the protocol accepts it, from `celld 0.6.0` / `v2.11.6 h1:…` / `1.0.0`.
@@ -283,6 +324,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::daemon::log::recording;
     use crate::release::{sign_for_test, validate_envelope};
 
     fn script(body: &str) -> Vec<u8> {
@@ -355,6 +397,20 @@ mod tests {
         let lines = lines.lock().unwrap().clone();
 
         (result, lines)
+    }
+
+    #[tokio::test]
+    async fn a_binary_that_cannot_spawn_logs_the_reason() {
+        let (logger, lines) = recording();
+        let missing = "/nonexistent/lunora-test/celld";
+
+        assert_eq!(version_output_logged(Path::new(missing), &["--version"], &logger).await, None);
+
+        let lines = lines.lock().unwrap();
+
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("warn: version probe failed: binary=/nonexistent/lunora-test/celld stage=spawn elapsed_ms="), "{}", lines[0]);
+        assert!(lines[0].contains("error=could not run /nonexistent/lunora-test/celld"), "{}", lines[0]);
     }
 
     #[tokio::test]
