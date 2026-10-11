@@ -277,6 +277,12 @@ interface PrivacyConfig<C> {
 }
 ```
 
+### `PrivacyFor` (type)
+
+```ts
+type PrivacyFor<C> = (context: C) => Privacy;
+```
+
 ### `PrivacyPolicy` (interface)
 
 ```ts
@@ -285,6 +291,19 @@ interface PrivacyPolicy {
     readonly extensionMonths: number;
     readonly responseMonths: number;
     readonly reviewRequired: boolean;
+}
+```
+
+### `PrivacyPorts` (interface)
+
+```ts
+interface PrivacyPorts {
+    readonly data: DataPort;
+    readonly files: StorePort;
+    readonly newId: () => string;
+    readonly now: () => Date;
+    readonly store: RequestStore;
+    readonly tombstones?: TombstonePort;
 }
 ```
 
@@ -302,6 +321,20 @@ interface PrivacyPreset {
 
 ```ts
 type PrivacyTableName = "archive" | "events" | "holds" | "requests" | "tombstones";
+```
+
+### `PrivacyWorkflowContext` (interface)
+
+```ts
+interface PrivacyWorkflowContext {
+    readonly params: {
+        readonly requestId: string;
+    };
+    readonly step: {
+        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
+    };
+}
 ```
 
 ### `RequestRecord` (interface)
@@ -708,39 +741,6 @@ const eu: () => PrivacyPreset;
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
-
-### `PrivacyFor` (type)
-
-```ts
-type PrivacyFor<C> = (context: C) => Privacy;
-```
-
-### `PrivacyPorts` (interface)
-
-```ts
-interface PrivacyPorts {
-    readonly data: DataPort;
-    readonly files: StorePort;
-    readonly newId: () => string;
-    readonly now: () => Date;
-    readonly store: RequestStore;
-    readonly tombstones?: TombstonePort;
-}
-```
-
-### `PrivacyWorkflowContext` (interface)
-
-```ts
-interface PrivacyWorkflowContext {
-    readonly params: {
-        readonly requestId: string;
-    };
-    readonly step: {
-        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
-        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
-    };
-}
-```
 
 ### `TombstonePort` (interface)
 
