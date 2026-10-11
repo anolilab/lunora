@@ -110,4 +110,40 @@ describe("the privacy surface in an app", () => {
         expect(generated).toContain("export class PrivacyExportWorkflow");
         expect(generated).toContain("export class PrivacyErasureWorkflow");
     });
+
+    it("schedules the deadline sweep as a daily cron on the internal tick", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "privacy-api.ts"),
+            [
+                `import { internalMutation } from "@lunora/server";`,
+                `import { privacy } from "@lunora/privacy-fixture";`,
+                ``,
+                `export const privacyTick = internalMutation({ args: {}, handler: privacy.handlers.tick });`,
+                ``,
+            ].join("\n"),
+        );
+        writeFileSync(
+            join(workdir, "lunora", "crons.ts"),
+            [
+                `import { cronJobs } from "lunorash/server";`,
+                ``,
+                `import { internal } from "./_generated/internal.js";`,
+                ``,
+                `const crons = cronJobs();`,
+                ``,
+                `crons.daily("privacy deadlines", { hourUTC: 6, minuteUTC: 0 }, internal.privacyApi.privacyTick, {});`,
+                ``,
+                `export default crons;`,
+                ``,
+            ].join("\n"),
+        );
+
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+        const cronsOutput = readFileSync(join(workdir, "lunora", "_generated", "crons.ts"), "utf8");
+
+        expect(cronsOutput).toContain("LUNORA_CRON_TRIGGERS");
+        expect(cronsOutput).toContain("0 6 * * *");
+    });
 });
