@@ -147,7 +147,7 @@ import {
     utf8ByteLength,
 } from "./replay";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
-import { applyRowOpsToView } from "./shape-state";
+import { commitPokeSlice, PokeAssembler } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
@@ -186,7 +186,6 @@ import type {
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
-    RowOp,
     ScheduleRecord,
     SchedulerStatus,
     ServerDataMessage,
@@ -961,7 +960,7 @@ class LunoraClient {
      * epoch (spurious fork → view wiped) and the other finds no buffer for its
      * parts at all, silently dropping rows while the server's memo advances.
      */
-    private readonly pokeBuffers = new Map<string, PokeBuffer>();
+    private readonly pokeAssembler = new PokeAssembler(LunoraClient.MAX_POKE_BUFFERS);
 
     private nextShapeId = 0;
 
@@ -3955,7 +3954,7 @@ class LunoraClient {
         // touched by the registries above, so drop them too — otherwise the UI
         // closures they close over outlive the terminal client.
         this.shapeSubscriptions.clear();
-        this.pokeBuffers.clear();
+        this.pokeAssembler.clear();
 
         // The three registries the comment above always claimed to cover but
         // never did. Each `SubscriptionState` holds three callback sets
@@ -6794,104 +6793,24 @@ class LunoraClient {
         }
     }
 
-    /** Buffer key for an in-flight poke: `pokeId` is only unique per shard socket, so it is scoped by connection. */
-    // eslint-disable-next-line class-methods-use-this -- a pure key derivation kept beside the poke handlers that are its only callers
-    private pokeBufferKey(shardKey: string | undefined, pokeId: string): string {
-        return `${connectionKey(shardKey)}\u0000${pokeId}`;
-    }
-
     private handlePokeStart(message: ServerPokeStartMessage, shardKey: string | undefined): void {
-        // A buffer is dropped at its `pokeEnd`; one whose socket drops mid-poke
-        // (no `pokeEnd`) is abandoned and the server re-seeds on resume, so it
-        // would otherwise linger forever. Bound the map by evicting the oldest
-        // entry once it exceeds the cap — abandoned buffers are always the oldest,
-        // and live pokes resolve within a few frames, so this only ever reclaims
-        // dead buffers in practice.
-        evictOldestEntry(this.pokeBuffers, LunoraClient.MAX_POKE_BUFFERS);
-
-        // Open a buffer for this poke. Parts accumulate per shape and apply
-        // atomically at `pokeEnd`, so a socket dropping mid-poke leaves the view
-        // untouched and re-seeds on reconnect (no torn state).
-        this.pokeBuffers.set(this.pokeBufferKey(shardKey, message.pokeId), {
-            baseCheckpoint: message.baseCheckpoint,
-            bases: new Map(),
-            epoch: message.epoch,
-            lastMutationId: new Map(),
-            parts: new Map(),
-            resets: new Set(),
-            undecodable: new Map(),
-        });
+        this.pokeAssembler.start(shardKey, message);
     }
 
     private handlePokePart(message: ServerPokePartMessage, shardKey: string | undefined): void {
-        const buffer = this.pokeBuffers.get(this.pokeBufferKey(shardKey, message.pokeId));
-
-        if (!buffer) {
-            // No matching `pokeStart` (we connected mid-poke) — ignore; the
-            // server re-seeds the shape on the next subscribe.
-            return;
-        }
-
-        // Wire-decode each row-op's post-image (no-op on a pure-JSON value), so a
-        // shape carrying a `bytes`/`bigint` column applies real values locally.
-        // Loop rather than `push(...map())` — a large `rowsPatch` would otherwise
-        // allocate an intermediate array and risk the JS argument-count ceiling.
-        //
-        // Decoded into a scratch list BEFORE anything is buffered: a row the
-        // codec refuses used to throw out of this handler half-way through the
-        // push, and the poke's `pokeEnd` then applied the rest and advanced the
-        // checkpoint past rows the view never held — with nothing reported.
-        const decoded: RowOp[] = [];
-
-        try {
-            for (const op of message.rowsPatch) {
-                decoded.push(op.value === undefined ? op : { ...op, value: decodeWire(op.value) as Record<string, unknown> });
-            }
-        } catch (error) {
-            buffer.undecodable.set(message.shapeId, error);
-
-            return;
-        }
-
-        const existing = buffer.parts.get(message.shapeId) ?? [];
-
-        for (const op of decoded) {
-            existing.push(op);
-        }
-        buffer.parts.set(message.shapeId, existing);
-
-        if (message.lastMutationId !== undefined) {
-            buffer.lastMutationId.set(message.shapeId, message.lastMutationId);
-        }
-
-        const base = message.baseCheckpoint ?? buffer.baseCheckpoint;
-
-        if (base !== undefined) {
-            buffer.bases.set(message.shapeId, base);
-        }
-
-        // A shape can only ever receive one part per poke, but record the flag
-        // sticky (never cleared) so a server that split a seed across parts still
-        // replaces rather than merges.
-        if (message.reset === true) {
-            buffer.resets.add(message.shapeId);
-        }
+        this.pokeAssembler.part(shardKey, message);
     }
 
     private handlePokeEnd(message: ServerPokeEndMessage, shardKey: string | undefined): void {
-        const key = this.pokeBufferKey(shardKey, message.pokeId);
-        const buffer = this.pokeBuffers.get(key);
+        const buffer = this.pokeAssembler.end(shardKey, message.pokeId);
 
         if (!buffer) {
             return;
         }
 
-        this.pokeBuffers.delete(key);
-
         // A shape whose slice carried a row the codec refused keeps its view, its
-        // checkpoint and its epoch exactly as they were: applying the decodable
-        // rest would advance the resume position past a row it never held, so no
-        // resume would ever send that row again.
+        // checkpoint and its epoch: applying the decodable rest would advance the
+        // resume position past a row it never held, so no resume would send it again.
         for (const [shapeId, error] of buffer.undecodable) {
             const state = this.shapeSubscriptions.get(shapeId);
 
@@ -6913,72 +6832,23 @@ class LunoraClient {
     }
 
     /**
-     * Commit one shape's slice of a poke, or refuse it and re-seed.
-     *
-     * Split out of {@link handlePokeEnd} because every decision here is PER SHAPE
-     * — the reset flag, the base checkpoint, the watermark — while the poke
-     * envelope around it is not.
+     * Commit one shape's slice of a poke. The decision and the state change live in
+     * `commitPokeSlice`; this method only performs the I/O that follows it.
      */
     private applyPokePart(state: ShapeSubscriptionState, buffer: PokeBuffer, message: ServerPokeEndMessage): void {
-        // Read from the buffer rather than taken as a parameter: the caller could
-        // only ever pass `buffer.parts.get(state.id)`, and two ways to reach one
-        // value is one way for them to disagree.
-        const ops = buffer.parts.get(state.id) ?? [];
-        /* eslint-disable no-param-reassign -- advance the shared shape-subscription state in place, as the rest of the poke path does */
-        // A `reset` part carries the shape's COMPLETE membership, so it is
-        // authoritative on its own: drop whatever we hold and apply it. Without
-        // this the ops splice onto the stale view — and a seed is inserts-only,
-        // so every row deleted while we were disconnected survives the reconnect
-        // and renders forever. It also settles a forked epoch / diverged base in
-        // one round trip instead of provoking a redundant re-subscribe below.
-        const reset = buffer.resets.has(state.id);
+        const outcome = commitPokeSlice(state, buffer, message);
 
-        // An epoch mismatch means the changelog timeline forked since we last
-        // applied (a reset/recycled DO); a base mismatch means this diff was
-        // computed against a checkpoint we're not actually at (a dropped poke
-        // / gap). Either way, splicing the incremental ops onto our view would
-        // corrupt it — so drop the local view, clear the cursor, SKIP the ops,
-        // and re-subscribe so the server re-seeds the membership from scratch.
-        const base = buffer.bases.get(state.id);
-        const epochForked = buffer.epoch !== undefined && state.serverEpoch !== undefined && buffer.epoch !== state.serverEpoch;
-        const baseDiverged = base !== undefined && state.serverCursor !== undefined && state.serverCursor !== base;
+        this.emitShapeRows(state);
 
-        if (!reset && (epochForked || baseDiverged)) {
-            state.rows.clear();
-            state.serverCursor = undefined;
-            state.serverEpoch = undefined;
-            this.emitShapeRows(state);
+        if (outcome === "reseed") {
             this.sendShapeSubscribeIfOpen(state);
 
             return;
         }
 
-        if (reset) {
-            state.rows.clear();
-        }
-
-        applyRowOpsToView(state.rows, ops);
-
-        if (message.checkpoint !== undefined) {
-            state.serverCursor = message.checkpoint;
-        }
-
-        if (message.epoch !== undefined) {
-            state.serverEpoch = message.epoch;
-        }
-
-        const watermark = buffer.lastMutationId.get(state.id);
-
-        if (watermark !== undefined) {
-            state.lastMutationId = watermark;
-        }
-
-        this.emitShapeRows(state);
-
-        // Surface the advanced watermark so a `@lunora/db` collection can drop
-        // the optimistic overlay for any mutation this poke has now synced.
+        // Fired after the emit, as before: `@lunora/db` drops its optimistic overlay on
+        // this callback, so it must run once the rows have rendered.
         state.onCheckpoint?.({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
-        /* eslint-enable no-param-reassign */
     }
 
     /**
