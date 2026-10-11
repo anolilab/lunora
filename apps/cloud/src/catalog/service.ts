@@ -8,12 +8,12 @@
  * served; a listed app whose manifest fails any check is reported in `skipped` with
  * its reason; an install verifies everything it fetches before it plans anything.
  */
-import type { ArtifactErrorCode, CatalogForm, CatalogManifest } from "./artifact";
-import { MAX_ARTIFACT_BYTES, verifyArchive, verifyManifestBytes } from "./artifact";
-import type { CatalogIndexEntry } from "./catalog-index";
+import type { ArtifactErrorCode, CatalogForm, CatalogManifest, Refused } from "./artifact";
+import { MAX_ARTIFACT_BYTES, refuse, verifyArchive, verifyManifestBytes } from "./artifact";
+import type { CatalogIndexEntry, IndexErrorCode } from "./catalog-index";
 import { manifestMatchesIndex, verifyCatalogIndex } from "./catalog-index";
 import { isHttpsUrl, messageOf } from "./fields";
-import type { InstallFailure, InstallPhase, InstallPorts, InstallValues } from "./install";
+import type { InstallPhase, InstallPorts, InstallValues } from "./install";
 import { runInstall } from "./install";
 import type { DetachedSignature, TrustedCatalogKey } from "./signature";
 import { decodeBase64, MAX_SIGNATURE_FILE_BYTES, parseDetachedSignature } from "./signature";
@@ -243,7 +243,10 @@ const fetchBounded = async (fetcher: CatalogDeps["fetch"], url: string, limit: n
 };
 
 /** The index's verified entries, served from the cache while fresh; otherwise fetched, verified and cached. */
-type IndexLoad = { entries: CatalogIndexEntry[]; ok: true } | { error: string; ok: false };
+/** Why an index was not loaded: a refusal of the index itself, or one of the three steps that load it. */
+type IndexLoadCode = IndexErrorCode | "FETCH" | "STALE_INDEX" | "STORE_FAILED";
+
+type IndexLoad = { entries: CatalogIndexEntry[]; ok: true } | Refused<IndexLoadCode>;
 
 const loadIndex = async (deps: CatalogDeps, config: ReadyConfig): Promise<IndexLoad> => {
     const now = deps.now();
@@ -261,19 +264,19 @@ const loadIndex = async (deps: CatalogDeps, config: ReadyConfig): Promise<IndexL
         indexBytes = await fetchBounded(deps.fetch, config.indexUrl, MAX_INDEX_BYTES);
         signatureBytes = await fetchBounded(deps.fetch, new URL("index.sig", config.indexUrl).href, MAX_SIGNATURE_FILE_BYTES);
     } catch (error) {
-        return { error: `the catalog index could not be fetched: ${messageOf(error)}`, ok: false };
+        return refuse("FETCH", `the catalog index could not be fetched: ${messageOf(error)}`);
     }
 
     const signature = parseDetachedSignature(signatureBytes);
 
     if (signature === undefined) {
-        return { error: "the catalog index signature is malformed", ok: false };
+        return refuse("BAD_SIGNATURE", "the catalog index signature is malformed");
     }
 
     const verified = await verifyCatalogIndex({ indexBytes, keys: config.keys, now, signature });
 
     if (!verified.ok) {
-        return { error: `the catalog index failed verification: ${verified.error.message}`, ok: false };
+        return refuse(verified.error.code, `the catalog index failed verification: ${verified.error.message}`);
     }
 
     let recorded: { accepted: boolean };
@@ -281,11 +284,11 @@ const loadIndex = async (deps: CatalogDeps, config: ReadyConfig): Promise<IndexL
     try {
         recorded = await deps.indexState.advance(config.indexUrl, signature.keyId, verified.issuedAt);
     } catch (error) {
-        return { error: `the catalog index could not be recorded: ${messageOf(error)}`, ok: false };
+        return refuse("STORE_FAILED", `the catalog index could not be recorded: ${messageOf(error)}`);
     }
 
     if (!recorded.accepted) {
-        return { error: "the catalog index is older than one this control plane has already served", ok: false };
+        return refuse("STALE_INDEX", "the catalog index is older than one this control plane has already served");
     }
 
     cachedIndex = { entries: verified.entries, expiresAt: now + INDEX_TTL_MS, fingerprint: config.fingerprint };
@@ -309,15 +312,15 @@ const checkManifest = async (
     entry: CatalogIndexEntry,
     manifestBytes: Uint8Array,
     signatureBytes: Uint8Array,
-): Promise<{ ok: true; value: CheckedManifest } | { code: ArtifactErrorCode; ok: false; reason: string }> => {
+): Promise<{ ok: true; value: CheckedManifest } | Refused> => {
     if (!(await manifestMatchesIndex(entry, manifestBytes))) {
-        return { code: "HASH_MISMATCH", ok: false, reason: "its manifest does not match the sha256 the index names" };
+        return refuse("HASH_MISMATCH", "its manifest does not match the sha256 the index names");
     }
 
     const signature: DetachedSignature | undefined = parseDetachedSignature(signatureBytes);
 
     if (signature === undefined) {
-        return { code: "BAD_SIGNATURE", ok: false, reason: "its manifest signature is malformed" };
+        return refuse("BAD_SIGNATURE", "its manifest signature is malformed");
     }
 
     const verified = await verifyManifestBytes(keys, manifestBytes, signature);
@@ -328,11 +331,11 @@ const checkManifest = async (
             UNKNOWN_KEY: "its manifest is signed by a key that is not trusted",
         };
 
-        return { code: verified.error.code, ok: false, reason: reasons[verified.error.code] ?? `its manifest is invalid: ${verified.error.message}` };
+        return refuse(verified.error.code, reasons[verified.error.code] ?? `its manifest is invalid: ${verified.error.message}`);
     }
 
     if (verified.manifest.slug !== entry.slug || verified.manifest.version !== entry.version) {
-        return { code: "INVALID_MANIFEST", ok: false, reason: "its manifest names a different app or version than the index does" };
+        return refuse("INVALID_MANIFEST", "its manifest names a different app or version than the index does");
     }
 
     return { ok: true, value: { manifest: verified.manifest, manifestBytes } };
@@ -343,7 +346,7 @@ const fetchAndCheck = async (
     deps: CatalogDeps,
     keys: TrustedCatalogKey[],
     entry: CatalogIndexEntry,
-): Promise<{ ok: true; value: CheckedManifest } | { code: ArtifactErrorCode | "FETCH"; ok: false; reason: string }> => {
+): Promise<{ ok: true; value: CheckedManifest } | Refused<ArtifactErrorCode | "FETCH">> => {
     let manifestBytes: Uint8Array;
     let signatureBytes: Uint8Array;
 
@@ -351,7 +354,7 @@ const fetchAndCheck = async (
         manifestBytes = await fetchBounded(deps.fetch, entry.manifestUrl, MAX_MANIFEST_BYTES);
         signatureBytes = await fetchBounded(deps.fetch, entry.signatureUrl, MAX_SIGNATURE_FILE_BYTES);
     } catch (error) {
-        return { code: "FETCH", ok: false, reason: `its manifest could not be fetched: ${messageOf(error)}` };
+        return refuse("FETCH", `its manifest could not be fetched: ${messageOf(error)}`);
     }
 
     return checkManifest(keys, entry, manifestBytes, signatureBytes);
@@ -377,7 +380,7 @@ export const listCatalog = async (deps: CatalogListDeps, organizationId: string)
     const [index, installs] = await Promise.all([loadIndex(deps, config), deps.installs(organizationId)]);
 
     if (!index.ok) {
-        return { error: index.error, ok: false };
+        return { error: index.error.message, ok: false };
     }
 
     const checked = await Promise.all(
@@ -392,7 +395,7 @@ export const listCatalog = async (deps: CatalogListDeps, organizationId: string)
 
     for (const { entry, result } of checked) {
         if (!result.ok) {
-            skipped.push({ reason: result.reason, slug: entry.slug, version: entry.version });
+            skipped.push({ reason: result.error.message, slug: entry.slug, version: entry.version });
             continue;
         }
 
@@ -443,15 +446,6 @@ export type InstallOutcome =
     | { deploymentId: string; generated: string[]; kept: string[]; ok: true; recorded: boolean; url?: string }
     | { code?: ArtifactErrorCode; error: string; field?: string; kind: InstallFailureKind; ok: false };
 
-const refuse = (kind: InstallFailureKind, error: string, code?: ArtifactErrorCode): InstallOutcome => {
-    return {
-        error,
-        kind,
-        ok: false,
-        ...(code === undefined ? {} : { code }),
-    };
-};
-
 /**
  * Install one app into a project: find its index entry, fetch its archive, manifest
  * and signature, verify all of them, then run the install core. Never returns a
@@ -461,33 +455,37 @@ export const installApp = async (deps: CatalogDeps, request: InstallRequest, ada
     const config = readCatalogConfig(deps.env);
 
     if (config.kind === "refused") {
-        return refuse("unavailable", config.error);
+        return { error: config.error, kind: "unavailable", ok: false };
     }
 
     if (config.kind === "empty") {
-        return refuse("notFound", `no app named ${request.slug} is in the catalog`);
+        return { error: `no app named ${request.slug} is in the catalog`, kind: "notFound", ok: false };
     }
 
     const index = await loadIndex(deps, config);
 
     if (!index.ok) {
-        return refuse("unavailable", index.error);
+        return { error: index.error.message, kind: "unavailable", ok: false };
     }
 
     const entry = index.entries.find((candidate) => candidate.slug === request.slug);
 
     if (entry === undefined) {
-        return refuse("notFound", `no app named ${request.slug} is in the catalog`);
+        return { error: `no app named ${request.slug} is in the catalog`, kind: "notFound", ok: false };
     }
 
     const target = await adapters.target();
 
     if (target === null) {
-        return refuse("notFound", "project not found in this organization");
+        return { error: "project not found in this organization", kind: "notFound", ok: false };
     }
 
     if (target.scriptName === undefined) {
-        return refuse("conflict", "this project has no production alias yet; deploy it once before installing a catalog app");
+        return {
+            error: "this project has no production alias yet; deploy it once before installing a catalog app",
+            kind: "conflict",
+            ok: false,
+        };
     }
 
     let archive: Uint8Array;
@@ -499,19 +497,19 @@ export const installApp = async (deps: CatalogDeps, request: InstallRequest, ada
         manifestBytes = await fetchBounded(deps.fetch, entry.manifestUrl, MAX_MANIFEST_BYTES);
         signatureBytes = await fetchBounded(deps.fetch, entry.signatureUrl, MAX_SIGNATURE_FILE_BYTES);
     } catch (error) {
-        return refuse("upstream", `the app's files could not be fetched: ${messageOf(error)}`);
+        return { error: `the app's files could not be fetched: ${messageOf(error)}`, kind: "upstream", ok: false };
     }
 
     const checked = await checkManifest(config.keys, entry, manifestBytes, signatureBytes);
 
     if (!checked.ok) {
-        return refuse("verification", checked.reason, checked.code);
+        return { code: checked.error.code, error: checked.error.message, kind: "verification", ok: false };
     }
 
     const archiveChecked = await verifyArchive(archive, checked.value.manifest);
 
     if (!archiveChecked.ok) {
-        return refuse("verification", archiveChecked.error.message, archiveChecked.error.code);
+        return { code: archiveChecked.error.code, error: archiveChecked.error.message, kind: "verification", ok: false };
     }
 
     const result = await runInstall(
@@ -529,9 +527,8 @@ export const installApp = async (deps: CatalogDeps, request: InstallRequest, ada
     );
 
     if (!result.ok) {
-        const failed: InstallFailure = result;
-
-        return { error: failed.error, kind: failed.kind, ...(failed.field === undefined ? {} : { field: failed.field }), ok: false };
+        // The install core's failure is already an install outcome; it passes through unchanged.
+        return result;
     }
 
     return {

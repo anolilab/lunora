@@ -4,6 +4,7 @@
  * payload starts with a domain tag naming what it is, so a signature over a
  * catalog index can never be replayed as an artifact manifest, or the reverse.
  */
+import type { Refused } from "./artifact";
 import { toBase64, toHex } from "./fields";
 
 /** Domain tag for a signed artifact manifest. */
@@ -121,17 +122,17 @@ export const verifyDetached = async (
     domain: string,
     payload: Uint8Array,
     detached: DetachedSignature,
-): Promise<{ code: "BAD_SIGNATURE" | "UNKNOWN_KEY"; message: string; ok: false } | { ok: true }> => {
+): Promise<Refused<"BAD_SIGNATURE" | "UNKNOWN_KEY"> | { ok: true }> => {
     const key = keys.find((candidate) => candidate.keyId === detached.keyId);
 
     if (key === undefined) {
-        return { code: "UNKNOWN_KEY", message: `no trusted catalog key is named ${detached.keyId}`, ok: false };
+        return { error: { code: "UNKNOWN_KEY", message: `no trusted catalog key is named ${detached.keyId}` }, ok: false };
     }
 
     const signature = decodeBase64(detached.signature);
 
     if (signature === undefined || !(await verifySignature(key, domain, payload, signature))) {
-        return { code: "BAD_SIGNATURE", message: "the signature does not verify under the named key", ok: false };
+        return { error: { code: "BAD_SIGNATURE", message: "the signature does not verify under the named key" }, ok: false };
     }
 
     return { ok: true };

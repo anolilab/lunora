@@ -104,14 +104,17 @@ export type ArtifactErrorCode =
     | "UNLISTED_FILE"
     | "UNSUPPORTED_FORMAT";
 
-export interface ArtifactError {
-    code: ArtifactErrorCode;
+/** A refusal: the code that says why, and the message a person reads. Every catalog module refuses in this shape. */
+export interface Refusal<Code extends string = ArtifactErrorCode> {
+    code: Code;
     message: string;
 }
 
-/** A verified artifact: its manifest and the bytes of each listed file. */
+/** A failed check, returned as `{ error, ok: false }` so it narrows the same way everywhere. */
+export type Refused<Code extends string = ArtifactErrorCode> = { error: Refusal<Code>; ok: false };
 
-const refuse = (code: ArtifactErrorCode, message: string): { error: ArtifactError; ok: false } => {
+/** Refuse with a code and a message. The one place a catalog refusal is built. */
+export const refuse = <Code extends string>(code: Code, message: string): Refused<Code> => {
     return { error: { code, message }, ok: false };
 };
 
@@ -123,10 +126,10 @@ const isSafePath = (path: string): boolean =>
     path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 
 /** A parsed form field, or the reason it is refused. */
-type FieldResult<T> = { field: T; ok: true } | { error: ArtifactError; ok: false };
+type FieldResult<T> = { field: T; ok: true } | Refused;
 
 /** The entries of a form list. A present value that is not a list is refused, not dropped. */
-const formList = (value: unknown, field: string): { items: unknown[]; ok: true } | { error: ArtifactError; ok: false } => {
+const formList = (value: unknown, field: string): { items: unknown[]; ok: true } | Refused => {
     if (value === undefined) {
         return { items: [], ok: true };
     }
@@ -139,7 +142,7 @@ const formList = (value: unknown, field: string): { items: unknown[]; ok: true }
 };
 
 /** A form name, claimed so that no other field may use it. */
-const readFormName = (value: unknown, claimed: Set<string>): { name: string; ok: true } | { error: ArtifactError; ok: false } => {
+const readFormName = (value: unknown, claimed: Set<string>): { name: string; ok: true } | Refused => {
     if (typeof value !== "string" || !ENV_NAME.test(value)) {
         return refuse("INVALID_MANIFEST", `form name ${String(value)} must be upper snake case`);
     }
@@ -158,7 +161,7 @@ const readFormName = (value: unknown, claimed: Set<string>): { name: string; ok:
 };
 
 /** A label is one line of 1 to 80 characters. */
-const readLabel = (item: Record<string, unknown>, owner: string): { label: string; ok: true } | { error: ArtifactError; ok: false } => {
+const readLabel = (item: Record<string, unknown>, owner: string): { label: string; ok: true } | Refused => {
     const { label } = item;
 
     if (typeof label !== "string" || label.length === 0 || label.length > 80) {
@@ -249,7 +252,7 @@ const parseFormSecret = (entry: unknown, claimed: Set<string>): FieldResult<Form
  * platform's reserved prefix, and one name may appear only once across vars and
  * secrets, so the install can never write two values to the same binding.
  */
-export const parseForm = (value: unknown): { form: CatalogForm; ok: true } | { error: ArtifactError; ok: false } => {
+export const parseForm = (value: unknown): { form: CatalogForm; ok: true } | Refused => {
     if (!isRecord(value)) {
         return refuse("INVALID_MANIFEST", "form must be an object with vars and secrets lists");
     }
@@ -339,7 +342,7 @@ const isRuntime = (value: unknown): value is CatalogRuntime => value === "lunora
 /** The scalar fields of a manifest, each checked against what the publisher writes. The slug and version come back typed. */
 const readHeader = (
     record: Record<string, unknown>,
-): { error: ArtifactError; ok: false } | { bindings: unknown[] | undefined; ok: true; runtime: CatalogRuntime | undefined; slug: string; version: string } => {
+): Refused | { bindings: unknown[] | undefined; ok: true; runtime: CatalogRuntime | undefined; slug: string; version: string } => {
     const known = new Set(["bindings", "files", "form", "format", "main", "runtime", "slug", "version"]);
     const unknown = Object.keys(record).filter((key) => !known.has(key));
 
@@ -378,7 +381,7 @@ const readHeader = (
  * reason it is invalid; a field the schema does not know is refused too, so a
  * misspelled field fails loudly rather than being silently dropped.
  */
-export const parseManifest = (value: unknown): { manifest: CatalogManifest; ok: true } | { error: ArtifactError; ok: false } => {
+export const parseManifest = (value: unknown): { manifest: CatalogManifest; ok: true } | Refused => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         return refuse("INVALID_MANIFEST", "the manifest is not a JSON object");
     }
@@ -446,7 +449,7 @@ export const parseManifest = (value: unknown): { manifest: CatalogManifest; ok: 
 };
 
 /** The outcome of checking a manifest's signature and its contents. */
-export type ManifestVerifyResult = { manifest: CatalogManifest; ok: true } | { error: ArtifactError; ok: false };
+export type ManifestVerifyResult = { manifest: CatalogManifest; ok: true } | Refused;
 
 /**
  * Check a manifest: its signature under the artifact domain first, then the bytes
@@ -460,7 +463,7 @@ export const verifyManifestBytes = async (
     const signed = await verifyDetached(keys, ARTIFACT_SIGNING_DOMAIN, manifestBytes, signature);
 
     if (!signed.ok) {
-        return refuse(signed.code, signed.message);
+        return signed;
     }
 
     let raw: unknown;
@@ -475,7 +478,7 @@ export const verifyManifestBytes = async (
 };
 
 /** The archive's files, each checked against the manifest. */
-export type ArchiveVerifyResult = { files: Map<string, Uint8Array>; ok: true } | { error: ArtifactError; ok: false };
+export type ArchiveVerifyResult = { files: Map<string, Uint8Array>; ok: true } | Refused;
 
 /**
  * Unpack an archive against a verified manifest. Only the files the manifest lists
@@ -569,7 +572,7 @@ export interface ArtifactInput {
 }
 
 /** A verified artifact: its manifest and the bytes of each listed file. */
-export type ArtifactVerifyResult = { files: Map<string, Uint8Array>; manifest: CatalogManifest; ok: true } | { error: ArtifactError; ok: false };
+export type ArtifactVerifyResult = { files: Map<string, Uint8Array>; manifest: CatalogManifest; ok: true } | Refused;
 
 /** Verify an artifact end to end: its manifest, then its archive. */
 export const verifyArtifact = async (input: ArtifactInput): Promise<ArtifactVerifyResult> => {

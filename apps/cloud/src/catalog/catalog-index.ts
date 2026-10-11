@@ -5,7 +5,8 @@
  * keep serving an old signed index for ever: one older than {@link MAX_INDEX_AGE_MS}
  * is refused. Verification checks the signature before anything in the bytes is read.
  */
-import { CATALOG_FORMAT } from "./artifact";
+import type { Refused } from "./artifact";
+import { CATALOG_FORMAT, refuse } from "./artifact";
 import { isHttpsUrl, isVersion, MAX_NAME_LENGTH, MAX_SUMMARY_LENGTH, SHA256, SLUG } from "./fields";
 import type { DetachedSignature, TrustedCatalogKey } from "./signature";
 import { INDEX_SIGNING_DOMAIN, sha256Hex, verifyDetached } from "./signature";
@@ -28,14 +29,15 @@ export interface CatalogIndexEntry {
     version: string;
 }
 
-export type CatalogIndexResult = { entries: CatalogIndexEntry[]; issuedAt: number; ok: true } | { error: { code: string; message: string }; ok: false };
+/** Why an index is refused: its own checks, or the signature and format checks it shares with the artifacts. */
+export type IndexErrorCode = "BAD_SIGNATURE" | "INVALID_INDEX" | "UNKNOWN_KEY" | "UNSUPPORTED_FORMAT";
 
-const invalid = (message: string): { error: { code: string; message: string }; ok: false } => {
-    return { error: { code: "INVALID_INDEX", message }, ok: false };
-};
+export type CatalogIndexResult = { entries: CatalogIndexEntry[]; issuedAt: number; ok: true } | Refused<IndexErrorCode>;
+
+const invalid = (message: string): Refused<IndexErrorCode> => refuse("INVALID_INDEX", message);
 
 /** Read one index entry, refusing anything the publisher would not have written. */
-const readEntry = (item: unknown): { entry: CatalogIndexEntry; ok: true } | { error: { code: string; message: string }; ok: false } => {
+const readEntry = (item: unknown): { entry: CatalogIndexEntry; ok: true } | Refused<IndexErrorCode> => {
     const app = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
     const { slug } = app;
 
@@ -94,7 +96,7 @@ export const verifyCatalogIndex = async (input: {
     const signed = await verifyDetached(input.keys, INDEX_SIGNING_DOMAIN, input.indexBytes, input.signature);
 
     if (!signed.ok) {
-        return { error: { code: signed.code, message: signed.message }, ok: false };
+        return signed;
     }
 
     let raw: unknown;
@@ -108,7 +110,7 @@ export const verifyCatalogIndex = async (input: {
     const record = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
 
     if (record["format"] !== CATALOG_FORMAT) {
-        return { error: { code: "UNSUPPORTED_FORMAT", message: `the index is not format ${String(CATALOG_FORMAT)}` }, ok: false };
+        return refuse("UNSUPPORTED_FORMAT", `the index is not format ${String(CATALOG_FORMAT)}`);
     }
 
     const issuedAt = typeof record["issuedAt"] === "string" ? Date.parse(record["issuedAt"]) : Number.NaN;
