@@ -1808,15 +1808,11 @@ const CELLD_RELEASE_ASSETS_DIRECTORY = "assets";
 
 ### `CELLD_RELEASE_BINDINGS` (const)
 
-```ts
-const CELLD_RELEASE_BINDINGS: CelldReleaseBindings;
-```
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
 
 ### `CELLD_RELEASE_BINDING_TYPES` (const)
 
-```ts
-const CELLD_RELEASE_BINDING_TYPES: ReadonlySet<BindingRequirement["type"]>;
-```
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
 
 ### `CELLD_RELEASE_MAIN` (const)
 
@@ -1832,6 +1828,82 @@ interface CelldReleaseAssetsConfig {
     not_found_handling?: "404-page" | "none" | "single-page-application";
     run_worker_first?: boolean | ReadonlyArray<string>;
 }
+```
+
+### `CelldReleaseBindings` (interface)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+### `CelldReleaseConfigError` (class)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+### `CelldReleaseManifest` (interface)
+
+```ts
+interface CelldReleaseManifest {
+    bindings: ReadonlyArray<BindingRequirement>;
+    compatibilityDate?: string;
+    compatibilityFlags?: ReadonlyArray<string>;
+}
+```
+
+### `CelldReleaseOptions` (interface)
+
+```ts
+interface CelldReleaseOptions {
+    alias: string;
+    assetsConfig?: CelldReleaseAssetsConfig;
+    compatibilityDate?: string;
+    compatibilityFlags?: ReadonlyArray<string>;
+    crons: ReadonlyArray<string>;
+    hasAssets: boolean;
+    vars: Readonly<Record<string, string>>;
+}
+```
+
+### `CelldReleaseRefusal` (interface)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+### `MAX_RELEASE_ALIAS_LENGTH` (const)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+### `MAX_RESOURCE_NAME` (const)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+### `RELEASE_ALIAS_PATTERN` (const)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+### `celldConfigFromRelease` (const)
+
+```ts
+const celldConfigFromRelease: (manifest: CelldReleaseManifest, options: CelldReleaseOptions) => Config;
+```
+
+### `isReleaseAlias` (const)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+### `releaseResourceName` (const)
+
+Re-exported from `@lunora/config/celld-names` — signature tracked in that section.
+
+## `@lunora/config/celld-names`
+
+### `CELLD_RELEASE_BINDINGS` (const)
+
+```ts
+const CELLD_RELEASE_BINDINGS: CelldReleaseBindings;
+```
+
+### `CELLD_RELEASE_BINDING_TYPES` (const)
+
+```ts
+const CELLD_RELEASE_BINDING_TYPES: ReadonlySet<BindingRequirement["type"]>;
 ```
 
 ### `CelldReleaseBindings` (interface)
@@ -1855,30 +1927,6 @@ interface CelldReleaseBindings {
 class CelldReleaseConfigError extends Error {
     readonly refused: ReadonlyArray<CelldReleaseRefusal>;
     constructor(message: string, refused?: ReadonlyArray<CelldReleaseRefusal>);
-}
-```
-
-### `CelldReleaseManifest` (interface)
-
-```ts
-interface CelldReleaseManifest {
-    bindings: ReadonlyArray<BindingRequirement>;
-    compatibilityDate?: string;
-    compatibilityFlags?: ReadonlyArray<string>;
-}
-```
-
-### `CelldReleaseOptions` (interface)
-
-```ts
-interface CelldReleaseOptions {
-    alias: string;
-    assetsConfig?: CelldReleaseAssetsConfig;
-    compatibilityDate?: string;
-    compatibilityFlags?: ReadonlyArray<string>;
-    crons: ReadonlyArray<string>;
-    hasAssets: boolean;
-    vars: Readonly<Record<string, string>>;
 }
 ```
 
@@ -1908,12 +1956,6 @@ const MAX_RESOURCE_NAME = 63;
 
 ```ts
 const RELEASE_ALIAS_PATTERN: RegExp;
-```
-
-### `celldConfigFromRelease` (const)
-
-```ts
-const celldConfigFromRelease: (manifest: CelldReleaseManifest, options: CelldReleaseOptions) => Config;
 ```
 
 ### `isReleaseAlias` (const)
