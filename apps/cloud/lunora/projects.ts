@@ -413,7 +413,7 @@ export const updateBuildSettings = mutation
  * (`releaseIdleAliases`). `halts` goes: a halt left behind would hold whichever
  * project claims the alias next.
  */
-const PROJECT_SCOPED_TABLES = ["buildLogs", "builds", "domains", "halts", "secrets"] as const;
+const PROJECT_SCOPED_TABLES = ["buildLogs", "builds", "catalogInstalls", "domains", "halts", "secrets"] as const;
 
 /**
  * Delete a project and everything scoped to it (owners/admins).

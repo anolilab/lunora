@@ -2,6 +2,7 @@ import { defineSchema } from "@lunora/server";
 
 import { billingTables } from "./tables/billing";
 import { boxesTables } from "./tables/boxes";
+import { catalogTables } from "./tables/catalog";
 import { deployTables } from "./tables/deploy";
 import { notificationTables } from "./tables/notifications";
 import { observabilityTables } from "./tables/observability";
@@ -31,4 +32,5 @@ export default defineSchema({
     ...observabilityTables,
     ...notificationTables,
     ...billingTables,
+    ...catalogTables,
 });

@@ -43,6 +43,9 @@ export interface ApiTypes {
         listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, ({ organizationId: Id<"organizations">; createdAt: number; deploymentId?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; projectId: Id<"projects">; branch: string; commitSha: string; fromFork?: false | true; pullRequest?: number; trigger?: "push" | "pull_request"; bundleHash?: string; _id: Id<"builds">; pathFiltered?: false | true; processingBy?: string; processingStartedAt?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; runtime?: null | "worker"; skipReason?: string } & { advisoryNotes: number; advisoryWarnings: number; })[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
     };
+    catalog: {
+        installs: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: string; createdAt: number; deploymentId: string; installedBy: string; organizationId: string; projectId: string; slug: string; version: string }[]>;
+    };
     cells: {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
     };
@@ -73,7 +76,7 @@ export interface ApiTypes {
     deployments: {
         activate: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments"> }, void>;
         create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; allowDeleteClasses?: Array<unknown>; deployKey?: unknown; durableObjectClasses?: Array<unknown>; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtime?: "worker"; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; projectId: Id<"projects">; target?: string; branch?: string; bundleHash?: string; _id: Id<"deployments">; runtime?: null | "worker"; kind: "dev" | "preview" | "production"; scriptName: string; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; durableObjectClasses?: null | string[]; expiresAt?: number; url?: string; verifyingAt?: null | number; version?: number }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; projectId: Id<"projects">; target?: string; branch?: string; bundleHash?: string; _id: Id<"deployments">; runtime?: null | "worker"; version?: number; kind: "dev" | "preview" | "production"; scriptName: string; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; durableObjectClasses?: null | string[]; expiresAt?: number; url?: string; verifyingAt?: null | number }[]>;
         planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; recursion?: "allow"; }>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }, void>;
     };
@@ -243,6 +246,9 @@ export const api: ApiTypes = {
         advisories: { __lunoraRef: "builds:advisories" },
         listByProject: { __lunoraRef: "builds:listByProject" },
         logs: { __lunoraRef: "builds:logs" },
+    },
+    catalog: {
+        installs: { __lunoraRef: "catalog:installs" },
     },
     cells: {
         list: { __lunoraRef: "cells:list" },

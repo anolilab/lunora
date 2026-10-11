@@ -1,6 +1,5 @@
 /**
- * Control-plane route classification + boot scanner (Openship's route-scanner
- * idea — github.com/oblien/openship, Apache-2.0 — adapted to our `/v1` router).
+ * Control-plane route classification and boot scanner for the `/v1` router.
  *
  * Every control-plane HTTP route must declare *how it is authenticated*. The
  * scanner runs once when `createDeployRouter` builds the table, so a route added
