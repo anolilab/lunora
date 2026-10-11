@@ -15,6 +15,8 @@ export { defineDataset, erasureOrder } from "./dataset";
  * the jurisdiction presets live at `./eu` and `./de`.
  */
 export { addCalendarMonths, dueAt, extendedDueAt } from "./deadlines";
+export type { Disposition, VerifyResult } from "./erasure";
+export { dispositionOf, drainUntilEmpty, ERASE_BATCH, verifyErasure } from "./erasure";
 export type { RequestStatus, RequestType } from "./lifecycle";
 export {
     canCancel,

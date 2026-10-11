@@ -91,6 +91,25 @@ interface DatasetSpec {
 }
 ```
 
+### `Disposition` (type)
+
+```ts
+type Disposition = {
+    readonly kind: "delete";
+} | {
+    readonly kind: "anonymise";
+} | {
+    readonly kind: "keep";
+    readonly until: Date;
+};
+```
+
+### `ERASE_BATCH` (const)
+
+```ts
+const ERASE_BATCH = 100;
+```
+
 ### `ErasureSettings` (interface)
 
 ```ts
@@ -295,6 +314,15 @@ interface TableSpec {
 }
 ```
 
+### `VerifyResult` (interface)
+
+```ts
+interface VerifyResult {
+    readonly complete: boolean;
+    readonly leftover: ReadonlyArray<string>;
+}
+```
+
 ### `actionCacheDataset` (const)
 
 ```ts
@@ -379,10 +407,26 @@ const checkCoverage: (tables: ReadonlyArray<string>, classifications: Readonly<R
 const defineDataset: (id: string, spec: DatasetSpec) => Dataset;
 ```
 
+### `dispositionOf` (const)
+
+```ts
+const dispositionOf: (erase: TableErasure, row: {
+    readonly [column: string]: unknown;
+}, rules: ReadonlyMap<string, RetentionRule>, now: Date) => Disposition;
+```
+
 ### `documentHistoryDataset` (const)
 
 ```ts
 const documentHistoryDataset: (table?: string) => Dataset;
+```
+
+### `drainUntilEmpty` (const)
+
+```ts
+const drainUntilEmpty: (step: () => Promise<{
+    readonly hasMore: boolean;
+}>, maxRounds?: number) => Promise<number>;
 ```
 
 ### `dueAt` (const)
@@ -480,6 +524,12 @@ const storageObjectsDataset: (prefix: string) => Dataset;
 
 ```ts
 const transition: (from: RequestStatus, to: RequestStatus) => RequestStatus;
+```
+
+### `verifyErasure` (const)
+
+```ts
+const verifyErasure: (remaining: Readonly<Record<string, number>>) => VerifyResult;
 ```
 
 ## `@lunora/privacy/de`
