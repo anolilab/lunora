@@ -28,23 +28,33 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## Open (TODO)
 
-| Plan                                              | Title                                                       | Notes                                                         |
-| ------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
-| [466](./466-local-replica-client-wiring.md)       | Wire `@lunora/replica` into every client                    | decisions D1–D6 open; Phase 0 first                           |
-| [467](./467-client-split-remaining-clusters.md)   | Finish splitting `lunora-client.ts`                         | replay engine, frame handlers, admin surface; decisions D1–D3 |
-| [135](./135-stable-1.0-roadmap.md)                | Road to stable 1.0.0                                        | umbrella; phase/exit-criteria tracker for `alpha → main`      |
-| [306](./306-pluggable-queue-drivers.md)           | Pluggable queue-driver package                              | P2                                                            |
-| [332](./332-payment-conformance-spike.md)         | Spike: what a payment-provider conformance suite asserts    | spike; deliverable is a decision                              |
-| [168](./168-cross-shard-transactions-spike.md)    | Cross-shard transaction story                               | spike; decision first                                         |
-| [078](./078-custom-scalar-types.md)               | Custom scalar types (`v.custom`)                            | not shipped                                                   |
-| [089](./089-promise-pipelining-batch.md)          | Promise pipelining over the batch transport                 | draft, design-only                                            |
-| [160](./160-adapter-voice-agent-consolidation.md) | Consolidate the voice/agent surface across the 5 adapters   | deferred                                                      |
-| [364](./364-studio-conversational-assistant.md)   | Conversational assistant for the Studio                     | P3                                                            |
-| [033](./033-stream.md)                            | Cloudflare Stream (video)                                   | P3, deferred                                                  |
-| [037](./037-realtime-calls-webrtc.md)             | Cloudflare Realtime / Calls (WebRTC)                        | P3, deferred                                                  |
-| [133](./133-live-cdc-and-do-consumes-do.md)       | Live CDC ingest + DO-consumes-DO shape                      | P3, demand-gated                                              |
-| [169](./169-collab-crdt.md)                       | `@lunora/collab` (CRDT / collaborative editing)             | demand-gated                                                  |
-| [453](./453-embedded-runtime.md)                  | In-process runtime as an embedded (browser / device) target | phase 1 shipped; rest demand-gated                            |
+| Plan                                                   | Title                                                                                  | Notes                                                         |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                                               | decisions D1–D6 open; Phase 0 first                           |
+| [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                                    | replay engine, frame handlers, admin surface; decisions D1–D3 |
+| [479](./479-payment-authorize-default-deny.md)         | Make `createPayment`'s `authorize` required (default-deny)                             | P1 security; breaking on alpha                                |
+| [487](./487-studio-ws-token-no-master-fallback.md)     | Never send the master admin token in a WebSocket URL                                   | P1 security; master-token fallback and server opt-out         |
+| [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot                   | P2 bug; breaking for id-less runtimes                         |
+| [481](./481-presence-bounded-members-and-sweep.md)     | Cap presence sessions after dedup; bound the sweep read                                | P2 perf/bug; workerd gate                                     |
+| [482](./482-ratelimit-db-store-atomic-consume.md)      | Reproduce the database rate-limit lost update on workerd, then make consume atomic     | P2; repro not yet confirmed; workerd gate                     |
+| [486](./486-mcp-data-read-scope-gate.md)               | Gate raw data-read and observability MCP tools behind scopes                           | P2; option A (default-deny scopes) recorded                   |
+| [488](./488-node-dispatch-route-for-queues.md)         | Serve the Node scheduler dispatch route so queue and topic handlers can call functions | P2; option B recorded; keeps `emulated`                       |
+| [484](./484-codegen-aliased-any-validator-lint.md)     | Flag `v.any()` public args reached through an alias, destructure, or helper            | P2 lint coverage gap                                          |
+| [483](./483-dev-vars-exclusive-create.md)              | Make the `.dev.vars` create exclusive on the final path                                | P3                                                            |
+| [485](./485-presence-adapter-ssr-guards.md)            | Stop presence `setData` heartbeats before mount or on the server                       | P3                                                            |
+| [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                                   | umbrella; phase/exit-criteria tracker for `alpha → main`      |
+| [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                                         | P2                                                            |
+| [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts                               | spike; deliverable is a decision                              |
+| [168](./168-cross-shard-transactions-spike.md)         | Cross-shard transaction story                                                          | spike; decision first                                         |
+| [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                                       | not shipped                                                   |
+| [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                                            | draft, design-only                                            |
+| [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters                              | deferred                                                      |
+| [364](./364-studio-conversational-assistant.md)        | Conversational assistant for the Studio                                                | P3                                                            |
+| [033](./033-stream.md)                                 | Cloudflare Stream (video)                                                              | P3, deferred                                                  |
+| [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                                   | P3, deferred                                                  |
+| [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                                 | P3, demand-gated                                              |
+| [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                                        | demand-gated                                                  |
+| [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target                            | phase 1 shipped; rest demand-gated                            |
 
 ## Reference designs
 
