@@ -1,27 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { refoldSubscription } from "../src/optimistic-layers";
 import type { SubscriptionCallback, SubscriptionState, SyncWatermark } from "../src/subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, refoldAndNotify } from "../src/subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints } from "../src/subscription-frames";
 import type { ServerDataMessage } from "../src/types";
 
 /** A subscription in its just-opened state, with every field set so no cast is needed. */
-const subscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {return {
-    acked: false,
-    args: {},
-    argsKey: "{}",
-    callbacks: new Set<SubscriptionCallback>(),
-    checkpointCallbacks: new Set<(watermark: SyncWatermark) => void>(),
-    errorCallbacks: new Set(),
-    fn: { __lunoraRef: "todos:list" },
-    id: "s1",
-    lastValue: undefined,
-    optimisticLayers: [],
-    serverBase: undefined,
-    wireArgs: {},
-    ...overrides,
-}};
+const subscription = (overrides: Partial<SubscriptionState> = {}): SubscriptionState => {
+    return {
+        acked: false,
+        args: {},
+        argsKey: "{}",
+        callbacks: new Set<SubscriptionCallback>(),
+        checkpointCallbacks: new Set<(watermark: SyncWatermark) => void>(),
+        errorCallbacks: new Set(),
+        fn: { __lunoraRef: "todos:list" },
+        id: "s1",
+        lastValue: undefined,
+        optimisticLayers: [],
+        serverBase: undefined,
+        wireArgs: {},
+        ...overrides,
+    };
+};
 
-const dataFrame = (extra: Partial<ServerDataMessage> = {}): ServerDataMessage => {return { data: [], id: "s1", type: "data", ...extra }};
+const dataFrame = (extra: Partial<ServerDataMessage> = {}): ServerDataMessage => {
+    return { data: [], id: "s1", type: "data", ...extra };
+};
 
 describe("advanceWatermark", () => {
     it("keeps the higher watermark when a lower one arrives", () => {
@@ -48,7 +53,7 @@ describe("fanCheckpoints", () => {
         const seen: SyncWatermark[] = [];
         const state = subscription({ checkpointCallbacks: new Set([(watermark: SyncWatermark) => seen.push(watermark)]), lastMutationId: 4, serverCursor: 11 });
 
-        fanCheckpoints(state, { rowsFollow: true });
+        fanCheckpoints(state, true);
 
         expect(seen).toStrictEqual([{ checkpoint: 11, mutationId: 4, rowsFollow: true }]);
     });
@@ -89,41 +94,39 @@ describe("commitDataFrame", () => {
         expect(state.serverEpoch).toBe("e0");
     });
 
-    it("fans a checkpoint out with rowsFollow only when the frame carries a watermark", () => {
+    it("has no effect on subscribers: the watermark and fan-out belong to the caller", () => {
         expect.assertions(2);
 
         const onCheckpoint = vi.fn<(watermark: SyncWatermark) => void>();
-        const state = subscription({ checkpointCallbacks: new Set([onCheckpoint]) });
+        const state = subscription({ checkpointCallbacks: new Set([onCheckpoint]), lastMutationId: 3 });
 
-        commitDataFrame(state, dataFrame(), "value");
+        commitDataFrame(state, dataFrame({ lastMutationId: 9 }), "value");
 
         expect(onCheckpoint).not.toHaveBeenCalled();
-
-        commitDataFrame(state, dataFrame({ lastMutationId: 6 }), "value");
-
-        expect(onCheckpoint).toHaveBeenCalledWith({ checkpoint: undefined, mutationId: 6, rowsFollow: true });
-    });
-
-    it("never lets a lower watermark regress the state", () => {
-        expect.assertions(1);
-
-        const state = subscription({ lastMutationId: 10 });
-
-        commitDataFrame(state, dataFrame({ lastMutationId: 2 }), "value");
-
-        expect(state.lastMutationId).toBe(10);
+        expect(state.lastMutationId).toBe(3);
     });
 });
 
-describe("refoldAndNotify", () => {
+describe("refoldSubscription", () => {
     it("publishes the authoritative base when no optimistic layer is pending", () => {
         expect.assertions(1);
 
         const seen: unknown[] = [];
         const state = subscription({ callbacks: new Set([(value: unknown) => seen.push(value)]), serverBase: [{ id: "a" }] });
 
-        refoldAndNotify(state);
+        refoldSubscription(state, state.serverBase);
 
         expect(seen).toStrictEqual([[{ id: "a" }]]);
+    });
+
+    it("publishes the base it is given, not whatever serverBase holds now", () => {
+        expect.assertions(1);
+
+        const seen: unknown[] = [];
+        const state = subscription({ callbacks: new Set([(value: unknown) => seen.push(value)]), serverBase: "stale" });
+
+        refoldSubscription(state, "payload");
+
+        expect(seen).toStrictEqual(["payload"]);
     });
 });

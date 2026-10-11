@@ -128,6 +128,7 @@ import {
     dropConfirmedLayers,
     foldOptimistic,
     notifySubscription,
+    refoldSubscription,
     rollbackOptimistic,
 } from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
@@ -153,7 +154,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, refoldAndNotify } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints } from "./subscription-frames";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -4396,7 +4397,7 @@ class LunoraClient {
                     // `Math.max` guards monotonicity: this must never move
                     // `state.lastMutationId` backwards.
                     if (lastMutationId !== undefined && clientId === this.clientId) {
-                        state.lastMutationId = Math.max(state.lastMutationId ?? 0, lastMutationId);
+                        advanceWatermark(state, lastMutationId);
                     }
 
                     // Fan out to every registered checkpoint subscriber, same
@@ -4407,9 +4408,7 @@ class LunoraClient {
                     // always fires; `state.lastMutationId` is whatever it was
                     // above — unchanged (a no-op re-resolve) when the frame
                     // didn't own this follower's watermark.
-                    for (const onCheckpoint of state.checkpointCallbacks) {
-                        onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
-                    }
+                    fanCheckpoints(state);
                 }
             },
         });
@@ -6910,6 +6909,11 @@ class LunoraClient {
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
         commitDataFrame(state, message, payload);
 
+        if (message.lastMutationId !== undefined) {
+            advanceWatermark(state, message.lastMutationId);
+            fanCheckpoints(state, true);
+        }
+
         // Persist the authoritative server value (never the optimistic overlay)
         // to the durable read cache (debounced).
         this.persistQueryValue(state);
@@ -6923,7 +6927,7 @@ class LunoraClient {
             dropAcknowledgedLayers(state, snapshotMark);
         }
 
-        refoldAndNotify(state);
+        refoldSubscription(state, payload);
 
         // When cross-tab sync is active and we're the WS leader, broadcast
         // the new value to follower tabs so they stay in sync without their
@@ -7036,25 +7040,12 @@ class LunoraClient {
             // confirmed. Sweep confirmed layers here too (not just on `data`
             // frames), or a no-visible-change write would leave its overlay stuck.
             if (dropConfirmedLayers(state, state.serverCursor)) {
-                refoldAndNotify(state);
+                refoldSubscription(state, state.serverBase);
             }
         }
         /* eslint-enable no-param-reassign */
     }
 
-    /**
-     * Resolve the value to publish for a `data`/`delta` frame.
-     *
-     * A `data` frame is an authoritative snapshot (the server re-execution path)
-     * and always replaces the cached value wholesale. A `delta` frame carrying a
-     * structured `MutationDelta` (the `broadcastDelta` row-change path) is
-     * merged incrementally into the cached list — preserving order, no dup/loss —
-     * so each subscription (including every paginated page) updates by delta
-     * rather than a full re-send. We fall back to full replacement when the
-     * delta isn't a recognisable row change, when there's no cached value yet,
-     * or when it can't be applied cleanly against the current cached shape.
-     */
-     
     /** Route an inbound whisper to the topic's handlers on the originating shard. */
     private dispatchWhisper(message: ServerWhisperMessage, shardKey?: string): void {
         const handlers = this.whisperHandlers.get(connectionKey(shardKey))?.get(message.topic);

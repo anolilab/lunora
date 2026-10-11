@@ -85,6 +85,15 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
     }
 };
 
+/**
+ * Display `base` through the subscription's pending optimistic layers. The caller names the
+ * base, so a frame that has just committed its payload folds that payload, not whatever
+ * `serverBase` holds now.
+ */
+export const refoldSubscription = (state: SubscriptionState, base: unknown): void => {
+    notifySubscription(state, foldOptimistic(base, state.optimisticLayers));
+};
+
 /** The settle handle returned by {@link applyOptimisticLayer}. */
 export interface OptimisticLayerHandle {
     /**
@@ -142,9 +151,7 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
     };
 
     const refold = (): void => {
-        // Re-derive the displayed value from the authoritative base through the
-        // remaining layers. `notifySubscription` no-ops if it's unchanged.
-        notifySubscription(state, foldOptimistic(state.serverBase, state.optimisticLayers));
+        refoldSubscription(state, state.serverBase);
     };
 
     return {

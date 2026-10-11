@@ -1,4 +1,3 @@
-import { foldOptimistic,notifySubscription } from "./optimistic-layers";
 import type { SubscriptionState } from "./subscription";
 import type { ServerDataMessage } from "./types";
 
@@ -19,19 +18,20 @@ export const advanceWatermark = (state: SubscriptionState, mutationId: number): 
  * frame passes `rowsFollow`, because its rowset callback runs right after. A settled
  * frame does not: its value did not change, so no rows follow.
  */
-export const fanCheckpoints = (state: SubscriptionState, options: { rowsFollow?: true } = {}): void => {
+export const fanCheckpoints = (state: SubscriptionState, rowsFollow = false): void => {
     for (const onCheckpoint of state.checkpointCallbacks) {
         onCheckpoint({
             checkpoint: state.serverCursor,
             mutationId: state.lastMutationId,
-            ...(options.rowsFollow === true && { rowsFollow: true }),
+            ...(rowsFollow && { rowsFollow: true }),
         });
     }
 };
 
 /**
- * Commit a data frame's authoritative payload and its position. The caller has
- * already resolved the payload, so this only records it. The payload becomes the
+ * Record a data frame's authoritative payload and its position. The caller has already
+ * resolved the payload. The watermark and the checkpoint fan-out are the caller's to run,
+ * so this function has no effect on subscribers. The payload becomes the
  * new `serverBase`, and the cursor and epoch advance when the frame carries them.
  */
 export const commitDataFrame = (state: SubscriptionState, message: ServerDataMessage, payload: unknown): void => {
@@ -46,17 +46,4 @@ export const commitDataFrame = (state: SubscriptionState, message: ServerDataMes
         state.serverEpoch = message.epoch;
     }
     /* eslint-enable no-param-reassign */
-
-    if (message.lastMutationId !== undefined) {
-        advanceWatermark(state, message.lastMutationId);
-        fanCheckpoints(state, { rowsFollow: true });
-    }
-};
-
-/**
- * Display the authoritative base, re-folded through whatever optimistic layers are
- * still pending, so a layer that is still pending keeps showing its write.
- */
-export const refoldAndNotify = (state: SubscriptionState): void => {
-    notifySubscription(state, foldOptimistic(state.serverBase, state.optimisticLayers));
 };
