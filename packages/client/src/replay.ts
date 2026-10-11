@@ -222,12 +222,18 @@ export const indexReplaySlots = (results: { body?: unknown; id?: number }[]): Ma
 };
 
 /**
- * What a batch slot means for the queued write it answers. `unanswered` means the
- * server never replied (retry under the same mutationId). `errored` carries the server's
- * error, which the caller may requeue or settle, depending on the failure. `accepted`
- * carries the envelope to settle.
+ * What a batch slot means for the queued write it answers, decided in one place.
+ * `unanswered`: the server never replied, so retry under the same `mutationId`.
+ * `errored`: the server's error. The caller requeues or settles it by failure kind.
+ * `committed`: the write committed with a readable result.
+ * `undecodable`: the write committed, but its result cannot be decoded. It settles
+ * as committed and is never retried.
  */
-export type ReplaySlotVerdict = { error: LunoraClientError; kind: "errored" } | { inner: RpcEnvelopeBody; kind: "accepted" } | { kind: "unanswered" };
+export type ReplaySlotVerdict =
+    | { error: LunoraClientError; kind: "errored" }
+    | { commitCursor: number | undefined; error: LunoraError; kind: "undecodable" }
+    | { commitCursor: number | undefined; kind: "committed"; value: unknown }
+    | { kind: "unanswered" };
 
 export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlotVerdict => {
     if (inner === undefined) {
@@ -238,20 +244,10 @@ export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlo
         return { error: slotError(inner), kind: "errored" };
     }
 
-    return { inner, kind: "accepted" };
-};
-
-/**
- * Decode an accepted slot's result. A result the codec refuses still means the write
- * committed, so it is reported as an undecodable success, not a failure to retry.
- */
-export type ReplayResultDecode = { error: LunoraError; kind: "undecodable" } | { kind: "value"; value: unknown };
-
-export const decodeReplayResult = (inner: RpcEnvelopeBody): ReplayResultDecode => {
     try {
-        return { kind: "value", value: decodeWire(inner.result) };
+        return { commitCursor: inner.commitCursor, kind: "committed", value: decodeWire(inner.result) };
     } catch (error: unknown) {
-        return { error: undecodableResultError(error), kind: "undecodable" };
+        return { commitCursor: inner.commitCursor, error: undecodableResultError(error), kind: "undecodable" };
     }
 };
 

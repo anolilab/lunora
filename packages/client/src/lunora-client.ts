@@ -136,7 +136,6 @@ import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import { createReconnect } from "./reconnect";
 import type { RpcEnvelopeBody } from "./replay";
 import {
-    decodeReplayResult,
     defaultReplayRetryDelayMs,
     indexReplaySlots,
     isTransientReplayFailure,
@@ -8698,11 +8697,14 @@ class LunoraClient {
         for (const [index, item] of items.entries()) {
             const verdict = replaySlotVerdict(bySlot.get(index));
 
-            if (verdict.kind === "unanswered") {
-                // The server never returned this slot. It may or may not have committed,
-                // so retry under the same `mutationId` (idempotent).
-                requeue.push(item);
-            } else if (verdict.kind === "errored") {
+            switch (verdict.kind) {
+            case "committed": {
+                accepted = true;
+                this.settleReplaySuccess(item, verdict.value, verdict.commitCursor);
+            
+            break;
+            }
+            case "errored": {
                 refused ||= isAuthReplayFailure(verdict.error);
 
                 if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
@@ -8711,15 +8713,20 @@ class LunoraClient {
                 } else {
                     this.settleReplayTerminal(item, verdict.error);
                 }
-            } else {
+            
+            break;
+            }
+            case "unanswered": {
+                // The server never returned this slot. It may or may not have committed,
+                // so retry under the same `mutationId` (idempotent).
+                requeue.push(item);
+            
+            break;
+            }
+            default: {
                 accepted = true;
-                const decoded = decodeReplayResult(verdict.inner);
-
-                if (decoded.kind === "undecodable") {
-                    this.settleReplayUndecodable(item, decoded.error, verdict.inner.commitCursor);
-                } else {
-                    this.settleReplaySuccess(item, decoded.value, verdict.inner.commitCursor);
-                }
+                this.settleReplayUndecodable(item, verdict.error, verdict.commitCursor);
+            }
             }
         }
 

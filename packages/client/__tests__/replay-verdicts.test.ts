@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
-import { decodeReplayResult, indexReplaySlots, replaySlotVerdict } from "../src/replay";
+import { indexReplaySlots, replaySlotVerdict } from "../src/replay";
 
 describe("indexReplaySlots", () => {
     it("keeps the envelope of each answered slot, keyed by its index", () => {
@@ -50,31 +50,26 @@ describe("replaySlotVerdict", () => {
         expect(verdict.kind).toBe("errored");
         expect(verdict).toMatchObject({ error: { code: "CONFLICT", message: "taken" } });
     });
-
-    it("accepts a slot carrying a result envelope, and hands back that envelope", () => {
-        expect.assertions(2);
-
-        const inner = { commitCursor: 9, result: encodeWire(1) };
-
-        expect(replaySlotVerdict(inner)).toStrictEqual({ inner, kind: "accepted" });
-        expect(replaySlotVerdict(inner)).toMatchObject({ inner: { commitCursor: 9 } });
-    });
 });
 
-describe("decodeReplayResult", () => {
-    it("decodes a committed result into its value", () => {
+describe("replaySlotVerdict decode outcomes", () => {
+    it("reports a readable committed result as committed, with its value and commit cursor", () => {
         expect.assertions(1);
 
-        expect(decodeReplayResult({ result: encodeWire({ total: 42n }) })).toStrictEqual({ kind: "value", value: { total: 42n } });
+        expect(replaySlotVerdict({ commitCursor: 4, result: encodeWire({ total: 42n }) })).toStrictEqual({
+            commitCursor: 4,
+            kind: "committed",
+            value: { total: 42n },
+        });
     });
 
-    it("reports a committed result the codec refuses as undecodable, not as a failure", () => {
+    it("reports a committed result the codec refuses as undecodable, not as a failure to retry", () => {
         expect.assertions(2);
 
         // The write committed; only its reply is unreadable. It must settle, not retry.
-        const decoded = decodeReplayResult({ result: ["$lunora.wire$", "bigint", "not-a-number"] });
+        const verdict = replaySlotVerdict({ commitCursor: 4, result: ["$lunora.wire$", "bigint", "not-a-number"] });
 
-        expect(decoded.kind).toBe("undecodable");
-        expect(decoded).toMatchObject({ error: { code: "WIRE_DECODE_FAILED" } });
+        expect(verdict.kind).toBe("undecodable");
+        expect(verdict).toMatchObject({ commitCursor: 4, error: { code: "WIRE_DECODE_FAILED" } });
     });
 });
