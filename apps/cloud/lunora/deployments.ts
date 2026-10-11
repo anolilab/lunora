@@ -7,6 +7,8 @@ import { organizationServing } from "../src/billing/spend";
 import type { BadgeInstall, InstallBadgeStore } from "../src/catalog/install-badge";
 import { endInstallBadge, restoreInstallBadge } from "../src/catalog/install-badge";
 import { previewExpiry } from "../src/deploy/preview";
+import type { DeploymentStatus } from "../src/deploy/status-transitions";
+import { assertStatusMove } from "../src/deploy/status-transitions";
 import { PLAIN_WORKER_NO_ADMIN, RUNTIME_LABELS, storedRuntime } from "../src/project-runtime";
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
@@ -21,11 +23,8 @@ import { rateLimit } from "./guards";
 import { assertProjectNotHalted } from "./halts";
 import { enqueueNotification } from "./notification-outbox";
 import { collectAll } from "./paginate";
-import type { DEPLOYMENT_STATUSES } from "./tables/shared";
 import { storedProjectRuntime } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
-
-type DeploymentStatus = (typeof DEPLOYMENT_STATUSES)[number];
 
 type DeploymentRow = Document_<"deployments">;
 
@@ -244,37 +243,6 @@ const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "li
         superseded: "supersededAt",
         verifying: "verifyingAt",
     };
-
-/**
- * The status moves the system performs, keyed by the status a deployment is in.
- * `updateStatus` refuses any move not listed here. Every entry is a write some
- * writer really makes:
- *
- * - `queued → provisioning → verifying → live`, the orchestrator's progress
- *   events forwarded by `src/deploy/release-core.ts`. A release without a health
- *   check goes `provisioning → live`.
- * - `→ failed` from any in-flight state. `live → failed` is an activation that
- *   fails after the live write (`fail("activate")` in `release-core.ts`).
- * - `live → superseded` and `superseded → live`: `activate`, `rollback`, and a
- *   halt's resume (`halt-converge.ts`).
- * - `→ destroyed`: an expired preview, a deleted project or organization, and
- *   the superseded prune (`pruneSuperseded`).
- * - Same-status writes: the orchestrator re-drives `updateStatus`, and a retry
- *   can write a status the row already holds.
- *
- * `building` has no writer. It stays in the status union for the client's phase
- * view, so no move into or out of it is listed.
- */
-export const ALLOWED_TRANSITIONS: Readonly<Record<DeploymentStatus, ReadonlyArray<DeploymentStatus>>> = {
-    building: [],
-    destroyed: [],
-    failed: ["failed", "destroyed"],
-    live: ["live", "superseded", "failed", "destroyed"],
-    provisioning: ["provisioning", "verifying", "live", "failed", "destroyed"],
-    queued: ["provisioning", "failed", "destroyed"],
-    superseded: ["live", "destroyed"],
-    verifying: ["verifying", "live", "failed", "destroyed"],
-};
 
 /**
  * Resolve a deployment's tenant URL + *sealed* admin token for the hosted-studio
@@ -758,6 +726,11 @@ export const activate = mutation
         const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
         const others = page.filter((d) => d._id !== id && d.alias === deployment.alias && d.kind === deployment.kind && d.status === "live");
 
+        // Every superseded row is checked before the first write, so a refused move leaves the alias as it was.
+        for (const other of others) {
+            assertStatusMove(other.status, "superseded");
+        }
+
         for (const other of others) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
@@ -834,7 +807,10 @@ export const rollback = internalMutation
         const { now } = context;
         const replaced = await liveRelease(context, target);
 
+        assertStatusMove(target.status, "live");
+
         if (replaced && replaced._id !== id) {
+            assertStatusMove(replaced.status, "superseded");
             await context.db.patch(replaced._id, { status: "superseded", supersededAt: now, updatedAt: now });
             await endInstallBadge(installBadgeOf(context), replaced);
         }
@@ -949,19 +925,18 @@ export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }
         byProjectKind.set(groupKey, group);
     }
 
-    let pruned = 0;
+    const excess = [...byProjectKind.values()].flatMap((group) => group.toSorted((a, b) => b.createdAt - a.createdAt).slice(SUPERSEDED_RETENTION));
 
-    for (const group of byProjectKind.values()) {
-        const excess = group.toSorted((a, b) => b.createdAt - a.createdAt).slice(SUPERSEDED_RETENTION);
-
-        for (const deployment of excess) {
-            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
-            pruned += 1;
-        }
+    for (const deployment of excess) {
+        assertStatusMove(deployment.status, "destroyed");
     }
 
-    return { pruned };
+    for (const deployment of excess) {
+        // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+        await context.db.patch(deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
+    }
+
+    return { pruned: excess.length };
 });
 
 /**
@@ -976,6 +951,10 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
     const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
 
     const expired = page.filter((deployment) => deployment.status !== "destroyed" && deployment.expiresAt != null && deployment.expiresAt < now);
+
+    for (const deployment of expired) {
+        assertStatusMove(deployment.status, "destroyed");
+    }
 
     for (const deployment of expired) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
@@ -1027,7 +1006,7 @@ const onEnter = async (context: MutationContext, id: Id<"deployments">, existing
 
 /**
  * Advance a deployment's lifecycle (queued → provisioning → verifying → live, or
- * → failed). A move the transition table ({@link ALLOWED_TRANSITIONS}) does not
+ * → failed). A move the transition table (`src/deploy/status-transitions.ts`) does not
  * list is refused with a CONFLICT. Driven by the deploy orchestrator as it works through the
  * provisioner's progress events, authorized by the same `deployKey` (CI) or a
  * member session (dashboard).
@@ -1068,9 +1047,7 @@ export const updateStatus = mutation
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
             : assertMember(context, existing.organizationId, ["owner", "admin"]));
 
-        if (!ALLOWED_TRANSITIONS[existing.status].includes(status)) {
-            throw new LunoraError("CONFLICT", `cannot move a ${existing.status} deployment to ${status}`);
-        }
+        assertStatusMove(existing.status, status);
 
         const { now } = context;
         const phaseColumn = PHASE_TIMESTAMP[status];

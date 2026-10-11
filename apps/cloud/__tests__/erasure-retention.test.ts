@@ -305,6 +305,66 @@ describe("erasure: tenant backups", () => {
     });
 });
 
+describe("organization erasure: deployments", () => {
+    const deployment = (id: string, status: string, extra: Record<string, unknown> = {}) => {
+        return {
+            _id: id,
+            alias: "acme",
+            createdAt: 1,
+            kind: "production",
+            organizationId: "org_1",
+            projectId: "proj_1",
+            scriptName: "acme",
+            status,
+            ...extra,
+        };
+    };
+    const erasedWith = (deployments: Record<string, unknown>[]) =>
+        makeCtx(
+            {
+                ...ORG_TABLES,
+                aliasOwnership: [],
+                edgeRules: [],
+                buildLogs: [],
+                builds: [],
+                catalogInstalls: [],
+                deployments,
+                domains: [],
+                halts: [],
+                members: [],
+                organizations: [{ _id: "org_1", deletionRequestedAt: 1 }],
+                payment_customers: [],
+                payment_sessions: [],
+                payment_subscriptions: [],
+                payment_usageEvents: [],
+                projects: [],
+                secrets: [],
+            },
+            { now: NOW },
+        );
+
+    it("moves a live deployment to destroyed, and leaves an already destroyed one as it is", async () => {
+        const { ctx, ops } = erasedWith([deployment("dep_live", "live"), deployment("dep_gone", "destroyed", { destroyedAt: 5 })]);
+
+        await purgeDeleted.handler(ctx, {});
+
+        expect(patches(ops).filter((entry) => entry.id.startsWith("dep_"))).toStrictEqual([
+            { id: "dep_live", patch: expect.objectContaining({ status: "destroyed" }) },
+        ]);
+    });
+
+    it("tears down a deployment stuck in building, so the organization's erasure leaves nothing running", async () => {
+        const { ctx, ops } = erasedWith([deployment("dep_live", "live"), deployment("dep_building", "building")]);
+
+        await purgeDeleted.handler(ctx, {});
+
+        expect(patches(ops).filter((entry) => entry.id.startsWith("dep_"))).toStrictEqual([
+            { id: "dep_live", patch: expect.objectContaining({ status: "destroyed" }) },
+            { id: "dep_building", patch: expect.objectContaining({ status: "destroyed" }) },
+        ]);
+    });
+});
+
 describe("retention sweep", () => {
     it("deletes anonymised financial rows only past ten years", async () => {
         const { ctx, ops } = makeCtx(

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { Id } from "../lunora/_generated/dataModel";
 import type { MutationCtx } from "../lunora/_generated/server";
-import { ALLOWED_TRANSITIONS, updateStatus } from "../lunora/deployments";
+import { updateStatus } from "../lunora/deployments";
+import { ALLOWED_TRANSITIONS, assertStatusMove } from "../src/deploy/status-transitions";
 import withRateLimitStore from "./support/rate-limit-db";
 
 type Row = Record<string, unknown>;
@@ -25,6 +26,7 @@ const PERFORMED: ReadonlyArray<Move> = [
     ["provisioning", "live"],
     ["provisioning", "failed"],
     ["provisioning", "destroyed"],
+    ["building", "destroyed"],
     ["verifying", "verifying"],
     ["verifying", "live"],
     ["verifying", "failed"],
@@ -156,5 +158,45 @@ describe("updateStatus against the deployment transition table", () => {
         await updateStatus.handler(ctx, { id: ID, status: "failed" });
 
         expect(patched[0]?.patch).toMatchObject({ failedAt: ctx.now, status: "failed" });
+    });
+});
+
+/** The error a call throws, or `undefined` when it does not throw. */
+const thrownBy = (action: () => void): unknown => {
+    try {
+        action();
+    } catch (error) {
+        return error;
+    }
+
+    return undefined;
+};
+
+describe("assertStatusMove, the check every direct status writer runs", () => {
+    it.each(PERFORMED)("allows %s -> %s", (from, to) => {
+        expect(
+            thrownBy(() => {
+                assertStatusMove(from, to);
+            }),
+        ).toBeUndefined();
+    });
+
+    it.each(REFUSED)("refuses %s -> %s with a CONFLICT naming both statuses", (from, to) => {
+        expect(
+            thrownBy(() => {
+                assertStatusMove(from, to);
+            }),
+        ).toMatchObject({
+            code: "CONFLICT",
+            message: `cannot move a ${from} deployment to ${to}`,
+        });
+    });
+
+    it("refuses a stored status the table does not know, rather than treating it as a move", () => {
+        expect(
+            thrownBy(() => {
+                assertStatusMove("archived", "live");
+            }),
+        ).toMatchObject({ code: "CONFLICT" });
     });
 });

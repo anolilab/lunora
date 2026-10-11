@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { assertStatusMove } from "../src/deploy/status-transitions";
 import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
@@ -360,7 +361,15 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         // eslint-disable-next-line no-await-in-loop -- one read per org; volumes are small
         const { page: deployments } = await context.db.deployments.findMany({ where: { organizationId } });
 
-        for (const deployment of deployments) {
+        // A row already `destroyed` keeps its status and its `destroyedAt`: it is not moved, so it is skipped
+        // rather than re-written (`destroyed → destroyed` is not a move the table lists).
+        const toDestroy = deployments.filter((deployment) => deployment.status !== "destroyed");
+
+        for (const deployment of toDestroy) {
+            assertStatusMove(deployment.status, "destroyed");
+        }
+
+        for (const deployment of toDestroy) {
             // eslint-disable-next-line no-await-in-loop -- sequential patches; volumes are small
             await context.db.patch(deployment._id, { destroyedAt: context.now, status: "destroyed", updatedAt: context.now });
         }

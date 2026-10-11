@@ -112,6 +112,22 @@ describe("projects.remove", () => {
         expect(result).toStrictEqual({ destroyed: 1 });
     });
 
+    it("tears down a deployment stuck in building along with the live one", async () => {
+        const { ctx, patched } = makeCtx({
+            deployments: [
+                { _id: "dep_live", projectId: PROJECT, status: "live" },
+                { _id: "dep_building", projectId: PROJECT, status: "building" },
+            ],
+            members,
+        });
+
+        const result = await remove.handler(ctx, { id: PROJECT as never, organizationId: ORG as never });
+
+        expect(patched.find((entry) => entry.id === "dep_building")?.patch).toMatchObject({ status: "destroyed" });
+        expect(patched.find((entry) => entry.id === "dep_live")?.patch).toMatchObject({ status: "destroyed" });
+        expect(result).toStrictEqual({ destroyed: 2 });
+    });
+
     it("keeps an alias claimed until its tenant is torn down, and releases one with nothing left to tear down", async () => {
         const { ctx, deleted } = makeCtx({
             aliasOwnership: [

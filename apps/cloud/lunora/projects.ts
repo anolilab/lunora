@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import { productionAliasCandidates } from "../src/deploy/production-alias";
+import { assertStatusMove } from "../src/deploy/status-transitions";
 import type { ProjectRuntime } from "../src/project-runtime";
 import { runtimeColumn, storedRuntime } from "../src/project-runtime";
 import type { TargetId } from "../src/provision-contract";
@@ -450,6 +451,10 @@ export const remove = mutation
         // has something to tear down.
         const { page: deployments } = await context.db.deployments.findMany({ where: { projectId: id } });
         const live = deployments.filter((row) => row.status !== "destroyed");
+
+        for (const deployment of live) {
+            assertStatusMove(deployment.status, "destroyed");
+        }
 
         for (const deployment of live) {
             // eslint-disable-next-line no-await-in-loop -- sequential patches; a project's volumes are small

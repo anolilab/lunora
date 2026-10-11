@@ -35,6 +35,7 @@ import type { DeployPacer } from "./pacing";
 import type { DeployTelemetry, ReleaseDeps } from "./release";
 import { droppedDurableObjectClasses, reprovision } from "./release";
 import type { ReleaseStore } from "./release-store";
+import { assertStatusMove } from "./status-transitions";
 import { classesOnWorker, recordingDriver, storeRecorder } from "./worker-classes";
 
 /** Everything both converges need. */
@@ -284,6 +285,15 @@ const installBadgeOf = (database: ControlPlaneStore): InstallBadgeStore => {
 /** Record a resume onto a release other than the live one, as a rollback records it: it becomes live and the project points at it. */
 const recordResumedOnto = async (deps: HaltConvergeDeps, target: DeploymentRow, live: DeploymentRow | undefined, now: number): Promise<void> => {
     const badge = installBadgeOf(deps.database);
+
+    // Both moves are checked before either is written, so a refused one never leaves the alias with no live release.
+    if (live !== undefined && live._id !== target._id) {
+        assertStatusMove(live.status, "superseded");
+    }
+
+    if (live?._id !== target._id) {
+        assertStatusMove(target.status, "live");
+    }
 
     if (live !== undefined && live._id !== target._id) {
         await deps.database.patch(live._id, { status: "superseded", supersededAt: now, updatedAt: now }, "deployments");

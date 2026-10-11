@@ -141,7 +141,7 @@ describe("deployment notifications", () => {
         expect(notifications(inserted)).toHaveLength(0);
     });
 
-    // The orchestrator's in-flight phase: the table refuses a move out of `building`, which nothing writes.
+    // The orchestrator's in-flight phase: the table allows `building` only into `destroyed`, and nothing writes it.
     const provisioning = {
         _id: "dep_3",
         kind: "production",

@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { Doc } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
-import { cleanupExpiredPreviews, planForScript } from "../lunora/deployments";
+import { cleanupExpiredPreviews, planForScript, pruneSuperseded } from "../lunora/deployments";
 import type { DEPLOYMENT_STATUSES } from "../lunora/tables/shared";
 import { periodStartOf } from "../src/billing/spend";
 
@@ -78,6 +78,47 @@ describe("deployments.cleanupExpiredPreviews", () => {
 
         expect(result).toStrictEqual({ destroyed: 0 });
         expect(patched).toHaveLength(0);
+    });
+
+    it("tears down an expired preview stuck in building, as it does one in queued", async () => {
+        const now = Date.now();
+        const { ctx, patched } = makeCtx([
+            { _id: "queued_expired", expiresAt: now - 1, kind: "preview", status: "queued" },
+            { _id: "building_expired", expiresAt: now - 1, kind: "preview", status: "building" },
+        ]);
+
+        const result = await cleanupExpiredPreviews.handler(ctx, {});
+
+        expect(result).toStrictEqual({ destroyed: 2 });
+        expect(patched.map((entry) => entry.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["building_expired", "queued_expired"]);
+        expect(patched.every((entry) => entry.patch["status"] === "destroyed")).toBe(true);
+    });
+});
+
+describe("deployments.pruneSuperseded", () => {
+    it("destroys only the superseded releases beyond the retention window, and writes no other status", async () => {
+        const row = (id: string, createdAt: number, status: string): Row => {
+            return {
+                _id: id,
+                alias: "acme",
+                createdAt,
+                kind: "production",
+                scriptName: "acme",
+                status,
+            };
+        };
+        const { ctx, patched } = makeCtx([
+            row("newest", 4, "superseded"),
+            row("second", 3, "superseded"),
+            row("third", 2, "superseded"),
+            row("oldest", 1, "superseded"),
+            row("live", 5, "live"),
+        ]);
+
+        const result = await pruneSuperseded.handler(ctx, {});
+
+        expect(result).toStrictEqual({ pruned: 1 });
+        expect(patched.map((entry) => [entry.id, entry.patch["status"]])).toStrictEqual([["oldest", "destroyed"]]);
     });
 });
 
