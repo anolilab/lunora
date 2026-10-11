@@ -141,7 +141,7 @@ describe("reading the contract", () => {
         expect(() => readContract(source)).toThrow("cannot evaluate");
     });
 
-    it("takes the celld-vps row from @lunora/config's CELLD_RELEASE_BINDINGS, through its re-export", () => {
+    it("takes the celld-vps row from @lunora/config's CELLD_RELEASE_BINDINGS, from the celld-names module", () => {
         expect.assertions(4);
 
         const row = contract.bindingSupport["celld-vps"];
@@ -152,18 +152,18 @@ describe("reading the contract", () => {
         const edited = readContract(contractSource, (filePath) => {
             const text = readFileSync(filePath, "utf8");
 
-            return filePath.endsWith("release-config.ts") ? text.replace('kv: "provisioned",', 'kv: "bound",') : text;
+            return filePath.endsWith("celld-names/index.ts") ? text.replace('kv: "provisioned",', 'kv: "bound",') : text;
         });
 
         expect(edited.bindingSupport["celld-vps"].kv).toBe("bound");
         expect(edited.bindingSupport["celld-vps"].d1).toBe("provisioned");
-        expect(Object.keys(MODULE_SOURCES)).toStrictEqual(["@lunora/config/celld"]);
+        expect(Object.keys(MODULE_SOURCES)).toStrictEqual(["@lunora/config/celld", "@lunora/config/celld-names"]);
     });
 
     it("refuses a value imported from a module it does not read", () => {
         expect.assertions(1);
 
-        const source = contractSource.replace(/(import \{ CELLD_RELEASE_BINDINGS[^}]*\} from )"@lunora\/config\/celld"/u, '$1"@lunora/elsewhere"');
+        const source = contractSource.replace(/(import \{ CELLD_RELEASE_BINDINGS[^}]*\} from )"@lunora\/config\/celld-names"/u, '$1"@lunora/elsewhere"');
 
         expect(() => readContract(source)).toThrow('imports a value from "@lunora/elsewhere"');
     });
