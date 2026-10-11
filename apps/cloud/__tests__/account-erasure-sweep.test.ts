@@ -143,6 +143,24 @@ describe("orphaned-membership sweep", () => {
         await expect(runAccountErasureSweep(store, sweepPorts)).resolves.toStrictEqual({ erased: ["usr_gone", "usr_mixed"], failed: [] });
     });
 
+    it("erases a kept ownership once support has given the organization another owner", async () => {
+        const sweepPorts = ports([]);
+        const store = markedStore(
+            [
+                { _id: "m_kept", organizationId: "org_1", role: "owner", userId: "usr_removed" },
+                { _id: "m_new", organizationId: "org_1", role: "owner", userId: "usr_new_owner" },
+            ],
+            ["m_kept"],
+        );
+
+        await expect(
+            runAccountErasureSweep(store, { ...sweepPorts, existingUserIds: () => Promise.resolve(new Set(["usr_new_owner"])) }),
+        ).resolves.toStrictEqual({
+            erased: ["usr_removed"],
+            failed: [],
+        });
+    });
+
     it("does not count kept ownerships against the per-tick cap", async () => {
         const kept = Array.from({ length: MAX_ERASURES_PER_TICK + 5 }, (_, index) => {
             return { _id: `m_kept_${String(index)}`, organizationId: `org_${String(index)}`, role: "owner", userId: `usr_kept_${String(index)}` };
