@@ -27,12 +27,12 @@ export interface PlatformMetricsQuery {
     query: string;
 }
 
-/** Build the four statements for the window `(sinceSec, toSec]`. Pure, so the SQL is pinned by tests. */
+/** Build the five statements for the window `(sinceSec, toSec]`. Pure, so the SQL is pinned by tests. */
 export const buildPlatformMetricsQueries = (
     dataset: string,
     sinceSec: number,
     toSec: number,
-): Record<"dispatchLatency" | "dispatchOutcomes" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
+): Record<"controlPlaneUnconfigured" | "dispatchLatency" | "dispatchOutcomes" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
     const table = analyticsEngineTable(dataset);
     const statement = (kind: string, select: string, tail: string): PlatformMetricsQuery => {
         return {
@@ -57,6 +57,11 @@ export const buildPlatformMetricsQueries = (
             "SELECT blob2 AS cell, blob3 AS step, blob4 AS reason, COUNT(*) AS failures",
             `GROUP BY cell, step, reason ORDER BY failures DESC LIMIT ${String(MAX_FAILURE_ROWS)}`,
         ),
+        controlPlaneUnconfigured: statement(
+            PLATFORM_METRIC_KINDS.controlPlaneUnconfigured,
+            "SELECT blob2 AS cell, blob3 AS setting, COUNT(*) AS refusals",
+            "GROUP BY cell, setting ORDER BY cell, setting",
+        ),
         // MAX, not AVG: a queue that backed up for one minute of fifteen is the
         // thing to see, and averaging it away hides exactly that.
         queueDepth: statement(
@@ -78,6 +83,8 @@ const asString = (value: unknown): string => (typeof value === "string" ? value 
 
 /** What the endpoint returns. */
 export interface PlatformMetricsSnapshot {
+    /** Requests refused fail-closed for a missing setting outside `development` (plan 475), per cell and setting. */
+    controlPlaneUnconfigured: { cell: string; refusals: number; setting: string }[];
     dispatch: { cell: string; outcomes: Record<string, number>; p50Ms: number; p95Ms: number; requests: number }[];
     provisionFailures: { cell: string; failures: number; reason: string; step: string }[];
     /** Peak depth per 15-minute bucket; `t` is the bucket start in epoch ms. */
@@ -86,8 +93,9 @@ export interface PlatformMetricsSnapshot {
 
 type Rows = ReadonlyArray<Record<string, unknown>>;
 
-/** Fold the four result sets into one snapshot — outcomes nested under their cell's latency row. */
+/** Fold the five result sets into one snapshot — outcomes nested under their cell's latency row. */
 export const foldPlatformMetrics = (rows: {
+    controlPlaneUnconfigured: Rows;
     dispatchLatency: Rows;
     dispatchOutcomes: Rows;
     provisionFailures: Rows;
@@ -114,6 +122,9 @@ export const foldPlatformMetrics = (rows: {
     }
 
     return {
+        controlPlaneUnconfigured: rows.controlPlaneUnconfigured.map((row) => {
+            return { cell: asString(row.cell), refusals: asNumber(row.refusals), setting: asString(row.setting) };
+        }),
         dispatch,
         provisionFailures: rows.provisionFailures.map((row) => {
             return { cell: asString(row.cell), failures: asNumber(row.failures), reason: asString(row.reason), step: asString(row.step) };
@@ -130,7 +141,7 @@ export const foldPlatformMetrics = (rows: {
     };
 };
 
-/** Read a snapshot over `[from, to]` (epoch ms). The four reads are independent, so they run together. */
+/** Read a snapshot over `[from, to]` (epoch ms). The five reads are independent, so they run together. */
 export const readPlatformMetrics = async (
     options: AnalyticsSqlCredentials & { dataset: string },
     window: { from: number; to: number },
@@ -142,12 +153,13 @@ export const readPlatformMetrics = async (
 
         return rows;
     };
-    const [dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth] = await Promise.all([
+    const [controlPlaneUnconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth] = await Promise.all([
+        run(queries.controlPlaneUnconfigured),
         run(queries.dispatchLatency),
         run(queries.dispatchOutcomes),
         run(queries.provisionFailures),
         run(queries.queueDepth),
     ]);
 
-    return foldPlatformMetrics({ dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth });
+    return foldPlatformMetrics({ controlPlaneUnconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth });
 };
