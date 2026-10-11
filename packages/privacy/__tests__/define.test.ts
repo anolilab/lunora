@@ -105,7 +105,7 @@ describe("definePrivacy erasure", () => {
 
         expect(opened).toMatchObject({ status: "grace" });
         expect(opened.erasureGraceUntil?.getTime()).toBe(now.getTime() + 14 * DAY_MS);
-        await expect(privacy.cancelRequest({ requestId: opened.id })).resolves.toMatchObject({ status: "cancelled" });
+        await expect(privacy.cancelRequest({ requestId: opened.id, subjectId: "u1" })).resolves.toMatchObject({ status: "cancelled" });
     });
 
     it("refuses an erasure from a sign-in older than 24 hours", async () => {
@@ -127,7 +127,19 @@ describe("definePrivacy erasure", () => {
         const { privacy } = build();
         const opened = await privacy.requestExport({ subjectId: "u1" });
 
-        await expect(privacy.extendRequest({ reason: "Large request", requestId: opened.id })).resolves.toMatchObject({ reason: "Large request" });
-        await expect(codeOf(privacy.extendRequest({ reason: "again", requestId: opened.id }))).resolves.toBe("UNPROCESSABLE");
+        await expect(privacy.extendRequest({ reason: "Large request", requestId: opened.id, subjectId: "u1" })).resolves.toMatchObject({
+            reason: "Large request",
+        });
+        await expect(codeOf(privacy.extendRequest({ reason: "again", requestId: opened.id, subjectId: "u1" }))).resolves.toBe("UNPROCESSABLE");
+    });
+});
+
+describe("definePrivacy ownership", () => {
+    it("refuses to cancel or extend another subject's request, as not found", async () => {
+        const { privacy } = build();
+        const opened = await privacy.requestErasure({ sessionAgeMs: 60_000, subjectId: "u1" });
+
+        await expect(codeOf(privacy.cancelRequest({ requestId: opened.id, subjectId: "u2" }))).resolves.toBe("NOT_FOUND");
+        await expect(codeOf(privacy.extendRequest({ reason: "x", requestId: opened.id, subjectId: "u2" }))).resolves.toBe("NOT_FOUND");
     });
 });

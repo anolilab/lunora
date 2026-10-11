@@ -22,6 +22,20 @@ import { assembleExport, collectPart, EXPORT_EXPIRY_MS, runErasure, runExport } 
 import type { TombstonePort } from "./tombstones";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
+/**
+ * Load a request the caller may act on. A request that belongs to someone else reads as
+ * not found, so a caller cannot probe which ids exist.
+ */
+const requireOwnedRequest = async (store: RequestStore, requestId: string, subjectId: string): Promise<RequestRecord> => {
+    const record = await store.get(requestId);
+
+    if (record?.subjectId !== subjectId) {
+        throw new LunoraError("NOT_FOUND", `No privacy request with id ${requestId}.`);
+    }
+
+    return record;
+};
+
 /** The app's erasure settings. The defaults are the decided values (D3 and the sign-in window). */
 interface ErasureOptions {
     readonly drainBudgetDays?: number;
@@ -77,11 +91,11 @@ interface Privacy {
         /** Re-run a failed export or erasure. The Art. 12(3) clock keeps running throughout. */
         readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
     };
-    readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
+    readonly cancelRequest: (input: { requestId: string; subjectId: string }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
     /** The subject's download link for a finished export. Refused for anyone but the subject, and once expired. */
     readonly downloadUrl: (input: { requestId: string; subjectId: string }) => Promise<string>;
-    readonly extendRequest: (input: { reason: string; requestId: string }) => Promise<RequestRecord>;
+    readonly extendRequest: (input: { reason: string; requestId: string; subjectId: string }) => Promise<RequestRecord>;
     readonly requestErasure: (input: { sessionAgeMs: number; subjectId: string }) => Promise<RequestRecord>;
     readonly requestExport: (input: { subjectId: string }) => Promise<RequestRecord>;
     /** Erase again any restored subject that was erased after the backup. Returns the subject ids it re-erased. */
@@ -234,7 +248,11 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
         };
 
         return {
-            cancelRequest: async ({ requestId }) => cancelRequest(ports.store, { id: requestId, now: ports.now() }),
+            cancelRequest: async ({ requestId, subjectId }) => {
+                await requireOwnedRequest(ports.store, requestId, subjectId);
+
+                return cancelRequest(ports.store, { id: requestId, now: ports.now() });
+            },
 
             coverage: (tables, exclusions = {}) => {
                 const allExclusions = { ...config.exclude, ...exclusions };
@@ -253,7 +271,11 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                 return checkCoverage(tables, classifications);
             },
 
-            extendRequest: async ({ requestId, reason }) => extendRequest(ports.store, { id: requestId, now: ports.now(), reason }),
+            extendRequest: async ({ reason, requestId, subjectId }) => {
+                await requireOwnedRequest(ports.store, requestId, subjectId);
+
+                return extendRequest(ports.store, { id: requestId, now: ports.now(), reason });
+            },
 
             requestErasure: async ({ sessionAgeMs, subjectId }) =>
                 openRequest(ports.store, {

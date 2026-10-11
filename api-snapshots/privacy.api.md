@@ -231,6 +231,7 @@ interface Privacy {
     };
     readonly cancelRequest: (input: {
         requestId: string;
+        subjectId: string;
     }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
     readonly downloadUrl: (input: {
@@ -240,6 +241,7 @@ interface Privacy {
     readonly extendRequest: (input: {
         reason: string;
         requestId: string;
+        subjectId: string;
     }) => Promise<RequestRecord>;
     readonly requestErasure: (input: {
         sessionAgeMs: number;
