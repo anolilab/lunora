@@ -154,7 +154,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, routeErrorFrame } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition, routeErrorFrame } from "./subscription-frames";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -4266,7 +4266,7 @@ class LunoraClient {
                 // is already queued in the message task queue. Drop it when a
                 // stamp is present and doesn't match; an absent stamp
                 // (mixed-version leader) is accepted, same as today.
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -4277,9 +4277,7 @@ class LunoraClient {
                 // consumers see it.
                 // `"polling"` counts as live too: the leader reaches the origin over
                 // HTTP, and this tab's queued writes ride HTTP either way.
-                const transitionedToConnected =
-                    (status === "connected" && this.leaderStatus !== "connected") ||
-                    (status === "polling" && this.leaderStatus !== "connected" && this.leaderStatus !== "polling");
+                const transitionedToConnected = isLiveTransition(this.leaderStatus, status);
 
                 this.leaderStatus = status;
 
@@ -4299,7 +4297,7 @@ class LunoraClient {
             onSubscriptionData: (key, data, cursor, epoch, identity) => {
                 // Belt-and-braces identity check — see `onConnectionStatus`'s
                 // comment for the full rationale (identical here).
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -4312,8 +4310,6 @@ class LunoraClient {
                 if (!state) {
                     return;
                 }
-
-                state.serverBase = data;
 
                 // The leader's frame replaces the cache seed — same bookkeeping
                 // the leader's own `handleDataMessage` does.
@@ -4329,13 +4325,11 @@ class LunoraClient {
                 // hasn't shipped the cursor yet falls through to the historical
                 // fold-and-notify-without-drop behavior below — backward
                 // compatible with a cursor-less wire frame.
+                // The epoch rides only with a cursor. A cursor-less frame changes nothing but the
+                // value, so it never drops layers against the old cursor.
+                commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
+
                 if (cursor !== undefined) {
-                    state.serverCursor = cursor;
-
-                    if (epoch !== undefined) {
-                        state.serverEpoch = epoch;
-                    }
-
                     dropConfirmedLayers(state, cursor);
                 }
 
@@ -4357,7 +4351,7 @@ class LunoraClient {
                 // comment for the full rationale (identical here). This was the
                 // one of the four callbacks without it, which only went unnoticed
                 // because nothing broadcast to it.
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -4370,7 +4364,7 @@ class LunoraClient {
             onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity) => {
                 // Belt-and-braces identity check — see `onConnectionStatus`'s
                 // comment for the full rationale (identical here).
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -6904,7 +6898,7 @@ class LunoraClient {
         // Drop the cache seed before the value moves, then commit the payload and its
         // position. The watermark and the checkpoint fan-out follow the commit.
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
-        commitDataFrame(state, message, payload);
+        commitDataFrame(state, payload, { cursor: message.cursor, epoch: message.epoch });
 
         if (message.lastMutationId !== undefined) {
             advanceWatermark(state, message.lastMutationId);
@@ -8698,35 +8692,35 @@ class LunoraClient {
             const verdict = replaySlotVerdict(bySlot.get(index));
 
             switch (verdict.kind) {
-            case "committed": {
-                accepted = true;
-                this.settleReplaySuccess(item, verdict.value, verdict.commitCursor);
-            
-            break;
-            }
-            case "errored": {
-                refused ||= isAuthReplayFailure(verdict.error);
+                case "committed": {
+                    accepted = true;
+                    this.settleReplaySuccess(item, verdict.value, verdict.commitCursor);
 
-                if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
-                    this.noteReplayRetryDelay(shardKey, verdict.error, authToken);
-                    requeue.push(item);
-                } else {
-                    this.settleReplayTerminal(item, verdict.error);
+                    break;
                 }
-            
-            break;
-            }
-            case "unanswered": {
-                // The server never returned this slot. It may or may not have committed,
-                // so retry under the same `mutationId` (idempotent).
-                requeue.push(item);
-            
-            break;
-            }
-            default: {
-                accepted = true;
-                this.settleReplayUndecodable(item, verdict.error, verdict.commitCursor);
-            }
+                case "errored": {
+                    refused ||= isAuthReplayFailure(verdict.error);
+
+                    if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
+                        this.noteReplayRetryDelay(shardKey, verdict.error, authToken);
+                        requeue.push(item);
+                    } else {
+                        this.settleReplayTerminal(item, verdict.error);
+                    }
+
+                    break;
+                }
+                case "unanswered": {
+                    // The server never returned this slot. It may or may not have committed,
+                    // so retry under the same `mutationId` (idempotent).
+                    requeue.push(item);
+
+                    break;
+                }
+                default: {
+                    accepted = true;
+                    this.settleReplayUndecodable(item, verdict.error, verdict.commitCursor);
+                }
             }
         }
 
