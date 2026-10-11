@@ -37,8 +37,11 @@ import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
  * - **Symlinks.** `rename` replaces the *link*, not its target, so a config
  * managed by stow/chezmoi silently becomes a regular file and the dotfiles repo
  * keeps a stale copy that still reads as clean. Resolve first.
+ *
+ * Accepts text or bytes, so the profile commands reuse it for their gzip output.
+ * Throws on any failure, including creating the parent directory.
  */
-const writeAtomic = (path: string, contents: string): void => {
+const writeAtomic = (path: string, contents: string | Uint8Array): void => {
     // Resolve through any symlink so both the mode we copy and the file we
     // replace are the real one.
     let target = path;
@@ -57,6 +60,8 @@ const writeAtomic = (path: string, contents: string): void => {
     const temporaryPath = `${target}.lunora-${Math.random().toString(36).slice(2, 10)}.tmp`;
 
     try {
+        // Inside the try, so a failure to create the directory is thrown to the caller like any other write error.
+        mkdirSync(dirname(target), { recursive: true });
         writeFileSync(temporaryPath, contents, "utf8");
 
         if (mode !== undefined) {
@@ -290,4 +295,4 @@ const removeMcpEntry = (options: { key: string; name: string; path: string }): R
 };
 
 export type { RemoveAction, UpsertAction };
-export { hasMcpEntry, inspectMcpEntry, removeMcpEntry, upsertMcpEntry };
+export { hasMcpEntry, inspectMcpEntry, removeMcpEntry, upsertMcpEntry, writeAtomic };

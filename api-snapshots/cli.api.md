@@ -60,6 +60,7 @@ const COMMANDS: readonly [
     "logs",
     "run",
     "insights",
+    "profile",
     "reset",
     "migrate",
     "export",
