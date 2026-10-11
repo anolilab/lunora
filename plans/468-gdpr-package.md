@@ -235,7 +235,7 @@ import { privacyExtension } from "@lunora/privacy";
 export default defineSchema({ ... }).extend(privacyExtension);
 ```
 
-**2. Define the privacy configuration and re-export its functions.**
+**2. Define the privacy configuration, and declare its functions in the app.**
 
 ```ts
 // lunora/privacy.ts
@@ -248,7 +248,7 @@ import { tasksData } from "./tasks/privacy";
 
 export const privacy = definePrivacy({
     schema,
-    rules: [...eu(), ...germany()], // §4.4 defaults, each overridable
+    presets: [eu(), germany()], // §4.4 defaults; a preset sets policy values and named retention rules, each overridable
     subject: { shardKey: (subjectId) => subjectId }, // where the subject's own rows live
     datasets: [tasksData, billingData, authDataset(), documentHistoryDataset()],
     exclude: { featureFlags: "Operator configuration; contains no personal data" },
@@ -268,10 +268,38 @@ export const privacy = definePrivacy({
         },
     },
 });
-
-export const { requestExport, requestErasure, cancelRequest, myRequests, exportDownloadUrl } = privacy.functions;
-export const { privacyRun, privacyTick, privacyAdmin } = privacy.internal; // dispatched by path
 ```
+
+The functions are builder calls in the app, in their own file, so codegen registers them. The
+package supplies only the handlers. The args validators are declared here too, because codegen cannot
+read a validator that a package declares.
+
+```ts
+// lunora/privacy-api.ts
+import { internalMutation, mutation, query, v } from "@lunora/server";
+
+import { privacy } from "./privacy";
+
+export const requestExport = mutation({ args: { subjectId: v.string() }, handler: privacy.handlers.requestExport });
+export const requestErasure = mutation({ args: { subjectId: v.string() }, handler: privacy.handlers.requestErasure });
+export const cancelRequest = mutation({ args: { requestId: v.string() }, handler: privacy.handlers.cancelRequest });
+export const myRequests = query({ args: {}, handler: privacy.handlers.myRequests });
+export const exportDownloadUrl = query({ args: { requestId: v.string() }, handler: privacy.handlers.exportDownloadUrl });
+export const privacyRun = internalMutation({
+    args: { dataset: v.string(), operation: v.string(), cursor: v.optional(v.string()) },
+    handler: privacy.handlers.run,
+});
+export const privacyTick = internalMutation({ args: {}, handler: privacy.handlers.tick });
+export const privacyAdmin = internalMutation({ args: {}, handler: privacy.handlers.admin });
+```
+
+**Why not `export const { … } = privacy.functions`.** A package that ships declarations only makes
+codegen drop the destructured functions without a diagnostic. The Phase 0 re-plan tested this
+(`privacy-functions.test.ts`): a builder call in the app registers, and the destructured form does not.
+The package also needs a reference to `privacyRun` to dispatch steps. It does not import `_generated`.
+The app passes its generated reference in config instead, as a thunk, so the module cycle stays lazy:
+`definePrivacy({ …, runFunction: () => internal.privacyApi.privacyRun })`. A `FunctionReference` is
+`{ __lunoraRef: "<file>:<function>" }` at runtime (`shared/function-reference.ts`).
 
 **3. Register the two workflows.** The export names must match `definePrivacy({ workflows })`, which defaults to the two below. The start action resolves them with `ctx.workflows.get(name)` and fails with a named error if one is missing.
 
