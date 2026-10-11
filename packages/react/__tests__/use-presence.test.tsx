@@ -2,6 +2,7 @@ import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/clien
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
@@ -215,6 +216,34 @@ describe("usePresence", () => {
             root.unmount();
             container.remove();
         }
+    });
+
+    it("setData called during render sends no heartbeat before mount", () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        // Server rendering runs the body with no effects, the same pre-mount path a render-time call takes.
+        const Probe = (): ReactElement => {
+            const { setData } = usePresence("room-1", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 1000,
+                listPresent: LIST_PRESENT,
+                sessionId: "sess-fixed",
+            });
+
+            setData({ status: "typing" });
+
+            return <div />;
+        };
+
+        renderToString(
+            <LunoraProvider client={mock.asClient}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        expect(mock.mutation).not.toHaveBeenCalled();
     });
 
     it("stops heart-beating after unmount and releases the subscription", async () => {

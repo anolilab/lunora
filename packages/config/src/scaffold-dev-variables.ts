@@ -303,6 +303,12 @@ interface EnsureDevVariablesResult {
 const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (generated ${keys.join(", ")})` : "");
 
 /**
+ * The sibling temp path a pid-suffixed write stages through. It lives in the
+ * target's directory, so the rename never crosses devices (`EXDEV`).
+ */
+const temporaryPathFor = (path: string): string => `${path}.tmp-${String(process.pid)}`;
+
+/**
  * Atomically write `path`: write the content to a sibling temp file, then
  * `rename` it over the target. The rename is atomic within one filesystem, so
  * a reader can never observe a half-written file, and an interrupt mid-write
@@ -317,7 +323,7 @@ const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (genera
  * file, use {@link createExclusively}.
  */
 const atomicWrite = (path: string, content: string, options: { mode?: number } = {}): void => {
-    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+    const temporaryPath = temporaryPathFor(path);
 
     try {
         writeFileSync(temporaryPath, content, { encoding: "utf8", ...options });
@@ -339,7 +345,7 @@ const atomicWrite = (path: string, content: string, options: { mode?: number } =
  * hard link shares the temp file's inode, so `mode: 0o600` carries over.
  */
 const createExclusively = (path: string, content: string): boolean => {
-    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+    const temporaryPath = temporaryPathFor(path);
 
     try {
         writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
@@ -507,10 +513,9 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
             return { addedKeys: [], generatedKeys: [], status: "declined" };
         }
 
-        // Re-check right before the write (a cheap early exit), then create
-        // exclusively: a peer can still create the file between this check and
-        // the write, and `createExclusively` refuses to replace it.
-        if (existsSync(devVariablesPath) || !createExclusively(devVariablesPath, plan.content)) {
+        // Create exclusively: a peer can create the file after the existence check
+        // above, and `createExclusively` refuses to replace it.
+        if (!createExclusively(devVariablesPath, plan.content)) {
             return { addedKeys: [], generatedKeys: [], status: "skipped-exists" };
         }
 

@@ -107,11 +107,11 @@ describe("createAdminWsTokenProvider", () => {
         const { calls, fetchImpl } = mintFetch([new Response("not found", { status: 404 }), new Response("not found", { status: 404 })]);
         const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
 
-        await expect(provider.getToken()).rejects.toThrow("ws-token mint endpoint is missing");
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 404");
 
         // No latch: a reconnect re-probes the mint endpoint and still refuses to
         // hand back the master token.
-        await expect(provider.getToken()).rejects.toThrow("ws-token mint endpoint is missing");
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 404");
 
         expect(calls).toHaveLength(2);
     });
@@ -122,8 +122,8 @@ describe("createAdminWsTokenProvider", () => {
         const { calls, fetchImpl } = mintFetch([new Response("method not allowed", { status: 405 }), new Response("method not allowed", { status: 405 })]);
         const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
 
-        await expect(provider.getToken()).rejects.toThrow("ws-token mint endpoint is missing");
-        await expect(provider.getToken()).rejects.toThrow("ws-token mint endpoint is missing");
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 405");
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 405");
 
         expect(calls).toHaveLength(2);
     });
@@ -135,7 +135,7 @@ describe("createAdminWsTokenProvider", () => {
         const { calls, fetchImpl } = mintFetch([new Response("not found", { status: 404 }), mintedResponse("eph-1", now + 60_000)]);
         const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
 
-        await expect(provider.getToken()).rejects.toThrow("ws-token mint endpoint is missing");
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 404");
 
         provider.invalidate();
 

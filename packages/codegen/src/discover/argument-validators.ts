@@ -2,9 +2,11 @@ import type { CallExpression, ObjectLiteralExpression, Project, SourceFile, Vari
 import { Node } from "ts-morph";
 
 import type { ArgumentValidatorIR } from "../ir";
+import { isServerSurfaceModule } from "../module-specifiers";
 import { procedureArgumentObjects } from "../procedure-argument-objects";
 import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
+import { importAliases } from "./callee";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -71,21 +73,25 @@ type ValidatorScope = {
     namespaces: Set<string>;
 };
 
+/**
+ * The modules a validator namespace may come from: the server surface, and
+ * `@lunora/values`, the package that defines `v`. Nothing else is read.
+ */
+const validatorModule = (moduleSpecifier: string): boolean => isServerSurfaceModule(moduleSpecifier) || moduleSpecifier === "@lunora/values";
+
 /** Receiver texts for the namespace: `v` itself, an aliased `v` import, and `ns.v` for a namespace import. */
 const namespaceReceiversOf = (sourceFile: SourceFile): Set<string> => {
     const namespaces = new Set<string>(["v"]);
 
+    for (const alias of importAliases(sourceFile, "v", validatorModule)) {
+        namespaces.add(alias);
+    }
+
     for (const declaration of sourceFile.getImportDeclarations()) {
         const namespaceImport = declaration.getNamespaceImport();
 
-        if (namespaceImport) {
+        if (namespaceImport && validatorModule(declaration.getModuleSpecifierValue())) {
             namespaces.add(`${namespaceImport.getText()}.v`);
-        }
-
-        for (const specifier of declaration.getNamedImports()) {
-            if (specifier.getName() === "v") {
-                namespaces.add(specifier.getAliasNode()?.getText() ?? "v");
-            }
         }
     }
 
@@ -116,12 +122,6 @@ const destructuredFactoriesOf = (sourceFile: SourceFile, namespaces: ReadonlySet
     }
 
     return destructured;
-};
-
-const validatorScopeOf = (sourceFile: SourceFile): ValidatorScope => {
-    const namespaces = namespaceReceiversOf(sourceFile);
-
-    return { destructured: destructuredFactoriesOf(sourceFile, namespaces), namespaces };
 };
 
 /** The `v.<name>(…)` factory a call expression invokes, or `undefined` when it is not one. */
@@ -266,7 +266,8 @@ const argumentValidatorIrFromDeclaration = (declaration: VariableDeclaration, re
 /** Per-procedure arg-validator snapshots across one source file. */
 const argumentValidatorsInSourceFile = (sourceFile: SourceFile, relativePath: string): ArgumentValidatorIR[] => {
     const found: ArgumentValidatorIR[] = [];
-    const scope = validatorScopeOf(sourceFile);
+    const namespaces = namespaceReceiversOf(sourceFile);
+    const scope: ValidatorScope = { destructured: destructuredFactoriesOf(sourceFile, namespaces), namespaces };
 
     for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
         const ir = argumentValidatorIrFromDeclaration(declaration, relativePath, scope);

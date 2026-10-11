@@ -292,19 +292,4 @@ describe("createWorker — ephemeral WS token enforcement", () => {
 
         expect(calls).toEqual(["/ws"]);
     });
-
-    it("refuses the raw master in ?token= when a disabling env value is set", async () => {
-        expect.assertions(1);
-
-        const { calls, namespace } = recordingScheduler();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
-
-        await worker.fetch(
-            new Request(`${SCHEDULED_WS_URL}?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
-            { LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN: "off" },
-            fakeContext,
-        );
-
-        expect(calls).toEqual([]);
-    });
 });

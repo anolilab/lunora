@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PaymentAdapter } from "../src/adapter";
 import type { CreatePaymentOptions, WebhookOutcome } from "../src/create-payment";
 import { createPayment, webhookResponse } from "../src/create-payment";
+import { LunoraPaymentError } from "../src/errors";
 import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
@@ -303,31 +304,21 @@ describe("createPayment", () => {
         expect(providerCalls).toBe(0);
     });
 
-    it("denies an untyped caller that omits authorize, so the factory cannot default open", async () => {
+    it("rejects an untyped caller that omits authorize at construction, so the factory cannot default open", () => {
         expect.assertions(2);
 
-        let providerCalls = 0;
-        const adapter = fakeAdapter({
-            createCheckout: async () => {
-                providerCalls += 1;
+        // Untyped JavaScript reaches the factory without the required option. Construction fails with a
+        // configuration error, so no facade exists to reach the provider.
+        let caught: unknown;
 
-                return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
-            },
-        });
-        // Untyped JavaScript reaches the factory without the required option. The old code treated
-        // omission as "allow"; now the missing authorizer throws inside the guard and denies.
-        const payment = createPayment({ adapter, store: new MemoryPaymentStore() } as unknown as CreatePaymentOptions);
+        try {
+            createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() } as unknown as CreatePaymentOptions);
+        } catch (error) {
+            caught = error;
+        }
 
-        await expect(
-            payment.createCheckout({
-                cancelUrl: "https://x/cancel",
-                mode: "payment",
-                priceId: "price_1",
-                referenceId: "user_1",
-                successUrl: "https://x/ok",
-            }),
-        ).rejects.toMatchObject({ code: "FORBIDDEN" });
-        expect(providerCalls).toBe(0);
+        expect(caught).toBeInstanceOf(LunoraPaymentError);
+        expect(caught).toMatchObject({ code: "CONFIG_INVALID" });
     });
 
     it("ignores a caller-supplied customerId, forwarding the store's customer for the reference", async () => {
@@ -1236,8 +1227,6 @@ describe("createPayment", () => {
 
         const adapter = fakeAdapter({
             parseWebhook: async () => {
-                const { LunoraPaymentError } = await import("../src/errors");
-
                 throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "bad signature");
             },
         });
@@ -1258,8 +1247,6 @@ describe("createPayment", () => {
 
         const adapter = fakeAdapter({
             parseWebhook: async () => {
-                const { LunoraPaymentError } = await import("../src/errors");
-
                 throw new LunoraPaymentError("PROVIDER_ERROR", "upstream provider timed out");
             },
         });
@@ -1287,8 +1274,6 @@ describe("createPayment", () => {
         // still travels and the message does not.
         const adapter = fakeAdapter({
             parseWebhook: async () => {
-                const { LunoraPaymentError } = await import("../src/errors");
-
                 throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
             },
         });

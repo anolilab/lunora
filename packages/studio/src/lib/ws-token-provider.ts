@@ -77,14 +77,9 @@ export const createAdminWsTokenProvider = (options: AdminWsTokenProviderOptions)
             method: "POST",
         });
 
-        // A 404/405 is what a proxy or CDN answers for an unknown POST, and what a
-        // worker without the mint route answers. Either way there is no sub-token
-        // to hand out, and the master token must never stand in for one: it would
-        // ride the `?token=` query string into access logs and browser history.
-        if (response.status === 404 || response.status === 405) {
-            throw new Error("ws-token mint endpoint is missing: this worker predates the ephemeral admin WS token");
-        }
-
+        // Any failure leaves no sub-token to hand out, and the master token must never
+        // stand in for one: it would ride the `?token=` query string into access logs
+        // and browser history.
         if (!response.ok) {
             throw new Error(`ws-token mint failed: ${String(response.status)}`);
         }

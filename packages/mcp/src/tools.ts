@@ -417,7 +417,7 @@ const TOOL_FAMILIES: ReadonlyArray<ToolFamily> = [
         gate: {
             flag: "allowDataReads",
             refuse: (name) =>
-                `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply. Enable it with the LUNORA_MCP_ALLOW_DATA_READS env var.`,
+                `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply. Enable it with the LUNORA_MCP_ALLOW_DATA_READS env var or the allowDataReads option; on the authed path the token also needs the ${DATA_READ_SCOPE} scope.`,
             scope: DATA_READ_SCOPE,
         },
         names: ROW_READ_TOOL_NAMES,
@@ -428,7 +428,7 @@ const TOOL_FAMILIES: ReadonlyArray<ToolFamily> = [
         gate: {
             flag: "allowObservability",
             refuse: (name) =>
-                `tool "${name}" is disabled: it reads the deployment's logs, request metadata and grouped errors — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var.`,
+                `tool "${name}" is disabled: it reads the deployment's logs, request metadata and grouped errors — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var or the allowObservability option; on the authed path the token also needs the ${OBSERVABILITY_SCOPE} scope.`,
             scope: OBSERVABILITY_SCOPE,
         },
         names: OBSERVABILITY_TOOL_NAMES,
@@ -518,7 +518,27 @@ const scopeForTool = (name: string, gates: ToolGates): string | undefined => {
     return family.gate.scope;
 };
 
-export { callTool, DATA_READ_SCOPE, OBSERVABILITY_SCOPE, READ_ONLY_TOOL_DEFINITIONS, scopeForTool, toolDefinitions, WRITE_TOOL_DEFINITIONS, WRITE_TOOL_NAMES };
+/**
+ * Each family a token scope can open, as the opt-in flag it sets and the scope
+ * that pairs with it. Derived from {@link TOOL_FAMILIES}, so a new scoped family
+ * is declared once.
+ */
+const SCOPED_GATES: ReadonlyArray<{ flag: ToolGate; scope: string }> = TOOL_FAMILIES.flatMap((family) =>
+    family.gate?.scope === undefined ? [] : [{ flag: family.gate.flag, scope: family.gate.scope }],
+);
+
+export {
+    callTool,
+    DATA_READ_SCOPE,
+    OBSERVABILITY_SCOPE,
+    READ_ONLY_TOOL_DEFINITIONS,
+    SCOPED_GATES,
+    scopeForTool,
+    toolDefinitions,
+    WRITE_TOOL_DEFINITIONS,
+    WRITE_TOOL_NAMES,
+};
+export type { ToolGate, ToolGates };
 
 export { OBSERVABILITY_TOOL_DEFINITIONS } from "./observability-tools";
 export { ROW_READ_TOOL_DEFINITIONS } from "./row-read-tools";

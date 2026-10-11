@@ -82,7 +82,7 @@ import { readScreenedBody, serveStateless } from "./serve-stateless";
 import type { LunoraMcpServerOptions } from "./server";
 import { createLunoraMcpServer, resolveClient } from "./server";
 import callToolName from "./tool-call";
-import { DATA_READ_SCOPE, OBSERVABILITY_SCOPE, scopeForTool, WRITE_TOOL_NAMES } from "./tools";
+import { SCOPED_GATES, scopeForTool, WRITE_TOOL_NAMES } from "./tools";
 
 /**
  * The verified access-token payload better-auth hands a protected handler.
@@ -191,11 +191,13 @@ const mcpTokenScopes = (claims: McpAccessTokenClaims): ReadonlySet<string> => {
  * resolved admin token.
  */
 const withTokenScopes = (server: LunoraMcpServerOptions, scopes: ReadonlySet<string>): LunoraMcpServerOptions => {
-    return {
-        ...server,
-        allowDataReads: server.allowDataReads === true && scopes.has(DATA_READ_SCOPE),
-        allowObservability: server.allowObservability === true && scopes.has(OBSERVABILITY_SCOPE),
-    };
+    const scoped = { ...server };
+
+    for (const { flag, scope } of SCOPED_GATES) {
+        scoped[flag] = server[flag] === true && scopes.has(scope);
+    }
+
+    return scoped;
 };
 
 /**

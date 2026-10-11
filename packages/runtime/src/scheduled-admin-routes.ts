@@ -149,11 +149,10 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
     /**
      * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
      * studio can subscribe to the live job list. A browser `WebSocket` can't
-     * set an `Authorization` header, so the admin credential is also accepted
-     * via the `?token=` query parameter — the only channel the constructor
-     * allows. The gate takes the master token or an ephemeral minted sub-token
-     * (`POST /_lunora/admin/ws-token`), so the master credential can stay out
-     * of the URL.
+     * set an `Authorization` header, so the gate reads an ephemeral minted
+     * sub-token (`POST /_lunora/admin/ws-token`) from the `?token=` query
+     * parameter, the only channel the constructor allows. The master token is
+     * accepted only in the `Authorization` header, so it stays out of the URL.
      */
     const handleScheduledWebSocket = async (request: Request): Promise<Response> => {
         if (request.headers.get("Upgrade") !== "websocket") {

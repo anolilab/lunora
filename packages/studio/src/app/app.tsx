@@ -178,9 +178,10 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
         // HMAC-signed sub-token from the worker (master token in the
         // Authorization HEADER) fresh on every (re)connect, so only the ephemeral
         // token appears in `?token=`. Against a worker without the mint endpoint
-        // (404s) the provider falls back to the master token. A 4001
-        // token-expired drop invalidates the provider's cache so the reconnect
-        // re-mints even when the cached token still looks fresh.
+        // (404s) the provider fails the connection instead; the master token is
+        // never sent as a WS credential. A 4001 token-expired drop invalidates the
+        // provider's cache so the reconnect re-mints even when the cached token
+        // still looks fresh.
         const origin = resolveOrigin(baseUrl);
         const provider = debouncedToken === "" ? undefined : createAdminWsTokenProvider({ adminToken: debouncedToken, baseUrl: origin });
         const created = new LunoraClient({ url: origin, ...(provider === undefined ? {} : { wsToken: provider.getToken }) });

@@ -423,20 +423,12 @@ describe("shardDO admin-socket upgrade flagging", () => {
     });
 
     describe("ephemeral WS token enforcement (master token never admitted via ?token=)", () => {
-        const ENFORCED = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
+        const ADMIN_ENV = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
 
         it("stamps admin:false for the raw master token in ?token=", async () => {
             expect.assertions(1);
 
-            const attachment = await upgradeAndCaptureAttachment(ENFORCED, `https://shard.internal/?token=${ADMIN_TOKEN}`);
-
-            expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
-        });
-
-        it("stamps admin:false for the raw master token in ?token= with no env flag set (no opt-out)", async () => {
-            expect.assertions(1);
-
-            const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
+            const attachment = await upgradeAndCaptureAttachment(ADMIN_ENV, `https://shard.internal/?token=${ADMIN_TOKEN}`);
 
             expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
         });
@@ -445,7 +437,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
             expect.assertions(1);
 
             const minted = await mintWsAdminToken(ADMIN_TOKEN);
-            const attachment = await upgradeAndCaptureAttachment(ENFORCED, `https://shard.internal/?token=${encodeURIComponent(minted.token)}`);
+            const attachment = await upgradeAndCaptureAttachment(ADMIN_ENV, `https://shard.internal/?token=${encodeURIComponent(minted.token)}`);
 
             expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
         });
@@ -453,22 +445,11 @@ describe("shardDO admin-socket upgrade flagging", () => {
         it("still stamps admin:true for the master token in the Authorization HEADER (no URL leak)", async () => {
             expect.assertions(1);
 
-            const attachment = await upgradeAndCaptureAttachment(ENFORCED, "https://shard.internal/", {
+            const attachment = await upgradeAndCaptureAttachment(ADMIN_ENV, "https://shard.internal/", {
                 Authorization: `Bearer ${ADMIN_TOKEN}`,
             });
 
             expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
-        });
-
-        it("refuses the master token in ?token= even when the env value reads as off", async () => {
-            expect.assertions(1);
-
-            const attachment = await upgradeAndCaptureAttachment(
-                { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN: "off" },
-                `https://shard.internal/?token=${ADMIN_TOKEN}`,
-            );
-
-            expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
         });
     });
 });

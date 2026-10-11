@@ -13731,11 +13731,12 @@ abstract class ShardDO {
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
 
-            // The admin credential (master token or minted ephemeral sub-token)
-            // is accepted as an alternate so a studio can open its socket even
-            // when `LUNORA_WS_BEARER` gates ordinary subscribers. The socket is
-            // flagged admin separately (see `isAdminSocket`); matching the
-            // bearer alone never grants it.
+            // The admin credential is accepted as an alternate so a studio can open
+            // its socket even when `LUNORA_WS_BEARER` gates ordinary subscribers: a
+            // minted ephemeral sub-token (header or `?token=`), or the master token
+            // in the `Authorization` header only. The socket is flagged admin
+            // separately (see `isAdminSocket`); matching the bearer alone never
+            // grants it.
             if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
                 return false;
             }
@@ -13782,7 +13783,10 @@ abstract class ShardDO {
             return false;
         }
 
-        const supplied = this.suppliedWsToken(request);
+        // Read the header once: it is the first choice for the token, and the only
+        // place the master token is admitted from.
+        const headerBearer = extractBearerToken(request.headers.get("authorization"));
+        const supplied = headerBearer ?? new URL(request.url).searchParams.get("token") ?? undefined;
 
         if (supplied === undefined) {
             return false;
@@ -13791,8 +13795,6 @@ abstract class ShardDO {
         if (await verifyWsAdminToken(adminToken, supplied)) {
             return true;
         }
-
-        const headerBearer = extractBearerToken(request.headers.get("authorization"));
 
         return headerBearer !== undefined && constantTimeEqual(headerBearer, adminToken);
     }
