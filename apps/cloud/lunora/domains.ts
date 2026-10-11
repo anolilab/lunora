@@ -3,8 +3,8 @@ import { LunoraError } from "@lunora/server";
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
 import { randomSecret } from "../src/deploy/keys";
-import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { domainNotificationDetail } from "../src/domains/check";
+import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import type { TargetId } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
@@ -38,7 +38,9 @@ interface DomainRow {
     customHostnameId?: null | string;
     edgeBlockedAt?: null | number;
     edgeBlockError?: null | string;
+    failedChecks?: number;
     hostname: string;
+    lastCheckedAt?: number;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     redirectStatusCode?: number;
@@ -46,8 +48,6 @@ interface DomainRow {
     txtToken: string;
     updatedAt: number;
     verifiedAt?: number;
-    failedChecks?: number;
-    lastCheckedAt?: number;
 }
 
 interface ProjectRow {
@@ -301,7 +301,13 @@ export const markVerified = internalMutation
             return;
         }
 
-        const event = verified && existing.verifiedAt == null ? "domain.verified" : !verified && existing.verifiedAt != null ? "domain.failed" : null;
+        let event: "domain.failed" | "domain.verified" | null = null;
+
+        if (verified && existing.verifiedAt == null) {
+            event = "domain.verified";
+        } else if (!verified && existing.verifiedAt != null) {
+            event = "domain.failed";
+        }
 
         if (event !== null) {
             const project = (await context.db.get(existing.projectId)) as null | { name?: string };

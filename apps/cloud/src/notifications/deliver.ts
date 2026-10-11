@@ -42,9 +42,9 @@ export interface NotificationRequest {
  * retrying the same request cannot succeed.
  */
 export class NotificationDeliveryError extends Error {
-    readonly retryable: boolean;
+    public readonly retryable: boolean;
 
-    constructor(message: string, retryable: boolean) {
+    public constructor(message: string, retryable: boolean) {
         super(message);
         this.name = "NotificationDeliveryError";
         this.retryable = retryable;
