@@ -12,7 +12,7 @@ import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
 import type { RequestStatus } from "./lifecycle";
-import { effectiveDueAt,isOverdue, transition } from "./lifecycle";
+import { effectiveDueAt, isOverdue, transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
