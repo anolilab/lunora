@@ -350,6 +350,15 @@ const callWriteTool = async (client: LunoraClient, name: string, input: Record<s
 type ToolGate = "allowDataReads" | "allowObservability" | "allowWrites";
 
 /**
+ * The scopes a verified token must carry before the authed path opens the raw-row
+ * and observability families. Declared once here: the authed path reads them to
+ * derive the flags per request, and the challenge names them. Lunora does not
+ * issue these scopes. The OAuth server must list them in its `mcp({ scopes })`.
+ */
+const DATA_READ_SCOPE = "lunora:data-read";
+const OBSERVABILITY_SCOPE = "lunora:observability";
+
+/**
  * The opt-in flags as the caller actually passed them.
  *
  * Deliberately `unknown` rather than `boolean`: both consumers are exported and
@@ -367,6 +376,8 @@ const isOptedIn = (value: unknown): boolean => value === true;
 interface ToolGateSpec {
     flag: ToolGate;
     refuse: (name: string) => string;
+    /** The token scope that also opens this family on the authed path. Absent for families gated by no scope. */
+    scope?: string;
 }
 
 /**
@@ -407,6 +418,7 @@ const TOOL_FAMILIES: ReadonlyArray<ToolFamily> = [
             flag: "allowDataReads",
             refuse: (name) =>
                 `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply. Enable it with the LUNORA_MCP_ALLOW_DATA_READS env var.`,
+            scope: DATA_READ_SCOPE,
         },
         names: ROW_READ_TOOL_NAMES,
     },
@@ -417,6 +429,7 @@ const TOOL_FAMILIES: ReadonlyArray<ToolFamily> = [
             flag: "allowObservability",
             refuse: (name) =>
                 `tool "${name}" is disabled: it reads the deployment's logs, request metadata and grouped errors — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var.`,
+            scope: OBSERVABILITY_SCOPE,
         },
         names: OBSERVABILITY_TOOL_NAMES,
     },
@@ -489,7 +502,14 @@ const callTool = async (
     }
 };
 
-export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS, WRITE_TOOL_NAMES };
+/**
+ * The token scope a tool needs on the authed path, or `undefined` when no scope
+ * gates it. Only the raw-row and observability families carry one; the write and
+ * agent tools are challenged through `stepUp` in `./authed-http` instead.
+ */
+const scopeForTool = (name: string): string | undefined => TOOL_FAMILIES.find((family) => family.names.has(name))?.gate?.scope;
+
+export { callTool, DATA_READ_SCOPE, OBSERVABILITY_SCOPE, READ_ONLY_TOOL_DEFINITIONS, scopeForTool, toolDefinitions, WRITE_TOOL_DEFINITIONS, WRITE_TOOL_NAMES };
 
 export { OBSERVABILITY_TOOL_DEFINITIONS } from "./observability-tools";
 export { ROW_READ_TOOL_DEFINITIONS } from "./row-read-tools";

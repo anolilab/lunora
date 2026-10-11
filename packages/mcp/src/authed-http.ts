@@ -76,13 +76,14 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import type { McpAgentExposure } from "./agent-tools";
 import { isAgentToolName } from "./agent-tools";
 import type { McpFetchHandler } from "./serve-stateless";
 import { readScreenedBody, serveStateless } from "./serve-stateless";
 import type { LunoraMcpServerOptions } from "./server";
 import { createLunoraMcpServer, resolveClient } from "./server";
 import callToolName from "./tool-call";
-import { WRITE_TOOL_NAMES } from "./tools";
+import { DATA_READ_SCOPE, OBSERVABILITY_SCOPE, scopeForTool, WRITE_TOOL_NAMES } from "./tools";
 
 /**
  * The verified access-token payload better-auth hands a protected handler.
@@ -149,7 +150,9 @@ interface AuthedMcpFetchHandlerOptions {
      * side effect). A token without `scope` still sees them in `tools/list`, and
      * a `tools/call` to one throws `challenge([scope])` instead of running, so the
      * client can re-authorize for the scope and retry. Unset, tools follow
-     * `allowWrites` / `allowAgents` alone.
+     * `allowWrites` / `allowAgents` alone. The raw-row and observability families
+     * need their own token scopes with or without `stepUp`; without it a call
+     * without the scope is refused as a tool error, not challenged.
      */
     stepUp?: {
         /**
@@ -182,6 +185,50 @@ const mcpTokenScopes = (claims: McpAccessTokenClaims): ReadonlySet<string> => {
 };
 
 /**
+ * Open the raw-row and observability families only when the token carries their
+ * scope. The scope is a second gate on top of the caller's own opt-in, not a grant:
+ * a scope with no `allowDataReads` / `allowObservability` still opens nothing.
+ * `createLunoraMcpServer` then also requires the env-or-constructor opt-in and a
+ * resolved admin token.
+ */
+const withTokenScopes = (server: LunoraMcpServerOptions, scopes: ReadonlySet<string>): LunoraMcpServerOptions => {
+    return {
+        ...server,
+        allowDataReads: server.allowDataReads === true && scopes.has(DATA_READ_SCOPE),
+        allowObservability: server.allowObservability === true && scopes.has(OBSERVABILITY_SCOPE),
+    };
+};
+
+/**
+ * Every scope the messages' tool calls need: the step-up scope for a write or
+ * agent tool, and the family's own scope for a raw-row or observability tool.
+ * A batch is checked message by message, so a call tucked inside one is named.
+ */
+const requiredScopes = (messages: ReadonlyArray<unknown>, agents: ReadonlyArray<McpAgentExposure>, stepUpScope: string): Set<string> => {
+    const required = new Set<string>();
+
+    for (const message of messages) {
+        const name = callToolName(message);
+
+        if (name === undefined) {
+            continue;
+        }
+
+        if (WRITE_TOOL_NAMES.has(name) || isAgentToolName(name, agents)) {
+            required.add(stepUpScope);
+        }
+
+        const familyScope = scopeForTool(name);
+
+        if (familyScope !== undefined) {
+            required.add(familyScope);
+        }
+    }
+
+    return required;
+};
+
+/**
  * Build an OAuth-protected stateless Streamable-HTTP fetch handler for a Lunora
  * MCP server.
  *
@@ -210,7 +257,11 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
     const sharedClient = typeof options.server === "function" ? undefined : resolveClient(options.server);
 
     return options.protect(async (request: Request, claims: McpAccessTokenClaims): Promise<Response> => {
-        const resolved = typeof options.server === "function" ? await options.server(claims) : { ...options.server, client: sharedClient };
+        const scopes = mcpTokenScopes(claims);
+        const resolved = withTokenScopes(
+            typeof options.server === "function" ? await options.server(claims) : { ...options.server, client: sharedClient },
+            scopes,
+        );
         let parsedBody: unknown;
 
         if (stepUp !== undefined) {
@@ -229,16 +280,11 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
             // message so a call tucked inside one is challenged rather than relying
             // on that. The agent tool names come from the resolved server, since a
             // `toolName` override renames them.
-            const agents = resolved.agents ?? [];
             const messages: unknown[] = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
-            const hasSideEffect = messages.some((message) => {
-                const name = callToolName(message);
+            const missing = [...requiredScopes(messages, resolved.agents ?? [], stepUp.scope)].filter((scope) => !scopes.has(scope));
 
-                return name !== undefined && (WRITE_TOOL_NAMES.has(name) || isAgentToolName(name, agents));
-            });
-
-            if (hasSideEffect && !mcpTokenScopes(claims).has(stepUp.scope)) {
-                throw stepUp.challenge([stepUp.scope]);
+            if (missing.length > 0) {
+                throw stepUp.challenge(missing);
             }
         }
 
