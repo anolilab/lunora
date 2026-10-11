@@ -59,7 +59,13 @@ Read from the official text:
 
 ### What this means for the package's defaults
 
-- **The default of 10 years for every voucher is longer than the law requires** for a business that is not a regulated institution. Keeping data longer than necessary conflicts with GDPR Art. 5(1)(e) (storage limitation). This is the most important open question. The package keeps 10 years because that was decided on 2026-10-11 as the conservative value, but the statute does not support that as a general rule. **Recommendation:** 8 years for non-regulated businesses, and 10 years only for regulated institutions. This needs the maintainer's decision.
+- **The default of 10 years for every voucher is longer than the law requires** for a business that is not a regulated institution. Keeping data longer than necessary conflicts with GDPR Art. 5(1)(e) (storage limitation). This is the most important open question. The package keeps 10 years because that was decided on 2026-10-11 as the conservative value, but the statute does not support that as a general rule. **Options:** both decisions are now options, and both keep the current values as their defaults.
+
+- `germany({ voucherYears: 8 | 10 })` sets the voucher period. The default is 10. Use 8 for a non-regulated business, as the statute sets it. Regulated institutions keep 10 either way.
+- `eu({ erasureGraceDays })` sets the erasure grace. The default is 14 days, and the range is 0 to 14 whole days.
+
+The defaults stay as decided until a maintainer or a lawyer changes them.
+
 - The package follows the BEG IV transitional rule only as far as its note says. A lawyer or tax adviser must confirm it.
 
 ### Restriction instead of erasure (BDSG §35)
@@ -85,7 +91,7 @@ Read from the official text:
 ## Open questions for a lawyer or tax adviser
 
 1. The voucher period: 8 years for non-regulated businesses, or 10 as decided? (Art. 5(1)(e), HGB §257(4), AO §147(3), BEG IV.)
-2. Is a 14-day erasure grace "without undue delay" under Art. 17(1)? Is there a better design?
+2. Is a 14-day erasure grace "without undue delay" under Art. 17(1)? It is set by `eu({ erasureGraceDays })`. Is there a better design?
 3. Does the strict one-month clock (no pause for identity verification) match what the controller wants, given the EDPB's secondary reading?
 4. Is moving retained rows into an archive table compatible with the GoBD, and what logging does it need?
 5. Are backups and point-in-time restores a problem for the erasure promise, and how long may they keep erased data?

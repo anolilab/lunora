@@ -682,10 +682,24 @@ const verifyErasure: (remaining: Readonly<Record<string, number>>) => VerifyResu
 
 ## `@lunora/privacy/de`
 
+### `DEFAULT_VOUCHER_YEARS` (const)
+
+```ts
+const DEFAULT_VOUCHER_YEARS = 10;
+```
+
+### `GermanyOptions` (interface)
+
+```ts
+interface GermanyOptions {
+    readonly voucherYears?: 8 | 10;
+}
+```
+
 ### `germany` (const)
 
 ```ts
-const germany: () => PrivacyPreset;
+const germany: (options?: GermanyOptions) => PrivacyPreset;
 ```
 
 ### `legalClaimsHold` (const)
@@ -696,16 +710,42 @@ const legalClaimsHold: RetentionRule;
 
 ## `@lunora/privacy/eu`
 
+### `DEFAULT_ERASURE_GRACE_DAYS` (const)
+
+```ts
+const DEFAULT_ERASURE_GRACE_DAYS = 14;
+```
+
 ### `EU_RESPONSE_MONTHS` (const)
 
 ```ts
 const EU_RESPONSE_MONTHS = 1;
 ```
 
+### `EuOptions` (interface)
+
+```ts
+interface EuOptions {
+    readonly erasureGraceDays?: number;
+}
+```
+
+### `MAX_ERASURE_GRACE_DAYS` (const)
+
+```ts
+const MAX_ERASURE_GRACE_DAYS = 14;
+```
+
+### `checkErasureGraceDays` (const)
+
+```ts
+const checkErasureGraceDays: (days: number) => number;
+```
+
 ### `eu` (const)
 
 ```ts
-const eu: () => PrivacyPreset;
+const eu: (options?: EuOptions) => PrivacyPreset;
 ```
 
 ## Referenced internal declarations

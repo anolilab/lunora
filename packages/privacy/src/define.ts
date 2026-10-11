@@ -11,6 +11,7 @@ import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
+import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import type { RequestStatus } from "./lifecycle";
 import { effectiveDueAt, isOverdue, transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
@@ -87,7 +88,7 @@ interface Privacy {
 /** A download link lives fifteen minutes (the plan's D5). */
 const DOWNLOAD_TTL_SECONDS = 15 * 60;
 
-const DEFAULT_GRACE_DAYS = 14;
+const DEFAULT_GRACE_DAYS = DEFAULT_ERASURE_GRACE_DAYS;
 const DEFAULT_DRAIN_BUDGET_DAYS = 3;
 const DEFAULT_FRESH_AGE_MS = 24 * 60 * 60 * 1000;
 /** Warn an operator this long before a request's deadline. */
@@ -103,10 +104,13 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
         }
     }
 
+    // The grace comes from the preset that sets one, unless the app sets it directly.
+    const presetGraceDays = [...(config.presets ?? [])].toReversed().find((preset) => preset.policy?.erasureGraceDays !== undefined)?.policy?.erasureGraceDays;
+
     const erasure = {
         drainBudgetDays: config.erasure?.drainBudgetDays ?? DEFAULT_DRAIN_BUDGET_DAYS,
         freshAgeMs: config.erasure?.freshAgeMs ?? DEFAULT_FRESH_AGE_MS,
-        graceDays: config.erasure?.graceDays ?? DEFAULT_GRACE_DAYS,
+        graceDays: checkErasureGraceDays(config.erasure?.graceDays ?? presetGraceDays ?? DEFAULT_GRACE_DAYS),
     };
     const subjectKey = config.subjectKey ?? ((subjectId: string) => subjectId);
     const base = { data: config.data, files: config.files, now: config.now, rules, store: config.store };

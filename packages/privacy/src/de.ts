@@ -4,26 +4,39 @@ import type { PrivacyPreset, RetentionRule } from "./rules";
  * LEGAL WARNING: these values have NOT been reviewed by a lawyer or a tax adviser.
  * The research behind them is in `docs/legal.mdx`. The statute text was read from
  * gesetze-im-internet.de; the 8-year voucher period comes from the 2024 BEG IV
- * amendment, and the 10-year figure below is a decision, not the statute.
+ * amendment.
  */
 
-/**
- * The voucher period. The statute sets 8 years for Buchungsbelege (HGB §257(4) S. 1
- * and AO §147(3) S. 1) and 10 years for credit, insurance and securities
- * institutions (HGB §257(4) S. 2). The package keeps 10 years for every voucher
- * because that was decided on 2026-10-11 as the conservative value. Keeping data
- * longer than the law requires is itself a GDPR concern (Art. 5(1)(e)), so the
- * maintainer should confirm 10 or move to 8 for non-regulated businesses.
- */
-const VOUCHER_NOTE =
-    "Decided at 10 years. The statute sets 8 years for Buchungsbelege (HGB §257(4) S. 1, AO §147(3) S. 1) and 10 years for regulated institutions (HGB §257(4) S. 2). Keeping 10 years for everyone conflicts with GDPR Art. 5(1)(e) for non-regulated businesses. Maintainer decision pending.";
+/** The statutory voucher period for non-regulated businesses: HGB §257(4) S. 1, AO §147(3) S. 1. */
+const STATUTE_VOUCHER_YEARS = 8;
+
+/** The voucher period the package keeps by default: the value decided on 2026-10-11. */
+const DEFAULT_VOUCHER_YEARS = 10;
+
+/** Options for the German preset. Every option defaults to the decided value. */
+interface GermanyOptions {
+    /**
+     * The retention period for Buchungsbelege (vouchers and invoices): 8 is the statute for
+     * non-regulated businesses; 10 is the value decided on 2026-10-11, kept as the default. Regulated
+     * institutions keep 10 regardless of this option (HGB §257(4) S. 2).
+     */
+    readonly voucherYears?: 8 | 10;
+}
+
+/** The note on the voucher rule, which says what the statute sets and what the chosen value is. */
+const voucherNote = (years: number): string =>
+    (years === STATUTE_VOUCHER_YEARS
+        ? "Set to the statutory 8 years (HGB §257(4) S. 1, AO §147(3) S. 1). Regulated institutions keep 10 years. Confirm with a tax adviser."
+        : "Set to 10 years, the decided conservative value. The statute sets 8 years for Buchungsbelege (HGB §257(4) S. 1, AO §147(3) S. 1) and 10 years for regulated institutions. Keeping 10 years for non-regulated businesses conflicts with GDPR Art. 5(1)(e). Maintainer decision pending.");
 
 /**
  * German statutory retention periods (HGB §257, AO §147). Every rule is pending
  * tax review. The package does not decide which table is a voucher; apps bind
  * tables to these rules explicitly.
  */
-export const germany = (): PrivacyPreset => {
+const germany = (options: GermanyOptions = {}): PrivacyPreset => {
+    const voucherYears = options.voucherYears ?? DEFAULT_VOUCHER_YEARS;
+
     return {
         id: "de",
         retention: [
@@ -37,10 +50,10 @@ export const germany = (): PrivacyPreset => {
             {
                 citation: "HGB §257(1) Nr. 4, (4) S. 1; AO §147(1) Nr. 4, (3) S. 1 (statute: 8 years; see note)",
                 id: "de.voucher",
-                note: VOUCHER_NOTE,
+                note: voucherNote(voucherYears),
                 reviewRequired: true,
                 start: "endOfCalendarYear",
-                years: 10,
+                years: voucherYears,
             },
             {
                 citation: "HGB §257(4) S. 2 (10 years for Kreditinstitute, Versicherungsunternehmen, Wertpapierinstitute)",
@@ -64,10 +77,12 @@ export const germany = (): PrivacyPreset => {
  * The legal-claims hold. It is opt-in, because it applies only when the controller
  * relies on Art. 17(3)(e) for specific data (LR L11).
  */
-export const legalClaimsHold: RetentionRule = {
+const legalClaimsHold: RetentionRule = {
     citation: "BGB §195, §199(1)",
     id: "de.legalClaims",
     reviewRequired: true,
     start: "endOfCalendarYear",
     years: 3,
 };
+
+export { DEFAULT_VOUCHER_YEARS, germany, type GermanyOptions, legalClaimsHold };
