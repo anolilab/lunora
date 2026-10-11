@@ -365,6 +365,9 @@ impl LogForwarder {
         }
 
         lock(&self.buffer).next_attempt_at = 0;
+        // A post already in flight took its batch before the last records were buffered, so the
+        // first flush can only wait for it. The second posts whatever arrived after it.
+        self.flush().await;
         self.flush().await;
     }
 
