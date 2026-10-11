@@ -20,16 +20,19 @@
  */
 import type { BetterAuthPlugin } from "better-auth";
 import { APIError, createAuthMiddleware, getSessionFromCtx, isAPIError } from "better-auth/api";
-import { defaultRoles } from "better-auth/plugins/admin/access";
 
 import { afterAccountDeletion, postAccountErase } from "./account-deletion";
+import { ADMIN_ROLES } from "./admin-roles";
 import type { AuthEnv } from "./auth";
 
 const REMOVE_USER_PATH = "/admin/remove-user";
 
-/** The admin plugin's `user:delete` permission over its default roles, which the cloud app does not override. */
-const canDeleteUsers = (role: null | string | undefined): boolean =>
-    (role ?? "user").split(",").some((name) => defaultRoles[name as keyof typeof defaultRoles]?.authorize({ user: ["delete"] }).success);
+/**
+ * Whether a session's role string grants `user:delete` under the role map the
+ * admin plugin is configured with. Exported for the test that pins it.
+ */
+export const canDeleteUsers = (role: null | string | undefined, roles: Partial<typeof ADMIN_ROLES> = ADMIN_ROLES): boolean =>
+    (role ?? "user").split(",").some((name) => roles[name as keyof typeof ADMIN_ROLES]?.authorize({ user: ["delete"] }).success === true);
 
 const targetUserId = (body: unknown): string | undefined => {
     const userId = (body as null | { userId?: unknown } | undefined)?.userId;

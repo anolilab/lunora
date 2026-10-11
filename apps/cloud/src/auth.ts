@@ -19,6 +19,7 @@ import { createMailerFromEnv } from "@lunora/mail";
 
 import { afterAccountDeletion, beforeAccountDeletion } from "./account-deletion";
 import { adminRemovalGuard } from "./admin-removal";
+import { ADMIN_ROLES } from "./admin-roles";
 
 /**
  * The slice of the worker `env` the auth build reads.
@@ -143,12 +144,12 @@ const authOptions = (env: AuthEnv, requestOrigin?: string): LunoraAuthOptions =>
          *
          * `adminRemovalGuard` holds the admin plugin's `/admin/remove-user` to the
          * same owner rule and cleanup as a self-service deletion, which that
-         * endpoint skips (`src/admin-removal.ts`). Its permission check mirrors
-         * the admin plugin's default roles, so a custom `roles` or `adminUserIds`
-         * here must be mirrored there.
+         * endpoint skips (`src/admin-removal.ts`). Its permission check reads the
+         * same `ADMIN_ROLES` map this plugin is given (`src/admin-roles.ts`), so a
+         * role change cannot leave the two out of step. `adminUserIds` is not used.
          */
         plugins: [
-            admin({ defaultRole: "user" }),
+            admin({ defaultRole: "user", roles: ADMIN_ROLES }),
             adminRemovalGuard(env),
             inviteOnly({ allowFirstUser: env.WORKER_ENV === "development" }),
             twoFactor(),
