@@ -482,6 +482,7 @@ describe("discover/feature-usage", () => {
                 mail: false,
                 notifications: false,
                 payments: false,
+                privacy: false,
                 queues: false,
                 scheduler: false,
                 storage: false,
@@ -515,6 +516,13 @@ describe("discover/feature-usage", () => {
                 kv: true,
                 vectors: false,
             });
+        });
+
+        it("shows the privacy requests page only when the app declares @lunora/privacy", () => {
+            expect.assertions(2);
+
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/privacy"]) }).privacy).toBe(true);
+            expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS).privacy).toBe(false);
         });
 
         it("hides the vector browser for `ctx.vectors` usage against a schema that declares no index", () => {

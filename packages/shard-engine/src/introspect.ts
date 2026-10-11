@@ -557,6 +557,9 @@ interface StudioFeaturesResult {
      * usage flags alone.
      */
     platform?: { id: string; name: string; unsupported: string[] };
+
+    /** `@lunora/privacy` is a declared dependency. It backs the Privacy requests page, which reads the package's admin API. */
+    privacy: boolean;
     /** `@lunora/queue` / `ctx.queues` is used, the app declares queues, or it is a declared dependency. */
     queues: boolean;
     /** `@lunora/scheduler` / `ctx.scheduler` is used, the app declares crons, or it is a declared dependency. */
