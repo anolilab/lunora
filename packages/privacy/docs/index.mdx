@@ -1,0 +1,80 @@
+---
+title: Privacy
+description: Export, erasure and retention for a user's data, built for GDPR Art. 15, 17 and 20 and the German statutory periods.
+---
+
+`@lunora/privacy` handles a user's data-subject requests: an export of everything the app holds about them, an erasure of it, and the retention periods the law requires you to keep certain records for.
+
+> **Experimental.** The legal and tax values are pending review by counsel and a tax adviser, and every one is marked as such in the package. Do not rely on the defaults until that review is done.
+
+## Integrate it
+
+Declare each module's personal data as a dataset, next to the tables it describes.
+
+```ts
+// lunora/tasks/privacy.ts
+import { defineDataset } from "@lunora/privacy";
+
+export const tasksData = defineDataset("tasks", {
+    legalBasis: "contract",
+    origin: "provided",
+    purpose: "Tasks and goals the user schedules",
+    tables: {
+        goals: {},
+        tasks: { omit: ["activeCycle"] },
+    },
+});
+```
+
+Then bind the datasets, the presets and the ports into one object. The app supplies the data, storage and request ports, and the clock.
+
+```ts
+// lunora/privacy.ts
+import { definePrivacy } from "@lunora/privacy";
+import { eu } from "@lunora/privacy/eu";
+import { germany } from "@lunora/privacy/de";
+
+import { tasksData } from "./tasks/privacy";
+
+export const privacy = definePrivacy({
+    datasets: [tasksData],
+    presets: [eu(), germany()],
+    // Tables that hold a user's data but are not exported, each with the reason a reviewer reads.
+    exclude: { featureFlags: "Operator configuration; contains no personal data" },
+    // Your ports: data, files, store, and the clock.
+    data,
+    files,
+    store,
+    now: () => new Date(),
+    newId: () => crypto.randomUUID(),
+});
+```
+
+Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically.
+
+```ts
+// lunora/workflows.ts
+import { defineWorkflow } from "@lunora/workflow";
+
+import { privacy } from "./privacy";
+
+export const privacyExport = defineWorkflow({ handler: privacy.workflows.exportHandler, limits: { steps: 25_000 }, name: "privacy-export" });
+export const privacyErasure = defineWorkflow({ handler: privacy.workflows.erasureHandler, limits: { steps: 25_000 }, name: "privacy-erasure" });
+```
+
+Declare the functions in their own file as builder calls, so codegen registers them. Each one passes its handler from the package.
+
+## What it does
+
+- **Export (Art. 15 and 20).** Every dataset is collected, then written to a ZIP with a manifest and a readable PDF copy. The manifest says which article each dataset falls under. The download link lasts fifteen minutes, and the export expires after seven days.
+- **Erasure (Art. 17).** A request enters a 14-day grace window, during which the subject can cancel. Erasure then runs one dataset at a time, and the request completes only after a verify step finds every table empty.
+- **Deadlines (Art. 12(3)).** The response is due one calendar month after receipt. `tick` lists requests within seven days of their deadline and those already overdue, so an operator sees a missed one.
+- **Restores.** A completed erasure records a tombstone keyed by a hash of the subject id. If a backup taken before the erasure is restored, `restore` erases those subjects again.
+
+## Coverage
+
+A table with a `userId` column must be covered by a dataset, or excluded with a reason, once the app uses `definePrivacy`. Otherwise the build fails with `privacy_table_unclassified`, which names the table.
+
+## What is not yet included
+
+The package does not yet include a Studio page for these requests, and the workerd suite for its storage paths is still to come. The legal and tax review of the defaults is also still open.
