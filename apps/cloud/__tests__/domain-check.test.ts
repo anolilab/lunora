@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FAILURES_BEFORE_UNVERIFIED, reconcileDomain } from "../src/domains/check";
-import { runDomainSweep } from "../src/domains/sweep";
+import { expireUnverifiedDomains, runDomainSweep } from "../src/domains/sweep";
 import type { DnsAnswer } from "../src/domains/verify";
 import type { ControlPlaneDatabase } from "../src/store";
 
@@ -82,6 +82,51 @@ const domainRow = (overrides: Row): Row => ({
     txtToken: "tok",
     updatedAt: 1,
     ...overrides,
+});
+
+describe(expireUnverifiedDomains, () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    /** A store whose `delete` removes the row, so the test reads back what survived. */
+    const expiringDatabase = (rows: Row[]) => {
+        const remaining = [...rows];
+        const database: ControlPlaneDatabase = {
+            delete: (id) => {
+                const index = remaining.findIndex((row) => row._id === id);
+
+                if (index !== -1) {
+                    remaining.splice(index, 1);
+                }
+
+                return Promise.resolve(undefined);
+            },
+            findMany: () => Promise.resolve({ page: [...remaining] }),
+            insert: () => Promise.resolve(undefined),
+            patch: () => Promise.resolve(undefined),
+        };
+
+        return { database, remaining };
+    };
+
+    it("removes a domain still unverified after seven days, and keeps a verified one and a recent one", async () => {
+        const { database, remaining } = expiringDatabase([
+            { _id: "stale", createdAt: NOW - 8 * DAY, hostname: "stale.example.com", verifiedAt: null },
+            { _id: "verified", createdAt: NOW - 30 * DAY, hostname: "verified.example.com", verifiedAt: NOW - 20 * DAY },
+            { _id: "recent", createdAt: NOW - 2 * DAY, hostname: "recent.example.com", verifiedAt: null },
+        ]);
+
+        await expect(expireUnverifiedDomains(database, { now: NOW })).resolves.toStrictEqual({ expired: 1 });
+        expect(remaining.map((row) => row._id)).toStrictEqual(["verified", "recent"]);
+    });
+
+    it("keeps an old unverified domain that already holds a certificate", async () => {
+        const { database, remaining } = expiringDatabase([
+            { _id: "certified", createdAt: NOW - 8 * DAY, customHostnameId: "chn_1", hostname: "c.example.com", verifiedAt: null },
+        ]);
+
+        await expect(expireUnverifiedDomains(database, { now: NOW })).resolves.toStrictEqual({ expired: 0 });
+        expect(remaining.map((row) => row._id)).toStrictEqual(["certified"]);
+    });
 });
 
 describe(runDomainSweep, () => {

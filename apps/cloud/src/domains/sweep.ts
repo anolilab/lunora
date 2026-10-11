@@ -9,14 +9,21 @@ import type { NotificationEvent, NotificationKind } from "../notifications/event
 import { channelsForEvent, renderNotification } from "../notifications/events";
 import { pendingDeliveryRow } from "../notifications/outbox";
 import type { ControlPlaneDatabase } from "../store";
+import { drainTable } from "../store";
 import { domainNotificationDetail, reconcileDomain } from "./check";
-import { type DnsResolve, verifyDomain } from "./verify";
+import type { DnsResolve } from "./verify";
+import { verifyDomain } from "./verify";
 
 /** Domains checked per run. The DNS lookups for a batch run concurrently. */
 export const DOMAIN_BATCH_SIZE = 50;
 
+/** A custom domain still unverified this long after it was added is removed. */
+export const UNVERIFIED_DOMAIN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 interface DomainRow {
     _id: string;
+    createdAt?: number;
+    customHostnameId?: null | string;
     failedChecks?: number;
     hostname: string;
     organizationId: string;
@@ -67,6 +74,29 @@ const announce = async (database: ControlPlaneDatabase, domain: DomainRow, event
         // eslint-disable-next-line no-await-in-loop -- a handful of channels per transition; sequential keeps the writes simple
         await database.insert("notificationDeliveries", pendingDeliveryRow(channel, message, domain.organizationId, now));
     }
+};
+
+/**
+ * Remove the custom domains that were added and never verified within
+ * {@link UNVERIFIED_DOMAIN_TTL_MS}. A domain with a certificate is never removed
+ * here: releasing a certificate goes through the `domains.remove` path, which this
+ * sweep does not take. Limit: `verifiedAt` clears when a verified domain stops
+ * validating, so such a domain with no certificate reads as unverified and is
+ * removed too; the row does not record that it ever verified.
+ */
+export const expireUnverifiedDomains = async (database: ControlPlaneDatabase, options: { now: number }): Promise<{ expired: number }> => {
+    const domains = await drainTable<DomainRow>(database, "domains");
+    const cutoff = options.now - UNVERIFIED_DOMAIN_TTL_MS;
+    const expired = domains.filter(
+        (domain) => domain.createdAt !== undefined && domain.createdAt < cutoff && domain.verifiedAt == null && domain.customHostnameId == null,
+    );
+
+    for (const domain of expired) {
+        // eslint-disable-next-line no-await-in-loop -- expiries are rare; sequential keeps the writes simple
+        await database.delete(domain._id, "domains");
+    }
+
+    return { expired: expired.length };
 };
 
 /**

@@ -36,7 +36,7 @@ import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
-import { runDomainSweep } from "../domains/sweep";
+import { expireUnverifiedDomains, runDomainSweep } from "../domains/sweep";
 import { createDohResolver } from "../domains/verify";
 import { edgeBudget } from "../edge/protection";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
@@ -588,6 +588,11 @@ const sweepDomains = async (database: ControlPlaneStore, env: ControlPlaneEnv): 
     });
 };
 
+/** Removes custom domains still unverified seven days after they were added. */
+const sweepUnverifiedDomains = async (database: ControlPlaneStore): Promise<void> => {
+    await expireUnverifiedDomains(database, { now: Date.now() });
+};
+
 /**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
@@ -731,6 +736,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (tick: TickContext) => Promise<void
     // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
     { cron: EVERY_MINUTE, run: withStore(sweepNotifications) },
     { cron: EVERY_HOUR, run: withStore(sweepDomains) },
+    // Expires custom domains that never verified (sweep stage, so a failure is isolated).
+    { cron: EVERY_HOUR, run: withStore(sweepUnverifiedDomains) },
     { cron: EVERY_HOUR, run: withStore(sweepHostdRollouts) },
     // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
     { cron: EVERY_HOUR, run: withStore(sweepOutdatedBoxes) },
