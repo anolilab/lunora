@@ -173,14 +173,17 @@ const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, pacer
     };
 };
 
+/** A probe that hangs past this counts as a failed release, not an open request. */
+const HEALTH_CHECK_TIMEOUT_MS = 10_000;
+
 /**
  * Probe the project's Worker once the release is on it (GAPS.md A1): any
  * response below 500 counts as healthy (the app may 404 its root route); a
- * network error or 5xx fails the release and reverts to the previous one.
+ * network error, a timeout or 5xx fails the release and reverts to the previous one.
  */
 const healthCheck = async (url: string): Promise<boolean> => {
     try {
-        const response = await fetch(url, { method: "GET" });
+        const response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) });
 
         return response.status < 500;
     } catch {
