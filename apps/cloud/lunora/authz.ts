@@ -28,27 +28,23 @@ interface DeployKeyRow {
 }
 
 /**
- * Resolve and authorize the caller's membership in an organization. Throws
- * `UNAUTHORIZED` if not signed in, `FORBIDDEN` if not a member (or, when
- * `allowedRoles` is given, if the member's role isn't permitted). Works in both
- * queries and mutations (the reader facade is shared).
+ * The membership rule every organization check shares: the user must be a member of
+ * the organization and, when `allowedRoles` is given, hold one of those roles. Throws
+ * `FORBIDDEN` otherwise. The user id is passed in, so a caller that has already verified
+ * the user (a session the route read, for one) gets the same rule as a signed-in query.
+ * Works in both queries and mutations (the reader facade is shared).
  *
  * Returns the organization from the verified membership row: a write stamps its
  * `organizationId` from that, never from the request's `args`, so the
  * ownership column only ever holds an organization the caller is a member of
  * (the `owner_field_from_args_not_auth` advisor rule).
  */
-export const assertMember = async (
+export const assertRoleForUser = async (
     context: QueryContext,
     organizationId: Id<"organizations">,
+    userId: string,
     allowedRoles?: ReadonlyArray<MemberRole>,
 ): Promise<{ organizationId: Id<"organizations">; role: MemberRole; userId: string }> => {
-    const { userId } = context.auth;
-
-    if (!userId) {
-        throw new LunoraError("UNAUTHORIZED", "not signed in");
-    }
-
     const { page } = await context.db.members.findMany({ where: { organizationId, userId } });
     const member = page[0];
 
@@ -61,6 +57,26 @@ export const assertMember = async (
     }
 
     return { organizationId: member.organizationId, role: member.role, userId };
+};
+
+/**
+ * Resolve and authorize the caller's membership in an organization. Throws
+ * `UNAUTHORIZED` if not signed in, `FORBIDDEN` if not a member (or, when
+ * `allowedRoles` is given, if the member's role isn't permitted). The rule itself is
+ * {@link assertRoleForUser}.
+ */
+export const assertMember = async (
+    context: QueryContext,
+    organizationId: Id<"organizations">,
+    allowedRoles?: ReadonlyArray<MemberRole>,
+): Promise<{ organizationId: Id<"organizations">; role: MemberRole; userId: string }> => {
+    const { userId } = context.auth;
+
+    if (!userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    return assertRoleForUser(context, organizationId, userId, allowedRoles);
 };
 
 /** Match a key by SHA-256 to its (non-revoked, org-matching) row, or throw `FORBIDDEN`. */

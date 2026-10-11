@@ -1,5 +1,7 @@
+import { LunoraError } from "@lunora/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { internal } from "../lunora/_generated/internal";
 import type { InstallEvent } from "../src/catalog/install-events";
 import { takeInstallEvents } from "../src/catalog/install-events";
 import { installApp, listCatalog } from "../src/catalog/service";
@@ -34,12 +36,32 @@ vi.mock(import("../src/catalog/service"), async (importOriginal) => {
 const KEY = "k".repeat(64);
 const RELEASES = {} as NonNullable<RouterEnv["RELEASES"]>;
 
-/** A context whose reads return the given members, and whose writes are never expected. */
+/**
+ * A context over the given members, and whose writes are never expected. The owner-or-
+ * admin check is the membership query, so it answers as the real one does: a non-member
+ * or a role outside `allowedRoles` is refused as FORBIDDEN.
+ */
 const contextWith = (members: { role: string; userId: string }[]): NonNullable<RouterEnv["__lunoraCtx"]> =>
     ({
         runAction: () => Promise.reject(new Error("unused")),
         runMutation: () => Promise.reject(new Error("unexpected write")),
-        runQuery: () => Promise.resolve(members),
+        runQuery: (reference: unknown, args: Record<string, unknown>) => {
+            if (reference !== internal.members.roleForUser) {
+                return Promise.resolve(undefined);
+            }
+
+            const member = members.find((candidate) => candidate.userId === args["userId"]);
+
+            if (member === undefined) {
+                return Promise.reject(new LunoraError("FORBIDDEN", "not a member of this organization"));
+            }
+
+            if (!(args["allowedRoles"] as string[]).includes(member.role)) {
+                return Promise.reject(new LunoraError("FORBIDDEN", "requires one of: owner, admin"));
+            }
+
+            return Promise.resolve(member.role);
+        },
     }) as NonNullable<RouterEnv["__lunoraCtx"]>;
 
 const environmentWith = (members: { role: string; userId: string }[], overrides: Partial<RouterEnv> = {}): RouterEnv => {
@@ -155,6 +177,23 @@ describe("the catalog routes", () => {
             const members = [{ role: "member", userId: "user_owner" }];
 
             const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith(members), pacer);
+
+            expect(response.status).toBe(403);
+            await expect(readJson(response)).resolves.toStrictEqual({ error: "only owners and admins can install a catalog app" });
+            expect(installApp).not.toHaveBeenCalled();
+        });
+
+        it("lets an admin install, as the owner-or-admin rule allows", async () => {
+            vi.mocked(installApp).mockResolvedValueOnce({ deploymentId: "dep_1", generated: [], kept: [], ok: true, recorded: true });
+
+            const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith([{ role: "admin", userId: "user_owner" }]), pacer);
+
+            expect(response.status).toBe(200);
+            expect(installApp).toHaveBeenCalledTimes(1);
+        });
+
+        it("refuses a viewer, before anything is written", async () => {
+            const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith([{ role: "viewer", userId: "user_owner" }]), pacer);
 
             expect(response.status).toBe(403);
             await expect(readJson(response)).resolves.toStrictEqual({ error: "only owners and admins can install a catalog app" });

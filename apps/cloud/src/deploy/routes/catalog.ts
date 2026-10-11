@@ -365,15 +365,13 @@ export const handleCatalogInstallRoute = async (request: Request, environment: R
 
     const { body } = parsed;
 
+    // The owner-or-admin rule is the membership rule's own, run on the user id the session verified.
     try {
-        const members = await context.runQuery<{ role: string; userId: string }[]>(api.members.list, { organizationId: body.organizationId });
-        const role = members.find((member) => member.userId === installedBy)?.role;
-
-        if (role !== "owner" && role !== "admin") {
-            return jsonError(403, "only owners and admins can install a catalog app");
-        }
+        await context.runQuery(internal.members.roleForUser, { allowedRoles: ["owner", "admin"], organizationId: body.organizationId, userId: installedBy });
     } catch (error) {
-        return catalogFailed(error, "catalog install failed");
+        return isLunoraError(error) && error.code === "FORBIDDEN"
+            ? jsonError(403, "only owners and admins can install a catalog app")
+            : catalogFailed(error, "catalog install failed");
     }
 
     // Refusals above are plain JSON with their status. From here the install streams its progress.

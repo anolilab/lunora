@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { QueryCtx } from "../lunora/_generated/server";
-import { assertMember, authorizeDeployKey } from "../lunora/authz";
+import { assertMember, assertRoleForUser, authorizeDeployKey } from "../lunora/authz";
 import { hashDeployKey } from "../src/deploy/keys";
 
 type Row = Record<string, unknown>;
@@ -47,6 +47,33 @@ describe(assertMember, () => {
 
         await expect(assertMember(context, org, ["admin"])).resolves.toStrictEqual({ organizationId: org, role: "admin", userId: "u1" });
         await expect(assertMember(context, org, ["owner"])).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+});
+
+describe(assertRoleForUser, () => {
+    const members = [
+        { _id: "m1", organizationId: "org_1", role: "admin", userId: "u1" },
+        { _id: "m2", organizationId: "org_1", role: "viewer", userId: "u2" },
+    ];
+
+    it("gives a verified user the same result assertMember gives a signed-in one with the same role", async () => {
+        const signedIn = makeCtx("u1", { members });
+        const verified = makeCtx(null, { members });
+
+        await expect(assertRoleForUser(verified, org, "u1", ["owner", "admin"])).resolves.toStrictEqual(await assertMember(signedIn, org, ["owner", "admin"]));
+        await expect(assertRoleForUser(verified, org, "u1")).resolves.toStrictEqual(await assertMember(signedIn, org));
+    });
+
+    it("allows an admin where the rule names admin", async () => {
+        await expect(assertRoleForUser(makeCtx(null, { members }), org, "u1", ["owner", "admin"])).resolves.toMatchObject({ role: "admin" });
+    });
+
+    it("refuses a viewer where the rule names owner or admin", async () => {
+        await expect(assertRoleForUser(makeCtx(null, { members }), org, "u2", ["owner", "admin"])).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("refuses a user who is not a member at all", async () => {
+        await expect(assertRoleForUser(makeCtx(null, { members }), org, "u3")).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 });
 

@@ -1,9 +1,29 @@
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
-import { assertMember, assertRowInOrg } from "./authz";
+import { internalQuery, mutation, query, v } from "./_generated/server.js";
+import { assertMember, assertRoleForUser, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
+
+/**
+ * The role a verified user holds in an organization, or the refusal when they hold none
+ * of `allowedRoles`. The app catalog's install route passes the session's user id, so
+ * its owner-or-admin check is {@link assertRoleForUser}, the same rule `assertMember`
+ * applies. An internal query: a public one would answer role questions about any user
+ * in any organization.
+ */
+export const roleForUser = internalQuery
+    .input({
+        allowedRoles: v.array(v.union(v.literal("admin"), v.literal("member"), v.literal("owner"), v.literal("viewer"))),
+        organizationId: v.id("organizations"),
+        userId: boundedString(LIMITS.id),
+    })
+    .query(async ({ ctx: context, args: { allowedRoles, organizationId, userId } }): Promise<"admin" | "member" | "owner" | "viewer"> => {
+        const member = await assertRoleForUser(context, organizationId, userId, allowedRoles);
+
+        return member.role;
+    });
 
 interface MemberRow {
     _id: Id<"members">;
