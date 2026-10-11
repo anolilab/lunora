@@ -244,6 +244,14 @@ that every call site must pass ports to, or a module-level `ctx` that does not e
 workflow context has no `ctx.db`, so its `ports` reach the data through `ctx.run` into an internal
 function. The example app is the reference for that.
 
+**The requests table keys rows by the id the package hands out.** The table had no column for that
+id, so an app's store port could not find a request again. It now has a `requestId` column with a
+`byRequestId` index. Found while building the example. The app's `_id` cannot serve, because the
+package mints the id before the insert.
+
+**Open for the maintainer.** `TombstonePort.keys()` returns every tombstone, so an app reads the whole
+table on each restore. A membership check per restored subject would let the app use an index.
+
 **1. Merge the extension into the schema.** The table set is static and independent of
 configuration, so there is no cycle with step 2.
 
