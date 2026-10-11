@@ -57,6 +57,11 @@ crons.interval("purge deleted organizations", { hours: 6 }, internal.organizatio
 // how promptly old rows clear — keeping within Cloudflare's 3-trigger cap.
 crons.interval("prune uptime checks", { hours: 6 }, internal.uptime.prune, {});
 
+// Prune records past their retention window: anonymised payment and subscription
+// rows (ten years), payment webhook events (90 days), and audit entries (three
+// years). Rides the 6h bucket for the same trigger-cap reason as above.
+crons.interval("prune retention records", { hours: 6 }, internal.retention.prune, {});
+
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
 // fan-out, the uptime sweep, AND the metric-alert sweep (src/telemetry/sweep.ts —
 // re-evaluates error_rate/latency_p95/llm_cost rules so quiet windows still
