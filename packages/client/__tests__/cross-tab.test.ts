@@ -413,7 +413,7 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
 
         // `emitConnectionStatus` fires only on a CHANGE and `onBecomeLeader`
         // announces once, so a tab opened later heard nothing and sat on
-        // `leaderStatus === undefined` — `computeStatus()` answering "idle" while
+        // `leader.status === undefined` — `computeStatus()` answering "idle" while
         // the app was live, and never producing the transitioned-to-connected
         // edge that flushes an offline queue.
         const channelName = `test-cross-tab-${crypto.randomUUID()}`;
@@ -788,7 +788,7 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
 
         try {
             // The leader reports connected once (establishing the follower's
-            // sticky `leaderWasEverConnected`), then offline.
+            // sticky `leader.wasEverConnected`), then offline.
             rogue.postMessage({ status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
             await delay(30);
             rogue.postMessage({ status: "offline", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);

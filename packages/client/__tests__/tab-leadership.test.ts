@@ -1,0 +1,143 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { ConnectionStatus } from "../src/connection-state";
+import type { SubscriptionState } from "../src/subscription";
+import type { LeaderMirror, TabLeadershipHost } from "../src/tab-leadership";
+import { onBecomeLeader, onLeaderClaimAnswered, onLeaderStatus, onStopBeingLeader } from "../src/tab-leadership";
+
+/** A host whose every operation is a recorded fake, with a leader mirror the test can read. */
+const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<LeaderMirror> = {}) => {
+    const leader: LeaderMirror = { status: undefined, wasEverConnected: false, ...mirror };
+    const host: TabLeadershipHost = {
+        activeSubscriptions: vi.fn<() => SubscriptionState[]>(() => []),
+        broadcastStatus: vi.fn<(status: ConnectionStatus, identity: string | null) => void>(),
+        closeConnections: vi.fn<() => void>(),
+        computeStatus: vi.fn<() => ConnectionStatus>(() => "connected"),
+        emitConnectionStatus: vi.fn<() => void>(),
+        ensureSocket: vi.fn<(shardKey: string | undefined) => void>(),
+        flushOfflineQueues: vi.fn<() => void>(),
+        identityFingerprint: vi.fn<() => string | null>(() => "subj:a"),
+        isLeader: vi.fn<() => boolean>(() => false),
+        leader,
+        queueResubscribe: vi.fn<(state: SubscriptionState) => void>(),
+        queuedShardKeys: vi.fn<() => Iterable<string | undefined>>(() => []),
+        ...overrides,
+    };
+
+    return { host, leader };
+};
+
+const subscription = (id: string, shardKey: string | undefined): SubscriptionState => ({ id, shardKey }) as unknown as SubscriptionState;
+
+describe("onBecomeLeader", () => {
+    it("reopens a socket and queues a resubscribe for every subscription, then broadcasts once", () => {
+        expect.assertions(4);
+
+        const a = subscription("a", undefined);
+        const b = subscription("b", "tenant-b");
+        const { host } = fakeHost({ activeSubscriptions: () => [a, b] });
+
+        onBecomeLeader(host);
+
+        expect(host.ensureSocket).toHaveBeenNthCalledWith(1, undefined);
+        expect(host.queueResubscribe).toHaveBeenNthCalledWith(1, a);
+        expect(host.queueResubscribe).toHaveBeenNthCalledWith(2, b);
+        expect(host.broadcastStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens the socket of a shard with a queued write even when no subscription uses it", () => {
+        expect.assertions(2);
+
+        const { host } = fakeHost({ queuedShardKeys: () => ["tenant-q"] });
+
+        onBecomeLeader(host);
+
+        expect(host.ensureSocket).toHaveBeenCalledWith("tenant-q");
+        expect(host.queueResubscribe).not.toHaveBeenCalled();
+    });
+});
+
+describe("onStopBeingLeader", () => {
+    it("closes every connection and clears the mirror of the previous leader", () => {
+        expect.assertions(3);
+
+        const { host, leader } = fakeHost({}, { status: "connected", wasEverConnected: true });
+
+        onStopBeingLeader(host);
+
+        expect(host.closeConnections).toHaveBeenCalledTimes(1);
+        expect(leader.status).toBeUndefined();
+        expect(leader.wasEverConnected).toBe(false);
+    });
+});
+
+describe("onLeaderStatus", () => {
+    it("mirrors the leader's status and marks it sticky once it reports connected", () => {
+        expect.assertions(3);
+
+        const { host, leader } = fakeHost();
+
+        onLeaderStatus(host, "connected", "subj:a");
+
+        expect(leader.status).toBe("connected");
+        expect(leader.wasEverConnected).toBe(true);
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("flushes queued offline writes on each transition into a live state, and not otherwise", () => {
+        expect.assertions(4);
+
+        const { host } = fakeHost({}, { status: "idle" });
+
+        onLeaderStatus(host, "connected", undefined);
+
+        expect(host.flushOfflineQueues).toHaveBeenCalledTimes(1);
+
+        onLeaderStatus(host, "connected", undefined);
+
+        expect(host.flushOfflineQueues).toHaveBeenCalledTimes(1);
+
+        onLeaderStatus(host, "offline", undefined);
+
+        expect(host.flushOfflineQueues).toHaveBeenCalledTimes(1);
+
+        expect(host.emitConnectionStatus).toHaveBeenCalledTimes(3);
+    });
+
+    it("drops a status stamped for another identity, changing nothing", () => {
+        expect.assertions(3);
+
+        const { host, leader } = fakeHost({}, { status: "idle" });
+
+        onLeaderStatus(host, "connected", "subj:b");
+
+        expect(leader.status).toBe("idle");
+        expect(host.emitConnectionStatus).not.toHaveBeenCalled();
+        expect(host.flushOfflineQueues).not.toHaveBeenCalled();
+    });
+
+    it("accepts a status with no stamp, as a mixed-version leader sends", () => {
+        expect.assertions(1);
+
+        const { host, leader } = fakeHost();
+
+        onLeaderStatus(host, "polling", undefined);
+
+        expect(leader.status).toBe("polling");
+    });
+});
+
+describe("onLeaderClaimAnswered", () => {
+    it("restates the status only when this tab leads", () => {
+        expect.assertions(2);
+
+        const leading = fakeHost({ isLeader: () => true, computeStatus: () => "connected" });
+        onLeaderClaimAnswered(leading.host);
+
+        const following = fakeHost({ isLeader: () => false });
+        onLeaderClaimAnswered(following.host);
+
+        expect(leading.host.broadcastStatus).toHaveBeenCalledWith("connected", "subj:a");
+        expect(following.host.broadcastStatus).not.toHaveBeenCalled();
+    });
+});

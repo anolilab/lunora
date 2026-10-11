@@ -154,7 +154,9 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp } from "./subscription-frames";
+import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
+import { onBecomeLeader, onLeaderClaimAnswered, onLeaderStatus, onStopBeingLeader } from "./tab-leadership";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -658,16 +660,7 @@ class LunoraClient {
      * leader (becomes leader itself, or the leader changes), so a stale
      * mirror from a previous leader never survives a leadership change.
      */
-    private leaderStatus: ConnectionStatus | undefined;
-
-    /**
-     * Sticky "has the mirrored leader status ever reported `connected`" flag —
-     * the follower's counterpart to {@link ShardConnection.wasEverConnected},
-     * since a follower has no `ShardConnection` of its own. Feeds the
-     * offline-queue gate (see `mutation`) exactly like the real per-shard flag
-     * does on the leader/single-tab path.
-     */
-    private leaderWasEverConnected = false;
+    private readonly leader: LeaderMirror = { status: undefined, wasEverConnected: false };
 
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
     private readonly connections = new Map<string, ShardConnection>();
@@ -4211,88 +4204,46 @@ class LunoraClient {
         // exposure class; `this.url` is not a secret to same-origin script either.
         const channelName = `lunora-bridge::${this.url}::${this.identityFingerprint() ?? "anon"}`;
 
-        return new TabCoordinator({
-            channelName,
-            onBecomeLeader: () => {
-                // Re-open sockets for every active subscription now that
-                // we own the WS connections. Paced like the socket-open path:
-                // a handover replays every tab's subscriptions combined, so
-                // this is the wider of the two bursts, not the narrower.
-                for (const state of this.subscriptions.all()) {
-                    this.ensureSocket(state.shardKey);
-                    this.queueResubscribe(state);
-                }
-
-                // …and for every shard with a write queued on it. A hydrated
-                // durable write warms its own shard through `ensureSocket`,
-                // which no-ops while this tab is a follower — including the
-                // whole startup claim window a SOLE tab spends before
-                // self-promoting, which is when hydration runs. A write-only
-                // shard has no subscription to carry it in the loop above, so
-                // without this its restored writes never flush at all.
-                for (const shardKey of this.queuedOfflineShardKeys) {
-                    this.ensureSocket(shardKey);
-                }
-
-                // Broadcast our aggregate status once immediately, so a
-                // follower that was mirroring the PREVIOUS leader isn't
-                // stuck displaying a stale value until this tab's own
-                // status happens to change (which may be a while, e.g. no
-                // active subscription ever opens a socket).
-                this.tabCoordinator?.broadcastConnectionStatus(this.computeStatus(), this.identityFingerprint());
-            },
-            onStopBeingLeader: () => {
-                // Close all WS connections now that another tab leads —
-                // reuse the same timer-teardown sequence `close()` uses so
-                // a demoted leader can't leak a `reconnectTimer` /
-                // `heartbeatTimer` the way an inline `conn.socket?.close()`
-                // (which skips both) used to.
+        // The leader and follower hooks run against this host. It exposes operations on the
+        // client, so the hooks reach no state of their own.
+        const leadership: TabLeadershipHost = {
+            activeSubscriptions: () => this.subscriptions.all(),
+            broadcastStatus: (status, identity) => this.tabCoordinator?.broadcastConnectionStatus(status, identity),
+            closeConnections: () => {
                 for (const [key, conn] of this.connections) {
                     this.teardownConnection(conn);
                     this.connections.delete(key);
                 }
+            },
+            computeStatus: () => this.computeStatus(),
+            emitConnectionStatus: () => {
+                this.emitConnectionStatus();
+            },
+            ensureSocket: (shardKey) => {
+                this.ensureSocket(shardKey);
+            },
+            flushOfflineQueues: () => {
+                this.flushAllOfflineQueues();
+            },
+            identityFingerprint: () => this.identityFingerprint(),
+            isLeader: () => this.tabCoordinator?.isLeader() === true,
+            leader: this.leader,
+            queueResubscribe: (state) => {
+                this.queueResubscribe(state);
+            },
+            queuedShardKeys: () => this.queuedOfflineShardKeys,
+        };
 
-                // We're now a follower of whoever won leadership — clear
-                // any stale mirror from the previous leader until the new
-                // one's first `connection-status` broadcast arrives.
-                this.leaderStatus = undefined;
-                this.leaderWasEverConnected = false;
+        return new TabCoordinator({
+            channelName,
+            onBecomeLeader: () => {
+                onBecomeLeader(leadership);
+            },
+            onStopBeingLeader: () => {
+                onStopBeingLeader(leadership);
             },
             onConnectionStatus: (status, identity) => {
-                // Belt-and-braces: the channel-name scoping is the primary
-                // defence (a different identity is normally on a different
-                // channel entirely), but a `setAuthToken` in this tab can move
-                // it to a new channel while a stale frame from the OLD leader
-                // is already queued in the message task queue. Drop it when a
-                // stamp is present and doesn't match; an absent stamp
-                // (mixed-version leader) is accepted, same as today.
-                if (isForeignStamp(identity, this.identityFingerprint())) {
-                    return;
-                }
-
-                // A follower has no `ShardConnection` of its own — this is
-                // its only truthful status signal. Mirror it and re-run
-                // the same notify path a real status change takes so this
-                // tab's own `onConnectionStatus`/`connectionStatus()`
-                // consumers see it.
-                // `"polling"` counts as live too: the leader reaches the origin over
-                // HTTP, and this tab's queued writes ride HTTP either way.
-                const transitionedToConnected = isLiveTransition(this.leaderStatus, status);
-
-                this.leaderStatus = status;
-
-                if (status === "connected") {
-                    this.leaderWasEverConnected = true;
-                }
-
-                this.emitConnectionStatus();
-
-                // Flush this tab's own queued offline writes now that the
-                // (leader's) connection is back — they replay over HTTP
-                // RPC, which needs no socket of this follower's own.
-                if (transitionedToConnected) {
-                    this.flushAllOfflineQueues();
-                }
+                onLeaderStatus(leadership, status, identity);
             },
             onSubscriptionData: (key, data, cursor, epoch, identity) => {
                 // Belt-and-braces identity check — see `onConnectionStatus`'s
@@ -4336,15 +4287,7 @@ class LunoraClient {
                 refoldSubscription(state, data);
             },
             onLeaderClaimAnswered: () => {
-                // A new tab just announced itself. Re-state our status directly:
-                // `emitConnectionStatus` short-circuits when nothing changed, so
-                // a stable leader never re-broadcasts and a late-joining follower
-                // would otherwise sit on `leaderStatus === undefined` — reporting
-                // `"idle"` while the app is live, and never seeing the
-                // transitioned-to-connected edge that flushes its offline queue.
-                if (this.tabCoordinator?.isLeader()) {
-                    this.tabCoordinator.broadcastConnectionStatus(this.computeStatus(), this.identityFingerprint());
-                }
+                onLeaderClaimAnswered(leadership);
             },
             onSubscriptionError: (key, error, identity) => {
                 // Belt-and-braces identity check — see `onConnectionStatus`'s
@@ -5256,7 +5199,7 @@ class LunoraClient {
         // `connections` map, which would otherwise report `"idle"` forever
         // regardless of the leader's real socket state.
         if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
-            return this.leaderStatus ?? "idle";
+            return this.leader.status ?? "idle";
         }
 
         const conns = [...this.connections.values()];
@@ -5601,7 +5544,7 @@ class LunoraClient {
      * the real `ShardConnection`'s state (byte-identical to the pre-cross-tab
      * behavior). A follower has no `ShardConnection` of its own (see
      * `ensureSocket`), so it derives the same triple from the mirrored
-     * `leaderStatus`/`leaderWasEverConnected` instead: `"connected"` maps to
+     * `leader.status`/`leader.wasEverConnected` instead: `"connected"` maps to
      * `"open"` (queue-eligible once `wasEverConnected`), `"connecting"` stays
      * `"connecting"` (the mid-reconnect queue branch), anything else is
      * `"idle"`. `hasSocket` is always `false` for a follower — it never has
@@ -5628,13 +5571,13 @@ class LunoraClient {
         if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
             let wsState: WSState = "idle";
 
-            if (this.leaderStatus === "connected") {
+            if (this.leader.status === "connected") {
                 wsState = "open";
-            } else if (this.leaderStatus === "connecting") {
+            } else if (this.leader.status === "connecting") {
                 wsState = "connecting";
             }
 
-            return { hasSocket: false, idleClosed: false, polling: this.leaderStatus === "polling", wasEverConnected: this.leaderWasEverConnected, wsState };
+            return { hasSocket: false, idleClosed: false, polling: this.leader.status === "polling", wasEverConnected: this.leader.wasEverConnected, wsState };
         }
 
         const conn = this.getConnection(shardKey);
