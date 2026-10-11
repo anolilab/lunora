@@ -26,6 +26,19 @@ describe(authDataset, () => {
         expect(auth.tables.session?.omit).toContain("token");
         expect(auth.tables.twoFactor?.omit).toContain("secret");
     });
+
+    it("keeps every credential column out of the export, not just one per table", () => {
+        const auth = authDataset();
+
+        expect(auth.tables.account?.omit).toStrictEqual(expect.arrayContaining(["password", "accessToken", "refreshToken", "idToken"]));
+        expect(auth.tables.twoFactor?.omit).toStrictEqual(expect.arrayContaining(["secret", "backupCodes"]));
+    });
+
+    it("keeps credential columns out of the export under renamed tables too", () => {
+        const auth = authDataset({ account: "logins" });
+
+        expect(auth.tables.logins?.omit).toContain("password");
+    });
 });
 
 describe("the other built-in datasets", () => {

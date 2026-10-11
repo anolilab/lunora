@@ -29,13 +29,13 @@ const authDataset = (names: AuthTableNames = {}): Dataset =>
         origin: "provided",
         purpose: "Sign-in identity: the account, its sessions, linked sign-in methods and second factors",
         tables: {
-            [names.account ?? "account"]: {},
+            [names.account ?? "account"]: { omit: ["password", "accessToken", "refreshToken", "idToken"] },
             [names.apikey ?? "apikey"]: { omit: ["key"] },
             [names.member ?? "member"]: {},
             [names.passkey ?? "passkey"]: {},
             [names.session ?? "session"]: { omit: ["token"] },
             [names.teamMember ?? "teamMember"]: {},
-            [names.twoFactor ?? "twoFactor"]: { omit: ["secret"] },
+            [names.twoFactor ?? "twoFactor"]: { omit: ["secret", "backupCodes"] },
             [names.user ?? "user"]: {},
         },
     });
