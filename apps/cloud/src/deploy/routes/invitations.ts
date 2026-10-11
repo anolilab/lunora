@@ -9,7 +9,14 @@ import { jsonError, rejected, requireContext } from "./shared";
 interface InviteBody {
     email?: string;
     organizationId?: string;
+    role?: string;
 }
+
+type InviteRole = "admin" | "member" | "owner" | "viewer";
+
+const INVITE_ROLES: ReadonlyArray<InviteRole> = ["admin", "member", "owner", "viewer"];
+
+const isInviteRole = (value: string): value is InviteRole => (INVITE_ROLES as ReadonlyArray<string>).includes(value);
 
 /**
  * A sign-up link for an invited address with no account yet, or `undefined` when
@@ -66,19 +73,35 @@ export const handleInviteRoute = async (request: Request, environment: RouterEnv
         return jsonError(400, "organizationId and email are required");
     }
 
+    // The dashboard sends no role; an invitee joins as a member unless the caller names one.
+    const role = invite.role ?? "member";
+
+    if (!isInviteRole(role)) {
+        return jsonError(400, "role must be one of owner, admin, member, viewer");
+    }
+
+    let token: string;
+
     try {
-        const { token } = await context.runMutation<{ id: string; token: string }>(api.invitations.invite, {
+        ({ token } = await context.runMutation<{ id: string; token: string }>(api.invitations.invite, {
             email: invite.email,
             organizationId: invite.organizationId,
-        });
+            role,
+        }));
+    } catch (error) {
+        return rejected(error, "invite rejected");
+    }
+
+    // The row exists from here on, so a mail failure is a delivery failure, not a refusal.
+    try {
         const { origin } = new URL(request.url);
         const acceptUrl = `${origin}/accept-invite?token=${encodeURIComponent(token)}`;
         const signUpUrl = await signUpInvitationFor(origin, invite.email);
 
         await sendInvitationEmail(environment, { acceptUrl, ...(signUpUrl === undefined ? {} : { signUpUrl }), to: invite.email });
-
-        return Response.json({ ok: true });
-    } catch (error) {
-        return rejected(error, "invite rejected");
+    } catch {
+        return jsonError(502, "invitation was created but its email could not be sent");
     }
+
+    return Response.json({ ok: true });
 };
