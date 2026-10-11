@@ -46,6 +46,8 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
             progress: v.number(),
             reason: v.optional(v.string()),
             receivedAt: v.number(),
+            /** The id the package hands out. Stored as a column so the app's table row id stays the app's own. */
+            requestId: v.string(),
             status: v.union(
                 v.literal("received"),
                 v.literal("grace"),
@@ -61,6 +63,7 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
             verifiedAt: v.optional(v.number()),
             workflowInstanceId: v.optional(v.string()),
         })
+            .index("byRequestId", ["requestId"])
             .index("bySubject", ["subjectId", "type"])
             .index("byStatus", ["status", "dueAt"]),
 
