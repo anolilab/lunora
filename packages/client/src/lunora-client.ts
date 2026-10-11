@@ -110,7 +110,7 @@ import { bucketQuery, deriveWsUrl, joinUrl, withQuery } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
 import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
-import { applyDelta, isMutationDelta, UNMERGEABLE_DELTA } from "./delta-merge";
+import { resolveDataPayload, UNMERGEABLE_DELTA } from "./delta-merge";
 import { isAuthReplayFailure, TransportError } from "./errors";
 import { httpStream } from "./http-stream";
 import Listeners from "./listeners";
@@ -153,6 +153,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, refoldAndNotify } from "./subscription-frames";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -6881,7 +6882,7 @@ class LunoraClient {
         let payload: unknown;
 
         try {
-            payload = this.resolveDataPayload(message, state);
+            payload = resolveDataPayload(message, state.serverBase);
         } catch (error) {
             // The frame carried a value `decodeWire` refuses (an over-long
             // bigint, an over-depth tree, a malformed map entry). Left to throw
@@ -6904,45 +6905,10 @@ class LunoraClient {
             return;
         }
 
-        // `payload` is the new authoritative base. Update it first, then advance
-        // the cursor, so a layer whose write committed at/under this cursor is
-        // dropped (its effect is now in `payload`) before we re-fold. With no
-        // layers active (the common case) the displayed value is just `payload`,
-        // byte-identical to the historical behaviour.
-        state.serverBase = payload;
-
+        // Drop the cache seed before the value moves, then commit the payload and its
+        // position. The watermark and its checkpoint fan-out happen inside commit.
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
-
-        // Advance the resume cursor + epoch when the frame carries them
-        // (CDC-enabled shard); replayed as `sinceSeq` / `sinceEpoch` on the
-        // next reconnect.
-        if (message.cursor !== undefined) {
-            state.serverCursor = message.cursor;
-        }
-
-        if (message.epoch !== undefined) {
-            state.serverEpoch = message.epoch;
-        }
-
-        // Consume the per-client custom-mutator watermark this frame carries
-        // (mirrors the `settled` tail in `handleSettledMessage`), so a
-        // `@lunora/db` checkpoint gate sees the watermark THIS frame's rows
-        // actually reflect, instead of relying solely on the provisional
-        // RPC-ack signal (`confirmedMutationWatermark`) which can race ahead
-        // of what has actually synced. `Math.max` guards monotonicity. Fired
-        // BEFORE `notifySubscription` below (which drives `@lunora/db`'s
-        // `onRows`) so a fresher, frame-scoped watermark is already recorded
-        // by the time any RPC-ack-based fallback would otherwise run.
-        if (message.lastMutationId !== undefined) {
-            state.lastMutationId = Math.max(state.lastMutationId ?? 0, message.lastMutationId);
-
-            for (const onCheckpoint of state.checkpointCallbacks) {
-                // The one call site that sets `rowsFollow`: `notifySubscription`
-                // below drives this same frame's rowset callback, so this
-                // watermark genuinely describes rows that are about to land.
-                onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId, rowsFollow: true });
-            }
-        }
+        commitDataFrame(state, message, payload);
 
         // Persist the authoritative server value (never the optimistic overlay)
         // to the durable read cache (debounced).
@@ -6957,7 +6923,7 @@ class LunoraClient {
             dropAcknowledgedLayers(state, snapshotMark);
         }
 
-        notifySubscription(state, foldOptimistic(payload, state.optimisticLayers));
+        refoldAndNotify(state);
 
         // When cross-tab sync is active and we're the WS leader, broadcast
         // the new value to follower tabs so they stay in sync without their
@@ -7017,15 +6983,13 @@ class LunoraClient {
             // is reset (a recycled DO, a PITR restore, the shard's own watermark
             // recovery path) — a bare assignment would then walk this gate
             // BACKWARDS and re-open an overlay a later frame already confirmed.
-            state.lastMutationId = Math.max(state.lastMutationId ?? 0, message.lastMutationId);
+            advanceWatermark(state, message.lastMutationId);
         }
 
         // Fan out to every registered subscriber (shared state — see
         // SubscriptionState.checkpointCallbacks). A snapshot isn't needed: a
         // checkpoint callback never (un)subscribes to this same state mid-flush.
-        for (const onCheckpoint of state.checkpointCallbacks) {
-            onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
-        }
+        fanCheckpoints(state);
 
         // Cross-tab: propagate the checkpoint advance to follower tabs too, or a
         // `setQuery`/per-call optimistic overlay this byte-identical write just
@@ -7072,7 +7036,7 @@ class LunoraClient {
             // confirmed. Sweep confirmed layers here too (not just on `data`
             // frames), or a no-visible-change write would leave its overlay stuck.
             if (dropConfirmedLayers(state, state.serverCursor)) {
-                notifySubscription(state, foldOptimistic(state.serverBase, state.optimisticLayers));
+                refoldAndNotify(state);
             }
         }
         /* eslint-enable no-param-reassign */
@@ -7090,44 +7054,7 @@ class LunoraClient {
      * delta isn't a recognisable row change, when there's no cached value yet,
      * or when it can't be applied cleanly against the current cached shape.
      */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other message handlers; reads no shared client state
-    private resolveDataPayload(message: ServerDataMessage, state: SubscriptionState): unknown {
-        if ("data" in message && message.data !== undefined) {
-            // Wire-decode the snapshot so a `bytes`/`bigint` column arrives as a
-            // real ArrayBuffer/bigint (no-op on a pure-JSON payload).
-            return decodeWire(message.data);
-        }
-
-        const delta = decodeWire(message.delta);
-
-        // Merge into the authoritative `serverBase`, NOT the displayed `lastValue`
-        // (which may carry an optimistic overlay) — a delta describes a change to
-        // server truth, re-folded under the overlay afterwards. With no optimistic
-        // layers active `serverBase === lastValue`, so this is the historical path.
-        if (isMutationDelta(delta)) {
-            // No cached base is NOT a merge failure — there is nothing to merge
-            // into and nothing to corrupt. This is the legacy `broadcastDelta`
-            // fan-out, which stamps no `cursor` at all (see `ShardDO.broadcastDelta`:
-            // "legacy broadcast path has no diff baseline to protect"), so handing
-            // the change itself to a subscriber that has not been seeded strands
-            // no cursor and is the behaviour that path has always had. Asking for
-            // a snapshot here would turn every such broadcast into a re-subscribe.
-            if (state.serverBase === undefined) {
-                return delta;
-            }
-
-            // A base we DO hold and cannot splice the delta into is the dangerous
-            // case: wholesale replacement publishes the `{ key, op, table, row }`
-            // envelope over a real query result, and a frame that carries a cursor
-            // advances it, so nothing would ever reconcile it. Ask for a snapshot.
-            return applyDelta(state.serverBase, delta) ?? UNMERGEABLE_DELTA;
-        }
-
-        // Opaque delta payload (e.g. a full result the server sent verbatim):
-        // replace wholesale, preserving the historical behaviour.
-        return delta;
-    }
-
+     
     /** Route an inbound whisper to the topic's handlers on the originating shard. */
     private dispatchWhisper(message: ServerWhisperMessage, shardKey?: string): void {
         const handlers = this.whisperHandlers.get(connectionKey(shardKey))?.get(message.topic);
