@@ -112,9 +112,9 @@ export const readCatalogConfig = (env: CatalogEnv): CatalogConfig => {
 };
 
 /**
- * The shared record of the newest verified index per URL. Backed by the database, so
- * every isolate reads the same watermark; `accepted` is `false` for an index older than
- * the stored one.
+ * The shared record of the newest verified index per URL and signing key. Backed by the
+ * database, so every isolate reads the same watermark; `accepted` is `false` for an index
+ * older than the stored one for its key.
  */
 export interface IndexStateStore {
     advance: (indexUrl: string, keyId: string, issuedAt: number) => Promise<{ accepted: boolean }>;

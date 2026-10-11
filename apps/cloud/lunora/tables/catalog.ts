@@ -40,9 +40,11 @@ export const catalogTables = {
         .index("by_org", ["organizationId"])
         .index("by_project", ["projectId"])
         .index("by_active", ["activeKey"], { unique: true }),
-    // The newest catalog index this deployment has verified, one row per index URL. Every isolate
-    // reads and advances the same row, so an index an isolate has seen stops an older one anywhere.
-    // `issuedAt` only moves forward; `keyId` records the key that signed the stored index.
+    // The newest catalog index this deployment has verified, one row per (index URL, signing key).
+    // Every isolate reads and advances the same row, so an index an isolate has seen stops an older
+    // one signed by the same key anywhere. Each key keeps its own high-water mark: a rotated key
+    // cannot replay an index an older key signed, and a newer index from one key never holds back
+    // another. `issuedAt` only moves forward.
     catalogIndexState: defineTable({
         indexUrl: v.string(),
         issuedAt: v.number(),
@@ -50,5 +52,5 @@ export const catalogTables = {
         updatedAt: v.number(),
     })
         .global()
-        .index("by_url", ["indexUrl"], { unique: true }),
+        .index("by_url_key", ["indexUrl", "keyId"], { unique: true }),
 };

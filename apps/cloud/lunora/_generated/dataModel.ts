@@ -919,7 +919,7 @@ export interface IndexNamesByTable {
     subscriptions: "by_reference" | "by_provider_subscription";
     usageEvents: "by_reference_feature" | "by_idempotency";
     catalogInstalls: "by_active" | "by_project" | "by_org";
-    catalogIndexState: "by_url";
+    catalogIndexState: "by_url_key";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
