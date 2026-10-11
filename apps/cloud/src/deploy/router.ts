@@ -107,11 +107,8 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         return Promise.resolve(jsonError(500, "github webhook secret not configured"));
     }
 
-    const context = environment.__lunoraCtx;
-
-    if (!context) {
-        return Promise.resolve(jsonError(500, "lunora context unavailable"));
-    }
+    // Throws `MissingContextError` without the context; the route table's `withContext` answers that as the same 500.
+    const context = requireContext(environment);
 
     // For the preview path filter's compare call and a skipped build's commit
     // status; absent credentials leave previews building unfiltered and skips

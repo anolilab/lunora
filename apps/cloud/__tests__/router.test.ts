@@ -134,6 +134,17 @@ describe(createDeployRouter, () => {
 
         limitSpy.mockRestore();
     });
+
+    it("answers the GitHub webhook 500 when the Lunora context is missing", async () => {
+        const router = createDeployRouter();
+        const response = await router.fetch(
+            new Request("https://control.lunora.app/v1/github/webhook", { body: "{}", headers: { "content-type": "application/json" }, method: "POST" }),
+            { GITHUB_WEBHOOK_SECRET: "webhook-secret" },
+        );
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toStrictEqual({ error: "lunora context unavailable" });
+    });
 });
 
 /** POST to the platform tail route, optionally presenting a tail secret header. */
