@@ -13,6 +13,8 @@ import { api } from "../../../lunora/_generated/api";
 import { internal } from "../../../lunora/_generated/internal";
 import { currentAuth } from "../../auth";
 import type { InstallPorts, SealedSecret } from "../../catalog/install";
+import type { InstallEvent } from "../../catalog/install-events";
+import { encodeInstallEvent } from "../../catalog/install-events";
 import type { CatalogDeps, CatalogEnv, CatalogInstallRow, InstallAdapters, InstallFailureKind, InstallRequest, InstallTarget } from "../../catalog/service";
 import { installApp, listCatalog } from "../../catalog/service";
 import { encryptSecret } from "../../secrets/crypto";
@@ -263,9 +265,75 @@ const projectTargetOf = async (context: ReturnType<typeof requireContext>, organ
 };
 
 /**
+ * The install's events as a newline-delimited JSON body. A write the client can no
+ * longer receive is dropped, never thrown into the install: an install that cannot
+ * report its progress must still finish, and roll back if it has to.
+ */
+const eventStream = (): { close: () => Promise<void>; readable: ReadableStream<Uint8Array>; send: (event: InstallEvent) => void } => {
+    const transform = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = transform.writable.getWriter();
+    const encoder = new TextEncoder();
+    let open = true;
+
+    return {
+        close: () => writer.close().catch(() => {}),
+        readable: transform.readable,
+        send: (event) => {
+            if (open) {
+                writer.write(encoder.encode(encodeInstallEvent(event))).catch(() => {
+                    open = false;
+                });
+            }
+        },
+    };
+};
+
+/** The one event an install that threw ends on: the Lunora error's own message and status, else a 500. */
+const failureEvent = (error: unknown, fallback: string): InstallEvent =>
+    isLunoraError(error) ? { error: error.message, event: "error", status: error.status } : { error: fallback, event: "error", status: 500 };
+
+/** Run one install and end its stream with a `result` or an `error` event, whatever happens. */
+const runStreamedInstall = async (
+    events: ReturnType<typeof eventStream>,
+    body: CatalogInstallBody,
+    installedBy: string,
+    adapters: InstallAdapters,
+    env: CatalogRouterEnv,
+): Promise<void> => {
+    try {
+        const outcome = await installApp(catalogTransport(env), { ...body, installedBy }, adapters);
+
+        events.send(
+            outcome.ok
+                ? {
+                      deploymentId: outcome.deploymentId,
+                      event: "result",
+                      generated: outcome.generated,
+                      kept: outcome.kept,
+                      recorded: outcome.recorded,
+                      ...(outcome.url === undefined ? {} : { url: outcome.url }),
+                  }
+                : {
+                      error: outcome.error,
+                      event: "error",
+                      ...(outcome.code === undefined ? {} : { code: outcome.code }),
+                      ...(outcome.field === undefined ? {} : { field: outcome.field }),
+                      status: STATUS_FOR[outcome.kind],
+                  },
+        );
+    } catch (error) {
+        events.send(failureEvent(error, "catalog install failed"));
+    } finally {
+        await events.close();
+    }
+};
+
+/**
  * `POST /v1/catalog/install` — install a catalog app into a project. Owner or admin
- * only, refused before anything is written. The install's key is minted for it alone
- * and expires on its own; the install row names the session user.
+ * only, refused before anything is written, with a JSON status. Once the install starts
+ * it answers 200 with newline-delimited JSON: a `phase` event per step, then one
+ * `result` or `error` event. The install's key is minted for it alone and expires on
+ * its own; the install row names the session user.
  */
 export const handleCatalogInstallRoute = async (request: Request, environment: RouterEnv, pacer: DeployPacer): Promise<Response> => {
     const context = requireContext(environment);
@@ -304,35 +372,23 @@ export const handleCatalogInstallRoute = async (request: Request, environment: R
         if (role !== "owner" && role !== "admin") {
             return jsonError(403, "only owners and admins can install a catalog app");
         }
-
-        const adapters: InstallAdapters = {
-            ports: installPorts(context, body.organizationId, body.projectId, secretKey, deps),
-            target: () => projectTargetOf(context, body.organizationId, body.projectId),
-        };
-        const outcome = await installApp(catalogTransport(env), { ...body, installedBy }, adapters);
-
-        if (outcome.ok) {
-            return Response.json(
-                {
-                    deploymentId: outcome.deploymentId,
-                    generated: outcome.generated,
-                    kept: outcome.kept,
-                    recorded: outcome.recorded,
-                    ...(outcome.url === undefined ? {} : { url: outcome.url }),
-                },
-                { status: 200 },
-            );
-        }
-
-        return Response.json(
-            {
-                error: outcome.error,
-                ...(outcome.code === undefined ? {} : { code: outcome.code }),
-                ...(outcome.field === undefined ? {} : { field: outcome.field }),
-            },
-            { status: STATUS_FOR[outcome.kind] },
-        );
     } catch (error) {
         return catalogFailed(error, "catalog install failed");
     }
+
+    // Refusals above are plain JSON with their status. From here the install streams its progress.
+    const events = eventStream();
+    const adapters: InstallAdapters = {
+        ports: installPorts(context, body.organizationId, body.projectId, secretKey, deps),
+        progress: (phase) => {
+            events.send({ event: "phase", phase });
+        },
+        target: () => projectTargetOf(context, body.organizationId, body.projectId),
+    };
+    // Registered so the install runs to its end even if the client has gone: a half-done install must still roll back.
+    const install = runStreamedInstall(events, body, installedBy, adapters, env);
+
+    environment.__executionCtx?.waitUntil?.(install);
+
+    return new Response(events.readable, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
 };

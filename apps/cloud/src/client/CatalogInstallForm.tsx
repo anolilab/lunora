@@ -6,15 +6,29 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import type { CatalogForm, FormSecret, FormVariable } from "../catalog/artifact";
+import type { InstallPhase } from "../catalog/install";
+import type { InstallEvent } from "../catalog/install-events";
+import { takeInstallEvents } from "../catalog/install-events";
 import { initialValues, withoutBlanks } from "./catalog-values";
 import { Field, FieldForm, FormError } from "./section-ui";
 import type { OrgId } from "./types";
 
-/** An install runs a deploy, so it gets far longer than a browse before the client gives up. */
-const INSTALL_TIMEOUT_MS = 120_000;
+/**
+ * How long the install may go without sending an event before the client gives up. The
+ * install streams a line per step, so a silence this long means it has stopped, not that
+ * a deploy is merely slow.
+ */
+const INSTALL_IDLE_MS = 120_000;
 
 const GENERATED_NOTE = "Generated on first install";
 const KEPT_NOTE = "Kept from the earlier install";
+
+const PHASE_LABELS: Record<InstallPhase, string> = {
+    claimed: "Claimed the project",
+    live: "The app is live",
+    "release-started": "Releasing the app",
+    "secrets-stored": "Stored the secrets",
+};
 
 export interface ProjectOption {
     _id: string;
@@ -33,31 +47,106 @@ interface CatalogInstallFormProps {
     slug: string;
 }
 
-const installRequest = async (body: Record<string, unknown>): Promise<InstallOutcome> => {
-    const response = await fetch("/v1/catalog/install", {
-        body: JSON.stringify(body),
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-        method: "POST",
-        signal: AbortSignal.timeout(INSTALL_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-        const failure = (await response.json().catch(() => null)) as { error?: string; field?: string } | null;
-
-        return {
-            ...(failure?.field === undefined ? {} : { field: failure.field }),
-            message: failure?.error ?? `could not install the app (HTTP ${String(response.status)})`,
-            ok: false,
-        };
+/** The outcome an install's final event carries, or `null` for an event that is only a step. */
+const outcomeOf = (event: InstallEvent): InstallOutcome | null => {
+    if (event.event === "result") {
+        return { generated: event.generated, kept: event.kept, ok: true };
     }
 
-    const payload = (await response.json().catch(() => null)) as { generated?: string[]; kept?: string[] } | null;
-
-    if (!payload?.generated || !payload.kept) {
-        return { message: "the install answered without its outcome", ok: false };
+    if (event.event === "error") {
+        return { ...(event.field === undefined ? {} : { field: event.field }), message: event.error, ok: false };
     }
 
-    return { generated: payload.generated, kept: payload.kept, ok: true };
+    return null;
+};
+
+/**
+ * Read an install's event stream to its outcome, handing each phase to `onPhase` as it
+ * arrives. `rearm` is called before every read, so the caller's idle timer restarts.
+ */
+const readInstallStream = async (body: ReadableStream<Uint8Array>, onPhase: (phase: InstallPhase) => void, rearm: () => void): Promise<InstallOutcome> => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    let outcome: InstallOutcome | null = null;
+
+    while (outcome === null) {
+        rearm();
+
+        // eslint-disable-next-line no-await-in-loop -- each chunk is parsed before the next is read, so the events stay in order
+        const { done, value } = await reader.read();
+        const taken = takeInstallEvents(pending, done ? "\n" : decoder.decode(value, { stream: true }));
+
+        pending = taken.rest;
+
+        for (const event of taken.events) {
+            if (event.event === "phase") {
+                onPhase(event.phase);
+            } else {
+                outcome ??= outcomeOf(event);
+            }
+        }
+
+        if (done) {
+            break;
+        }
+    }
+
+    return outcome ?? { message: "the install ended without an outcome", ok: false };
+};
+
+/**
+ * Run one install. A refusal before the install starts is a JSON status; once it starts,
+ * the body is a stream of events. Each phase is handed to `onPhase` as it arrives, and
+ * the stream's `result` or `error` event is the outcome.
+ */
+const installRequest = async (body: Record<string, unknown>, onPhase: (phase: InstallPhase) => void): Promise<InstallOutcome> => {
+    const idle = new AbortController();
+    let timer = setTimeout(() => {
+        idle.abort();
+    }, INSTALL_IDLE_MS);
+    const rearm = (): void => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            idle.abort();
+        }, INSTALL_IDLE_MS);
+    };
+
+    try {
+        rearm();
+
+        const response = await fetch("/v1/catalog/install", {
+            body: JSON.stringify(body),
+            credentials: "include",
+            headers: { "content-type": "application/json" },
+            method: "POST",
+            signal: idle.signal,
+        });
+
+        if (!response.ok) {
+            const failure = (await response.json().catch(() => null)) as { error?: string; field?: string } | null;
+
+            return {
+                ...(failure?.field === undefined ? {} : { field: failure.field }),
+                message: failure?.error ?? `could not install the app (HTTP ${String(response.status)})`,
+                ok: false,
+            };
+        }
+
+        if (response.body === null) {
+            return { message: "the install answered without its outcome", ok: false };
+        }
+
+        return await readInstallStream(response.body, onPhase, rearm);
+    } catch (error) {
+        if (idle.signal.aborted) {
+            return { message: "the install stopped sending progress", ok: false };
+        }
+
+        throw error;
+    } finally {
+        clearTimeout(timer);
+    }
 };
 
 /** The one line an install failure is shown on: the server's error, and the field it names if any. */
@@ -138,6 +227,7 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
     const [values, setValues] = useState(() => initialValues(form));
     const [pending, setPending] = useState(false);
     const [outcome, setOutcome] = useState<InstallOutcome | null>(null);
+    const [phases, setPhases] = useState<InstallPhase[]>([]);
     const selectedProject = projects.find((project) => project._id === projectId);
     const fieldId = (kind: string, fieldName: string): string => `catalog-${slug}-${kind}-${fieldName}`;
 
@@ -171,13 +261,19 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
 
         setPending(true);
         setOutcome(null);
+        setPhases([]);
 
-        const result = await installRequest({
-            organizationId,
-            projectId: selectedProject._id,
-            slug,
-            values: { secrets: withoutBlanks(values.secrets), vars: withoutBlanks(values.vars) },
-        })
+        const result = await installRequest(
+            {
+                organizationId,
+                projectId: selectedProject._id,
+                slug,
+                values: { secrets: withoutBlanks(values.secrets), vars: withoutBlanks(values.vars) },
+            },
+            (phase) => {
+                setPhases((current) => [...current, phase]);
+            },
+        )
             .catch((error: unknown): InstallOutcome => {
                 return {
                     message: error instanceof Error ? error.message : "could not install the app",
@@ -263,6 +359,13 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
                 </Button>
                 {outcome?.ok ? <p className="text-sm text-success">Installed. Generated: {outcome.generated.join(", ") || "nothing"}</p> : null}
             </div>
+            {phases.length === 0 ? null : (
+                <ol aria-label="Install progress" className="text-sm text-muted-foreground sm:col-span-2">
+                    {phases.map((phase) => (
+                        <li key={phase}>{PHASE_LABELS[phase]}</li>
+                    ))}
+                </ol>
+            )}
             <div className="sm:col-span-2">
                 <FormError message={failureText(outcome)} />
             </div>

@@ -13,7 +13,7 @@ import { MAX_ARTIFACT_BYTES, verifyArchive, verifyManifestBytes } from "./artifa
 import { isHttpsUrl } from "./fields";
 import type { CatalogIndexEntry } from "./index";
 import { manifestMatchesIndex, verifyCatalogIndex } from "./index";
-import type { InstallFailure, InstallPorts, InstallValues } from "./install";
+import type { InstallFailure, InstallPhase, InstallPorts, InstallValues } from "./install";
 import { runInstall } from "./install";
 import type { DetachedSignature, TrustedCatalogKey } from "./signature";
 import { decodeBase64, MAX_SIGNATURE_FILE_BYTES, parseDetachedSignature } from "./signature";
@@ -403,6 +403,8 @@ export type InstallTarget = { scriptName?: string } | null;
 /** What an install needs from its edge: the ports, and the project's production target. */
 export interface InstallAdapters {
     ports: InstallPorts;
+    /** Told each step an install reaches, in order. Optional: an install without a listener runs the same. */
+    progress?: (phase: InstallPhase) => void;
     /** The project's production alias, or `null` when the project is not in this organization. */
     target: () => Promise<InstallTarget>;
 }
@@ -505,6 +507,7 @@ export const installApp = async (deps: CatalogDeps, request: InstallRequest, ada
             values: request.values,
         },
         adapters.ports,
+        adapters.progress,
     );
 
     if (!result.ok) {

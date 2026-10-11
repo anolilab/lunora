@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { InstallEvent } from "../src/catalog/install-events";
+import { takeInstallEvents } from "../src/catalog/install-events";
 import { installApp, listCatalog } from "../src/catalog/service";
 import { createDeployPacer } from "../src/deploy/pacing";
 import { handleCatalogInstallRoute, handleCatalogRoute } from "../src/deploy/routes/catalog";
@@ -57,6 +59,13 @@ const installRequest = (body: unknown): Request =>
     new Request("https://cloud.test/v1/catalog/install", { body: typeof body === "string" ? body : JSON.stringify(body), method: "POST" });
 
 const validBody = { organizationId: "org_1", projectId: "proj_1", slug: "counter", values: { secrets: {}, vars: {} } };
+
+/** Every event an install streamed, in order, read to the end of the body. */
+const eventsOf = async (response: Response): Promise<InstallEvent[]> => {
+    const { events } = takeInstallEvents("", await response.text());
+
+    return events;
+};
 
 describe("the catalog routes", () => {
     beforeEach(() => {
@@ -159,35 +168,35 @@ describe("the catalog routes", () => {
             expect(installApp).not.toHaveBeenCalled();
         });
 
-        it("installs as the signed-in user and answers the outcome", async () => {
-            vi.mocked(installApp).mockResolvedValueOnce({
-                deploymentId: "dep_1",
-                generated: ["SIGNING_KEY"],
-                kept: ["DB_PASSWORD"],
-                ok: true,
-                recorded: true,
-                url: "https://acme.example.test",
+        it("streams each phase in order, then a result with the outcome, as the signed-in user", async () => {
+            vi.mocked(installApp).mockImplementationOnce(async (_deps, _request, adapters) => {
+                for (const phase of ["claimed", "secrets-stored", "release-started", "live"] as const) {
+                    adapters.progress?.(phase);
+                }
+
+                return { deploymentId: "dep_1", generated: ["SIGNING_KEY"], kept: ["DB_PASSWORD"], ok: true, recorded: true, url: "https://acme.example.test" };
             });
 
             const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith(OWNER), pacer);
 
             expect(response.status).toBe(200);
-            await expect(readJson(response)).resolves.toStrictEqual({
-                deploymentId: "dep_1",
-                generated: ["SIGNING_KEY"],
-                kept: ["DB_PASSWORD"],
-                recorded: true,
-                url: "https://acme.example.test",
-            });
+            expect(response.headers.get("content-type")).toBe("application/x-ndjson");
+            await expect(eventsOf(response)).resolves.toStrictEqual([
+                { event: "phase", phase: "claimed" },
+                { event: "phase", phase: "secrets-stored" },
+                { event: "phase", phase: "release-started" },
+                { event: "phase", phase: "live" },
+                { deploymentId: "dep_1", event: "result", generated: ["SIGNING_KEY"], kept: ["DB_PASSWORD"], recorded: true, url: "https://acme.example.test" },
+            ]);
             expect(vi.mocked(installApp).mock.calls[0]?.[1]).toMatchObject({ installedBy: "user_owner", organizationId: "org_1", slug: "counter" });
         });
 
-        it("answers without a url when the release has none", async () => {
+        it("ends a successful install with a result that has no url when the release has none", async () => {
             vi.mocked(installApp).mockResolvedValueOnce({ deploymentId: "dep_1", generated: [], kept: [], ok: true, recorded: false });
 
             const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith(OWNER), pacer);
 
-            await expect(readJson(response)).resolves.toStrictEqual({ deploymentId: "dep_1", generated: [], kept: [], recorded: false });
+            await expect(eventsOf(response)).resolves.toStrictEqual([{ deploymentId: "dep_1", event: "result", generated: [], kept: [], recorded: false }]);
         });
 
         it.each([
@@ -199,16 +208,15 @@ describe("the catalog routes", () => {
             ["unavailable", 503],
             ["upstream", 502],
             ["verification", 422],
-        ] as const)("answers a %s failure with %i", async (kind, status) => {
+        ] as const)("ends a %s failure with an error event carrying status %i", async (kind, status) => {
             vi.mocked(installApp).mockResolvedValueOnce({ error: `the ${kind} reason`, kind, ok: false });
 
             const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith(OWNER), pacer);
 
-            expect(response.status).toBe(status);
-            await expect(readJson(response)).resolves.toStrictEqual({ error: `the ${kind} reason` });
+            await expect(eventsOf(response)).resolves.toStrictEqual([{ error: `the ${kind} reason`, event: "error", status }]);
         });
 
-        it("carries the artifact error code and the field of a failure", async () => {
+        it("carries the artifact error code and the field of a failure on its error event", async () => {
             vi.mocked(installApp).mockResolvedValueOnce({
                 code: "HASH_MISMATCH",
                 error: "worker.js does not match its sha256",
@@ -219,12 +227,25 @@ describe("the catalog routes", () => {
 
             const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith(OWNER), pacer);
 
-            expect(response.status).toBe(422);
-            await expect(readJson(response)).resolves.toStrictEqual({
-                code: "HASH_MISMATCH",
-                error: "worker.js does not match its sha256",
-                field: "worker.js",
+            await expect(eventsOf(response)).resolves.toStrictEqual([
+                { code: "HASH_MISMATCH", error: "worker.js does not match its sha256", event: "error", field: "worker.js", status: 422 },
+            ]);
+        });
+
+        it("ends with an error event, not a hang, when the install throws after it has started", async () => {
+            vi.mocked(installApp).mockImplementationOnce(async (_deps, _request, adapters) => {
+                adapters.progress?.("claimed");
+
+                throw new Error("socket reset with internal details");
             });
+
+            const response = await handleCatalogInstallRoute(installRequest(validBody), environmentWith(OWNER), pacer);
+
+            expect(response.status).toBe(200);
+            await expect(eventsOf(response)).resolves.toStrictEqual([
+                { event: "phase", phase: "claimed" },
+                { error: "catalog install failed", event: "error", status: 500 },
+            ]);
         });
 
         it("answers 500 when no release bucket is configured, since a release could not be rolled back", async () => {

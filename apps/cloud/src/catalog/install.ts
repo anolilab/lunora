@@ -75,6 +75,9 @@ export interface InstallPlan {
     secrets: Record<string, string>;
 }
 
+/** A step an install has reached, in the order it reaches them. A failure has no phase: it ends the install. */
+export type InstallPhase = "claimed" | "live" | "release-started" | "secrets-stored";
+
 /** Why an install did not go live. `busy` and `invalidInput` are the user's to fix; `internal` is not. */
 export type InstallFailure = { error: string; field?: string; kind: "busy" | "internal" | "invalidInput"; ok: false };
 
@@ -428,7 +431,16 @@ const restore = async (ports: InstallPorts, installId: string, touched: string[]
  * and revoked whatever the release did; and records the install only once the release
  * is live. A failure after a secret was stored puts the project's secrets back.
  */
-export const runInstall = async (input: InstallInput, ports: InstallPorts): Promise<InstallResult> => {
+export const runInstall = async (input: InstallInput, ports: InstallPorts, progress?: (phase: InstallPhase) => void): Promise<InstallResult> => {
+    // A progress report is for the caller's eyes only: a failure to deliver one must not change the install.
+    const report = (phase: InstallPhase): void => {
+        try {
+            progress?.(phase);
+        } catch {
+            // The install goes on without its progress stream.
+        }
+    };
+
     const claim = await ports.claim({
         installedBy: input.installedBy,
         slug: input.slug,
@@ -440,6 +452,8 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
     }
 
     const { installId } = claim;
+
+    report("claimed");
     const abandon = (): Promise<void> => ports.abandon(installId).catch(() => {});
     const internal = async (error: string): Promise<InstallFailure> => {
         await abandon();
@@ -490,6 +504,8 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
         return internal("could not store the install's secrets");
     }
 
+    report("secrets-stored");
+
     let minted: { id: string; key: string };
 
     try {
@@ -501,6 +517,8 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
     }
 
     let outcome: ReleaseOutcome;
+
+    report("release-started");
 
     try {
         outcome = await ports.release(plan.request, minted.key, installId);
@@ -524,6 +542,8 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
     await ports.finish(installId, outcome.deploymentId).catch(() => {
         recorded = false;
     });
+
+    report("live");
 
     return {
         deploymentId: outcome.deploymentId,
