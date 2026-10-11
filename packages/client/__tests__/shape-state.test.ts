@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PokeBuffer, ShapeSubscriptionState } from "../src/shape-state";
-import { commitPokeSlice, PokeAssembler } from "../src/shape-state";
+import { commitPokeSlice, emitShapeRows, PokeAssembler } from "../src/shape-state";
 import type { RowOp, ServerPokeEndMessage, ServerPokePartMessage, ServerPokeStartMessage } from "../src/types";
 
 const shape = (overrides: Partial<ShapeSubscriptionState> = {}): ShapeSubscriptionState => {
@@ -209,5 +209,44 @@ describe("commitPokeSlice", () => {
 
         expect(commitPokeSlice(state, assembled, end("p1", { checkpoint: 10 }))).toBe("applied");
         expect(state.rows.has("stale")).toBe(false);
+    });
+});
+
+describe("emitShapeRows", () => {
+    it("hands every callback the current rows, in insertion order", () => {
+        expect.assertions(2);
+
+        const first = vi.fn<(rows: Record<string, unknown>[]) => void>();
+        const second = vi.fn<(rows: Record<string, unknown>[]) => void>();
+        const state = shape({
+            callbacks: new Set([first, second]),
+            rows: new Map([
+                ["a", { _id: "a" }],
+                ["b", { _id: "b" }],
+            ]),
+        });
+
+        emitShapeRows(state);
+
+        expect(first).toHaveBeenCalledWith([{ _id: "a" }, { _id: "b" }]);
+        expect(second).toHaveBeenCalledWith([{ _id: "a" }, { _id: "b" }]);
+    });
+
+    it("keeps calling the other callbacks when one throws", () => {
+        expect.assertions(1);
+
+        const survivor = vi.fn<(rows: Record<string, unknown>[]) => void>();
+        const state = shape({
+            callbacks: new Set([
+                () => {
+                    throw new Error("subscriber bug");
+                },
+                survivor,
+            ]),
+        });
+
+        emitShapeRows(state);
+
+        expect(survivor).toHaveBeenCalledTimes(1);
     });
 });

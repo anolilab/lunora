@@ -1,3 +1,17 @@
+## @lunora/cli [1.0.0-alpha.383](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.382...@lunora/cli@1.0.0-alpha.383) (2026-10-11)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.338
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.229
+
+## @lunora/cli [1.0.0-alpha.382](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.381...@lunora/cli@1.0.0-alpha.382) (2026-10-11)
+
+### Features
+
+* **platform-node:** add on-demand node profiler ([#1095](https://github.com/anolilab/lunora/issues/1095)) ([b8f2cdd](https://github.com/anolilab/lunora/commit/b8f2cdd84476bb9dfa99b52bfb9cd4851f0825cb))
+
 ## @lunora/cli [1.0.0-alpha.381](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.380...@lunora/cli@1.0.0-alpha.381) (2026-10-10)
 
 
