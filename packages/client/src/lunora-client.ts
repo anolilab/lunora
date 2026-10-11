@@ -7,58 +7,11 @@ import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { onSessionChanged } from "../../../shared/session-change";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
-import { shardTraffic } from "./admin/advisor";
-import {
-    addAuthOrgMember,
-    addAuthOrgTeamMember,
-    banAuthUser,
-    cancelAuthOrgInvitation,
-    createAuthOrganization,
-    createAuthOrgRole,
-    createAuthOrgTeam,
-    createAuthSignUpInvitation,
-    createAuthUser,
-    deleteAuthOrganization,
-    deleteAuthOrgRole,
-    deleteAuthPasskey,
-    disableAuthTwoFactor,
-    getAuthCapabilities,
-    getAuthConfig,
-    impersonateAuthUser,
-    inviteAuthOrgMember,
-    listAuthAccounts,
-    listAuthOrganizations,
-    listAuthOrgInvitations,
-    listAuthOrgMembers,
-    listAuthOrgRoles,
-    listAuthOrgTeamMembers,
-    listAuthOrgTeams,
-    listAuthPasskeys,
-    listAuthSessions,
-    listAuthSignUpInvitations,
-    listAuthUsers,
-    removeAuthOrgMember,
-    removeAuthOrgTeam,
-    removeAuthOrgTeamMember,
-    removeAuthUser,
-    revokeAuthSession,
-    revokeAuthSignUpInvitation,
-    revokeAuthUserSessions,
-    setAuthOrgMemberRole,
-    setAuthUserPassword,
-    setAuthUserRole,
-    unbanAuthUser,
-    unlinkAuthAccount,
-    updateAuthOrganization,
-    updateAuthOrgRole,
-    updateAuthOrgTeam,
-    updateAuthUser,
-} from "./admin/auth";
 import { fetchArchitecture, fetchOpenApi, fetchOpenRpc, getCronJobs, listFunctions, runCronJob } from "./admin/functions";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./admin/global-tables";
 import type { AdminHost } from "./admin/host";
 import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } from "./admin/kv";
-import { queryLogArchive } from "./admin/logs";
+import { queryLogArchive, shardTraffic } from "./admin/observability";
 import {
     cancelScheduledJob,
     decodeRecordArgs,
@@ -76,7 +29,58 @@ import { listVectorIndexes, queryVectorIndex } from "./admin/vector-indexes";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { BatchSlot } from "./call-wire";
 import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./call-wire";
-import { DEFAULT_AUTH_BASE_PATH, GET_SESSION_PATH, RPC_BATCH_PATH, RPC_PATH, SCHEDULED_WS_PATH, WS_PATH } from "./client-paths";
+import {
+    AUTH_ACCOUNTS_PATH,
+    AUTH_ADD_MEMBER_PATH,
+    AUTH_ADD_TEAM_MEMBER_PATH,
+    AUTH_BAN_PATH,
+    AUTH_CANCEL_INVITATION_PATH,
+    AUTH_CAPABILITIES_PATH,
+    AUTH_CONFIG_PATH,
+    AUTH_CREATE_ORG_PATH,
+    AUTH_CREATE_ROLE_PATH,
+    AUTH_CREATE_SIGN_UP_INVITATION_PATH,
+    AUTH_CREATE_TEAM_PATH,
+    AUTH_CREATE_USER_PATH,
+    AUTH_DELETE_PASSKEY_PATH,
+    AUTH_DISABLE_2FA_PATH,
+    AUTH_IMPERSONATE_PATH,
+    AUTH_INVITE_MEMBER_PATH,
+    AUTH_MEMBER_ROLE_PATH,
+    AUTH_ORG_INVITATIONS_PATH,
+    AUTH_ORG_MEMBERS_PATH,
+    AUTH_ORG_ROLES_PATH,
+    AUTH_ORG_TEAM_MEMBERS_PATH,
+    AUTH_ORG_TEAMS_PATH,
+    AUTH_ORGS_PATH,
+    AUTH_PASSKEYS_PATH,
+    AUTH_REMOVE_MEMBER_PATH,
+    AUTH_REMOVE_ORG_PATH,
+    AUTH_REMOVE_ROLE_PATH,
+    AUTH_REMOVE_TEAM_MEMBER_PATH,
+    AUTH_REMOVE_TEAM_PATH,
+    AUTH_REMOVE_USER_PATH,
+    AUTH_REVOKE_SESSION_PATH,
+    AUTH_REVOKE_SESSIONS_PATH,
+    AUTH_REVOKE_SIGN_UP_INVITATION_PATH,
+    AUTH_SESSIONS_PATH,
+    AUTH_SET_PASSWORD_PATH,
+    AUTH_SET_ROLE_PATH,
+    AUTH_SIGN_UP_INVITATIONS_PATH,
+    AUTH_UNBAN_PATH,
+    AUTH_UNLINK_ACCOUNT_PATH,
+    AUTH_UPDATE_ORG_PATH,
+    AUTH_UPDATE_ROLE_PATH,
+    AUTH_UPDATE_TEAM_PATH,
+    AUTH_UPDATE_USER_PATH,
+    AUTH_USERS_PATH,
+    DEFAULT_AUTH_BASE_PATH,
+    GET_SESSION_PATH,
+    RPC_BATCH_PATH,
+    RPC_PATH,
+    SCHEDULED_WS_PATH,
+    WS_PATH,
+} from "./client-paths";
 import type { ClientQueryRef } from "./client-query-store";
 import { ClientQueryStore } from "./client-query-store";
 import {
@@ -92,7 +96,7 @@ import {
     RESUBSCRIBE_CONCURRENCY,
     SOCKET_STABLE_MS,
 } from "./client-tuning";
-import { deriveWsUrl, joinUrl } from "./client-urls";
+import { deriveWsUrl, joinUrl, withQuery } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
 import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
@@ -474,6 +478,7 @@ class LunoraClient {
     public readonly url: string;
 
     public readonly wsUrl: string;
+    /** The admin modules reach the client only through this host. The arrows read `this` when called, so spies and overrides installed after construction still take effect. */
     private readonly adminHost: AdminHost = {
         adminFetch: (...args) => this.adminFetch(...args),
         assertOpen: () => {
@@ -2962,7 +2967,20 @@ class LunoraClient {
             sortDirection?: "asc" | "desc";
         } = {},
     ): Promise<AuthPage<AuthUser>> {
-        return listAuthUsers(this.adminHost, options);
+        this.assertOpen();
+
+        const path = withQuery(AUTH_USERS_PATH, {
+            filterField: options.filterField,
+            filterValue: options.filterValue,
+            limit: options.limit,
+            offset: options.offset,
+            search: options.search,
+            searchField: options.searchField,
+            sortBy: options.sortBy,
+            sortDirection: options.sortDirection,
+        });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<AuthUser>;
     }
 
     /**
@@ -2977,32 +2995,32 @@ class LunoraClient {
         password?: string;
         role?: string | string[];
     }): Promise<AuthUser> {
-        return createAuthUser(this.adminHost, input);
+        return (await this.adminFetch(AUTH_CREATE_USER_PATH, "POST", input)) as AuthUser;
     }
 
     /** Set a user's role (string, or array joined comma-wise server-side). */
     public async setAuthUserRole(input: { role: string | string[]; userId: string }): Promise<AuthUser> {
-        return setAuthUserRole(this.adminHost, input);
+        return (await this.adminFetch(AUTH_SET_ROLE_PATH, "POST", input)) as AuthUser;
     }
 
     /** Ban a user. `expiresInSeconds` sets a temporary ban; omit it for a permanent one. Revokes the user's live sessions. */
     public async banAuthUser(input: { expiresInSeconds?: number; reason?: string; userId: string }): Promise<AuthUser> {
-        return banAuthUser(this.adminHost, input);
+        return (await this.adminFetch(AUTH_BAN_PATH, "POST", input)) as AuthUser;
     }
 
     /** Lift a user's ban. */
     public async unbanAuthUser(input: { userId: string }): Promise<AuthUser> {
-        return unbanAuthUser(this.adminHost, input);
+        return (await this.adminFetch(AUTH_UNBAN_PATH, "POST", input)) as AuthUser;
     }
 
     /** Set a user's password (admin override — no current-password challenge). */
     public async setAuthUserPassword(input: { newPassword: string; userId: string }): Promise<void> {
-        return setAuthUserPassword(this.adminHost, input);
+        await this.adminFetch(AUTH_SET_PASSWORD_PATH, "POST", input);
     }
 
     /** Permanently delete a user and revoke their sessions. */
     public async removeAuthUser(input: { userId: string }): Promise<void> {
-        return removeAuthUser(this.adminHost, input);
+        await this.adminFetch(AUTH_REMOVE_USER_PATH, "POST", input);
     }
 
     /**
@@ -3011,17 +3029,17 @@ class LunoraClient {
      * cookie); the server performs no cookie round-trip.
      */
     public async impersonateAuthUser(input: { userId: string }): Promise<AuthImpersonation> {
-        return impersonateAuthUser(this.adminHost, input);
+        return (await this.adminFetch(AUTH_IMPERSONATE_PATH, "POST", input)) as AuthImpersonation;
     }
 
     /** Revoke a single session by its id (force sign-out of one device). */
     public async revokeAuthSession(input: { sessionId: string }): Promise<void> {
-        return revokeAuthSession(this.adminHost, input);
+        await this.adminFetch(AUTH_REVOKE_SESSION_PATH, "POST", input);
     }
 
     /** Revoke every session for a user (force sign-out everywhere). */
     public async revokeAuthUserSessions(input: { userId: string }): Promise<void> {
-        return revokeAuthUserSessions(this.adminHost, input);
+        await this.adminFetch(AUTH_REVOKE_SESSIONS_PATH, "POST", input);
     }
 
     /**
@@ -3030,52 +3048,56 @@ class LunoraClient {
      * whose capability is `true`.
      */
     public async getAuthCapabilities(): Promise<AuthCapabilities> {
-        return getAuthCapabilities(this.adminHost);
+        return (await this.adminFetch(AUTH_CAPABILITIES_PATH, "GET")) as AuthCapabilities;
     }
 
     /** Update a user's fields (name/email/app-defined `additionalFields`). */
     public async updateAuthUser(input: { data: Record<string, unknown>; userId: string }): Promise<AuthUser> {
-        return updateAuthUser(this.adminHost, input);
+        return (await this.adminFetch(AUTH_UPDATE_USER_PATH, "POST", input)) as AuthUser;
     }
 
     /** List a user's linked accounts (credential / OAuth providers). Token material is stripped server-side. */
     public async listAuthAccounts(input: { userId: string }): Promise<Record<string, unknown>[]> {
-        return listAuthAccounts(this.adminHost, input);
+        return (await this.adminFetch(withQuery(AUTH_ACCOUNTS_PATH, { userId: input.userId }), "GET")) as Record<string, unknown>[];
     }
 
     /** Unlink a linked account from a user. */
     public async unlinkAuthAccount(input: { accountId: string; userId: string }): Promise<void> {
-        return unlinkAuthAccount(this.adminHost, input);
+        await this.adminFetch(AUTH_UNLINK_ACCOUNT_PATH, "POST", input);
     }
 
     /** List a user's registered passkeys (requires the passkey plugin). */
     public async listAuthPasskeys(input: { userId: string }): Promise<Record<string, unknown>[]> {
-        return listAuthPasskeys(this.adminHost, input);
+        return (await this.adminFetch(withQuery(AUTH_PASSKEYS_PATH, { userId: input.userId }), "GET")) as Record<string, unknown>[];
     }
 
     /** Delete a passkey by id (requires the passkey plugin). */
     public async deleteAuthPasskey(input: { passkeyId: string }): Promise<void> {
-        return deleteAuthPasskey(this.adminHost, input);
+        await this.adminFetch(AUTH_DELETE_PASSKEY_PATH, "POST", input);
     }
 
     /** Disable two-factor auth for a user (requires the two-factor plugin). */
     public async disableAuthTwoFactor(input: { userId: string }): Promise<void> {
-        return disableAuthTwoFactor(this.adminHost, input);
+        await this.adminFetch(AUTH_DISABLE_2FA_PATH, "POST", input);
     }
 
     /** List organizations, paged (requires the organization plugin). */
     public async listAuthOrganizations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
-        return listAuthOrganizations(this.adminHost, options);
+        return (await this.adminFetch(withQuery(AUTH_ORGS_PATH, { limit: options.limit, offset: options.offset }), "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** List the members of an organization (requires the organization plugin). */
     public async listAuthOrgMembers(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        return listAuthOrgMembers(this.adminHost, input);
+        const path = withQuery(AUTH_ORG_MEMBERS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** List an organization's pending invitations (requires the organization plugin). */
     public async listAuthOrgInvitations(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        return listAuthOrgInvitations(this.adminHost, input);
+        const path = withQuery(AUTH_ORG_INVITATIONS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /**
@@ -3085,27 +3107,29 @@ class LunoraClient {
      * would let page 1 come back empty while pending rows sat on page 2.
      */
     public async listAuthSignUpInvitations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
-        return listAuthSignUpInvitations(this.adminHost, options);
+        const path = withQuery(AUTH_SIGN_UP_INVITATIONS_PATH, { limit: options.limit, offset: options.offset });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** Invite an address to sign up, or refresh an existing invitation for it. */
     public async createAuthSignUpInvitation(input: { email: string; expiresInSeconds?: number; invitedBy?: string }): Promise<Record<string, unknown>> {
-        return createAuthSignUpInvitation(this.adminHost, input);
+        return (await this.adminFetch(AUTH_CREATE_SIGN_UP_INVITATION_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Withdraw a sign-up invitation. Not retroactive — an account already created keeps existing. */
     public async revokeAuthSignUpInvitation(input: { email: string }): Promise<void> {
-        return revokeAuthSignUpInvitation(this.adminHost, input);
+        await this.adminFetch(AUTH_REVOKE_SIGN_UP_INVITATION_PATH, "POST", input);
     }
 
     /** Remove a member from an organization. */
     public async removeAuthOrgMember(input: { memberId: string }): Promise<void> {
-        return removeAuthOrgMember(this.adminHost, input);
+        await this.adminFetch(AUTH_REMOVE_MEMBER_PATH, "POST", input);
     }
 
     /** Cancel a pending organization invitation. */
     public async cancelAuthOrgInvitation(input: { invitationId: string }): Promise<void> {
-        return cancelAuthOrgInvitation(this.adminHost, input);
+        await this.adminFetch(AUTH_CANCEL_INVITATION_PATH, "POST", input);
     }
 
     /**
@@ -3115,7 +3139,7 @@ class LunoraClient {
      * and the dynamic create-user form. Never carries a secret.
      */
     public async getAuthConfig(): Promise<AuthConfigInfo> {
-        return getAuthConfig(this.adminHost);
+        return (await this.adminFetch(AUTH_CONFIG_PATH, "GET")) as AuthConfigInfo;
     }
 
     /** Create an organization; optionally seed an `owner` member for `ownerId`. */
@@ -3126,7 +3150,7 @@ class LunoraClient {
         ownerId?: string;
         slug?: string;
     }): Promise<Record<string, unknown>> {
-        return createAuthOrganization(this.adminHost, input);
+        return (await this.adminFetch(AUTH_CREATE_ORG_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Update an organization's name/slug/logo/metadata. */
@@ -3137,87 +3161,97 @@ class LunoraClient {
         organizationId: string;
         slug?: string;
     }): Promise<Record<string, unknown>> {
-        return updateAuthOrganization(this.adminHost, input);
+        return (await this.adminFetch(AUTH_UPDATE_ORG_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Delete an organization and cascade its members, invitations, teams, and custom roles. */
     public async deleteAuthOrganization(input: { organizationId: string }): Promise<void> {
-        return deleteAuthOrganization(this.adminHost, input);
+        await this.adminFetch(AUTH_REMOVE_ORG_PATH, "POST", input);
     }
 
     /** Directly add an existing user to an organization (no invitation/acceptance). */
     public async addAuthOrgMember(input: { organizationId: string; role?: string; userId: string }): Promise<Record<string, unknown>> {
-        return addAuthOrgMember(this.adminHost, input);
+        return (await this.adminFetch(AUTH_ADD_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Create a pending email invitation to an organization. */
     public async inviteAuthOrgMember(input: { email: string; inviterId?: string; organizationId: string; role?: string }): Promise<Record<string, unknown>> {
-        return inviteAuthOrgMember(this.adminHost, input);
+        return (await this.adminFetch(AUTH_INVITE_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Change a member's role. */
     public async setAuthOrgMemberRole(input: { memberId: string; role: string | string[] }): Promise<Record<string, unknown>> {
-        return setAuthOrgMemberRole(this.adminHost, input);
+        return (await this.adminFetch(AUTH_MEMBER_ROLE_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** List an organization's teams (requires the organization plugin with teams enabled). */
     public async listAuthOrgTeams(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        return listAuthOrgTeams(this.adminHost, input);
+        const path = withQuery(AUTH_ORG_TEAMS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** Create a team under an organization. */
     public async createAuthOrgTeam(input: { name: string; organizationId: string }): Promise<Record<string, unknown>> {
-        return createAuthOrgTeam(this.adminHost, input);
+        return (await this.adminFetch(AUTH_CREATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Rename a team. */
     public async updateAuthOrgTeam(input: { name: string; teamId: string }): Promise<Record<string, unknown>> {
-        return updateAuthOrgTeam(this.adminHost, input);
+        return (await this.adminFetch(AUTH_UPDATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Delete a team and its memberships. */
     public async removeAuthOrgTeam(input: { teamId: string }): Promise<void> {
-        return removeAuthOrgTeam(this.adminHost, input);
+        await this.adminFetch(AUTH_REMOVE_TEAM_PATH, "POST", input);
     }
 
     /** List a team's members. */
     public async listAuthOrgTeamMembers(input: { limit?: number; offset?: number; teamId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        return listAuthOrgTeamMembers(this.adminHost, input);
+        const path = withQuery(AUTH_ORG_TEAM_MEMBERS_PATH, { limit: input.limit, offset: input.offset, teamId: input.teamId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** Add a user to a team. */
     public async addAuthOrgTeamMember(input: { teamId: string; userId: string }): Promise<Record<string, unknown>> {
-        return addAuthOrgTeamMember(this.adminHost, input);
+        return (await this.adminFetch(AUTH_ADD_TEAM_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Remove a member from a team. */
     public async removeAuthOrgTeamMember(input: { teamMemberId: string }): Promise<void> {
-        return removeAuthOrgTeamMember(this.adminHost, input);
+        await this.adminFetch(AUTH_REMOVE_TEAM_MEMBER_PATH, "POST", input);
     }
 
     /** List an organization's custom roles (requires the organization plugin with dynamic access control). */
     public async listAuthOrgRoles(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        return listAuthOrgRoles(this.adminHost, input);
+        const path = withQuery(AUTH_ORG_ROLES_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** Create a custom org role with a permission grant (a `resource -> actions[]` map). */
     public async createAuthOrgRole(input: { organizationId: string; permission: Record<string, string[]>; role: string }): Promise<Record<string, unknown>> {
-        return createAuthOrgRole(this.adminHost, input);
+        return (await this.adminFetch(AUTH_CREATE_ROLE_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Replace a custom org role's permission grant. */
     public async updateAuthOrgRole(input: { permission: Record<string, string[]>; roleId: string }): Promise<Record<string, unknown>> {
-        return updateAuthOrgRole(this.adminHost, input);
+        return (await this.adminFetch(AUTH_UPDATE_ROLE_PATH, "POST", input)) as Record<string, unknown>;
     }
 
     /** Delete a custom org role. */
     public async deleteAuthOrgRole(input: { roleId: string }): Promise<void> {
-        return deleteAuthOrgRole(this.adminHost, input);
+        await this.adminFetch(AUTH_REMOVE_ROLE_PATH, "POST", input);
     }
 
     /** List auth sessions, paged and optionally filtered to one user. */
     public async listAuthSessions(options: { limit?: number; offset?: number; userId?: string } = {}): Promise<AuthPage<AuthSession>> {
-        return listAuthSessions(this.adminHost, options);
+        this.assertOpen();
+
+        const path = withQuery(AUTH_SESSIONS_PATH, { limit: options.limit, offset: options.offset, userId: options.userId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<AuthSession>;
     }
 
     // --- Subscriptions ------------------------------------------------------

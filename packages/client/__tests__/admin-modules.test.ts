@@ -1,17 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { shardTraffic } from "../src/admin/advisor";
-import { createAuthUser } from "../src/admin/auth";
 import { getCronJobs, runCronJob } from "../src/admin/functions";
 import { listGlobalTables } from "../src/admin/global-tables";
 import type { AdminHost } from "../src/admin/host";
 import { deleteKvKey, listKvNamespaces } from "../src/admin/kv";
-import { queryLogArchive } from "../src/admin/logs";
+import { queryLogArchive, shardTraffic } from "../src/admin/observability";
 import { cancelScheduledJob, listScheduledJobs } from "../src/admin/scheduler";
 import { listStorageBuckets, uploadStorageObject } from "../src/admin/storage";
 import { listVectorIndexes } from "../src/admin/vector-indexes";
 import {
-    AUTH_CREATE_USER_PATH,
     CRON_JOBS_PATH,
     CRON_JOBS_RUN_PATH,
     GLOBAL_TABLES_PATH,
@@ -25,6 +22,7 @@ import {
     STORAGE_PATH,
     VECTOR_INDEXES_PATH,
 } from "../src/client-paths";
+import { LunoraClient } from "../src/lunora-client";
 
 interface RecordedCall {
     contentType?: string;
@@ -115,17 +113,6 @@ describe("admin modules: request shape", () => {
         expect(calls[0]).toMatchObject({ method: "GET", path: KV_NAMESPACES_PATH });
     });
 
-    it("createAuthUser posts the whole input and returns the created user", async () => {
-        expect.assertions(2);
-
-        const created = { id: "u1" };
-        const { calls, host } = recordingHost(created);
-        const input = { email: "a@example.com", name: "Ada" };
-
-        await expect(createAuthUser(host, input)).resolves.toBe(created);
-        expect(calls[0]).toMatchObject({ method: "POST", path: AUTH_CREATE_USER_PATH, payload: input });
-    });
-
     it("getCronJobs gets the jobs and defaults to none", async () => {
         expect.assertions(2);
 
@@ -198,5 +185,23 @@ describe("admin modules: closed client", () => {
         expect(pending).toBeInstanceOf(Promise);
         await expect(pending).rejects.toThrow("client closed");
         expect(calls).toHaveLength(0);
+    });
+});
+
+describe("lunoraClient admin wiring", () => {
+    it("rejects an admin call on a closed client through the real assertOpen, without reaching fetch", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>();
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            url: "https://app.example",
+            WebSocket: vi.fn<() => void>() as unknown as typeof WebSocket,
+        });
+
+        client.close();
+
+        await expect(client.listScheduledJobs()).rejects.toThrow("LunoraClient is closed");
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 });
