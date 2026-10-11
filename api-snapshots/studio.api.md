@@ -819,6 +819,41 @@ interface PitrPanelProps {
 }
 ```
 
+### `PrivacyRequestRow` (interface)
+
+```ts
+interface PrivacyRequestRow {
+    readonly dueAt: number;
+    readonly extendedDueAt?: null | number;
+    readonly id: string;
+    readonly receivedAt: number;
+    readonly status: PrivacyRequestStatus;
+    readonly subjectId: string;
+    readonly type: PrivacyRequestType;
+}
+```
+
+### `PrivacyRequestStatus` (type)
+
+```ts
+type PrivacyRequestStatus = "failed" | "open" | "processing";
+```
+
+### `PrivacyRequestType` (type)
+
+```ts
+type PrivacyRequestType = "erasure" | "export";
+```
+
+### `PrivacyRequestsSource` (interface)
+
+```ts
+interface PrivacyRequestsSource {
+    listOpenPrivacyRequests: () => Promise<ReadonlyArray<PrivacyRequestRow>>;
+    retryPrivacyRequest: (id: string) => Promise<void>;
+}
+```
+
 ### `ProbeSnapshot` (interface)
 
 ```ts
@@ -1089,6 +1124,7 @@ interface StudioProps {
     readonly locale?: string;
     readonly openApiSpec?: unknown;
     readonly openRpcSpec?: unknown;
+    readonly privacyRequests?: PrivacyRequestsSource;
     readonly runAsIdentity?: boolean;
     readonly scheduledCancel?: SchedulePanelProps["scheduledCancel"];
     readonly scheduledCron?: SchedulePanelProps["loadCronJobs"];
@@ -1100,7 +1136,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "architecture" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "reactors" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "aiUsage" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "architecture" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "privacyRequests" | "queues" | "reactors" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "aiUsage" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)
@@ -2097,6 +2133,19 @@ const MESSAGE_IDS: readonly [
     "Filter audit log",
     "filter op, table, id",
     "No audit entries.",
+    "Privacy requests",
+    "Open data-subject export and erasure requests, with due dates and failed-run retries.",
+    "Privacy requests not configured",
+    "Pass privacyRequests to the Studio to list and retry data-subject requests.",
+    "Loading privacy requests…",
+    "No open privacy requests.",
+    "ID",
+    "Subject",
+    "Received",
+    "Due",
+    "Extended due",
+    "Overdue",
+    "Erasure",
     "Notifications",
     "Registered push devices — endpoint, kind, last-send status, and delivery errors.",
     "Registered Web Push / FCM devices appear here. Configure lunora/notify.ts with defineNotify({ store }) and register a device with ctx.push.register(...).",
