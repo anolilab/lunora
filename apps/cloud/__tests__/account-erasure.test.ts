@@ -259,6 +259,14 @@ describe("account deletion hooks", () => {
         expect(options.user?.deleteUser?.afterDelete).toBeTypeOf("function");
     });
 
+    it("hold the admin plugin's remove-user endpoint to the same rule", async () => {
+        await ensureAuth({ AUTH_SECRET: "s".repeat(32), DB: {}, LUNORA_ADMIN_TOKEN: "admin" }, "https://cloud.test");
+
+        const options = authState.createdOptions[0] as { plugins: { id: string }[] };
+
+        expect(options.plugins.map((plugin) => plugin.id)).toContain("lunora-cloud-admin-removal-guard");
+    });
+
     it("refuses the deletion when the admin token is not configured", async () => {
         await expect(beforeAccountDeletion({ DB: {} })({ id: "usr_me" })).rejects.toThrow("Your account was not deleted");
         expect(workerFetch).not.toHaveBeenCalled();

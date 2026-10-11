@@ -18,6 +18,7 @@ import { admin, inviteOnly, passkey, twoFactor } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
 import { afterAccountDeletion, beforeAccountDeletion } from "./account-deletion";
+import { adminRemovalGuard } from "./admin-removal";
 
 /**
  * The slice of the worker `env` the auth build reads.
@@ -139,8 +140,20 @@ const authOptions = (env: AuthEnv, requestOrigin?: string): LunoraAuthOptions =>
          * through the real endpoint on a database that has none. In production
          * the carve-out is a race between deploying and the owner signing up, so
          * the first invitation is seeded by hand instead.
+         *
+         * `adminRemovalGuard` holds the admin plugin's `/admin/remove-user` to the
+         * same owner rule and cleanup as a self-service deletion, which that
+         * endpoint skips (`src/admin-removal.ts`). Its permission check mirrors
+         * the admin plugin's default roles, so a custom `roles` or `adminUserIds`
+         * here must be mirrored there.
          */
-        plugins: [admin({ defaultRole: "user" }), inviteOnly({ allowFirstUser: env.WORKER_ENV === "development" }), twoFactor(), passkey()],
+        plugins: [
+            admin({ defaultRole: "user" }),
+            adminRemovalGuard(env),
+            inviteOnly({ allowFirstUser: env.WORKER_ENV === "development" }),
+            twoFactor(),
+            passkey(),
+        ],
         // Built-in per-IP throttling on the auth endpoints (sign-in/up, reset).
         rateLimit: { enabled: true },
         secret: env.AUTH_SECRET,
