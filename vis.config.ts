@@ -244,6 +244,7 @@ export default defineConfig({
                             "^deployme$",
                             "^install$",
                             "^project$",
+                            "^projectI$",
                             "^request$",
                             "^selected$",
                             "^string$",
