@@ -77,7 +77,8 @@ Size: **L**. Depends on a probe that could make the design smaller or larger.
 **Phase 0 — result (2026-10-11): partial.**
 - **BYO path, verified on the Lunora account.** A caller Worker binds a callee Worker with `services: [{ binding: "CALLEE", service: "pcheck-svc-callee", entrypoint: "CalleeApi" }]` and gets a typed RPC result (`[{"id":"c1","name":"Example"}]`). Named entrypoints work; a default export with only an RPC class fails the deploy with error 10068 ("no registered event handlers"), so the callee also needs a `fetch`. Both probe Workers were deleted afterwards.
 - **WfP questions Q1 and Q2: blocked** by the account (no dispatch namespaces, error 10121). See plan 477 §5.
-- **Q3 (`props`) and Q4 (tail attribution): not run.** Q4 is cheap on the BYO path and can be run next.
+- **Q4 (tail attribution), answered on the BYO path:** the callee's tail logs `CalleeApi.ping - Ok` and its own `console.log`, but do not name the calling Worker. A caller must be identified by the caller's own logs or a header it passes; the callee cannot attribute the call on its own.
+- **Q3 (`props`): not run.**
 - **Plan 457 is restored and mostly shipped** (`plans/457-service-bindings.md`). The typed-service snapshot it left open is implemented by #1024, so this plan's framework dependency is in place.
 
 **Phase 0 — probe (S, staging account), original questions:** Each answer recorded in this file:
