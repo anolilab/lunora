@@ -74,14 +74,18 @@ describe("the erasure grace option", () => {
             tables: { tasks: {} },
         });
         const privacy = definePrivacy({
-            data: memoryData({ tasks: 0 }),
             datasets: [tasks],
-            files: memoryFiles(),
-            newId: () => "r1",
-            now: () => now,
+            ports: () => {
+                return {
+                    data: memoryData({ tasks: 0 }),
+                    files: memoryFiles(),
+                    newId: () => "r1",
+                    now: () => now,
+                    store: memoryRequests(),
+                };
+            },
             presets: [eu({ erasureGraceDays: 3 })],
-            store: memoryRequests(),
-        });
+        })(undefined);
 
         const opened = await privacy.requestErasure({ sessionAgeMs: 1000, subjectId: "u1" });
 
