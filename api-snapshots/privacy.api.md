@@ -268,6 +268,7 @@ interface PrivacyConfig {
     readonly data: DataPort;
     readonly datasets: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
+    readonly exclude?: Readonly<Record<string, string>>;
     readonly files: StorePort;
     readonly newId: () => string;
     readonly now: () => Date;

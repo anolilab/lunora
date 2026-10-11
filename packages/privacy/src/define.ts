@@ -31,6 +31,8 @@ interface PrivacyConfig {
     readonly data: DataPort;
     readonly datasets: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
+    /** Tables left out of the export and erasure, each with the reason the reviewer reads. */
+    readonly exclude?: Readonly<Record<string, string>>;
     readonly files: StorePort;
     readonly newId: () => string;
     readonly now: () => Date;
@@ -204,6 +206,7 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
         cancelRequest: async ({ requestId }) => cancelRequest(config.store, { id: requestId, now: config.now() }),
 
         coverage: (tables, exclusions = {}) => {
+            const allExclusions = { ...config.exclude, ...exclusions };
             const classifications: Record<string, TableClassification | undefined> = {};
 
             for (const dataset of config.datasets) {
@@ -212,7 +215,7 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
                 }
             }
 
-            for (const [table, reason] of Object.entries(exclusions)) {
+            for (const [table, reason] of Object.entries(allExclusions)) {
                 classifications[table] = { excluded: reason };
             }
 
