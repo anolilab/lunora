@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { OWNER_REMOVED_ACTION, ownerRemovedTarget } from "../lunora/account";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { AccountErasurePorts } from "../src/sweeps/account-erasure";
 import { MAX_ERASURES_PER_TICK, runAccountErasureSweep } from "../src/sweeps/account-erasure";
@@ -26,6 +27,28 @@ const pagedStore = (userIds: string[], pageSize: number): ControlPlaneDatabase =
             });
 
             return Promise.resolve({ continueCursor: end < userIds.length ? String(end) : null, isDone: end >= userIds.length, page });
+        },
+        insert: () => Promise.reject(new Error("unused")),
+        patch: () => Promise.reject(new Error("unused")),
+    };
+};
+
+/** A store over fixed `members` rows and the `organization.owner-removed` marks of `markedIds`, matching `where` by equality. */
+const markedStore = (members: Record<string, string>[], markedIds: string[]): ControlPlaneDatabase => {
+    const auditLog = members
+        .filter((row) => markedIds.includes(row["_id"] ?? ""))
+        .map((row) => {
+            return { action: OWNER_REMOVED_ACTION, organizationId: row["organizationId"], target: ownerRemovedTarget(row["_id"] ?? "") };
+        });
+    const tables: Record<string, Record<string, unknown>[]> = { auditLog, members };
+
+    return {
+        delete: () => Promise.reject(new Error("unused")),
+        findMany: (table, args) => {
+            const where = args?.where ?? {};
+            const page = (tables[table] ?? []).filter((row) => Object.entries(where).every(([key, value]) => row[key] === value));
+
+            return Promise.resolve({ continueCursor: null, isDone: true, page: args?.limit === undefined ? page : page.slice(0, args.limit) });
         },
         insert: () => Promise.reject(new Error("unused")),
         patch: () => Promise.reject(new Error("unused")),
@@ -87,5 +110,49 @@ describe("orphaned-membership sweep", () => {
 
         await expect(runAccountErasureSweep(pagedStore([], 10), sweepPorts)).resolves.toStrictEqual({ erased: [], failed: [] });
         expect(sweepPorts.existingUserIds).not.toHaveBeenCalled();
+    });
+
+    it("leaves a user alone whose only memberships are owner memberships an operator removal kept", async () => {
+        const sweepPorts = ports([]);
+        const store = markedStore(
+            [
+                { _id: "m_kept", organizationId: "org_1", role: "owner", userId: "usr_removed" },
+                { _id: "m_peer", organizationId: "org_1", role: "member", userId: "usr_peer" },
+            ],
+            ["m_kept"],
+        );
+
+        await expect(runAccountErasureSweep(store, { ...sweepPorts, existingUserIds: () => Promise.resolve(new Set(["usr_peer"])) })).resolves.toStrictEqual({
+            erased: [],
+            failed: [],
+        });
+        expect(sweepPorts.erase).not.toHaveBeenCalled();
+    });
+
+    it("still erases an unmarked owner membership, and a user with a kept one beside others", async () => {
+        const sweepPorts = ports([]);
+        const store = markedStore(
+            [
+                { _id: "m_unmarked", organizationId: "org_1", role: "owner", userId: "usr_gone" },
+                { _id: "m_kept", organizationId: "org_2", role: "owner", userId: "usr_mixed" },
+                { _id: "m_left", organizationId: "org_3", role: "member", userId: "usr_mixed" },
+            ],
+            ["m_kept"],
+        );
+
+        await expect(runAccountErasureSweep(store, sweepPorts)).resolves.toStrictEqual({ erased: ["usr_gone", "usr_mixed"], failed: [] });
+    });
+
+    it("does not count kept ownerships against the per-tick cap", async () => {
+        const kept = Array.from({ length: MAX_ERASURES_PER_TICK + 5 }, (_, index) => {
+            return { _id: `m_kept_${String(index)}`, organizationId: `org_${String(index)}`, role: "owner", userId: `usr_kept_${String(index)}` };
+        });
+        const sweepPorts = ports([]);
+        const store = markedStore(
+            [...kept, { _id: "m_real", organizationId: "org_x", role: "member", userId: "usr_real" }],
+            kept.map((row) => row._id),
+        );
+
+        await expect(runAccountErasureSweep(store, sweepPorts)).resolves.toStrictEqual({ erased: ["usr_real"], failed: [] });
     });
 });

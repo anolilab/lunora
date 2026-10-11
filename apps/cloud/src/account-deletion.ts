@@ -23,7 +23,7 @@
  *
  * The hooks have no Lunora context, so they reach the control plane the way the
  * build runner reaches its mutations: an in-process call to its own admin route,
- * `POST /v1/account/erase`.
+ * `POST /v1/account/erase` ({@link postAccountErase}).
  */
 import { NOOP_EXECUTION_CONTEXT } from "@lunora/runtime";
 import { APIError } from "better-auth/api";
@@ -33,8 +33,13 @@ import type { ControlPlaneEnv } from "./control-plane-env";
 
 const ERASE_URL = "https://control-plane.internal/v1/account/erase";
 
-/** Call `POST /v1/account/erase` in-process; `null` when the admin token it is gated on is not configured. */
-const callEraseRoute = async (env: AuthEnv, body: { check?: true; userId: string }): Promise<null | Response> => {
+/**
+ * Call `POST /v1/account/erase` in-process; `null` when the admin token it is
+ * gated on is not configured, so the caller can refuse before anything runs.
+ * The operator's `removeUser` (`operator-removal.ts`) calls it with
+ * `operator: true`.
+ */
+export const postAccountErase = async (env: AuthEnv, body: { check?: true; operator?: true; userId: string }): Promise<null | Response> => {
     const token = env.LUNORA_ADMIN_TOKEN;
 
     if (typeof token !== "string" || token === "") {
@@ -63,7 +68,7 @@ const callEraseRoute = async (env: AuthEnv, body: { check?: true; userId: string
 export const beforeAccountDeletion =
     (env: AuthEnv) =>
     async (user: { id: string }): Promise<void> => {
-        const response = await callEraseRoute(env, { check: true, userId: user.id });
+        const response = await postAccountErase(env, { check: true, userId: user.id });
 
         if (response === null) {
             throw new APIError("INTERNAL_SERVER_ERROR", { message: "Account deletion is not available right now. Your account was not deleted." });
@@ -89,7 +94,7 @@ export const afterAccountDeletion =
     (env: AuthEnv) =>
     async (user: { id: string }): Promise<void> => {
         try {
-            const response = await callEraseRoute(env, { userId: user.id });
+            const response = await postAccountErase(env, { userId: user.id });
 
             if (!response?.ok) {
                 // eslint-disable-next-line no-console -- the sweep retries it; this is the record that it had to

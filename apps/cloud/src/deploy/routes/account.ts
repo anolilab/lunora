@@ -87,24 +87,34 @@ export const handleAccountExportRoute = async (request: Request, environment: Ro
 };
 
 /**
- * `POST /v1/account/erase` — the control plane's half of an account deletion,
- * called in-process with the admin token. Two calls, one on each side of the
- * authentication layer deleting the account:
+ * `POST /v1/account/erase` — the control plane's half of removing an account,
+ * called in-process with the admin token:
  *
- * - `{ userId, check: true }` from its before-delete hook: writes nothing, and
- *   answers 409 naming the organizations while the user is the only owner of any
- *   (`account.soleOwnedOrganizations`).
- * - `{ userId }` from its after-delete hook and from the orphaned-membership
- *   sweep: removes the memberships and anonymises the audit actor
- *   (`account.eraseUser`), and answers the organizations that were left without
- *   an owner.
+ * - `{ userId, check: true }` from the self-service before-delete hook: writes
+ *   nothing, and answers 409 naming the organizations while the user is the only
+ *   owner of any (`account.soleOwnedOrganizations`). Only this call refuses.
+ * - `{ userId }` from the self-service after-delete hook: removes the
+ *   memberships and anonymises the audit actor (`account.eraseUser`), and
+ *   answers the organizations that were left without an owner.
+ * - `{ userId, operator: true }` from the operator's `removeUser` and from the
+ *   orphaned-membership sweep: the same, except that the owner membership of an
+ *   organization the user solely owns is kept and marked for support; those
+ *   organizations come back as `retainedOwnerOf`. Never refused.
  */
 export const handleAccountEraseRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | { check?: unknown; userId?: unknown };
+    const body = (await request.json().catch(() => null)) as null | { check?: unknown; operator?: unknown; userId?: unknown };
 
     if (typeof body?.userId !== "string" || body.userId === "") {
         return jsonError(400, "userId is required");
+    }
+
+    if (body.operator !== undefined && typeof body.operator !== "boolean") {
+        return jsonError(400, "operator must be a boolean");
+    }
+
+    if (body.check === true && body.operator === true) {
+        return jsonError(400, "an operator removal is never refused, so it has no check");
     }
 
     if (body.check === true) {
@@ -125,12 +135,15 @@ export const handleAccountEraseRoute = async (request: Request, environment: Rou
         );
     }
 
-    const { ownerless } = await context.runMutation<EraseUserResult>(internal.account.eraseUser, { userId: body.userId });
+    const { ownerless, retainedOwnerOf } = await context.runMutation<EraseUserResult>(internal.account.eraseUser, {
+        userId: body.userId,
+        ...(body.operator === true ? { operator: true } : {}),
+    });
 
     if (ownerless.length > 0) {
         // eslint-disable-next-line no-console -- the audit entry is in each organization's log; this is the operator's signal
         console.error("[account] account deletion left organizations without an owner", ownerless);
     }
 
-    return Response.json({ erased: true, ownerless });
+    return Response.json(retainedOwnerOf === undefined ? { erased: true, ownerless } : { erased: true, ownerless, retainedOwnerOf });
 };

@@ -717,8 +717,9 @@ const ACCOUNT_ERASE_URL = "https://control-plane.internal/v1/account/erase";
 /**
  * Re-run the control plane's account cleanup for users whose account is gone but
  * whose memberships remain (`./account-erasure.ts`), through the same in-process
- * `POST /v1/account/erase` the after-delete hook calls. No-ops without the admin
- * token the route is gated on.
+ * `POST /v1/account/erase` the after-delete hook calls, as an operator removal so
+ * a sole owner's membership is kept for support. No-ops without the admin token
+ * the route is gated on.
  */
 const sweepAccountErasure = async (tick: TickContext): Promise<void> => {
     const token = tick.env.LUNORA_ADMIN_TOKEN;
@@ -731,7 +732,7 @@ const sweepAccountErasure = async (tick: TickContext): Promise<void> => {
         erase: async (userId) => {
             const response = await tick.worker.fetch(
                 new Request(ACCOUNT_ERASE_URL, {
-                    body: JSON.stringify({ userId }),
+                    body: JSON.stringify({ operator: true, userId }),
                     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
                     method: "POST",
                 }),
