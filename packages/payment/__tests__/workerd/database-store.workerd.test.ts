@@ -4,7 +4,7 @@
  * `createDatabasePaymentStore` over a REAL shard-engine `ctx.db` on Durable Object
  * SQLite — the storage it ships to. The node suite runs the store against an
  * in-memory double, which cannot say whether the unique indexes behind webhook
- * dedupe and usage idempotency hold, whether bigint money survives the column
+ * dedupe and usage idempotency hold, whether money survives the number column
  * codec, or whether keyset paging walks workerd's SQLite correctly.
  *
  * The `ctx.db` is built exactly as the generated ShardDO builds it
@@ -110,13 +110,13 @@ describe("database payment store on workerd", () => {
         });
     });
 
-    it("round-trips a payment session, bigint money and the subscription link included", async () => {
-        expect.assertions(4);
+    it("round-trips a payment session, money at the safe-integer ceiling and the subscription link included", async () => {
+        expect.assertions(6);
 
-        // Past Number.MAX_SAFE_INTEGER: a codec that went through a double would round it.
-        const huge = 9_007_199_254_740_993n;
+        // The largest amount a number column holds exactly.
+        const huge = BigInt(Number.MAX_SAFE_INTEGER);
 
-        await withStore(async (store) => {
+        await withStore(async (store, db) => {
             await store.upsertPaymentSession(session({ amount: money(huge, "EUR"), subscriptionId: "sub_1" }));
             await store.upsertPaymentSession(
                 session({
@@ -140,6 +140,14 @@ describe("database payment store on workerd", () => {
                 }),
             );
             expect(typeof stored?.amount.minorUnits).toBe("bigint");
+
+            // Stored as a plain number, which a `.global()` table accepts and compares numerically.
+            const { page } = await db.findMany("payment_sessions", {});
+
+            expect(page.map((row) => typeof row["amountMinor"])).toStrictEqual(["number"]);
+
+            // One past the ceiling would round, so the write is refused instead.
+            await expect(store.upsertPaymentSession(session({ amount: money(huge + 2n, "EUR"), id: "cs_3" }))).rejects.toThrow(/safe-integer range/u);
 
             // A session without a subscription reads the column back as absent.
             await store.upsertPaymentSession(session({ id: "cs_2" }));
@@ -335,5 +343,4 @@ describe("database payment store on workerd", () => {
             await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 2000, state: "active" });
         });
     });
-
 });

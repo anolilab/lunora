@@ -7,6 +7,7 @@
  * `.global()`/D1 read path for free. The codecs below are the single source of truth for the
  * domain ⇄ row mapping (money split into `amountMinor` + `currency`, id ⇄ `provider<Thing>Id`).
  */
+import { LunoraPaymentError } from "./errors";
 import { money } from "./money";
 import type { PaymentStore } from "./store";
 import { foldUsage } from "./store";
@@ -89,7 +90,8 @@ const readStringArray = (row: PaymentRow, key: string): string[] | undefined => 
     return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : undefined;
 };
 
-const readBigint = (row: PaymentRow, key: string): bigint => {
+/** A money column, written as a `number`. */
+const readMinorUnits = (row: PaymentRow, key: string): bigint => {
     const value = row[key];
 
     if (typeof value === "bigint") {
@@ -97,6 +99,23 @@ const readBigint = (row: PaymentRow, key: string): bigint => {
     }
 
     return typeof value === "number" || typeof value === "string" ? BigInt(value) : 0n;
+};
+
+/**
+ * Domain minor units → the `v.number()` money column. A double is exact only up to 2^53, so an
+ * amount outside the safe-integer range is refused rather than written rounded.
+ */
+const toMinorUnitsColumn = (minorUnits: bigint, field: string): number => {
+    const value = Number(minorUnits);
+
+    if (!Number.isSafeInteger(value)) {
+        throw new LunoraPaymentError(
+            "VALIDATION_ERROR",
+            `payment store: \`${field}\` (${String(minorUnits)}) is outside the safe-integer range and cannot be stored without rounding`,
+        );
+    }
+
+    return value;
 };
 
 /**
@@ -130,14 +149,14 @@ const rowToCustomer = (row: PaymentRow): Customer => {
 
 const sessionToRow = (session: PaymentSession): Record<string, unknown> => {
     return {
-        amountMinor: session.amount.minorUnits,
-        capturedMinor: session.capturedAmount.minorUnits,
+        amountMinor: toMinorUnitsColumn(session.amount.minorUnits, "amountMinor"),
+        capturedMinor: toMinorUnitsColumn(session.capturedAmount.minorUnits, "capturedMinor"),
         createdAt: session.createdAt,
         currency: session.amount.currency,
         provider: session.provider,
         providerSessionId: session.id,
         referenceId: session.referenceId,
-        refundedMinor: session.refundedAmount.minorUnits,
+        refundedMinor: toMinorUnitsColumn(session.refundedAmount.minorUnits, "refundedMinor"),
         state: session.state,
         ...(session.subscriptionId === undefined ? {} : { subscriptionId: session.subscriptionId }),
         updatedAt: session.updatedAt,
@@ -148,13 +167,13 @@ const rowToSession = (row: PaymentRow): PaymentSession => {
     const currency = readString(row, "currency");
 
     return {
-        amount: money(readBigint(row, "amountMinor"), currency),
-        capturedAmount: money(readBigint(row, "capturedMinor"), currency),
+        amount: money(readMinorUnits(row, "amountMinor"), currency),
+        capturedAmount: money(readMinorUnits(row, "capturedMinor"), currency),
         createdAt: readNumber(row, "createdAt"),
         id: readString(row, "providerSessionId"),
         provider: readString(row, "provider") as ProviderId,
         referenceId: readString(row, "referenceId"),
-        refundedAmount: money(readBigint(row, "refundedMinor"), currency),
+        refundedAmount: money(readMinorUnits(row, "refundedMinor"), currency),
         state: readString(row, "state") as PaymentState,
         subscriptionId: readOptionalString(row, "subscriptionId"),
         updatedAt: readNumber(row, "updatedAt"),

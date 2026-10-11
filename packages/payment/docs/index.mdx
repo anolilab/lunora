@@ -435,8 +435,10 @@ installed package, so a new column or index reaches your app when you upgrade
 | `payment_events`        | the append-only webhook log — inbound idempotency, audit, debugging                     |
 | `payment_usageEvents`   | the append-only metered-usage ledger `check` folds over                                 |
 
-Money is stored as `(amountMinor: bigint, currency: string)` columns; every row
-carries a `provider` discriminator so multiple providers can coexist during a
+Money is stored as `(amountMinor: number, currency: string)` columns. A number
+holds every integer up to 2^53 exactly (about 90 trillion dollars in cents), and
+the store refuses to write an amount outside that range rather than round it.
+Every row carries a `provider` discriminator so multiple providers can coexist during a
 migration. A **capture or refund is not its own table**: both fold into the
 payment's `payment_sessions` row as `capturedMinor` / `refundedMinor` plus a
 state (`refunded` / `partially_refunded`). Products, prices, checkouts and

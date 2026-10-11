@@ -205,6 +205,17 @@ The store does not read the old tables, and nothing moves their rows for you.
 Copy any rows you need into the `payment_*` tables, then delete the old tables
 from the schema.
 
+### `@lunora/payment`: money columns are numbers
+
+`amountMinor`, `capturedMinor` and `refundedMinor` on `payment_sessions` are
+`v.number()` instead of `v.bigint()`, so the tables can also be declared
+`.global()`. `Money.minorUnits` is still a `bigint`; the store converts at the
+row and throws a `VALIDATION_ERROR` for an amount outside ±(2^53 − 1) instead of
+rounding it.
+
+**Migration:** none for code that goes through the store. Code that reads the
+columns directly gets a `number`.
+
 ### `@lunora/codegen`: `api.*` nests by folder
 
 A function file in a folder used to be one underscore-joined key:
