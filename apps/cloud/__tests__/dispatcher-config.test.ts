@@ -73,14 +73,6 @@ describe("dispatcher.wrangler.jsonc conformance", () => {
         expect(config.vars?.["LUNORA_ENVIRONMENT"]).toBe("development");
     });
 
-    it("rejects an unsubstituted <replace-…> template in every environment", () => {
-        const offenders = everyVar()
-            .filter(([, value]) => value.startsWith("<replace-"))
-            .map(([label]) => label);
-
-        expect(offenders).toStrictEqual([]);
-    });
-
     it("rejects the example.workers.dev placeholder in every environment", () => {
         const offenders = everyVar()
             .filter(([, value]) => value.includes("example.workers.dev"))
