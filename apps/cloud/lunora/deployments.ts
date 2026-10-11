@@ -589,10 +589,9 @@ export const create = mutation
         }
 
         // Integrity: the project must belong to the same org (no cross-org linkage).
-        const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
-        const project = page.find((row) => row._id === arguments_.projectId);
+        const project = await context.db.get(arguments_.projectId);
 
-        if (!project) {
+        if (project?.organizationId !== arguments_.organizationId) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
@@ -1018,6 +1017,17 @@ const onEnter = async (context: MutationContext, id: Id<"deployments">, existing
  * here instead: a deploy key, or an org owner or admin. A plain member may not
  * retarget a deployment's status or URL.
  */
+/** Whether a value parses as an absolute http or https URL. */
+const isWebUrl = (value: string): boolean => {
+    try {
+        const { protocol } = new URL(value);
+
+        return protocol === "https:" || protocol === "http:";
+    } catch {
+        return false;
+    }
+};
+
 export const updateStatus = mutation
     .use(rateLimit("machine"))
     .input({
@@ -1046,6 +1056,11 @@ export const updateStatus = mutation
         await (deployKey
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
             : assertMember(context, existing.organizationId, ["owner", "admin"]));
+
+        // The URL is what the admin proxy sends the tenant's bearer to, so only web schemes are stored.
+        if (url !== undefined && !isWebUrl(url)) {
+            throw new LunoraError("BAD_REQUEST", "deployment url must be an http:// or https:// URL");
+        }
 
         assertStatusMove(existing.status, status);
 
