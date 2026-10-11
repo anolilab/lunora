@@ -145,14 +145,22 @@ export const finishInstall = internalMutation
     });
 
 /**
+ * How long before its lease ends a claim stops counting as held. An install that is
+ * still running at this point stops writing (its rollback is skipped), so a takeover
+ * that becomes possible at the lease's end never overlaps its writes by much.
+ */
+const CLAIM_FENCE_MARGIN_MS = 5 * 60 * 1000;
+
+/**
  * Whether an install still holds its project's claim (SYSTEM). A claim taken over
  * after its lease is deleted, so a takeover is visible as a missing row: the old
- * install's row id never comes back, which makes this a generation check.
+ * install's row id never comes back, which makes this a generation check. A claim
+ * within the fence margin of its lease's end is treated as lost.
  */
 export const holdsClaim = internalQuery.input({ installId: v.id("catalogInstalls") }).query(async ({ ctx: context, args: { installId } }): Promise<boolean> => {
     const row = (await context.db.get(installId)) as InstallRow | null;
 
-    return row?.status === "installing";
+    return row?.status === "installing" && context.now - row.createdAt < RELEASE_LEASE_MS - CLAIM_FENCE_MARGIN_MS;
 });
 
 /** Give up a claim whose install did not go live (SYSTEM). */
