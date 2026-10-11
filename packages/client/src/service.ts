@@ -41,7 +41,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
-import { errorEnvelopeOf } from "./wire-errors";
+import { errorEnvelopeOf, reconstructError } from "./wire-errors";
 
 /**
  * The wire endpoint every Lunora Worker serves. Matches `createWorker`'s RPC
@@ -88,45 +88,6 @@ interface LunoraServiceClient {
     mutation: <F extends FunctionReference<"mutation">>(reference: F, args?: ArgsOf<F>, options?: ServiceCallOptions) => Promise<ReturnOf<F>>;
     query: <F extends FunctionReference<"query">>(reference: F, args?: ArgsOf<F>, options?: ServiceCallOptions) => Promise<ReturnOf<F>>;
 }
-
-/**
- * Rebuild a thrown `Error` from the worker's `{ code, message, data? }` envelope
- * so a caller across a service binding sees the same `.code`/`.data` it would
- * see calling the same function in-process. `data` is wire-decoded, so a
- * `bigint` or byte array inside a thrown `LunoraError` survives the hop.
- */
-type ServiceCallError = Error & { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[] };
-
-const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string }): ServiceCallError => {
-    const error = new Error(errorBody.message ?? "request failed") as ServiceCallError;
-
-    error.code = errorBody.code;
-
-    // `hint` and `docsUrl` come from the error catalog and are what make a
-    // failure actionable. Restoring only `code`/`data` would give a
-    // service-binding caller a weaker error than the same function throws over
-    // HTTP, for no reason a caller could see.
-    // Guarded as on the HTTP path: a `data` the codec refuses is dropped and the
-    // server's coded verdict stands. Thrown bare, the codec's own exception
-    // replaced the coded error, so a caller saw no `code` at all.
-    if (errorBody.data !== undefined) {
-        try {
-            error.data = decodeWire(errorBody.data);
-        } catch {
-            // Dropped: see above.
-        }
-    }
-
-    if (errorBody.hint !== undefined) {
-        error.hint = errorBody.hint;
-    }
-
-    if (errorBody.docsUrl !== undefined) {
-        error.docsUrl = errorBody.docsUrl;
-    }
-
-    return error;
-};
 
 const callBinding = async (
     binding: ServiceBindingLike,
