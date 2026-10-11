@@ -57,8 +57,17 @@ const inRange = (actual: unknown, range: { gt?: number; lt?: number }): boolean 
 const matches = (row: Row, where: Row): boolean =>
     Object.entries(where).every(([field, value]) => (isRange(value) ? inRange(row[field], value) : row[field] === value));
 
-/** Tables the account erasure and export read; a test that does not seed one sees it empty. */
-const EMPTY_UNLESS_SEEDED = ["anomalySilences", "boxEnrolments", "catalogInstalls", "cloudflareAccounts", "deployments", "halts", "invitations"];
+/** Tables the account erasure, export and plan lookups read; a test that does not seed one sees it empty. */
+const EMPTY_UNLESS_SEEDED = [
+    "anomalySilences",
+    "boxEnrolments",
+    "catalogInstalls",
+    "cloudflareAccounts",
+    "deployments",
+    "halts",
+    "invitations",
+    "payment_subscriptions",
+];
 
 /**
  * Build the double.

@@ -6,16 +6,20 @@
  * credits ledger + the schedule live in `server.ts` (this stays store-only, so
  * the mapping and the suspend/recover writes are testable against a fake store).
  */
+import { toSubscription } from "../../lunora/entitlements";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { OverageFleetPorts, OverageOrgInput } from "./overage";
+import { plansByReference } from "./plan-of";
 import type { PeriodUsage } from "./spend";
 import { isBillableUsage } from "./usage";
+
+/** A subscription row as `toSubscription` reads it, so the plan comes from the same resolution the quota check uses. */
+type SubscriptionRow = Parameters<typeof toSubscription>[0];
 
 interface OrgRow {
     _id: string;
     creditsAccountId?: string;
-    plan: string;
     suspendedReason?: string;
 }
 
@@ -80,6 +84,10 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
     // current period first. The identical bug was already fixed in
     // `lunora/usage.ts`'s spend-cap sweep; `src/` just had no way to express it.
     const organizations = await drainTable<OrgRow>(database, "organizations");
+    // The plan a period is billed on comes from the synced subscriptions, not the
+    // column the caller set at creation (`src/billing/plan-of.ts`).
+    const subscriptions = await drainTable<SubscriptionRow>(database, "payment_subscriptions");
+    const plans = plansByReference(subscriptions.map((row) => toSubscription(row)));
 
     // The period filter belongs in the QUERY — filtering it in JS after a bounded
     // read is the second half of the same bug, since rows from other periods
@@ -126,7 +134,7 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
             boxes: boxesByOrg.get(organization._id) ?? 0,
             organizationId: organization._id,
             periodStart,
-            plan: organization.plan,
+            plan: plans.get(organization._id) ?? "free",
             usage: usageByOrg.get(organization._id) ?? { cpuMs: 0, requests: 0 },
         });
     }

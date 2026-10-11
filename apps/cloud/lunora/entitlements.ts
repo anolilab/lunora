@@ -2,10 +2,12 @@ import type { Entitlements, ProviderId, Subscription, SubscriptionState } from "
 import { resolveEntitlements } from "@lunora/payment";
 import { LunoraError } from "@lunora/server";
 
-import type { QuotaResource } from "../src/billing/plans";
-import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
+import { plansByReference } from "../src/billing/plan-of";
+import type { PlanName, QuotaResource } from "../src/billing/plans";
+import { effectiveLimit, highestPlan, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
 import type { Doc as StoredRow, Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
+import { collectAll } from "./paginate";
 
 /**
  * Live entitlement resolution. Quota is enforced against the
@@ -48,6 +50,23 @@ export const orgEntitlements = async (context: QueryContext, organizationId: Id<
         LUNORA_CLOUD_PLANS,
         page.map((row) => toSubscription(row)),
     );
+};
+
+/** The plan an org is on, from its synced subscriptions (`src/billing/plan-of.ts`). */
+export const orgPlan = async (context: QueryContext, organizationId: Id<"organizations">): Promise<PlanName> => {
+    const entitlements = await orgEntitlements(context, organizationId);
+
+    return highestPlan(entitlements.plans);
+};
+
+/**
+ * The plan of every organization that has subscriptions, from one read of the
+ * subscription table. Organizations absent from the map are on `free`.
+ */
+export const planByOrganization = async (context: QueryContext): Promise<Map<string, string>> => {
+    const subscriptions = await collectAll<StoredRow<"payment_subscriptions">>((cursor) => context.db.payment_subscriptions.findMany({ cursor }));
+
+    return plansByReference(subscriptions.map((row) => toSubscription(row)));
 };
 
 /** The effective per-resource limit for an org, resolved from its subscriptions. */

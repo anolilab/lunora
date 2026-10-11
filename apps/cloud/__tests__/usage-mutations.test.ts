@@ -67,6 +67,7 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId:
                         .find((row) => row["_id"] === id) ?? null,
                 ),
             members: facade("members"),
+            payment_subscriptions: facade("payment_subscriptions"),
             query: () => emptyQuery,
             delete: (id: string) => {
                 ops.push({ id, kind: "delete" });
@@ -186,6 +187,18 @@ const organization = (over: Row = {}): Row => {
 const isTransition = (op: Op): boolean => op.kind === "patch" && !("spendNanoCents" in op.patch);
 
 describe("usage.enforceSpendCaps", () => {
+    it("caps an organization on the plan its subscriptions grant, not the column it was created with", async () => {
+        // The column says enterprise (no cap); with no subscription the org is on free, which has one.
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ plan: "enterprise" })],
+            platformUsage: [usageRow("u1", 10_000_000_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedReason: "spend-cap" } });
+    });
+
     it("suspends an org over its cap and records why", async () => {
         const { ctx, ops } = makeCtx({
             organizations: [organization({ spendCapMinor: 1 })],

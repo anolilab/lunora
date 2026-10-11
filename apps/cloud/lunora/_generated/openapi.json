@@ -7034,22 +7034,6 @@
                       },
                       "jurisdiction": {},
                       "name": {},
-                      "plan": {
-                        "anyOf": [
-                          {
-                            "const": "free",
-                            "type": "string"
-                          },
-                          {
-                            "const": "pro",
-                            "type": "string"
-                          },
-                          {
-                            "const": "enterprise",
-                            "type": "string"
-                          }
-                        ]
-                      },
                       "slug": {}
                     },
                     "required": [],

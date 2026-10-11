@@ -41,6 +41,7 @@ const makeCtx = (userId: null | string, tables: Record<string, Row[]>): QueryCtx
             get: (id: string) => Promise.resolve((tables["organizations"] ?? []).find((row) => row["_id"] === id) ?? null),
             members: { findMany: findMany("members") },
             organizations: { findMany: findMany("organizations") },
+            payment_subscriptions: { findMany: findMany("payment_subscriptions") },
         },
     } as unknown as QueryCtx;
 };
@@ -65,6 +66,26 @@ describe("organizations.list", () => {
         const result = await list.handler(ctx, {});
 
         expect(result.map((organization) => organization._id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["org_1", "org_3"]);
+    });
+
+    it("shows the plan the subscriptions grant, not the column the organization was created with", async () => {
+        const ctx = makeCtx("usr_1", {
+            members: [
+                { organizationId: "org_1", userId: "usr_1" },
+                { organizationId: "org_3", userId: "usr_1" },
+            ],
+            organizations: orgs,
+            payment_subscriptions: [
+                { priceId: "price_pro_monthly", provider: "creem", providerSubscriptionId: "sub_1", referenceId: "org_1", state: "active" },
+            ],
+        });
+
+        const result = await list.handler(ctx, {});
+
+        expect(result.map((organization) => [organization._id, organization.plan])).toStrictEqual([
+            ["org_1", "pro"],
+            ["org_3", "free"],
+        ]);
     });
 
     it("returns nothing for a member of nothing, without reading the table", async () => {

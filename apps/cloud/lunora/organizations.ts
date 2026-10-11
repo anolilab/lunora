@@ -8,6 +8,7 @@ import { assertMember } from "./authz";
 import { releaseIdleAliases } from "./deployments";
 import { queueCertificateReleases } from "./domains";
 import { releaseEdgeRules } from "./edge";
+import { orgPlan } from "./entitlements";
 import { rateLimit } from "./guards";
 import { anonymiseScopedRows, ERASED_REFERENCE, purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
@@ -68,8 +69,14 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
     // the list was truncated. The read now scales with the caller's memberships,
     // which is what the answer depends on.
     const organizations = await Promise.all(orgIds.map(async (id) => (await context.db.get(id)) as null | OrganizationRow));
+    const present = organizations.filter((organization): organization is OrganizationRow => organization !== null);
 
-    return organizations.filter((organization): organization is OrganizationRow => organization !== null);
+    // The plan shown is the one billing applies, read from the subscriptions; the stored column is only the creation default.
+    return Promise.all(
+        present.map(async (organization): Promise<OrganizationRow> => {
+            return { ...organization, plan: await orgPlan(context, organization._id) };
+        }),
+    );
 });
 
 /**
@@ -125,7 +132,6 @@ export const create = mutation
         // "eu" | "fedramp" — restricts placement to cells in that jurisdiction.
         jurisdiction: v.optional(boundedString(LIMITS.tag)),
         name: boundedString(LIMITS.name),
-        plan: v.optional(v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"))),
         slug: boundedString(LIMITS.id),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"organizations">> => {
@@ -164,7 +170,9 @@ export const create = mutation
             cellId,
             createdAt: now,
             name: arguments_.name,
-            plan: arguments_.plan ?? "free",
+            // Every organization starts on free. A paid plan comes from a synced subscription,
+            // never from the caller (`src/billing/plan-of.ts`).
+            plan: "free",
             slug: arguments_.slug,
         });
 

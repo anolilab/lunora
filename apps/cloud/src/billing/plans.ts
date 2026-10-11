@@ -73,8 +73,11 @@ export const withinQuota = (entitlements: Entitlements, resource: QuotaResource,
  */
 export const PLAN_PRECEDENCE = ["enterprise", "pro", "free"] as const;
 
+/** One of the plans in {@link PLAN_PRECEDENCE}. */
+export type PlanName = (typeof PLAN_PRECEDENCE)[number];
+
 /** The most-generous plan among the active ones, or `free` when none match. */
-export const highestPlan = (plans: ReadonlyArray<string>): string => PLAN_PRECEDENCE.find((plan) => plans.includes(plan)) ?? "free";
+export const highestPlan = (plans: ReadonlyArray<string>): PlanName => PLAN_PRECEDENCE.find((plan) => plans.includes(plan)) ?? "free";
 
 /** Per-request runtime caps applied by the dispatcher via `env.DISPATCHER.get(..., { limits })`. */
 export interface RuntimeLimits {

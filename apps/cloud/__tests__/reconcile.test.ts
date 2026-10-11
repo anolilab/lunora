@@ -10,9 +10,13 @@ const noopLedger: CreditsLedgerPort = { balance: () => Promise.resolve(0), debit
 describe(buildOverageReconcileData, () => {
     it("aggregates period usage per org and joins plan + watermark + account", async () => {
         const database = fakeControlPlaneDb({
+            // The column says the opposite of the subscriptions on both rows: billing reads the subscriptions.
             organizations: [
-                { _id: "org_a", creditsAccountId: "acct_a", plan: "pro" },
-                { _id: "org_b", plan: "free" },
+                { _id: "org_a", creditsAccountId: "acct_a", plan: "free" },
+                { _id: "org_b", plan: "pro" },
+            ],
+            payment_subscriptions: [
+                { priceId: "price_pro_monthly", provider: "creem", providerSubscriptionId: "sub_a", referenceId: "org_a", state: "active" },
             ],
             overageDebits: [{ debitedCredits: 40, organizationId: "org_a", periodStart: 500 }],
             platformUsage: [

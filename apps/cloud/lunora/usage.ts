@@ -21,6 +21,7 @@ import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from ".
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { fireSpendAlerts } from "./alerts";
 import { assertMember, assertRowInOrg, authorizeBillingKey, authorizeDeployKeyRow } from "./authz";
+import { orgPlan, planByOrganization } from "./entitlements";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -318,7 +319,6 @@ export const spendStatus = query
     .query(async ({ ctx: context, args: { organizationId } }): Promise<SpendStatus> => {
         const member = await assertMember(context, organizationId);
         const organization = (await context.db.get(member.organizationId)) as null | {
-            plan: string;
             spendCapMinor?: null | number;
             spendWarnMinor?: null | number;
         };
@@ -330,7 +330,7 @@ export const spendStatus = query
         const periodStart = currentPeriodStart();
         const decision = evaluateSpendCap({
             capMinorOverride: organization.spendCapMinor,
-            plan: organization.plan,
+            plan: await orgPlan(context, member.organizationId),
             usage: await orgPeriodUsage(context, member.organizationId, periodStart),
             warnMinorOverride: organization.spendWarnMinor,
         });
@@ -412,7 +412,6 @@ export const billingSummary = internalQuery
         }
 
         const organization = (await context.db.get(verified)) as null | {
-            plan: string;
             spendCapMinor?: null | number;
             spendWarnMinor?: null | number;
             suspendedAt?: null | number;
@@ -425,7 +424,7 @@ export const billingSummary = internalQuery
         const usage = await orgPeriodUsage(context, verified, periodStart);
         const decision = evaluateSpendCap({
             capMinorOverride: organization.spendCapMinor,
-            plan: organization.plan,
+            plan: await orgPlan(context, verified),
             usage,
             warnMinorOverride: organization.spendWarnMinor,
         });
@@ -519,7 +518,6 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     const organizations = await collectAll<{
         _id: Id<"organizations">;
         name: string;
-        plan: string;
         spendCapMinor?: null | number;
         spendNanoCents?: null | number;
         spendPeriod?: null | number;
@@ -529,6 +527,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         suspendedReason?: null | string;
     }>((cursor) => context.db.organizations.findMany({ cursor }));
 
+    const plans = await planByOrganization(context);
     let suspended = 0;
     let unsuspended = 0;
     let warned = 0;
@@ -538,7 +537,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         const usage = byOrg.get(organizationId) ?? {};
         const decision = evaluateSpendCap({
             capMinorOverride: organization.spendCapMinor,
-            plan: organization.plan,
+            plan: plans.get(organizationId) ?? "free",
             usage,
             warnMinorOverride: organization.spendWarnMinor,
         });

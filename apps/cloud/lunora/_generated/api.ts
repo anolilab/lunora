@@ -148,7 +148,7 @@ export interface ApiTypes {
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
-        create: FunctionReference<"mutation", { cellId?: Id<"cells">; jurisdiction?: unknown; name: unknown; plan?: "free" | "pro" | "enterprise"; slug: unknown }, Id<"organizations">>;
+        create: FunctionReference<"mutation", { cellId?: Id<"cells">; jurisdiction?: unknown; name: unknown; slug: unknown }, Id<"organizations">>;
         getBySlug: FunctionReference<"query", { slug: unknown }, null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; deletionRequestedAt?: null | number; name: string; plan: "enterprise" | "free" | "pro"; slug: string; suspendedAt?: null | number; suspendedReason?: null | string }>;
         list: FunctionReference<"query", {}, { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; deletionRequestedAt?: null | number; name: string; plan: "enterprise" | "free" | "pro"; slug: string; suspendedAt?: null | number; suspendedReason?: null | string }[]>;
         rename: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations"> }, void>;

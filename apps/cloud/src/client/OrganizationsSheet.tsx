@@ -190,7 +190,6 @@ export const OrganizationsSheet = ({ onOpenChange, open, organizations, orgId }:
                                                 cellId: cellId === "auto" ? undefined : (cellId as CellId),
                                                 jurisdiction: jurisdiction === "any" ? undefined : jurisdiction,
                                                 name,
-                                                plan,
                                                 slug: slugify(name),
                                             });
                                         } catch (error_: unknown) {
