@@ -432,5 +432,13 @@ exports[`deploy route table > keeps every route's method, path, auth tier, rate 
       "auth": "adminToken",
     },
   },
+  {
+    "handler": "handleOwnerPromoteRoute",
+    "method": "POST",
+    "path": "/v1/organizations/owners",
+    "spec": {
+      "auth": "adminToken",
+    },
+  },
 ]
 `;

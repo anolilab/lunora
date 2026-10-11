@@ -79,7 +79,8 @@ const buildWorker = (env: ControlPlaneEnv): LunoraWorker => {
         adminToken: env.LUNORA_ADMIN_TOKEN,
         // Dispatch better-auth's `/api/auth/*` routes inside the worker so the
         // studio and the control plane share an origin.
-        // `removeUser` erases the control plane's data about the user first (`operator-removal.ts`).
+        // `removeUser` erases the control plane's data about the user first, and is refused
+        // for an organization's only owner (`operator-removal.ts`).
         authAdmin: auth ? withControlPlaneErasure(createAuthAdmin(auth), env) : undefined,
         authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
         // Code-first crons (lunora/crons.ts): the cleanup-expired-previews job

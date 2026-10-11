@@ -49,6 +49,7 @@ const ADMIN_ROUTES = [
     ["POST", "/v1/hostd/rollout"],
     ["GET", "/v1/platform/metrics?hours=2"],
     ["POST", "/v1/account/erase"],
+    ["POST", "/v1/organizations/owners"],
 ] as const;
 
 const WRONG_CREDENTIALS: ReadonlyArray<[string, Record<string, string>]> = [

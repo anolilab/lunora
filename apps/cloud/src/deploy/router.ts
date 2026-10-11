@@ -11,7 +11,7 @@ import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import { handleAccountEraseRoute, handleAccountExportRoute } from "./routes/account";
+import { handleAccountEraseRoute, handleAccountExportRoute, handleOwnerPromoteRoute } from "./routes/account";
 import { handleAdminRoute } from "./routes/admin-proxy";
 import { handleAlertTestRoute } from "./routes/alerts";
 import { handleBillingWebhookRoute } from "./routes/billing";
@@ -250,6 +250,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handlePlatformMetricsRoute, method: "GET", path: "/v1/platform/metrics", spec: { auth: "adminToken" } },
         // Account deletion: called in-process by the auth layer's delete hooks and the orphaned-membership sweep.
         { handler: handleAccountEraseRoute, method: "POST", path: "/v1/account/erase", spec: { auth: "adminToken" } },
+        // The operator's fix for a removal refused over a sole owner: promote another member to owner.
+        { handler: handleOwnerPromoteRoute, method: "POST", path: "/v1/organizations/owners", spec: { auth: "adminToken" } },
     ];
 
     // A route's classification must match the table it sits in, or its guard would be the wrong one.

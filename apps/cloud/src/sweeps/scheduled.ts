@@ -717,9 +717,9 @@ const ACCOUNT_ERASE_URL = "https://control-plane.internal/v1/account/erase";
 /**
  * Re-run the control plane's account cleanup for users whose account is gone but
  * whose memberships remain (`./account-erasure.ts`), through the same in-process
- * `POST /v1/account/erase` the after-delete hook calls, as an operator removal so
- * a sole owner's membership is kept for support. No-ops without the admin token
- * the route is gated on.
+ * `POST /v1/account/erase` the after-delete hook calls, as an operator removal,
+ * which is refused for a sole owner: that user is left for the operator and
+ * logged. No-ops without the admin token the route is gated on.
  */
 const sweepAccountErasure = async (tick: TickContext): Promise<void> => {
     const token = tick.env.LUNORA_ADMIN_TOKEN;
@@ -740,6 +740,12 @@ const sweepAccountErasure = async (tick: TickContext): Promise<void> => {
                 tick.context,
             );
 
+            if (response.status === 409) {
+                const { organizations } = await response.json<{ organizations: { id: string }[] }>();
+
+                return { refused: organizations.map((organization) => organization.id) };
+            }
+
             return response.ok;
         },
         existingUserIds: authExistingUserIds(tick.env),
@@ -748,6 +754,14 @@ const sweepAccountErasure = async (tick: TickContext): Promise<void> => {
     if (result.failed.length > 0) {
         // eslint-disable-next-line no-console -- the next tick retries them; this is the record that it had to
         console.error("[account] cleanup of deleted accounts failed", result.failed.length);
+    }
+
+    if (result.leftForOperator.length > 0) {
+        // eslint-disable-next-line no-console -- the operator's signal; the organizations only, not the removed users' ids
+        console.warn(
+            "[account] deleted accounts that are the only owner of an organization were left untouched; promote another member to owner or delete the organization",
+            [...new Set(result.leftForOperator.flatMap((entry) => entry.organizationIds))],
+        );
     }
 };
 

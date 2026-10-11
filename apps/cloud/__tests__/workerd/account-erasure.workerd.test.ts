@@ -15,10 +15,13 @@ import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { MutationCtx, QueryCtx } from "../../lunora/_generated/server";
-import { DELETED_ACTOR, eraseUser, ERASURE_ACTOR, OWNER_REMOVED_ACTION, OWNERLESS_ACTION, soleOwnedOrganizations } from "../../lunora/account";
+import type { EraseUserResult } from "../../lunora/account";
+import { DELETED_ACTOR, eraseUser, OWNERLESS_ACTION, soleOwnedOrganizations } from "../../lunora/account";
+import { OPERATOR_ACTOR, operatorPromoteOwner } from "../../lunora/members";
 import schema from "../../lunora/schema";
 import { authExistingUserIds, ensureAuth } from "../../src/auth";
 import { buildExec, controlPlaneDatabase } from "../../src/d1-store";
+import type { AccountErasurePorts } from "../../src/sweeps/account-erasure";
 import { runAccountErasureSweep } from "../../src/sweeps/account-erasure";
 
 const database = controlPlaneDatabase(env.DB);
@@ -105,16 +108,16 @@ describe("account erasure (workerd, real D1)", () => {
         await expect(eraseUser.handler(context(), { userId: "usr_me" })).resolves.toStrictEqual({ ownerless: [] });
     });
 
-    it("keeps a sole owner's membership on an operator removal, marks it once, and the sweep leaves it alone", async () => {
+    it("refuses an operator removal of a sole owner with nothing written, and the sweep leaves them alone until another member is promoted", async () => {
         const now = Date.now();
         const organization = await organizationSeeder(now);
         const solo = await organization("Solo");
         const team = await organization("Team");
         const member = (organizationId: string, userId: string, role: string) => database.insert("members", { createdAt: now, organizationId, role, userId });
 
-        const kept = (await member(solo, "usr_op", "owner")) as string;
+        await member(solo, "usr_op", "owner");
+        const peer = (await member(solo, "usr_op_peer", "member")) as string;
 
-        await member(solo, "usr_op_peer", "member");
         await member(team, "usr_op", "member");
         await member(team, "usr_op_lead", "owner");
         await database.insert("auditLog", { action: "project.create", actorUserId: "usr_op", createdAt: now, organizationId: solo });
@@ -126,34 +129,61 @@ describe("account erasure (workerd, real D1)", () => {
             target: "usr_op → member",
         });
 
-        const result = await eraseUser.handler(context(), { operator: true, userId: "usr_op" });
-
-        expect(result).toStrictEqual({ ownerless: [], retainedOwnerOf: [{ id: solo, name: "Solo" }] });
-        await expect(rows("members", { userId: "usr_op" })).resolves.toMatchObject([{ _id: kept, organizationId: solo, role: "owner" }]);
-        await expect(rows("members", { organizationId: solo })).resolves.toHaveLength(2);
-        await expect(rows("auditLog", { actorUserId: "usr_op" })).resolves.toStrictEqual([]);
-        await expect(rows("auditLog", { action: "member.set-role", organizationId: team })).resolves.toMatchObject([{ target: `${DELETED_ACTOR} → member` }]);
-        await expect(rows("auditLog", { action: OWNER_REMOVED_ACTION, organizationId: solo })).resolves.toMatchObject([{ actorUserId: ERASURE_ACTOR }]);
-        await expect(rows("auditLog", { action: OWNERLESS_ACTION, organizationId: solo })).resolves.toStrictEqual([]);
-
-        // A second removal finds the mark by its exact target and adds none.
-        await eraseUser.handler(context(), { operator: true, userId: "usr_op" });
-
-        await expect(rows("auditLog", { action: OWNER_REMOVED_ACTION, organizationId: solo })).resolves.toHaveLength(1);
-
-        // The auth layer no longer has usr_op; the kept, marked membership is not an orphan to erase.
-        const erased: string[] = [];
-
-        await runAccountErasureSweep(database, {
-            erase: (userId) => {
-                erased.push(userId);
-
-                return Promise.resolve(true);
-            },
-            existingUserIds: (userIds) => Promise.resolve(new Set(userIds.filter((userId) => userId !== "usr_op"))),
+        await expect(eraseUser.handler(context(), { operator: true, userId: "usr_op" })).resolves.toStrictEqual({
+            ownerless: [],
+            refused: [{ id: solo, name: "Solo" }],
         });
 
+        // Nothing was written: every membership, the audit actor and the old-format target still name usr_op.
+        await expect(rows("members", { userId: "usr_op" })).resolves.toHaveLength(2);
+        await expect(rows("auditLog", { actorUserId: "usr_op" })).resolves.toHaveLength(1);
+        await expect(rows("auditLog", { action: "member.set-role", organizationId: team })).resolves.toMatchObject([{ target: "usr_op → member" }]);
+
+        // The auth layer no longer has usr_op: the sweep leaves the sole owner for the operator and calls nothing.
+        const erased: string[] = [];
+        const sweepPorts: AccountErasurePorts = {
+            erase: async (userId) => {
+                erased.push(userId);
+
+                const result: EraseUserResult = await eraseUser.handler(context(), { operator: true, userId });
+
+                return result.refused ? { refused: result.refused.map((entry) => entry.id) } : true;
+            },
+            existingUserIds: (userIds) => Promise.resolve(new Set(userIds.filter((userId) => userId !== "usr_op"))),
+        };
+
+        await expect(runAccountErasureSweep(database, sweepPorts)).resolves.toMatchObject({ leftForOperator: [{ organizationIds: [solo], userId: "usr_op" }] });
         expect(erased).toStrictEqual([]);
+        await expect(rows("members", { userId: "usr_op" })).resolves.toHaveLength(2);
+
+        // The operator promotes the peer; the next sweep erases usr_op like any other orphan.
+        await expect(operatorPromoteOwner.handler(context(), { organizationId: solo as never, userId: "usr_op_peer" })).resolves.toStrictEqual({
+            memberId: peer,
+            promoted: true,
+        });
+        await expect(rows("auditLog", { action: "member.set-role", organizationId: solo })).resolves.toMatchObject([
+            { actorUserId: OPERATOR_ACTOR, target: `${peer} → owner` },
+        ]);
+
+        await runAccountErasureSweep(database, sweepPorts);
+
+        expect(erased).toStrictEqual(["usr_op"]);
+        await expect(rows("members", { userId: "usr_op" })).resolves.toStrictEqual([]);
+        await expect(rows("members", { organizationId: solo })).resolves.toMatchObject([{ role: "owner", userId: "usr_op_peer" }]);
+        await expect(rows("auditLog", { actorUserId: "usr_op" })).resolves.toStrictEqual([]);
+        await expect(rows("auditLog", { action: "member.set-role", organizationId: team })).resolves.toMatchObject([{ target: `${DELETED_ACTOR} → member` }]);
+        await expect(rows("auditLog", { action: OWNERLESS_ACTION, organizationId: solo })).resolves.toStrictEqual([]);
+    });
+
+    it("refuses to promote a user who is not a member, and writes nothing", async () => {
+        const organization = await organizationSeeder(Date.now());
+        const lone = await organization("Lone");
+
+        await expect(operatorPromoteOwner.handler(context(), { organizationId: lone as never, userId: "usr_stranger" })).rejects.toThrow(
+            "not a member of this organization",
+        );
+        await expect(rows("members", { organizationId: lone })).resolves.toStrictEqual([]);
+        await expect(rows("auditLog", { organizationId: lone })).resolves.toStrictEqual([]);
     });
 });
 

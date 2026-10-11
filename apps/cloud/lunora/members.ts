@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
-import { internalQuery, mutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRoleForUser, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -116,4 +116,50 @@ export const setRole = mutation
             organizationId: caller.organizationId,
             target: setRoleAuditTarget(target._id, newRole),
         });
+    });
+
+/** The audit actor of an ownership change made through the operator path. */
+export const OPERATOR_ACTOR = "system:operator";
+
+/**
+ * Make an existing member of an organization one of its owners, through the
+ * operator path (`POST /v1/organizations/owners`, admin token only). It is how
+ * an operator resolves a removal refused because the user is the organization's
+ * only owner: promote another member, then remove the user again.
+ *
+ * Refused when the organization does not exist or the user is not a member of
+ * it. Demotes no one. A member who already is an owner is left as they are, and
+ * nothing is written. The change is audited as `member.set-role` by
+ * {@link OPERATOR_ACTOR}, with the membership row as the target. SYSTEM only.
+ */
+export const operatorPromoteOwner = internalMutation
+    .input({ organizationId: v.id("organizations"), userId: boundedString(LIMITS.id) })
+    .mutation(async ({ ctx: context, args: { organizationId, userId } }): Promise<{ memberId: string; promoted: boolean }> => {
+        const organization = await context.db.organizations.get(organizationId);
+
+        if (!organization) {
+            throw new LunoraError("NOT_FOUND", "organization not found");
+        }
+
+        const { page } = await context.db.members.findMany({ limit: 1, where: { organizationId, userId } });
+        const [membership] = page;
+
+        if (!membership) {
+            throw new LunoraError("NOT_FOUND", "the user is not a member of this organization");
+        }
+
+        if (membership.role === "owner") {
+            return { memberId: membership._id, promoted: false };
+        }
+
+        await context.db.patch(membership._id, { role: "owner" });
+        await context.db.insert("auditLog", {
+            action: "member.set-role",
+            actorUserId: OPERATOR_ACTOR,
+            createdAt: context.now,
+            organizationId,
+            target: setRoleAuditTarget(membership._id, "owner"),
+        });
+
+        return { memberId: membership._id, promoted: true };
     });
