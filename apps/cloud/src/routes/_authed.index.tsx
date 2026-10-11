@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
+import { AccountSection } from "../client/AccountSection";
 import { OrganizationList } from "../client/OrganizationList";
 import { preload } from "../ssr/loader";
 
@@ -11,6 +12,7 @@ const OrganizationsPage = (): ReactElement => {
 
     return (
         <OrganizationList
+            account={<AccountSection />}
             onSelect={(organizationId) => {
                 void navigate({ params: { organizationId }, to: "/orgs/$organizationId" });
             }}
@@ -23,7 +25,8 @@ const OrganizationsPage = (): ReactElement => {
 /**
  * Organization picker — the signed-in landing page. Both queries it renders are
  * resolved on the edge, so the list arrives in the first byte instead of after a
- * WebSocket round trip.
+ * WebSocket round trip. Being the one signed-in screen outside any org, it also
+ * carries the account actions (export your data, delete your account).
  */
 export const Route = createFileRoute("/_authed/")({
     component: OrganizationsPage,

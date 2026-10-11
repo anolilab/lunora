@@ -702,14 +702,14 @@ const readDevVariable = async (key: string): Promise<string | undefined> => {
 };
 
 /**
- * Seed a build by driving the real GitHub App flow end to end: the `installation`
- * webhook records the install, the org claims it, and a `push` webhook on the
- * project's repo is what actually creates the build row.
+ * Seed a build by driving the GitHub App flow: the `installation` webhook records
+ * the install, the org claims it, and a `push` webhook on the project's repo is what
+ * actually creates the build row.
  *
  * `builds:recordPush` is an `internalMutation` reachable only from the
  * signature-verified webhook route, and it refuses a push whose installation the org
- * has not claimed — so all three steps are required, and none of them can be
- * short-circuited. Skipped (not fatal) when `GITHUB_WEBHOOK_SECRET` is absent.
+ * has not claimed — so all three steps are required. Only the claim cannot go
+ * through a real surface (see the comment at that step). Skipped (not fatal) when `GITHUB_WEBHOOK_SECRET` is absent.
  */
 const seedBuild = async (
     cookie: string,
@@ -746,7 +746,19 @@ const seedBuild = async (
         },
     );
 
-    await rpc<unknown>(cookie, "github_installations:claim", { installationId, organizationId });
+    // The org claims it. `github_installations:bind` is internal — only the signed setup
+    // callback reaches it, and that needs a linked GitHub account that installed the
+    // App, which no local seed has — so the bind is written the way `seedBuildLogs`
+    // writes its rows: through the local D1, never a remote one.
+    try {
+        await executeLocalSql(
+            `UPDATE githubInstallations SET organizationId='${organizationId}', claimedAt=${String(Date.now())} WHERE installationId=${String(installationId)};`,
+        );
+    } catch {
+        console.info(`  build       (skipped — \`wrangler d1 execute --local\` failed)`);
+
+        return;
+    }
 
     const response = await postSignedWebhook(
         "/v1/github/webhook",
