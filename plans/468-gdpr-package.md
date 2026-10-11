@@ -623,9 +623,18 @@ known up front:
        `handlerFile` as a relative path into `node_modules/<pkg>/index.d`. Nothing reads it today, but
        it is wrong. A codegen follow-up should label such a handler by its package name instead.
 
-- Still open, not run: the `fflate` `AsyncZipDeflate` check on Workers, the PDF library check, the Node
-  signed-URL check, and the DEFLATE CPU measurement. Each needs a workerd run or a real export; none is
-  claimed as done.
+- **ZIP library: checked in Node, not on Workers.** `fflate` 0.8.3 (zero dependencies) writes a valid
+  DEFLATE ZIP through a streaming `Zip` with `AsyncZipDeflate`. A 1.2 MB JSON file compressed to 52 KB, and
+  `unzip -t` passed. The Workers run is still open.
+- **PDF library: a decision is needed, and no candidate is verified on Workers.** Candidates from npm metadata:
+    - `pdf-lib` 1.17.1 (MIT). Pure-JS dependencies. Last published 2022-05-12, so maintenance is a risk.
+    - `pdfkit` 0.20.2 (MIT). Recently maintained, but Node-oriented, and it depends on `fontkit`.
+    - `jspdf` 4.2.1 (MIT). Browser-first.
+
+    Whichever is chosen must write a fixed creation date, or the export bytes will differ between runs.
+
+- Still open, not run: the Workers runs for the ZIP and PDF choices, the Node signed-URL check, and the
+  DEFLATE CPU measurement. Each needs a workerd run or a real export; none is claimed as done.
 - The legal and tax review (§10) is the user's to complete. Phase 0 cannot close until it is.
 
 **Test strategy:**
