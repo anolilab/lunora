@@ -45,12 +45,21 @@ Both routes are session-authenticated (`auth: "session"`) and org-scoped.
 
 - Body `{ organizationId, projectId, slug, values: { vars: Record<string,string>, secrets: Record<string,string> } }`.
 - Owner or admin only (checked against the caller's membership).
-- 200 `{ deploymentId, url?, generated, kept, recorded }`. `generated` lists the secrets
-  the install created; `kept` lists existing secrets it left as they were. Values are
-  never returned. `recorded` is false when the release went live but the install row
-  could not be marked live (the release itself is not rolled back).
-- Failures carry `{ error, field?, code? }` and the status from one table,
-  `STATUS_FOR` in `src/deploy/routes/catalog.ts`:
+- A refusal before the install starts is plain JSON with its status: 400 for a body that
+  is not valid, 401 when no one is signed in, 403 unless the caller is an owner or admin,
+  500 when a binding or key is missing. Nothing is written in these cases.
+- Once the install starts the response is 200 `application/x-ndjson`: one JSON object per
+  line. Each step is `{ event: "phase", phase }`, where `phase` is `claimed`,
+  `secrets-stored`, `release-started` or `live`, in that order. The stream ends with exactly
+  one of:
+    - `{ event: "result", deploymentId, url?, generated, kept, recorded }`. `generated` lists
+      the secrets the install created; `kept` lists existing secrets it left as they were.
+      Values are never returned. `recorded` is false when the release went live but the
+      install row could not be marked live (the release itself is not rolled back).
+    - `{ event: "error", error, field?, code?, status }`, where `status` is the one the
+      failure would have had as a plain response.
+- Failures carry `{ error, field?, code? }`; the status comes from one table, `STATUS_FOR`
+  in `src/deploy/routes/catalog.ts`:
 
     | kind           | status | when                                                                              |
     | -------------- | ------ | --------------------------------------------------------------------------------- |
