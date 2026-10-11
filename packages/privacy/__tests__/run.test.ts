@@ -65,6 +65,7 @@ const memoryRequests = (): RequestStore & { events: string[]; rows: Map<string, 
         events,
         findOpen: async () => undefined,
         get: async (id) => rows.get(id),
+        listOpen: async () => [...rows.values()],
         insert: async (record) => {
             rows.set(record.id, record);
         },

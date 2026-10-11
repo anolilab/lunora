@@ -32,6 +32,8 @@ interface RequestStore {
     findOpen: (subjectId: string, type: RequestType) => Promise<RequestRecord | undefined>;
     get: (id: string) => Promise<RequestRecord | undefined>;
     insert: (record: RequestRecord) => Promise<void>;
+    /** Every request that is not yet terminal, for the deadline sweep. */
+    listOpen: () => Promise<ReadonlyArray<RequestRecord>>;
     update: (id: string, patch: Partial<Omit<RequestRecord, "id">>) => Promise<void>;
 }
 

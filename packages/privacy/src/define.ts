@@ -12,7 +12,7 @@ import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
 import type { RequestStatus } from "./lifecycle";
-import { transition } from "./lifecycle";
+import { effectiveDueAt,isOverdue, transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
@@ -58,6 +58,8 @@ interface Privacy {
     readonly requestExport: (input: { subjectId: string }) => Promise<RequestRecord>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
     readonly runExport: (requestId: string) => Promise<ExportOutcome>;
+    /** The deadline sweep: requests due within seven days, and those already overdue. Run it from a cron. */
+    readonly tick: () => Promise<{ readonly approaching: ReadonlyArray<RequestRecord>; readonly overdue: ReadonlyArray<RequestRecord> }>;
     /** The durable handlers the app registers with `defineWorkflow`. Each step is memoised by name. */
     readonly workflows: {
         readonly erasureHandler: (context: PrivacyWorkflowContext) => Promise<void>;
@@ -68,6 +70,8 @@ interface Privacy {
 const DEFAULT_GRACE_DAYS = 14;
 const DEFAULT_DRAIN_BUDGET_DAYS = 3;
 const DEFAULT_FRESH_AGE_MS = 24 * 60 * 60 * 1000;
+/** Warn an operator this long before a request's deadline. */
+const DEADLINE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Bind the config into the API. Pure construction: nothing runs until a method is called. */
 const definePrivacy = (config: PrivacyConfig): Privacy => {
@@ -220,6 +224,19 @@ const definePrivacy = (config: PrivacyConfig): Privacy => {
             const record = await requireRequest(requestId);
 
             return runExport(contextFor(record), config.datasets, record);
+        },
+
+        tick: async () => {
+            const now = config.now().getTime();
+            const open = await config.store.listOpen();
+            const overdue = open.filter((record) => isOverdue(record.receivedAt, record.extendedDueAt !== undefined, record.status, config.now()));
+            const approaching = open.filter((record) => {
+                const due = effectiveDueAt(record.receivedAt, record.extendedDueAt !== undefined).getTime();
+
+                return due - now <= DEADLINE_WARNING_MS && due >= now;
+            });
+
+            return { approaching, overdue };
         },
 
         workflows: { erasureHandler, exportHandler },

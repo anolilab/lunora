@@ -21,6 +21,7 @@ export const memoryRequests = (): RequestStore & { events: string[]; rows: Map<s
         insert: async (record) => {
             rows.set(record.id, record);
         },
+        listOpen: async () => [...rows.values()].filter((row) => row.status !== "completed" && row.status !== "cancelled"),
         rows,
         update: async (id, patch) => {
             const existing = rows.get(id);

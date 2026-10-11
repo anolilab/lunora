@@ -242,6 +242,10 @@ interface Privacy {
     }) => Promise<RequestRecord>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
     readonly runExport: (requestId: string) => Promise<ExportOutcome>;
+    readonly tick: () => Promise<{
+        readonly approaching: ReadonlyArray<RequestRecord>;
+        readonly overdue: ReadonlyArray<RequestRecord>;
+    }>;
     readonly workflows: {
         readonly erasureHandler: (context: PrivacyWorkflowContext) => Promise<void>;
         readonly exportHandler: (context: PrivacyWorkflowContext) => Promise<void>;
@@ -322,6 +326,7 @@ interface RequestStore {
     findOpen: (subjectId: string, type: RequestType) => Promise<RequestRecord | undefined>;
     get: (id: string) => Promise<RequestRecord | undefined>;
     insert: (record: RequestRecord) => Promise<void>;
+    listOpen: () => Promise<ReadonlyArray<RequestRecord>>;
     update: (id: string, patch: Partial<Omit<RequestRecord, "id">>) => Promise<void>;
 }
 ```
