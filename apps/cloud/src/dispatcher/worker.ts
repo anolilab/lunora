@@ -3,6 +3,7 @@ import type { AnalyticsEngineDatasetLike } from "../targets/cloudflare-wfp/analy
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../targets/cloudflare-wfp/analytics";
 import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
 import { createCustomDomainResolver, createPlanResolver, resolveTenant, SERVABLE_PLANS } from "../targets/cloudflare-wfp/route";
+import type { MisconfiguredSetting } from "../telemetry/platform-metrics";
 import { recordControlPlaneUnconfigured, recordDispatch, recordRecursion } from "../telemetry/platform-metrics";
 import type { Lineage } from "./lineage";
 import { formatLineageParameter, LINEAGE_HEADER, MAX_LINEAGE_DEPTH, newLineageRoot, readLineage } from "./lineage";
@@ -85,8 +86,21 @@ const SUSPENDED = (): Response => new Response("this deployment is suspended —
  */
 const enforced = (env: DispatcherEnv): boolean => env.LUNORA_ENVIRONMENT !== "development";
 
-/** Set once per isolate: the refusal is logged once, the counter is written on every refusal. */
-let unconfiguredLogged = false;
+/** The settings already logged in this isolate. Each is logged once; the counter is written on every refusal. */
+const loggedMisconfigurations = new Set<MisconfiguredSetting>();
+
+/**
+ * Count one request refused for a missing setting, and log the setting once per isolate. A missing
+ * setting is a misconfiguration, not a forged request, so it never lands on the `forged` outcome.
+ */
+const refuseMisconfigured = (env: DispatcherEnv, setting: MisconfiguredSetting, log: string): void => {
+    if (!loggedMisconfigurations.has(setting)) {
+        loggedMisconfigurations.add(setting);
+        console.error(`[dispatcher] ${log} for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
+    }
+
+    recordControlPlaneUnconfigured(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default", setting });
+};
 
 /**
  * Trim trailing slashes before joining a path onto a base URL.
@@ -335,12 +349,7 @@ const buildResolvers = (env: DispatcherEnv): ControlPlaneState => {
  * the operator needs nothing else to fix it.
  */
 const controlPlaneUnconfigured = (env: DispatcherEnv, missing: string): Response => {
-    if (!unconfiguredLogged) {
-        unconfiguredLogged = true;
-        console.error(`[dispatcher] refusing all traffic: ${missing} not set for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
-    }
-
-    recordControlPlaneUnconfigured(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default" });
+    refuseMisconfigured(env, "control_plane", `refusing all traffic: ${missing} not set`);
 
     return refuse("control_plane_unconfigured", `${missing} not set for this environment`, { retryAfter: "30" });
 };
@@ -432,8 +441,7 @@ const admitLineage = async (
     // (plan 475 §4.3). Ordinary traffic carries no header, so it is unaffected;
     // refusing all traffic on a missing secret would turn a typo into an outage.
     if (header !== null && !env.LUNORA_LINEAGE_SECRET && enforced(env)) {
-        console.error(`[dispatcher] refusing a lineage header: LUNORA_LINEAGE_SECRET not set for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
-        recordRecursion(env.PLATFORM_METRICS, { cell, depth: 0, outcome: "forged" });
+        refuseMisconfigured(env, "lineage_secret", "refusing a lineage header: LUNORA_LINEAGE_SECRET not set");
 
         return refuse("lineage_unverifiable", "LUNORA_LINEAGE_SECRET not set for this environment", { retryAfter: "30" });
     }

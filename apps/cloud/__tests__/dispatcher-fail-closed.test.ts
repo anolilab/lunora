@@ -84,6 +84,13 @@ const configured = (overrides: Overrides = {}): Overrides => {
 /** The counter rows only: the dispatcher also writes a `dispatch` row for every request, so count by kind. */
 const refusalRows = (): unknown[] => writeDataPoint.mock.calls.map(([point]) => point).filter((point) => point?.blobs?.[0] === "control_plane_unconfigured");
 
+/** The outcome of every `recursion` row, so a test can assert that none is `forged`. */
+const recursionOutcomes = (): unknown[] =>
+    writeDataPoint.mock.calls
+        .map(([point]) => point)
+        .filter((point) => point?.blobs?.[0] === "recursion")
+        .map((point) => point?.blobs?.[2]);
+
 afterEach(() => {
     tenantFetch.mockClear();
     writeDataPoint.mockClear();
@@ -150,7 +157,9 @@ describe("dispatcher refuses without a control plane outside development", () =>
             environment({ CONTROL_PLANE_URL: undefined, CONTROL_PLANE_TOKEN: undefined, LUNORA_CELL: "eu-1", LUNORA_ENVIRONMENT: "production" }),
         );
 
-        expect(refusalRows()).toStrictEqual([{ blobs: ["control_plane_unconfigured", "eu-1"], doubles: [1], indexes: ["control_plane_unconfigured"] }]);
+        expect(refusalRows()).toStrictEqual([
+            { blobs: ["control_plane_unconfigured", "eu-1", "control_plane"], doubles: [1], indexes: ["control_plane_unconfigured"] },
+        ]);
     });
 
     it("logs the refusal once per isolate, not once per request", async () => {
@@ -197,9 +206,28 @@ describe("dispatcher refuses a lineage header it cannot verify outside developme
         const response = await dispatcher.fetch(withLineage(), environment(configured({ LUNORA_ENVIRONMENT: "staging", LUNORA_LINEAGE_SECRET: undefined })));
 
         expect(response.status).toBe(503);
+        expect(response.headers.get("retry-after")).toBe("30");
         await expect(response.json()).resolves.toMatchObject({ error: "lineage_unverifiable" });
         expect(tenantFetch).not.toHaveBeenCalled();
         expect(error).toHaveBeenCalledWith(expect.stringContaining("LUNORA_LINEAGE_SECRET"));
+
+        error.mockRestore();
+    });
+
+    it("counts a missing secret as a misconfiguration, not a forged header, and logs it once per isolate", async () => {
+        const dispatcher = await loadDispatcher();
+        const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const staging = environment(configured({ LUNORA_ENVIRONMENT: "staging", LUNORA_LINEAGE_SECRET: undefined }));
+
+        await dispatcher.fetch(withLineage("a.lunora.app"), staging);
+        await dispatcher.fetch(withLineage("b.lunora.app"), staging);
+
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(refusalRows()).toStrictEqual([
+            { blobs: ["control_plane_unconfigured", "default", "lineage_secret"], doubles: [1], indexes: ["control_plane_unconfigured"] },
+            { blobs: ["control_plane_unconfigured", "default", "lineage_secret"], doubles: [1], indexes: ["control_plane_unconfigured"] },
+        ]);
+        expect(recursionOutcomes()).not.toContain("forged");
 
         error.mockRestore();
     });
