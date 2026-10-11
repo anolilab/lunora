@@ -334,13 +334,6 @@ interface NotificationChannelBody {
     secret?: string;
 }
 
-/**
- * `POST /v1/notification-channels` — create a lifecycle notification channel. A
- * webhook channel gets a freshly generated signing key, returned here once; a
- * Telegram channel takes its bot token. Either secret is sealed at the edge with
- * SECRET_ENCRYPTION_KEY before it reaches the mutation, so the database holds only
- * ciphertext. Owner/admin gating happens in `notifications.createChannel`.
- */
 /** Seal a channel's secret at the edge. A response to return instead when the key is missing or sealing fails. */
 const sealChannelSecret = async (
     environment: RouterEnv,
@@ -361,6 +354,13 @@ const sealChannelSecret = async (
     }
 };
 
+/**
+ * `POST /v1/notification-channels` — create a lifecycle notification channel. A
+ * webhook channel gets a freshly generated signing key, returned here once; a
+ * Telegram channel takes its bot token. Either secret is sealed at the edge with
+ * SECRET_ENCRYPTION_KEY before it reaches the mutation, so the database holds only
+ * ciphertext. Owner/admin gating happens in `notifications.createChannel`.
+ */
 const handleNotificationChannelRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = environment.__lunoraCtx;
 
