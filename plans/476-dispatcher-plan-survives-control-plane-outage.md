@@ -47,25 +47,26 @@ Net effect: warm isolates serve through an outage of up to about `TTL + 5 min`; 
 
 1. **The control plane is the only writer; the dispatcher only reads.** A KV namespace holds one record per script,
    `plan:<scriptName>` = `{ plan, protected, recursion, verifiedAt }`. The control plane writes it:
-   - **on every change** of those facts (plan change, suspension, lift, protection or recursion change), and
-   - **on a refresh sweep**: the hourly tick rewrites any record whose `verifiedAt` is older than 20 hours, so a steady
-     tenant is written about once a day.
+    - **on every change** of those facts (plan change, suspension, lift, protection or recursion change), and
+    - **on a refresh sweep**: the hourly tick rewrites any record whose `verifiedAt` is older than 20 hours, so a steady
+      tenant is written about once a day.
 
-   The dispatcher never writes. Writing from every isolate in every colo is wrong: each isolate would have to read first to
-   know whether anything changed, and the write rate would scale with isolates, not with tenants.
-   *Rejected:* a Durable Object per script (a hot-key and cost problem to protect against a rare outage); Cache API (per colo,
-   evicts); a D1 read from the dispatcher (D1 fails in the same outage).
+    The dispatcher never writes. Writing from every isolate in every colo is wrong: each isolate would have to read first to
+    know whether anything changed, and the write rate would scale with isolates, not with tenants.
+    _Rejected:_ a Durable Object per script (a hot-key and cost problem to protect against a rare outage); Cache API (per colo,
+    evicts); a D1 read from the dispatcher (D1 fails in the same outage).
+
 2. **Maximum staleness: 48 hours** for non-suspended records, a dispatcher var (`PLAN_MAX_STALE_HOURS`).
-   *Decided.* Why 48 and not another number:
-   - The refresh runs every 20 hours, so one missed sweep (the record reaches 40 hours) is still inside the bound. 36 hours
-     would leave no margin for a missed sweep; 72 would tolerate two.
-   - What the bound protects against is a *downgrade or cap change* not taking effect during an outage. Suspensions are
-     exempt: they are stored indefinitely, so the money case never depends on the bound. A lift cannot be written during an
-     outage and keeps refusing, which is the fail-closed direction. So the bound only governs how long a downgrade can lag an
-     outage, and two days is the longest lag we accept for that.
-   - Changing it is a dispatcher var, not a deploy of code.
-   *Rejected:* unbounded staleness (a downgrade during a long outage never takes effect); 24 hours (one missed sweep would
-   start refusing paying tenants).
+   _Decided._ Why 48 and not another number:
+    - The refresh runs every 20 hours, so one missed sweep (the record reaches 40 hours) is still inside the bound. 36 hours
+      would leave no margin for a missed sweep; 72 would tolerate two.
+    - What the bound protects against is a _downgrade or cap change_ not taking effect during an outage. Suspensions are
+      exempt: they are stored indefinitely, so the money case never depends on the bound. A lift cannot be written during an
+      outage and keeps refusing, which is the fail-closed direction. So the bound only governs how long a downgrade can lag an
+      outage, and two days is the longest lag we accept for that.
+    - Changing it is a dispatcher var, not a deploy of code.
+      _Rejected:_ unbounded staleness (a downgrade during a long outage never takes effect); 24 hours (one missed sweep would
+      start refusing paying tenants).
 3. **Lookup order:** isolate cache → control plane → KV record (if younger than 48 h, or any age if `suspended`) →
    `UNAVAILABLE_PLAN`.
 4. **KV failure equals current behaviour.** If KV is unreachable, refuse as today.
@@ -99,12 +100,12 @@ Not applicable. Dispatcher-internal and Cloud-only; no `ctx.*` surface or framew
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 0 | Measure: count cold-isolate lookups during a staged outage; read KV's current propagation figure | Recorded numbers in this file |
-| 1 | A, C with unit tests for every row of the §3 contract | `pnpm --filter @lunora/cloud run test` green; a test fails if the persisted-suspension refusal is removed |
-| 2 | B with the write-volume estimate recorded | Writes per day measured on staging against the tenant count; estimate and KV plan limit recorded |
-| 3 | D and E | Staging drill output recorded here |
+| Phase | Work                                                                                             | Gate                                                                                                      |
+| ----- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| 0     | Measure: count cold-isolate lookups during a staged outage; read KV's current propagation figure | Recorded numbers in this file                                                                             |
+| 1     | A, C with unit tests for every row of the §3 contract                                            | `pnpm --filter @lunora/cloud run test` green; a test fails if the persisted-suspension refusal is removed |
+| 2     | B with the write-volume estimate recorded                                                        | Writes per day measured on staging against the tenant count; estimate and KV plan limit recorded          |
+| 3     | D and E                                                                                          | Staging drill output recorded here                                                                        |
 
 ## 8. Risks & STOP conditions
 
@@ -112,7 +113,7 @@ Not applicable. Dispatcher-internal and Cloud-only; no `ctx.*` surface or framew
 - **Risk:** write volume. Writes per day ≈ tenants (refresh) + fact changes. At 10,000 tenants that is about 10,000 writes a
   day; check against the KV plan and its current pricing before enabling. If too high, lengthen the refresh and the bound
   together (keeping the bound at least 2 × the refresh interval); do not drop the refresh.
-- **Risk:** the refresh sweep fails for a day and the bound is close. *Mitigate:* the counter in D fires before the bound, and
+- **Risk:** the refresh sweep fails for a day and the bound is close. _Mitigate:_ the counter in D fires before the bound, and
   the sweep retries.
 - **Perf watch:** a warm isolate must not read KV at all. Confirm with a before/after count of KV reads per request on staging.
 

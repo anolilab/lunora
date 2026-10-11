@@ -49,21 +49,21 @@ Size: **L**. Depends on a probe that could make the design smaller or larger.
 ## 4. Design decisions
 
 1. **Services and connectors are two different things, and the loop rule differs.**
-   - A **service** is a sibling Worker owned by the same project. It may call its own siblings, so cycles must be refused.
-   - A **connector** is a leaf: a Worker that exposes entrypoints and holds no service bindings back to tenant Workers. It cannot call a tenant, so it
-     cannot close a loop through one. Connectors need no per-call depth.
+    - A **service** is a sibling Worker owned by the same project. It may call its own siblings, so cycles must be refused.
+    - A **connector** is a leaf: a Worker that exposes entrypoints and holds no service bindings back to tenant Workers. It cannot call a tenant, so it
+      cannot close a loop through one. Connectors need no per-call depth.
 2. **Static acyclicity for services.** At deploy time, build the directed graph of declared service bindings for the project and refuse any cycle. Bindings
    are declared in config, not computed, so the check is complete for service-to-service calls.
-   *Rejected:* a runtime depth counter carried in each call (the caller computes it, so a tenant can forge it, and it cannot see a direct binding call).
-   *Rejected:* refusing service bindings on WfP entirely (safe, but leaves the migration case unmet).
+   _Rejected:_ a runtime depth counter carried in each call (the caller computes it, so a tenant can forge it, and it cannot see a direct binding call).
+   _Rejected:_ refusing service bindings on WfP entirely (safe, but leaves the migration case unmet).
 3. **Connectors are owned by the org. Decided.** A connector belongs to one organisation, deployed once by an org admin, and granted to named projects in that org.
    The grant is a row, so revoking it is central and does not need a code change in each project.
-   *Why per org:* the data a connector touches (the org's CRM, its ERP credentials) is the org's. Ownership by the org is also the only model that matches the
+   _Why per org:_ the data a connector touches (the org's CRM, its ERP credentials) is the org's. Ownership by the org is also the only model that matches the
    secrets story: the org's admin sets the secrets, and the org's projects never see them.
-   *Why not platform-curated first:* curation is a distribution question, not an ownership one. A platform-curated template can later be *installed into* an
+   _Why not platform-curated first:_ curation is a distribution question, not an ownership one. A platform-curated template can later be _installed into_ an
    org through the existing catalog flow (`apps/cloud/src/catalog/`), which produces an org-owned connector. Building curation first would mean the platform
    owns credentials it does not hold.
-   *Rejected:* binding a connector by name in each project's `wrangler.jsonc` (the org could not revoke it centrally).
+   _Rejected:_ binding a connector by name in each project's `wrangler.jsonc` (the org could not revoke it centrally).
 4. **Connector secrets stay in the sealed store.** Set and rotate through `apps/cloud/src/secrets/`; the connector reads them through a binding it alone holds.
    Values are never listed or returned.
 5. **WfP support is conditional on Phase 0.** If a dispatch-namespace Worker cannot hold a service binding to a sibling in the same namespace, the WfP row stays
@@ -75,6 +75,7 @@ Size: **L**. Depends on a probe that could make the design smaller or larger.
 ## 5. Workstreams
 
 **Phase 0 — result (2026-10-11): partial.**
+
 - **BYO path, verified on the Lunora account.** A caller Worker binds a callee Worker with `services: [{ binding: "CALLEE", service: "pcheck-svc-callee", entrypoint: "CalleeApi" }]` and gets a typed RPC result (`[{"id":"c1","name":"Example"}]`). Named entrypoints work; a default export with only an RPC class fails the deploy with error 10068 ("no registered event handlers"), so the callee also needs a `fetch`. Both probe Workers were deleted afterwards.
 - **WfP questions Q1 and Q2: blocked** by the account (no dispatch namespaces, error 10121). See plan 477 §5.
 - **Q4 (tail attribution), answered on the BYO path:** the callee's tail logs `CalleeApi.ping - Ok` and its own `console.log`, but do not name the calling Worker. A caller must be identified by the caller's own logs or a header it passes; the callee cannot attribute the call on its own.
@@ -82,6 +83,7 @@ Size: **L**. Depends on a probe that could make the design smaller or larger.
 - **Plan 457 is restored and mostly shipped** (`plans/457-service-bindings.md`). The typed-service snapshot it left open is implemented by #1024, so this plan's framework dependency is in place.
 
 **Phase 0 — probe (S, staging account), original questions:** Each answer recorded in this file:
+
 - Q1: can a dispatch-namespace user Worker declare a service binding to another script in the same namespace, at upload time?
 - Q2: can it bind to a script in a different namespace or an account-level Worker?
 - Q3: can the binding carry `props` (fixed per binding), enough to tell a connector which org it serves?
@@ -107,30 +109,30 @@ artifact and at what hash.
 
 ## 6. Platform parity
 
-| Feature | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` | Notes |
-| ------- | ---------------- | -------------------------- | ----------- | ----- |
+| Feature                   | `cloudflare-wfp`                         | `cloudflare-workers` (BYO)                                                                     | `celld-vps`                                                  | Notes                                                           |
+| ------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------- |
 | Service binding (sibling) | unsupported until Q1 passes, then native | unsupported (no namespace; a Worker in the customer account could bind natively, to be probed) | unsupported (one fleet per box, `provision-contract.ts:336`) | Framework side is plan 457; the cloud row is what changes here. |
-| Org connector (leaf) | depends on Q1/Q2 | unsupported | unsupported | A cloud feature; stated so the matrix cannot drift. |
+| Org connector (leaf)      | depends on Q1/Q2                         | unsupported                                                                                    | unsupported                                                  | A cloud feature; stated so the matrix cannot drift.             |
 
 Framework `ctx.*` is unchanged; plan 457 owns the `ctx`/client surface.
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 0 | Probe Q1–Q4 | Answers recorded; STOP per §8 if Q1 is no |
-| 1 | A | Cycle tests green; a deploy with a cycle is refused before provisioning (fake driver) |
-| 2 | B | A staging project with two sibling Workers calls each other in an acyclic direction end to end |
-| 3 | C, D | Secret-leak test green; grant revocation exercised on staging |
-| 4 | E | Studio and CLI flows reviewed end to end; matrix row matches the code |
+| Phase | Work        | Gate                                                                                           |
+| ----- | ----------- | ---------------------------------------------------------------------------------------------- |
+| 0     | Probe Q1–Q4 | Answers recorded; STOP per §8 if Q1 is no                                                      |
+| 1     | A           | Cycle tests green; a deploy with a cycle is refused before provisioning (fake driver)          |
+| 2     | B           | A staging project with two sibling Workers calls each other in an acyclic direction end to end |
+| 3     | C, D        | Secret-leak test green; grant revocation exercised on staging                                  |
+| 4     | E           | Studio and CLI flows reviewed end to end; matrix row matches the code                          |
 
 ## 8. Risks & STOP conditions
 
 - **STOP** if Phase 0 Q1 is no. WfP stays unsupported for services; ship A and the BYO path if wanted, and re-plan connectors on celld.
 - **STOP** if a connector grant requires a platform-wide rebuild. The grant must be a per-project binding change, not a fleet operation.
 - **Risk:** a connector becomes an unbounded egress path. A service call bypasses the dispatcher, but a connector's own `fetch()` does not, provided it runs in a namespace
-  with an Outbound Worker. *Mitigate:* a connector is placed only in a namespace with an Outbound Worker (plan 477 covers its `fetch()`); a connector with none is refused at grant time.
-- **Risk:** the cycle check misses a cycle through a Durable Object or queue. *Mitigate:* the docs state the check covers declared service bindings only.
+  with an Outbound Worker. _Mitigate:_ a connector is placed only in a namespace with an Outbound Worker (plan 477 covers its `fetch()`); a connector with none is refused at grant time.
+- **Risk:** the cycle check misses a cycle through a Durable Object or queue. _Mitigate:_ the docs state the check covers declared service bindings only.
 - **Perf watch:** the cycle check runs at deploy only; measure on the largest declared graph in the test fixtures.
 
 ## 9. Open questions — decided

@@ -61,14 +61,14 @@ Not applicable to the framework; no `ctx.*` surface and no binding. On BYO-Cloud
 
 ## 8. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 1 | A1, A2, A3 | Copy reviewed; the Access card link tested on staging; the deploy hint shows once per project |
-| Later | D, with plan 166 | Its own plan, when plan 166 has an identity model for end users |
+| Phase | Work             | Gate                                                                                          |
+| ----- | ---------------- | --------------------------------------------------------------------------------------------- |
+| 1     | A1, A2, A3       | Copy reviewed; the Access card link tested on staging; the deploy hint shows once per project |
+| Later | D, with plan 166 | Its own plan, when plan 166 has an identity model for end users                               |
 
 ## 9. Risks & STOP conditions
 
-- **Risk:** customers assume a gate exists because previews have one. *Mitigate:* §5's copy and the preview notice; A1 is the first deliverable.
+- **Risk:** customers assume a gate exists because previews have one. _Mitigate:_ §5's copy and the preview notice; A1 is the first deliverable.
 - **STOP** if a customer's written requirement is company-wide group rules before plan 166 lands. Then the decision is revisited, not patched with option B or C.
 
 ## 10. Open questions — decided

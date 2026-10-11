@@ -57,11 +57,13 @@ Size: **M** for the BYO path, **L or blocked** for WfP.
 ## 5. Workstreams
 
 **Phase 0 — result (2026-10-11).**
+
 - **Q2 (BYO): verified positive on the Lunora account.** A plain Worker deployed with a `workflows` binding (`class_name` exported, `WorkflowEntrypoint`). An instance ran to `Completed` with `step.do` and `step.sleep` (`Last Successful Step: finish-1`, output `"hi"`), in about one second. The `cloudflare-workers` refusal at `provision-contract.ts:438` is **stale**; workstream A is unblocked. The probe Worker and its workflow were deleted afterwards.
 - **Q1 (WfP): blocked** by the account (no dispatch namespaces, error 10121).
 - **Q3 (celld): not run.** No celld binary is installed here, and this base has no install script for it.
 
 **Phase 0 — probe (S, two accounts), original questions.**
+
 - Q1 (WfP): can a Worker uploaded into a dispatch namespace declare a `workflows` binding with a class export? Record the exact error if not.
 - Q2 (BYO): can a plain Worker in a customer account declare a `workflows` binding, and does the provision box create the Workflow on deploy?
 - Q3 (celld): does a workflow run to completion with `step.do`, `step.sleep` and `waitForEvent` on the box?
@@ -79,29 +81,29 @@ matches; a fake driver receives the workflow resource; teardown removes it with 
 
 ## 6. Platform parity
 
-| Feature | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` | Notes |
-| ------- | ---------------- | -------------------------- | ----------- | ----- |
-| Durable workflow (`workflows[]`) | unsupported until Q1 passes | native if Q2 passes, else unsupported | native (celld) | celld matrix: `packages/platform/src/capabilities/celld.ts:227-229` |
-| Step rollback (`rollbackOptions`) | unsupported | unsupported | unsupported | celld: "step rollbackOptions are not implemented" |
-| Scheduled workflows (`schedules`) | unsupported | unsupported | unsupported | not verified against celld |
+| Feature                           | `cloudflare-wfp`            | `cloudflare-workers` (BYO)            | `celld-vps`    | Notes                                                               |
+| --------------------------------- | --------------------------- | ------------------------------------- | -------------- | ------------------------------------------------------------------- |
+| Durable workflow (`workflows[]`)  | unsupported until Q1 passes | native if Q2 passes, else unsupported | native (celld) | celld matrix: `packages/platform/src/capabilities/celld.ts:227-229` |
+| Step rollback (`rollbackOptions`) | unsupported                 | unsupported                           | unsupported    | celld: "step rollbackOptions are not implemented"                   |
+| Scheduled workflows (`schedules`) | unsupported                 | unsupported                           | unsupported    | not verified against celld                                          |
 
 This plan touches a provider binding, so the table is mandatory. The framework's `ctx`-level workflow surface is unchanged.
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 0 | Q1–Q3 on real accounts | Answers recorded; §4 confirmed or revised |
-| 1 | A (if Q2) and B | Provision-contract matrix test; fake-driver test that a workflow resource is requested |
-| 2 | C and D | Halt response test; celld pins green in `test:celld` (requires the `celld` binary) |
-| 3 | E | Docs table matches the matrix |
+| Phase | Work                   | Gate                                                                                   |
+| ----- | ---------------------- | -------------------------------------------------------------------------------------- |
+| 0     | Q1–Q3 on real accounts | Answers recorded; §4 confirmed or revised                                              |
+| 1     | A (if Q2) and B        | Provision-contract matrix test; fake-driver test that a workflow resource is requested |
+| 2     | C and D                | Halt response test; celld pins green in `test:celld` (requires the `celld` binary)     |
+| 3     | E                      | Docs table matches the matrix                                                          |
 
 ## 8. Risks & STOP conditions
 
 - **STOP** if Q1 is no and the only route to WfP workflows is a host Worker running tenant code outside the dispatch isolation. That is a security decision; stop and ask.
 - **STOP** if Q2 says the BYO Worker cannot register workflows either. Then managed workflows are customer-box-only, and the product copy must say so.
-- **Risk:** flipping BYO to native while teardown cannot delete the Workflow leaves orphaned account resources. *Mitigate:* the teardown test in A.
-- **Risk:** a halt leaves Workflow instances running and charging the org. *Mitigate:* workstream C reports them; metering is §9.1.
+- **Risk:** flipping BYO to native while teardown cannot delete the Workflow leaves orphaned account resources. _Mitigate:_ the teardown test in A.
+- **Risk:** a halt leaves Workflow instances running and charging the org. _Mitigate:_ workstream C reports them; metering is §9.1.
 
 ## 9. Open questions
 

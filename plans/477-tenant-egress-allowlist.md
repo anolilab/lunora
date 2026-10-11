@@ -46,25 +46,26 @@ Size: **M–L**. The enforcement is small; the policy plumbing, the probe and th
 ## 4. Design decisions
 
 1. **Default-open for every project, new ones included. Enforcement is opt-in, and the first step is observation.**
-   *Decided, replacing the earlier "default-deny later" note.* Lunora apps call third-party APIs (payments, mail, model
+   _Decided, replacing the earlier "default-deny later" note._ Lunora apps call third-party APIs (payments, mail, model
    providers, the customer's own systems). A default-deny, even for new projects only, breaks the first deploy of exactly the
    apps that most need care, and the failure looks like an outage in the user's app. The best DX is to make the safe state
    reachable in one click, with the list built from evidence:
-   - **`off`** (default): no policy, no recording.
-   - **`report`**: the dispatcher lets every request through and records each destination origin with a count. Nothing is
-     refused, so nothing breaks.
-   - **`enforce`**: the recorded origins plus the platform origins are the allowlist; everything else gets the 403.
+    - **`off`** (default): no policy, no recording.
+    - **`report`**: the dispatcher lets every request through and records each destination origin with a count. Nothing is
+      refused, so nothing breaks.
+    - **`enforce`**: the recorded origins plus the platform origins are the allowlist; everything else gets the 403.
 
-   The studio's egress card starts in `report` as soon as the owner turns the feature on, shows the observed origins with counts,
-   and offers "enforce these N origins" as the single action. Removing an origin from the list is a plain edit. Denials are
-   visible in logs with the origin named, so a missing entry is one click to fix, not a support ticket.
-   *Rejected:* default-deny for new projects. It is the stronger position on paper, but it moves the cost onto every new user's
-   first deploy. A later plan can revisit it once the data shows how many projects reach `enforce` on their own.
+    The studio's egress card starts in `report` as soon as the owner turns the feature on, shows the observed origins with counts,
+    and offers "enforce these N origins" as the single action. Removing an origin from the list is a plain edit. Denials are
+    visible in logs with the origin named, so a missing entry is one click to fix, not a support ticket.
+    _Rejected:_ default-deny for new projects. It is the stronger position on paper, but it moves the cost onto every new user's
+    first deploy. A later plan can revisit it once the data shows how many projects reach `enforce` on their own.
+
 2. **The policy travels as a second `outbound` parameter. Unsigned, unless Phase 0 Q5 says tenants can reach it.** The dispatcher
    computes `{ v, mode, origins: string[] }` and passes it in the `outbound` options. The parameter goes from the dispatcher to the
    Outbound Worker directly, not through tenant traffic. Lineage needs a signature because its header round-trips through tenant
    requests; this value does not. If Q5 shows a tenant can set or read an outbound parameter, sign it the way lineage is signed.
-   *Rejected:* the Outbound Worker calling the control plane per fetch (a network hop and a new failure mode per call); a KV
+   _Rejected:_ the Outbound Worker calling the control plane per fetch (a network hop and a new failure mode per call); a KV
    lookup in the Outbound Worker (a new binding and a second source of truth).
 3. **Exact origin matching, `https` only by default.** An origin is `scheme://host[:port]`, compared exactly, host case-folded.
    Paths, userinfo and wildcards are rejected at write time. `http://` is allowed only when listed explicitly.
@@ -114,25 +115,25 @@ Object stubs and service bindings, per plan 365 §2.3).
 
 ## 6. Platform parity
 
-| Feature | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` | Notes |
-| ------- | ---------------- | -------------------------- | ----------- | ----- |
+| Feature                                                | `cloudflare-wfp`                        | `cloudflare-workers` (BYO)              | `celld-vps`                                | Notes                                                                                                          |
+| ------------------------------------------------------ | --------------------------------------- | --------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | Per-project `fetch()` allowlist (report, then enforce) | native (Outbound Worker, after Phase 0) | unsupported (no dispatcher or Outbound) | unsupported until celld's egress is probed | Studio shows "not enforced here" for `unsupported`. Not a framework `ctx.*` surface, so codegen is unaffected. |
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 0 | Probe Q1–Q5 on staging | Answers recorded here; a STOP in §8 if Q1 or Q4 forces a different design |
-| 1 | A and B (report mode only) | Unit tests: `off` is byte-identical to today; `report` forwards every request unchanged and records origins |
-| 2 | C (enforce) with a staging drill | Allowed origin reaches a test server; denied origin gets the 403 and the server sees nothing; a redirect to a denied origin is stopped at its hop; platform OTLP still exports |
-| 3 | D and E | Studio flow reviewed end to end: enable, observe, enforce; docs reviewed |
+| Phase | Work                             | Gate                                                                                                                                                                           |
+| ----- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0     | Probe Q1–Q5 on staging           | Answers recorded here; a STOP in §8 if Q1 or Q4 forces a different design                                                                                                      |
+| 1     | A and B (report mode only)       | Unit tests: `off` is byte-identical to today; `report` forwards every request unchanged and records origins                                                                    |
+| 2     | C (enforce) with a staging drill | Allowed origin reaches a test server; denied origin gets the 403 and the server sees nothing; a redirect to a denied origin is stopped at its hop; platform OTLP still exports |
+| 3     | D and E                          | Studio flow reviewed end to end: enable, observe, enforce; docs reviewed                                                                                                       |
 
 ## 8. Risks & STOP conditions
 
 - **STOP** if Q1 shows the parameter cannot carry a policy of realistic size. The fallback is a signed reference plus a read in the
   Outbound Worker, which needs its own design review.
 - **STOP** if Q4 shows a denied request reaches the network. The enforcement point is wrong; re-scope before building the studio.
-- **Risk:** the report window misses a host used only on a rare path (a monthly job, a webhook retry). *Mitigate:* the studio shows
+- **Risk:** the report window misses a host used only on a rare path (a monthly job, a webhook retry). _Mitigate:_ the studio shows
   when observation started and how many days it covers, and enforcement asks for confirmation when the window is under seven days.
 - **Risk:** connector Workers (plan 480) call out through `fetch()`. Plan 480 places connectors only in namespaces with an Outbound
   Worker, so this policy covers their `fetch()` calls too.

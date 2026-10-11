@@ -10,14 +10,14 @@ List (PSL). Checked 2026-10-11 with a positive control (`app` is listed, so the 
 
 A browser test on 2026-10-11 (Chrome, real hosts mapped to localhost, no DNS touched) and the pinned better-auth 1.7.7 source give these results:
 
-| Question | Result | Evidence |
-| -------- | ------ | -------- |
-| Can a tenant page set a cookie the control plane receives? | **Yes.** `better-auth.session_token; Domain=lunora.app` is accepted. | Browser run, `domainCookieAccepted: true` |
-| Does the `__Host-` prefix stop it? | **Yes.** A `__Host-` cookie with a `Domain` attribute is rejected. A tenant can set a `__Host-` cookie only on its own host, which the control plane never receives. | Browser run, `hostPrefixWithDomainAccepted: false` |
-| Does better-auth's **default** prefix stop it? | **No.** On HTTPS the default is `__Secure-`, and a `__Secure-` cookie with `Domain=lunora.app` is accepted. | Browser run, `securePrefixWithDomainAccepted: true`; `better-auth` 1.7.7 `cookies/index.mjs:23` |
-| Which value does the server read when two are sent? | **The first one.** `parseCookies` keeps the first occurrence of a name. A tenant cookie scoped to a more specific path (`/whoami`) is sent first by the browser. | `better-call` 1.4.0 `dist/cookies.cjs` (`if (!cookies.has(key))`); browser run |
-| Can the attacker forge a session? | **No.** `get-session` verifies an HMAC over the value (`api/routes/session.mjs:40`, `getSignedCookie`). | Source; a forged signature returns `session: null` (see readback test) |
-| So what can a sibling do? | **Plant the attacker's own signed session** in the victim's browser. Login CSRF: what the victim does lands in the attacker's account. Not account takeover. | Follows from the three rows above |
+| Question                                                   | Result                                                                                                                                                               | Evidence                                                                                        |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Can a tenant page set a cookie the control plane receives? | **Yes.** `better-auth.session_token; Domain=lunora.app` is accepted.                                                                                                 | Browser run, `domainCookieAccepted: true`                                                       |
+| Does the `__Host-` prefix stop it?                         | **Yes.** A `__Host-` cookie with a `Domain` attribute is rejected. A tenant can set a `__Host-` cookie only on its own host, which the control plane never receives. | Browser run, `hostPrefixWithDomainAccepted: false`                                              |
+| Does better-auth's **default** prefix stop it?             | **No.** On HTTPS the default is `__Secure-`, and a `__Secure-` cookie with `Domain=lunora.app` is accepted.                                                          | Browser run, `securePrefixWithDomainAccepted: true`; `better-auth` 1.7.7 `cookies/index.mjs:23` |
+| Which value does the server read when two are sent?        | **The first one.** `parseCookies` keeps the first occurrence of a name. A tenant cookie scoped to a more specific path (`/whoami`) is sent first by the browser.     | `better-call` 1.4.0 `dist/cookies.cjs` (`if (!cookies.has(key))`); browser run                  |
+| Can the attacker forge a session?                          | **No.** `get-session` verifies an HMAC over the value (`api/routes/session.mjs:40`, `getSignedCookie`).                                                              | Source; a forged signature returns `session: null` (see readback test)                          |
+| So what can a sibling do?                                  | **Plant the attacker's own signed session** in the victim's browser. Login CSRF: what the victim does lands in the attacker's account. Not account takeover.         | Follows from the three rows above                                                               |
 
 Severity: **M**, as originally rated. The browser run shows the injection is real, but the impact is login CSRF, not takeover.
 
@@ -53,31 +53,33 @@ Third finding, independent: the dispatcher sets no `Content-Security-Policy`, `X
 
 1. **Primary fix: `__Host-` session cookies, configured explicitly.** Verified with better-auth 1.7.7 in a real run (see §5, P0.4). The configuration:
 
-   ```ts
-   advanced: {
-     // Turn off the automatic __Secure- prefix; it does not stop a sibling's Domain attribute.
-     useSecureCookies: false,
-     cookies: {
-       session_token: { name: "__Host-better-auth.session_token", attributes: { secure: true, path: "/" } },
-       session_data: { name: "__Host-better-auth.session_data", attributes: { secure: true, path: "/" } },
-       account_data: { name: "__Host-better-auth.account_data", attributes: { secure: true, path: "/" } },
-       dont_remember: { name: "__Host-better-auth.dont_remember", attributes: { secure: true, path: "/" } },
-     },
-   },
-   ```
+    ```ts
+    advanced: {
+      // Turn off the automatic __Secure- prefix; it does not stop a sibling's Domain attribute.
+      useSecureCookies: false,
+      cookies: {
+        session_token: { name: "__Host-better-auth.session_token", attributes: { secure: true, path: "/" } },
+        session_data: { name: "__Host-better-auth.session_data", attributes: { secure: true, path: "/" } },
+        account_data: { name: "__Host-better-auth.account_data", attributes: { secure: true, path: "/" } },
+        dont_remember: { name: "__Host-better-auth.dont_remember", attributes: { secure: true, path: "/" } },
+      },
+    },
+    ```
 
-   Output of the run: `__Host-better-auth.session_token; Max-Age=604800; Path=/; HttpOnly; Secure; SameSite=Lax` (no `Domain`). `get-session` returns the session for that cookie, and a forged signature returns `null`.
-   *Rejected:* `useSecureCookies: true` alone. It gives `__Secure-`, which a sibling can still set with `Domain`. *Rejected:* a name starting `__Host-` with the automatic prefix on. better-auth prepends `__Secure-`, which produces an invalid name.
-   Each of the four cookies needs the override, or a leftover unprefixed cookie stays readable.
+    Output of the run: `__Host-better-auth.session_token; Max-Age=604800; Path=/; HttpOnly; Secure; SameSite=Lax` (no `Domain`). `get-session` returns the session for that cookie, and a forged signature returns `null`.
+    _Rejected:_ `useSecureCookies: true` alone. It gives `__Secure-`, which a sibling can still set with `Domain`. _Rejected:_ a name starting `__Host-` with the automatic prefix on. better-auth prepends `__Secure-`, which produces an invalid name.
+    Each of the four cookies needs the override, or a leftover unprefixed cookie stays readable.
+
 2. **Secondary: PSL submission of `lunora.app`.** Browsers then treat each tenant host as its own site. That isolates tenants from each other, which `__Host-` does not do, and it makes cross-tenant `SameSite` work. It is an external process with a lead time of weeks. Start it, but it does not block item 1.
-   *Rejected:* moving the control plane to another domain. The `__Host-` fix makes it unnecessary.
+   _Rejected:_ moving the control plane to another domain. The `__Host-` fix makes it unnecessary.
 3. **Platform headers are opt-in, report-only first.** A per-project setting selects `report-only` CSP, then `enforce`. Default off.
-   *Rejected:* enforce by default. It breaks arbitrary Lunora apps with inline scripts and third-party embeds on deploy.
+   _Rejected:_ enforce by default. It breaks arbitrary Lunora apps with inline scripts and third-party embeds on deploy.
 4. **Always-on headers:** `X-Content-Type-Options: nosniff` on every response, and `Referrer-Policy: strict-origin-when-cross-origin` only when the tenant sets no value.
 
 ## 5. Workstreams and results
 
 **Phase 0 — verify.**
+
 - **P0.1 done (2026-10-11):** PSL membership, with the positive control above.
 - **P0.2 done (2026-10-11), result negative:** `cloud.lunora.app` is not reachable; `lunora.app` resolves to a non-Cloudflare host. The production control plane's location must be confirmed before deploy. Not a blocker for the cookie fix.
 - **P0.3 done (2026-10-11), result positive:** the cross-host browser test (table in §0). Script kept at `/tmp/cookie-check/run.mjs` (throwaway).
@@ -95,20 +97,20 @@ Not applicable. Control-plane and dispatcher behaviour, not a framework `ctx.*` 
 
 ## 7. Phasing & ordering
 
-| Phase | Work | Gate |
-| ----- | ---- | ---- |
-| 0 | P0.1–P0.5 | Done (above). P0.2 needs the production control-plane location before deploy. |
-| 1 | B | Cookie-attribute tests green; a manual sign-in check on staging in two browsers; the browser cross-host test rerun against the staging control plane shows the sibling cookie is **not** read |
-| A | PSL submission | Submitted; acceptance date recorded. Parallel with 1. |
-| 2 | C | Header tests per rule; no change to the existing end-to-end suite |
-| 3 | D | Report-only policy on staging for one week, reports reviewed before any enforce setting is offered |
+| Phase | Work           | Gate                                                                                                                                                                                          |
+| ----- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | P0.1–P0.5      | Done (above). P0.2 needs the production control-plane location before deploy.                                                                                                                 |
+| 1     | B              | Cookie-attribute tests green; a manual sign-in check on staging in two browsers; the browser cross-host test rerun against the staging control plane shows the sibling cookie is **not** read |
+| A     | PSL submission | Submitted; acceptance date recorded. Parallel with 1.                                                                                                                                         |
+| 2     | C              | Header tests per rule; no change to the existing end-to-end suite                                                                                                                             |
+| 3     | D              | Report-only policy on staging for one week, reports reviewed before any enforce setting is offered                                                                                            |
 
 ## 8. Risks & STOP conditions
 
 - **STOP** if the staging browser test still reads a sibling-set cookie after B. The problem is then not the name; re-scope.
-- **Risk:** the `useSecureCookies: false` override changes other better-auth behaviour. *Mitigate:* the run in §5 showed the expected attributes; the tests in B cover sign-in, get-session and sign-out on staging.
-- **Risk:** the sign-out migration locks a user out mid-task. *Mitigate:* a one-time notice and the normal sign-in flow.
-- **Risk:** a CSP breaks a tenant app. *Mitigate:* report-only first; per-project switch defaults off.
+- **Risk:** the `useSecureCookies: false` override changes other better-auth behaviour. _Mitigate:_ the run in §5 showed the expected attributes; the tests in B cover sign-in, get-session and sign-out on staging.
+- **Risk:** the sign-out migration locks a user out mid-task. _Mitigate:_ a one-time notice and the normal sign-in flow.
+- **Risk:** a CSP breaks a tenant app. _Mitigate:_ report-only first; per-project switch defaults off.
 - **Perf watch:** none material; header work is O(1) per response.
 
 ## 9. Open questions — decided
