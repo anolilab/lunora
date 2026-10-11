@@ -267,18 +267,13 @@ interface Privacy {
 ### `PrivacyConfig` (interface)
 
 ```ts
-interface PrivacyConfig {
-    readonly data: DataPort;
+interface PrivacyConfig<C> {
     readonly datasets: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
     readonly exclude?: Readonly<Record<string, string>>;
-    readonly files: StorePort;
-    readonly newId: () => string;
-    readonly now: () => Date;
+    readonly ports: (context: C) => PrivacyPorts;
     readonly presets?: ReadonlyArray<PrivacyPreset>;
-    readonly store: RequestStore;
     readonly subjectKey?: (subjectId: string) => string;
-    readonly tombstones?: TombstonePort;
 }
 ```
 
@@ -540,7 +535,7 @@ const defineDataset: (id: string, spec: DatasetSpec) => Dataset;
 ### `definePrivacy` (const)
 
 ```ts
-const definePrivacy: (config: PrivacyConfig) => Privacy;
+const definePrivacy: <C>(config: PrivacyConfig<C>) => PrivacyFor<C>;
 ```
 
 ### `dispositionOf` (const)
@@ -713,6 +708,25 @@ const eu: () => PrivacyPreset;
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `PrivacyFor` (type)
+
+```ts
+type PrivacyFor<C> = (context: C) => Privacy;
+```
+
+### `PrivacyPorts` (interface)
+
+```ts
+interface PrivacyPorts {
+    readonly data: DataPort;
+    readonly files: StorePort;
+    readonly newId: () => string;
+    readonly now: () => Date;
+    readonly store: RequestStore;
+    readonly tombstones?: TombstonePort;
+}
+```
 
 ### `PrivacyWorkflowContext` (interface)
 
