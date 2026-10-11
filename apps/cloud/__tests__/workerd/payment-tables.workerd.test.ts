@@ -6,8 +6,8 @@
  * node suite drives the erasure and retention code over a `ctx` double that
  * answers whatever table name it is handed, so it cannot tell whether those
  * names exist in the schema. Here the schema is migrated into a real D1 and the
- * webhook, the entitlement read, the erasure, the retention sweep and the legacy
- * move all go through it.
+ * webhook, the entitlement read, the erasure and the retention sweep all go
+ * through it.
  */
 import type { D1CtxDbOptions } from "@lunora/d1";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
@@ -18,8 +18,7 @@ import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { Id } from "../../lunora/_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "../../lunora/_generated/server";
-import { moveLegacyPaymentTables } from "../../lunora/billing";
+import type { MutationCtx } from "../../lunora/_generated/server";
 import { orgEntitlements } from "../../lunora/entitlements";
 import { purgeDeleted } from "../../lunora/organizations";
 import { ERASED_REFERENCE } from "../../lunora/purge";
@@ -69,17 +68,18 @@ const organization = async (fields: Record<string, unknown> = {}): Promise<Id<"o
 };
 
 /** An adapter whose only job is to hand the store the action it is given. */
-const webhookAdapter = (action: () => WebhookAction): PaymentAdapter => ({
+const webhookAdapter = (action: () => WebhookAction): PaymentAdapter =>
+    ({
         capabilities: {},
         identifier: "creem",
         parseWebhook: async () => action(),
-    } as unknown as PaymentAdapter);
+    }) as unknown as PaymentAdapter;
 
 const deliver = async (action: WebhookAction): Promise<{ body: Record<string, unknown>; status: number }> => {
     const payments = paymentsFromContext(context() as never, { adapter: webhookAdapter(() => action) });
     const response = await payments.handleWebhook(new Request("https://internal/billing/webhook", { body: "{}", method: "POST" }));
 
-    return { body: (await response.json()), status: response.status };
+    return { body: await response.json(), status: response.status };
 };
 
 describe("payment tables (workerd, real D1)", () => {
@@ -229,34 +229,5 @@ describe("payment tables (workerd, real D1)", () => {
         await expect(rows("payment_sessions", { _id: live })).resolves.toHaveLength(1);
         await expect(rows("payment_events", { providerEventId: oldEvent })).resolves.toStrictEqual([]);
         await expect(rows("payment_events", { providerEventId: newEvent })).resolves.toHaveLength(1);
-    });
-
-    it("moves a subscription from its legacy table, so the entitlement read sees it again", async () => {
-        const organizationId = await organization();
-        const now = Date.now();
-
-        await database.insert("subscriptions", {
-            cancelAtPeriodEnd: false,
-            createdAt: now,
-            priceId: "price_pro_monthly",
-            provider: "creem",
-            providerSubscriptionId: `sub_${crypto.randomUUID()}`,
-            quantity: 1,
-            referenceId: organizationId,
-            state: "active",
-            updatedAt: now,
-        });
-
-        await expect(orgEntitlements(context() as unknown as QueryCtx, organizationId)).resolves.not.toMatchObject({ plans: expect.arrayContaining(["pro"]) });
-
-        let remaining = true;
-
-        while (remaining) {
-            // eslint-disable-next-line no-await-in-loop -- each call moves one batch, as the operator runs it
-            ({ remaining } = await moveLegacyPaymentTables.handler(context(), {}));
-        }
-
-        await expect(rows("subscriptions", { referenceId: organizationId })).resolves.toStrictEqual([]);
-        await expect(orgEntitlements(context() as unknown as QueryCtx, organizationId)).resolves.toMatchObject({ plans: expect.arrayContaining(["pro"]) });
     });
 });

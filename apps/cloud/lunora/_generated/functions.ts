@@ -118,7 +118,6 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "billing:checkout": lunora_billing_3.checkout as unknown as RegisteredLunoraFunction,
     "billing:enforceDunning": lunora_billing_3.enforceDunning as unknown as RegisteredLunoraFunction,
     "billing:entitlements": lunora_billing_3.entitlements as unknown as RegisteredLunoraFunction,
-    "billing:moveLegacyPaymentTables": lunora_billing_3.moveLegacyPaymentTables as unknown as RegisteredLunoraFunction,
     "billing:portal": lunora_billing_3.portal as unknown as RegisteredLunoraFunction,
     "billing:processWebhook": lunora_billing_3.processWebhook as unknown as RegisteredLunoraFunction,
     "billing:subscription": lunora_billing_3.subscription as unknown as RegisteredLunoraFunction,
@@ -410,18 +409,6 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
-});
-installCompiledValidatorMap(lunora_billing_3.moveLegacyPaymentTables.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-let __has1 = false;
-let __val1;
-if (source["batchSize"] !== undefined) {
-if (typeof source["batchSize"] !== "number" || !Number.isFinite(source["batchSize"])) return DEFER;
-__val1 = source["batchSize"];
-__has1 = true;
-}
-return { ...(__has1 ? { "batchSize": __val1 } : {}) };
 });
 installCompiledValidatorMap(lunora_billing_3.subscription.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1266,7 +1253,6 @@ export interface Caller {
         checkout: (args: { cancelUrl: unknown; organizationId: Id<"organizations">; priceId: unknown; successUrl: unknown }) => Promise<{ url: string; }>;
         enforceDunning: (args?: {}) => Promise<{ graced: number; recovered: number; suspended: number; }>;
         entitlements: (args: { organizationId: Id<"organizations"> }) => Promise<{ features: string[]; limits: Record<"boxes" | "members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
-        moveLegacyPaymentTables: (args: { batchSize?: number }) => Promise<{ moved: number; remaining: boolean; }>;
         portal: (args: { organizationId: Id<"organizations">; returnUrl: unknown }) => Promise<{ url: string; }>;
         processWebhook: (args: { body: unknown; signature: unknown }) => Promise<{ applied: boolean; status: number; }>;
         subscription: (args: { organizationId: Id<"organizations"> }) => Promise<{ cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
@@ -1600,7 +1586,6 @@ export const createCaller = (context: CallerCtx): Caller => ({
         checkout: (args) => callRegistered(context, "billing:checkout", args),
         enforceDunning: (args) => callRegistered(context, "billing:enforceDunning", args),
         entitlements: (args) => callRegistered(context, "billing:entitlements", args),
-        moveLegacyPaymentTables: (args) => callRegistered(context, "billing:moveLegacyPaymentTables", args),
         portal: (args) => callRegistered(context, "billing:portal", args),
         processWebhook: (args) => callRegistered(context, "billing:processWebhook", args),
         subscription: (args) => callRegistered(context, "billing:subscription", args),
