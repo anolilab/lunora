@@ -14,6 +14,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import { messageOf } from "../../src/catalog/fields";
 import { generateKeyPair, importPrivateKey, publishCatalog, readAppSource, writeCatalog } from "./publish-core";
 
 const USAGE = [
@@ -29,8 +30,6 @@ const requireFlag = (value: string | undefined, flag: string): string => {
 
     return value;
 };
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const keygen = async (keyIdFlag: string | undefined, outFlag: string | undefined): Promise<void> => {
     const keyId = requireFlag(keyIdFlag, "--key-id");

@@ -4,6 +4,7 @@
  * payload starts with a domain tag naming what it is, so a signature over a
  * catalog index can never be replayed as an artifact manifest, or the reverse.
  */
+import { toBase64, toHex } from "./fields";
 
 /** Domain tag for a signed artifact manifest. */
 export const ARTIFACT_SIGNING_DOMAIN = "lunora-catalog-artifact:v1";
@@ -42,7 +43,7 @@ export const decodeBase64 = (text: string): Uint8Array | undefined => {
 export const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
     const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
 
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return toHex(new Uint8Array(digest));
 };
 
 /** The bytes a signature covers: the domain tag, a newline, then the payload. */
@@ -83,7 +84,7 @@ export const signPayload = async (privateKey: CryptoKey, domain: string, payload
     const signed = signedBytes(domain, payload);
     const signature = new Uint8Array(await crypto.subtle.sign("Ed25519", privateKey, signed as BufferSource));
 
-    return btoa(String.fromCodePoint(...signature));
+    return toBase64(signature);
 };
 
 /** The most bytes a detached signature file may take. */

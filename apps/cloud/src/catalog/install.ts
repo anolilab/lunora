@@ -11,6 +11,7 @@
 import type { ReleaseOutcome, ReleaseRequest } from "../deploy/release-core";
 import type { AssetFile, AssetsUpload } from "../provision-contract";
 import type { CatalogManifest, FormSecret, FormVariable, SecretGenerator } from "./artifact";
+import { toBase64, toHex } from "./fields";
 
 /** Largest value a var or a secret may carry. */
 const MAX_VALUE_BYTES = 5 * 1024;
@@ -123,18 +124,6 @@ const fail = (error: string, field?: string): InstallFailure => {
         ok: false,
     };
 };
-
-const toBase64 = (bytes: Uint8Array): string => {
-    let binary = "";
-
-    for (let index = 0; index < bytes.length; index += 0x80_00) {
-        binary += String.fromCodePoint(...bytes.subarray(index, index + 0x80_00));
-    }
-
-    return btoa(binary);
-};
-
-const toHex = (bytes: Uint8Array): string => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const generateSecret = (generator: SecretGenerator): string => {
     const bytes = crypto.getRandomValues(new Uint8Array(GENERATED_BYTES));

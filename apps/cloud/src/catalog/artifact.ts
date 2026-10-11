@@ -11,7 +11,7 @@
  */
 import { unzipSync } from "fflate";
 
-import { isVersion, SHA256, SLUG } from "./fields";
+import { isRecord, isVersion, SHA256, SLUG } from "./fields";
 import type { DetachedSignature, TrustedCatalogKey } from "./signature";
 import { ARTIFACT_SIGNING_DOMAIN, sha256Hex, verifyDetached } from "./signature";
 
@@ -124,8 +124,6 @@ const isSafePath = (path: string): boolean =>
 
 /** A parsed form field, or the reason it is refused. */
 type FieldResult<T> = { field: T; ok: true } | { error: ArtifactError; ok: false };
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** The entries of a form list. A present value that is not a list is refused, not dropped. */
 const formList = (value: unknown, field: string): { items: unknown[]; ok: true } | { error: ArtifactError; ok: false } => {

@@ -10,7 +10,7 @@
  */
 import type { ArtifactErrorCode, CatalogForm, CatalogManifest } from "./artifact";
 import { MAX_ARTIFACT_BYTES, verifyArchive, verifyManifestBytes } from "./artifact";
-import { isHttpsUrl } from "./fields";
+import { isHttpsUrl, messageOf } from "./fields";
 import type { CatalogIndexEntry } from "./index";
 import { manifestMatchesIndex, verifyCatalogIndex } from "./index";
 import type { InstallFailure, InstallPhase, InstallPorts, InstallValues } from "./install";
@@ -184,8 +184,6 @@ export const resetCatalogIndexCache = (): void => {
 };
 
 class FetchFailure extends Error {}
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : "unknown error");
 
 /**
  * Fetch a body of at most `limit` bytes. A non-2xx answer, an over-long body or a

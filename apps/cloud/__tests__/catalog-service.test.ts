@@ -644,7 +644,8 @@ describe(installApp, () => {
 
         expect(outcome).toMatchObject({ deploymentId: "dep_1", ok: true });
         expect(ports.release).toHaveBeenCalledTimes(1);
-    });
+        // Packing, hashing and encoding 48 MB takes seconds on a loaded runner, past the default timeout.
+    }, 30_000);
 
     it("refuses an app whose declared files exceed the install limit, before anything is claimed or released", async () => {
         const key = await generateKey("catalog-2026");
@@ -658,7 +659,14 @@ describe(installApp, () => {
                 version: "1.0.0",
             }),
         );
-        const {archive} = await packArtifact({ files: counterFiles(), keyId: key.keyId, main: "worker.js", privateKey: key.privateKey, slug: "counter", version: "1.0.0" });
+        const { archive } = await packArtifact({
+            files: counterFiles(),
+            keyId: key.keyId,
+            main: "worker.js",
+            privateKey: key.privateKey,
+            slug: "counter",
+            version: "1.0.0",
+        });
         const stem = `${BASE}/counter-1.0.0`;
         const app: PublishedApp = {
             entry: {

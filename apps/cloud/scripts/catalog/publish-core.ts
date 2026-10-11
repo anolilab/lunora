@@ -10,7 +10,7 @@ import { join, relative, sep } from "node:path";
 
 import type { CatalogForm, CatalogRuntime } from "../../src/catalog/artifact";
 import { CATALOG_FORMAT, parseForm, verifyArtifact } from "../../src/catalog/artifact";
-import { MAX_NAME_LENGTH, MAX_SUMMARY_LENGTH } from "../../src/catalog/fields";
+import { isRecord, MAX_NAME_LENGTH, MAX_SUMMARY_LENGTH } from "../../src/catalog/fields";
 import type { CatalogIndexEntry } from "../../src/catalog/index";
 import { packArtifact } from "../../src/catalog/pack";
 import type { DetachedSignature, TrustedCatalogKey } from "../../src/catalog/signature";
@@ -22,8 +22,6 @@ const LINE_BREAK = /[\r\n]/u;
 const PEM_MARKER = /-----(?:BEGIN|END) PRIVATE KEY-----/gu;
 const WHITESPACE = /\s+/gu;
 const PEM_LINE = /.{1,64}/gu;
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 const requireKeyId = (keyId: string): string => {
     if (!KEY_ID.test(keyId)) {
