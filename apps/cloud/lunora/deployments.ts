@@ -19,7 +19,7 @@ import { rateLimit } from "./guards";
 import { assertProjectNotHalted } from "./halts";
 import { enqueueNotification } from "./notification-outbox";
 import { collectAll } from "./paginate";
-import type { DEPLOYMENT_STATUSES} from "./tables/shared";
+import type { DEPLOYMENT_STATUSES } from "./tables/shared";
 import { storedProjectRuntime } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
@@ -397,7 +397,37 @@ export const planForScript = query
  * failed and nothing logged it: the `Promise&lt;DeploymentRow[]>` annotation is
  * compile-time only and strips nothing at the wire.
  */
-type DeploymentView = Omit<DeploymentRow, "_creationTime" | "adminToken" | "adminTokenCiphertext" | "adminTokenIv">;
+
+/**
+ * The columns `toDeploymentView` writes, typed as the stored row types them. The
+ * nullable columns it leaves out stay on the declared type, nullable as they were,
+ * so the listed API's return type does not change shape.
+ */
+type DeploymentView = Pick<
+    DeploymentRow,
+    | "_id"
+    | "alias"
+    | "bindings"
+    | "branch"
+    | "bundleHash"
+    | "createdAt"
+    | "createdBy"
+    | "expiresAt"
+    | "kind"
+    | "organizationId"
+    | "projectId"
+    | "scriptName"
+    | "status"
+    | "updatedAt"
+    | "url"
+    | "version"
+> & {
+    cronSpecs?: null | string[];
+    durableObjectClasses?: null | string[];
+    runtime?: "worker" | null;
+    target?: string;
+    verifyingAt?: null | number;
+};
 
 /** Drop the admin-token fields from a stored row. */
 export const toDeploymentView = (row: DeploymentRow): DeploymentView => {

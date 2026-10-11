@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
+import type { Doc } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
 import { cleanupExpiredPreviews, planForScript } from "../lunora/deployments";
+import type { DEPLOYMENT_STATUSES } from "../lunora/tables/shared";
 import { periodStartOf } from "../src/billing/spend";
 
 type Row = Record<string, unknown>;
@@ -42,6 +44,13 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
 
     return { ctx, patched };
 };
+
+describe("deployment status union", () => {
+    it("keeps DEPLOYMENT_STATUSES and the stored status column in step", () => {
+        // Type-level: the check fails `tsc` (lint:types) when the array and the validator drift.
+        expectTypeOf<(typeof DEPLOYMENT_STATUSES)[number]>().toEqualTypeOf<Doc<"deployments">["status"]>();
+    });
+});
 
 describe("deployments.cleanupExpiredPreviews", () => {
     it("destroys only expired, not-yet-destroyed previews", async () => {
