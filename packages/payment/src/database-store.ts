@@ -90,7 +90,10 @@ const readStringArray = (row: PaymentRow, key: string): string[] | undefined => 
     return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : undefined;
 };
 
-/** A money column, written as a `number`. */
+/**
+ * A money column, written as a `number`. A value that is not a safe integer is not a minor-unit
+ * amount, so it is refused here rather than handed to `BigInt`, which would throw a bare RangeError.
+ */
 const readMinorUnits = (row: PaymentRow, key: string): bigint => {
     const value = row[key];
 
@@ -98,7 +101,23 @@ const readMinorUnits = (row: PaymentRow, key: string): bigint => {
         return value;
     }
 
-    return typeof value === "number" || typeof value === "string" ? BigInt(value) : 0n;
+    if (typeof value === "number") {
+        if (!Number.isSafeInteger(value)) {
+            throw new LunoraPaymentError("VALIDATION_ERROR", `payment store: \`${key}\` is not a safe integer`);
+        }
+
+        return BigInt(value);
+    }
+
+    if (typeof value === "string") {
+        try {
+            return BigInt(value);
+        } catch {
+            throw new LunoraPaymentError("VALIDATION_ERROR", `payment store: \`${key}\` is not an integer`);
+        }
+    }
+
+    return 0n;
 };
 
 /**

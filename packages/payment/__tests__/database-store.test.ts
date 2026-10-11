@@ -226,6 +226,22 @@ describe("createDatabasePaymentStore", () => {
         expect(loaded?.capturedAmount.minorUnits).toBe(1000n);
     });
 
+    it("refuses a stored money column that is not a safe integer", async () => {
+        expect.assertions(2);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+
+        const row = await db.findFirst("payment_sessions", { provider: "stripe", providerSessionId: "pi_1" });
+
+        await db.patch(row!._id, { capturedMinor: 1.5 });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toThrow("`capturedMinor` is not a safe integer");
+    });
+
     it("upserts in place rather than duplicating", async () => {
         expect.assertions(2);
 
