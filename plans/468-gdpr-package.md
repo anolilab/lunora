@@ -2,7 +2,7 @@
 
 **Baseline:** `b8f2cdd84` (origin/alpha, 2026-10-11)
 **Status:** IN PROGRESS (Phase 0). Decisions D1, D2 (voucher period), D3, D4, D5 (format) and D6 are
-recorded in §9. Still open: the PDF library (D5), the statutory 8-year voucher rule (TR), and every
+recorded in §9. Still open: confirmation of the PDF library choice (D5), the statutory 8-year voucher rule (TR), and every
 LR/TR item in §10. Phase 1 starts only after the Phase 0 gate in §7 is green. Every row marked **LEGAL REVIEW** needs sign-off from a German data
 protection lawyer, and every row marked **TAX REVIEW** needs a Steuerberater, before the matching
 default ships. Nothing in this plan is legal advice.
@@ -472,7 +472,7 @@ no-op, so a redelivered start is safe.
     - The stream goes through the equal 5 MiB part coalescer that `@lunora/storage/upload` already
       uses.
     - A retry aborts any stale upload id and overwrites the key.
-    - **Phase 0 check:** confirm `fflate` streams DEFLATE entries (`AsyncZipDeflate`) on Workers. It writes `manifest.json` and `summary.pdf`, a human-readable Art. 15 copy in the
+    - **Phase 0 check:** `fflate` `ZipDeflate` is verified on workerd (not `AsyncZipDeflate`, which fails there). It writes `manifest.json` and `summary.pdf`, a human-readable Art. 15 copy in the
       subject's locale, defaulting to English and German. **Phase 0 check:** a PDF library must run
       on Workers (pure JS, no native code) and must produce identical bytes for an identical export.
 5. `privacy/v1/export/finalize`: set `ready` and `expiresAt` (default 7 days), arm the expiry
@@ -567,7 +567,7 @@ hold is unexpired and that no case hold exists, so it cannot delete early.
 
 - `@lunora/server`, `@lunora/values`, `@lunora/errors` and `@lunora/workflow` at exact workspace
   versions, the same form `@lunora/agent` uses.
-- `fflate` (zero dependencies, pure JS, streaming `Zip` with `AsyncZipDeflate`, runs on Workers) under
+- `fflate` (zero dependencies, pure JS, synchronous `ZipDeflate` entries, verified on workerd) under
   a new `catalog:privacy` entry, never a bare version. `client-zip` was rejected: it does not
   compress, and its README targets browsers.
 - `@lunora/auth` is an optional peer used only by `authDataset`. It gets a real semver range, not
@@ -623,18 +623,21 @@ known up front:
        `handlerFile` as a relative path into `node_modules/<pkg>/index.d`. Nothing reads it today, but
        it is wrong. A codegen follow-up should label such a handler by its package name instead.
 
-- **ZIP library: checked in Node, not on Workers.** `fflate` 0.8.3 (zero dependencies) writes a valid
-  DEFLATE ZIP through a streaming `Zip` with `AsyncZipDeflate`. A 1.2 MB JSON file compressed to 52 KB, and
-  `unzip -t` passed. The Workers run is still open.
-- **PDF library: a decision is needed, and no candidate is verified on Workers.** Candidates from npm metadata:
-    - `pdf-lib` 1.17.1 (MIT). Pure-JS dependencies. Last published 2022-05-12, so maintenance is a risk.
-    - `pdfkit` 0.20.2 (MIT). Recently maintained, but Node-oriented, and it depends on `fontkit`.
-    - `jspdf` 4.2.1 (MIT). Browser-first.
+- **ZIP library: checked on Node and workerd.** `ZipDeflate` (synchronous) writes a valid DEFLATE ZIP
+  on workerd: a 1.2 MB JSON sample became 51,935 bytes in 42 ms wall time (`@cloudflare/vitest-plugin`
+  1.4.0, workerd via wrangler 4.149.0, same versions as the repo's catalog). The same bytes came from Node.
+  **`AsyncZipDeflate` fails on workerd** with `Worker is not defined`, so the plan uses `ZipDeflate` only.
+  Wall time is not CPU time, and the sample is not the largest allowed export; see Phase 1.
+- **PDF library: `pdf-lib` 1.17.1 (MIT), recommended, with a stale-maintenance risk.** On workerd it
+  rendered 40 pages (49 KB) in 98 ms, and two runs with a fixed creation date were byte-identical.
+  Its dependencies are pure JS. It was last published 2022-05-12. The alternatives were `pdfkit`
+  (maintained, but Node-oriented and depends on `fontkit`) and `jspdf` (browser-first). A maintainer
+  should confirm the choice.
+- **Node signed-URL check: passed.** The storage package's `signed-url.test.ts` passes 30 of 30 cases,
+  covering expired URLs, tampered keys, wrong secrets, and malformed input.
+- **DEFLATE CPU measurement: partial.** Only the 1.2 MB sample above was measured. Phase 1 must measure
+  the largest export the app allows, once the pre-flight limit exists.
 
-    Whichever is chosen must write a fixed creation date, or the export bytes will differ between runs.
-
-- Still open, not run: the Workers runs for the ZIP and PDF choices, the Node signed-URL check, and the
-  DEFLATE CPU measurement. Each needs a workerd run or a real export; none is claimed as done.
 - The legal and tax review (§10) is the user's to complete. Phase 0 cannot close until it is.
 
 **Test strategy:**
@@ -721,7 +724,7 @@ known up front:
    GoBD.
 5. **D5 Export format. Decided (2026-10-11): JSON and PDF.** A compressed (DEFLATE) ZIP holding the JSON data, plus
    `manifest.json`, the `portable/` Art. 20 subset and a `summary.pdf` readable copy (replacing the
-   earlier `README.html`). Open for Phase 0: a PDF library that runs on Workers. Files expire after 7 days, and download links are 15-minute signed URLs behind
+   earlier `README.html`). The PDF library is `pdf-lib`, verified on workerd (Phase 0 results). Files expire after 7 days, and download links are 15-minute signed URLs behind
    authentication.
 6. **D6 Does the identity-verification time pause the one-month clock? Decided: no** (strict clock)
    until legal review says otherwise.
