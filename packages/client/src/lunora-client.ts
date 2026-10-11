@@ -10,7 +10,7 @@ import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { BatchSlot } from "./call-wire";
-import { demuxBatchResults, encodeCallArgs, isEncodable, isSlotEnvelope, replayExpectation } from "./call-wire";
+import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./call-wire";
 import {
     ARCHITECTURE_PATH,
     AUTH_ACCOUNTS_PATH,
@@ -137,10 +137,12 @@ import { createReconnect } from "./reconnect";
 import type { RpcEnvelopeBody } from "./replay";
 import {
     defaultReplayRetryDelayMs,
+    indexReplaySlots,
     isTransientReplayFailure,
     isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
     replayRetryDelayMs,
+    replaySlotVerdict,
     undecodableResultError,
     unparseableResponseError,
     utf8ByteLength,
@@ -152,7 +154,7 @@ import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
 import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints } from "./subscription-frames";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition, routeErrorFrame } from "./subscription-frames";
 import type {
     ArgsOf,
     AuthCapabilities,
@@ -209,7 +211,7 @@ import type {
     WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter, slotError } from "./wire-errors";
+import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter } from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -4264,7 +4266,7 @@ class LunoraClient {
                 // is already queued in the message task queue. Drop it when a
                 // stamp is present and doesn't match; an absent stamp
                 // (mixed-version leader) is accepted, same as today.
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -4275,9 +4277,7 @@ class LunoraClient {
                 // consumers see it.
                 // `"polling"` counts as live too: the leader reaches the origin over
                 // HTTP, and this tab's queued writes ride HTTP either way.
-                const transitionedToConnected =
-                    (status === "connected" && this.leaderStatus !== "connected") ||
-                    (status === "polling" && this.leaderStatus !== "connected" && this.leaderStatus !== "polling");
+                const transitionedToConnected = isLiveTransition(this.leaderStatus, status);
 
                 this.leaderStatus = status;
 
@@ -4297,7 +4297,7 @@ class LunoraClient {
             onSubscriptionData: (key, data, cursor, epoch, identity) => {
                 // Belt-and-braces identity check — see `onConnectionStatus`'s
                 // comment for the full rationale (identical here).
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -4310,8 +4310,6 @@ class LunoraClient {
                 if (!state) {
                     return;
                 }
-
-                state.serverBase = data;
 
                 // The leader's frame replaces the cache seed — same bookkeeping
                 // the leader's own `handleDataMessage` does.
@@ -4327,13 +4325,11 @@ class LunoraClient {
                 // hasn't shipped the cursor yet falls through to the historical
                 // fold-and-notify-without-drop behavior below — backward
                 // compatible with a cursor-less wire frame.
+                // The epoch rides only with a cursor. A cursor-less frame changes nothing but the
+                // value, so it never drops layers against the old cursor.
+                commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
+
                 if (cursor !== undefined) {
-                    state.serverCursor = cursor;
-
-                    if (epoch !== undefined) {
-                        state.serverEpoch = epoch;
-                    }
-
                     dropConfirmedLayers(state, cursor);
                 }
 
@@ -4355,7 +4351,7 @@ class LunoraClient {
                 // comment for the full rationale (identical here). This was the
                 // one of the four callbacks without it, which only went unnoticed
                 // because nothing broadcast to it.
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -4368,7 +4364,7 @@ class LunoraClient {
             onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity) => {
                 // Belt-and-braces identity check — see `onConnectionStatus`'s
                 // comment for the full rationale (identical here).
-                if (identity !== undefined && identity !== this.identityFingerprint()) {
+                if (isForeignStamp(identity, this.identityFingerprint())) {
                     return;
                 }
 
@@ -6704,23 +6700,25 @@ class LunoraClient {
     }
 
     private handleErrorMessage(message: ServerErrorMessage): void {
-        // Token-expiry rejection (sent just before the server closes the socket
-        // with code 4001). Surface it to listeners; the close handler also fires
-        // and arms the reconnect, so nothing else to do here.
-        const errorCode = (message.error as { code?: unknown } | undefined)?.code;
+        // Stream-scoped errors arrive on the same `error` envelope as subscription
+        // errors. The route is decided from the frame and what holds its id, and each
+        // branch below only performs the effect for its route.
+        const { id } = message;
+        const stream = id === undefined ? undefined : this.streams.get(id);
+        const state = id === undefined ? undefined : this.subscriptions.getById(id);
+        const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
+        const route = routeErrorFrame(message, { shape: shapeState !== undefined, stream: stream !== undefined, subscription: state !== undefined });
 
-        if (errorCode === "TOKEN_EXPIRED") {
+        // Token-expiry rejection (sent just before the server closes the socket with code
+        // 4001). Surface it to listeners; the close handler also fires and arms the
+        // reconnect, so nothing else to do here.
+        if (route === "tokenExpired") {
             this.notifyTokenExpired();
 
             return;
         }
 
-        // Stream-scoped errors arrive on the same `error` envelope as
-        // subscription errors; dispatch by id-prefix lookup.
-        const { id } = message;
-        const stream = id === undefined ? undefined : this.streams.get(id);
-
-        if (stream && id !== undefined) {
+        if (route === "stream" && stream && id !== undefined) {
             stream.handle.fail(buildStreamError(message));
             this.forgetStream(id);
 
@@ -6732,9 +6730,7 @@ class LunoraClient {
         // subscriber's onError so the UI can react instead of silently
         // never receiving data; the registration is left in place so a
         // later reconnect with proper credentials can still succeed.
-        const state = id === undefined ? undefined : this.subscriptions.getById(id);
-
-        if (state) {
+        if (route === "subscription" && state) {
             const subscriptionError = buildSubscriptionError(message);
 
             // Snapshot the identity and key BEFORE fanning. `fanSubscriptionError`
@@ -6768,13 +6764,10 @@ class LunoraClient {
             return;
         }
 
-        // A shape subscription is keyed in its own map (`shape_*` ids), so the
-        // lookup above misses it. Without this a rejected `shape_subscribe`
-        // (unknown shape, RLS-denied, cross-shard-invalid) would never reach the
-        // subscriber's `onError` and the shape would silently hang with no data.
-        const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
-
-        if (shapeState) {
+        // Shape subscriptions are keyed in their own map (`shape_*` ids). A rejected
+        // `shape_subscribe` (unknown shape, RLS-denied, cross-shard-invalid) must reach the
+        // subscriber's `onError`, or the shape hangs with no data.
+        if (route === "shape" && shapeState) {
             fanSubscriptionError(shapeState.errorCallbacks, buildSubscriptionError(message));
         }
     }
@@ -6905,7 +6898,7 @@ class LunoraClient {
         // Drop the cache seed before the value moves, then commit the payload and its
         // position. The watermark and the checkpoint fan-out follow the commit.
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
-        commitDataFrame(state, message, payload);
+        commitDataFrame(state, payload, { cursor: message.cursor, epoch: message.epoch });
 
         if (message.lastMutationId !== undefined) {
             advanceWatermark(state, message.lastMutationId);
@@ -8690,41 +8683,44 @@ class LunoraClient {
         shardKey: string | undefined,
         authToken: null | string,
     ): QueuedMutation[] {
-        const bySlot = new Map<number, RpcEnvelopeBody>();
-
-        for (const entry of results) {
-            // A body that is not a readable envelope is a slot the server never answered
-            // (§4.3): leave it out so the item is requeued under the same mutationId.
-            if (typeof entry.id === "number" && isSlotEnvelope(entry.body)) {
-                bySlot.set(entry.id, entry.body);
-            }
-        }
-
+        const bySlot = indexReplaySlots(results);
         const requeue: QueuedMutation[] = [];
         let accepted = false;
         let refused = false;
 
         for (const [index, item] of items.entries()) {
-            const inner = bySlot.get(index);
+            const verdict = replaySlotVerdict(bySlot.get(index));
 
-            if (inner === undefined) {
-                // The server never returned this slot — it may or may not have
-                // committed; retry under the same `mutationId` (idempotent).
-                requeue.push(item);
-            } else if ("error" in inner) {
-                const error = slotError(inner);
+            switch (verdict.kind) {
+                case "committed": {
+                    accepted = true;
+                    this.settleReplaySuccess(item, verdict.value, verdict.commitCursor);
 
-                refused ||= isAuthReplayFailure(error);
-
-                if (this.shouldRequeueReplayFailure(error, authToken)) {
-                    this.noteReplayRetryDelay(shardKey, error, authToken);
-                    requeue.push(item);
-                } else {
-                    this.settleReplayTerminal(item, error);
+                    break;
                 }
-            } else {
-                accepted = true;
-                this.settleReplayBatchResult(item, inner);
+                case "errored": {
+                    refused ||= isAuthReplayFailure(verdict.error);
+
+                    if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
+                        this.noteReplayRetryDelay(shardKey, verdict.error, authToken);
+                        requeue.push(item);
+                    } else {
+                        this.settleReplayTerminal(item, verdict.error);
+                    }
+
+                    break;
+                }
+                case "unanswered": {
+                    // The server never returned this slot. It may or may not have committed,
+                    // so retry under the same `mutationId` (idempotent).
+                    requeue.push(item);
+
+                    break;
+                }
+                default: {
+                    accepted = true;
+                    this.settleReplayUndecodable(item, verdict.error, verdict.commitCursor);
+                }
             }
         }
 
@@ -8735,26 +8731,6 @@ class LunoraClient {
         }
 
         return requeue;
-    }
-
-    /**
-     * Settle one batch slot that answered with a result. Decoded per slot: one
-     * result the codec refuses must not abandon the slots after it (committed
-     * writes left pending and unsettled for the rest of the session), and its
-     * own write DID commit.
-     */
-    private settleReplayBatchResult(item: QueuedMutation, inner: RpcEnvelopeBody): void {
-        let value: unknown;
-
-        try {
-            value = decodeWire(inner.result);
-        } catch (error) {
-            this.settleReplayUndecodable(item, undecodableResultError(error), inner.commitCursor);
-
-            return;
-        }
-
-        this.settleReplaySuccess(item, value, inner.commitCursor);
     }
 }
 

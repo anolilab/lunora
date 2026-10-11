@@ -10,8 +10,11 @@
 import type { LunoraErrorCode } from "@lunora/errors";
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire } from "../../../shared/wire-codec";
+import { isSlotEnvelope } from "./call-wire";
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
-import { retryAfterHeaderMs } from "./wire-errors";
+import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";
+import { retryAfterHeaderMs, slotError } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -204,6 +207,49 @@ const undecodableResultError = (cause: unknown): LunoraError => {
 
 /** Whether `error` reports a committed reply whose result did not decode (see {@link undecodableResultError}). */
 const isUndecodableResult = (error: unknown): error is LunoraError => error instanceof Error && undecodableResults.has(error);
+
+/** A batch's answered slots keyed by slot index. A body that is not a readable envelope is left out, because the server never answered that slot (§4.3). */
+export const indexReplaySlots = (results: { body?: unknown; id?: number }[]): Map<number, RpcEnvelopeBody> => {
+    const bySlot = new Map<number, RpcEnvelopeBody>();
+
+    for (const entry of results) {
+        if (typeof entry.id === "number" && isSlotEnvelope(entry.body)) {
+            bySlot.set(entry.id, entry.body);
+        }
+    }
+
+    return bySlot;
+};
+
+/**
+ * What a batch slot means for the queued write it answers, decided in one place.
+ * `unanswered`: the server never replied, so retry under the same `mutationId`.
+ * `errored`: the server's error. The caller requeues or settles it by failure kind.
+ * `committed`: the write committed with a readable result.
+ * `undecodable`: the write committed, but its result cannot be decoded. It settles
+ * as committed and is never retried.
+ */
+export type ReplaySlotVerdict =
+    | { error: LunoraClientError; kind: "errored" }
+    | { commitCursor: number | undefined; error: LunoraError; kind: "undecodable" }
+    | { commitCursor: number | undefined; kind: "committed"; value: unknown }
+    | { kind: "unanswered" };
+
+export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlotVerdict => {
+    if (inner === undefined) {
+        return { kind: "unanswered" };
+    }
+
+    if ("error" in inner) {
+        return { error: slotError(inner), kind: "errored" };
+    }
+
+    try {
+        return { commitCursor: inner.commitCursor, kind: "committed", value: decodeWire(inner.result) };
+    } catch (error: unknown) {
+        return { commitCursor: inner.commitCursor, error: undecodableResultError(error), kind: "undecodable" };
+    }
+};
 
 export {
     defaultReplayRetryDelayMs,
