@@ -5,13 +5,13 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type {CoverageProblem, TableClassification} from "./coverage";
+import type { CoverageProblem, TableClassification } from "./coverage";
 import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
-import type {RequestRecord, RequestStore} from "./requests";
+import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
-import type {DataPort, ErasureOutcome, ExportOutcome, StorePort} from "./run";
+import type { DataPort, ErasureOutcome, ExportOutcome, StorePort } from "./run";
 import { runErasure, runExport } from "./run";
 
 /** The app's erasure settings. The defaults are the decided values (D3 and the sign-in window). */
@@ -39,8 +39,8 @@ interface PrivacyConfig {
 interface Privacy {
     readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
-    readonly extendRequest: (input: { reason: string; requestId: string; }) => Promise<RequestRecord>;
-    readonly requestErasure: (input: { sessionAgeMs: number; subjectId: string; }) => Promise<RequestRecord>;
+    readonly extendRequest: (input: { reason: string; requestId: string }) => Promise<RequestRecord>;
+    readonly requestErasure: (input: { sessionAgeMs: number; subjectId: string }) => Promise<RequestRecord>;
     readonly requestExport: (input: { subjectId: string }) => Promise<RequestRecord>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
     readonly runExport: (requestId: string) => Promise<ExportOutcome>;
