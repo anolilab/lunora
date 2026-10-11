@@ -148,7 +148,7 @@ import {
     utf8ByteLength,
 } from "./replay";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
-import { commitPokeSlice, PokeAssembler } from "./shape-state";
+import { commitPokeSlice, emitShapeRows, failUndecodableShapes, PokeAssembler } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
@@ -6725,19 +6725,8 @@ class LunoraClient {
             return;
         }
 
-        // A shape whose slice carried a row the codec refused keeps its view, its
-        // checkpoint and its epoch: applying the decodable rest would advance the
-        // resume position past a row it never held, so no resume would send it again.
-        for (const [shapeId, error] of buffer.undecodable) {
-            const state = this.shapeSubscriptions.get(shapeId);
-
-            if (state) {
-                fanSubscriptionError(state.errorCallbacks, {
-                    code: "WIRE_DECODE_FAILED",
-                    message: `could not decode a poke for this shape — ${error instanceof Error ? error.message : String(error)}`,
-                });
-            }
-        }
+        // A shape whose slice the codec refused keeps its view and resume position.
+        failUndecodableShapes(this.shapeSubscriptions, buffer);
 
         for (const shapeId of buffer.parts.keys()) {
             const state = this.shapeSubscriptions.get(shapeId);
@@ -6755,7 +6744,7 @@ class LunoraClient {
     private applyPokePart(state: ShapeSubscriptionState, buffer: PokeBuffer, message: ServerPokeEndMessage): void {
         const outcome = commitPokeSlice(state, buffer, message);
 
-        this.emitShapeRows(state);
+        emitShapeRows(state);
 
         if (outcome === "reseed") {
             this.sendShapeSubscribeIfOpen(state);
@@ -6787,20 +6776,6 @@ class LunoraClient {
         console.warn("[lunora] could not merge a row delta into the cached result; re-subscribing for a full snapshot");
 
         this.sendSubscribeIfOpen(state);
-    }
-
-    /** Materialize a shape's keyed view to an array and invoke its callbacks. */
-    // eslint-disable-next-line class-methods-use-this -- a pure state→callback fan-out kept beside the shape-subscription pipeline it serves.
-    private emitShapeRows(state: ShapeSubscriptionState): void {
-        const rows = [...state.rows.values()];
-
-        for (const shapeCallback of state.callbacks) {
-            try {
-                shapeCallback(rows);
-            } catch {
-                /* user callback threw — ignore */
-            }
-        }
     }
 
     /**
@@ -7658,7 +7633,7 @@ class LunoraClient {
             shapeState.rows.clear();
             shapeState.serverCursor = undefined;
             shapeState.serverEpoch = undefined;
-            this.emitShapeRows(shapeState);
+            emitShapeRows(shapeState);
         }
 
         this.bounceShardSockets();

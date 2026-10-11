@@ -2,6 +2,7 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeWire } from "../../../shared/wire-codec";
 import { connectionKey } from "./connection-state";
 import type { SubscriptionErrorCallback, SyncWatermark } from "./subscription";
+import { fanSubscriptionError } from "./subscription";
 import type { RowOp, ServerPokeEndMessage, ServerPokePartMessage, ServerPokeStartMessage } from "./types";
 
 /**
@@ -228,4 +229,35 @@ export const commitPokeSlice = (state: ShapeSubscriptionState, buffer: PokeBuffe
     /* eslint-enable no-param-reassign */
 
     return "applied";
+};
+
+/** Materialize a shape's keyed view to an array and invoke its callbacks. A throwing callback is swallowed so one subscriber cannot block the rest. */
+export const emitShapeRows = (state: ShapeSubscriptionState): void => {
+    const rows = [...state.rows.values()];
+
+    for (const shapeCallback of state.callbacks) {
+        try {
+            shapeCallback(rows);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
+};
+
+/**
+ * A shape whose slice carried a row the codec refused keeps its view, its checkpoint and its
+ * epoch: applying the decodable rest would advance the resume position past a row it never
+ * held, so no resume would send it again. Each such shape gets a `WIRE_DECODE_FAILED` error.
+ */
+export const failUndecodableShapes = (shapes: ReadonlyMap<string, ShapeSubscriptionState>, buffer: PokeBuffer): void => {
+    for (const [shapeId, error] of buffer.undecodable) {
+        const state = shapes.get(shapeId);
+
+        if (state) {
+            fanSubscriptionError(state.errorCallbacks, {
+                code: "WIRE_DECODE_FAILED",
+                message: `could not decode a poke for this shape — ${error instanceof Error ? error.message : String(error)}`,
+            });
+        }
+    }
 };
