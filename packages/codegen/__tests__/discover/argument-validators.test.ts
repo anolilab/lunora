@@ -81,6 +81,76 @@ const INTERNAL = `
     });
 `;
 
+/** `v.any()` reached through an aliased namespace import. */
+const ALIASED_ANY = `
+    import { v as val } from "@lunora/values";
+    import { mutation } from "@lunora/server";
+
+    export const update = mutation({
+        args: { payload: val.any() },
+        handler: async () => null,
+    });
+`;
+
+/** `v.any()` reached through a destructured shorthand. */
+const DESTRUCTURED_ANY = `
+    import { mutation } from "@lunora/server";
+
+    const { any } = v;
+
+    export const update = mutation({
+        args: { payload: any() },
+        handler: async () => null,
+    });
+`;
+
+/** `v.any()` returned by a same-file helper. */
+const HELPER_ANY = `
+    import { mutation } from "@lunora/server";
+
+    const untyped = () => v.any();
+
+    export const update = mutation({
+        args: { payload: untyped() },
+        handler: async () => null,
+    });
+`;
+
+/** `v.any()` reached through a namespace import, which exposes `v` as a member. */
+const NAMESPACE_ANY = `
+    import * as values from "@lunora/values";
+    import { mutation } from "@lunora/server";
+
+    export const update = mutation({
+        args: { payload: values.v.any() },
+        handler: async () => null,
+    });
+`;
+
+/** A helper's unbounded string that the call site bounds with `.max()`. */
+const HELPER_BOUNDED_AT_SITE = `
+    import { mutation } from "@lunora/server";
+
+    const title = () => v.string();
+
+    export const rename = mutation({
+        args: { name: title().max(200) },
+        handler: async () => null,
+    });
+`;
+
+/** A local function named `any` that is not the validator namespace. */
+const UNRELATED_ANY = `
+    import { mutation } from "@lunora/server";
+
+    const any = () => 1;
+
+    export const update = mutation({
+        args: { payload: any() },
+        handler: async () => null,
+    });
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -137,6 +207,66 @@ describe("discoverArgumentValidators", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "sync.ts"), INTERNAL, "utf8");
+
+        expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a v.any() reached through an aliased namespace import", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), ALIASED_ANY, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.anyArgs).toStrictEqual(["payload"]);
+    });
+
+    it("flags a v.any() reached through a destructured any", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), DESTRUCTURED_ANY, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.anyArgs).toStrictEqual(["payload"]);
+    });
+
+    it("flags a v.any() returned by a same-file helper", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), HELPER_ANY, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.anyArgs).toStrictEqual(["payload"]);
+    });
+
+    it("flags a v.any() reached through a namespace import", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), NAMESPACE_ANY, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.anyArgs).toStrictEqual(["payload"]);
+    });
+
+    it("does NOT flag a helper's string that the call site bounds", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "rename.ts"), HELPER_BOUNDED_AT_SITE, "utf8");
+
+        expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does NOT flag a non-validator call named any", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), UNRELATED_ANY, "utf8");
 
         expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
     });
