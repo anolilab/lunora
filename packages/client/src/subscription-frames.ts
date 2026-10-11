@@ -1,5 +1,5 @@
 import type { SubscriptionState } from "./subscription";
-import type { ServerDataMessage } from "./types";
+import type { ServerDataMessage, ServerErrorMessage } from "./types";
 
 /**
  * Advance a subscription's custom-mutator watermark. `Math.max`, never a bare
@@ -46,4 +46,42 @@ export const commitDataFrame = (state: SubscriptionState, message: ServerDataMes
         state.serverEpoch = message.epoch;
     }
     /* eslint-enable no-param-reassign */
+};
+
+/** Where an `error` frame belongs. Decided from the frame and what the client holds, never from the socket. */
+export type ErrorFrameRoute = "none" | "shape" | "stream" | "subscription" | "tokenExpired";
+
+/**
+ * Route an `error` frame. A token expiry is a socket-wide notice, so it wins over any
+ * id. Otherwise the frame goes to the first owner of its id, in the order streams,
+ * then subscriptions, then shapes. A frame with no id that is not a token expiry has no
+ * owner.
+ */
+export const routeErrorFrame = (message: ServerErrorMessage, held: { shape: boolean; stream: boolean; subscription: boolean }): ErrorFrameRoute => {
+    if ((message.error as { code?: unknown } | undefined)?.code === "TOKEN_EXPIRED") {
+        return "tokenExpired";
+    }
+
+    if (message.id === undefined) {
+        return "none";
+    }
+
+    if (held.stream) {
+        return "stream";
+    }
+
+    if (held.subscription) {
+        return "subscription";
+    }
+
+    return held.shape ? "shape" : "none";
+};
+
+/** Where a `complete` frame belongs: a stream ends, a subscription is cancelled, or nothing holds the id. */
+export const routeCompleteFrame = (held: { stream: boolean; subscription: boolean }): "none" | "stream" | "subscription" => {
+    if (held.stream) {
+        return "stream";
+    }
+
+    return held.subscription ? "subscription" : "none";
 };
