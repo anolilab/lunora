@@ -609,6 +609,9 @@ catalogs:
     jiti:
       specifier: ^2.7.0
       version: 2.7.0
+    pprof-format:
+      specifier: 2.3.1
+      version: 2.3.1
     quicktype-core:
       specifier: ^26.0.0
       version: 26.0.0
@@ -4169,6 +4172,9 @@ importers:
       cron-parser:
         specifier: catalog:tooling
         version: 5.10.1
+      pprof-format:
+        specifier: catalog:tooling
+        version: 2.3.1
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -22001,6 +22007,9 @@ packages:
   powershell-utils@0.1.0:
     resolution: {integrity: sha512-dM0jVuXJPsDN6DvRpea484tCUaMiXWjuCn++HGTqUWzGDjv5tZkEZldAJ/UMlqRYGFrD/etByo4/xOuC/snX2A==}
     engines: {node: '>=20'}
+
+  pprof-format@2.3.1:
+    resolution: {integrity: sha512-y51Z83qG2vEQBACPu6lkGFREVkHwQaCaNDdSFEMLIqSo3bmpADsbP6J3F2SSk7tYB741oTQ9Kt5YAdQsmiCRkA==}
 
   preact@10.29.7:
     resolution: {integrity: sha512-DCHYrK/B10yUD3ZjLfhZ3WIE/9Vf9VFUODcRE2dRomTYDpJk6z6L9wecSfhfE6M9ZTHUdyQkoC46arIDhEV84Q==}
@@ -44494,6 +44503,8 @@ snapshots:
       - preact-render-to-string
 
   powershell-utils@0.1.0: {}
+
+  pprof-format@2.3.1: {}
 
   preact@10.29.7: {}
 

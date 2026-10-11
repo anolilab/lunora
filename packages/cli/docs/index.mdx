@@ -46,6 +46,8 @@ lunora run <fn> [--args <json>]         # send a single RPC to a running worker
             [--as <userId>] [--claims <json>] #   run as an identity (identity-gated apps)
 lunora insights [--shard <key>]         # write-conflict / error / latency hot-spots
             [--limit n] [--format json] [--prod --url <u>]
+lunora profile --target node --url <u>  # on-demand CPU / heap profile (pprof) of a Node app
+            [--type cpu|heap] [--duration-ms n] [--out <file>] [--token <t>]
 lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
@@ -1164,6 +1166,41 @@ lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN
 Targeting production requires an explicit `--url`. See
 [Sharding](/docs/concepts/sharding) for what to do about a write-conflict
 hot-spot, and [Performance](/docs/concepts/observability) for the latency side.
+
+### `lunora profile`
+
+Captures an on-demand CPU or heap profile from a **running Node-target** app and
+writes it as a gzip-compressed pprof file. Read it with `go tool pprof`, or load
+it into Pyroscope or Speedscope.
+
+The app serves the capture itself. It mounts `createNodeProfileHandler` from
+`@lunora/platform-node` on a route it chooses, and that route is what `--url`
+points at. There is no default URL for a Node app, so `--url` is required.
+
+```bash
+lunora profile --target node --url https://app.example.com/__profile
+lunora profile --target node --url http://localhost:3000/__profile --type heap --duration-ms 30000
+lunora profile --target node --url https://app.example.com/__profile --out cpu.pprof.gz
+```
+
+- `--type cpu` (default) samples the call stack for the window. The app has to
+  be doing work during it, or the profile is empty. Functions V8 had already
+  inlined before the capture began can appear under their caller rather than
+  under their own name, so a long-running, warm app may show a caller where the
+  work is done.
+- `--type heap` reports the sampled allocations still alive when the window
+  ends. Allocations freed during the window do not appear.
+- `--duration-ms` is an integer from 1000 to 50000 (default 10000).
+- The bearer is `--token`, else `LUNORA_ADMIN_TOKEN`. It must match the token the
+  app passes to `createNodeProfileHandler`. The `.dev.vars` fallback applies to
+  localhost only, as it does for the other admin commands.
+- Only one capture runs per app process. A second request gets `409` until the
+  first finishes.
+
+On a project that deploys to Cloudflare the command refuses and points at
+`lunora cloudflare profile`. A project with no configured target resolves to
+Cloudflare, so the Node target must be passed with `--target node`, or set as the
+`target` in `lunora.config`.
 
 ### `lunora reset`
 
