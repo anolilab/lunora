@@ -786,6 +786,7 @@ export interface Doc_catalogInstalls {
     _id: Id<"catalogInstalls">;
     _creationTime: number;
     createdAt: number;
+    activeKey?: string;
     deploymentId?: string;
     installedBy: string;
     organizationId: Id<"organizations">;
@@ -902,7 +903,7 @@ export interface IndexNamesByTable {
     paymentSessions: "by_reference" | "by_provider_session";
     subscriptions: "by_reference" | "by_provider_subscription";
     usageEvents: "by_reference_feature" | "by_idempotency";
-    catalogInstalls: "by_project" | "by_org";
+    catalogInstalls: "by_active" | "by_project" | "by_org";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -1839,6 +1840,7 @@ export interface Insert_catalogInstalls {
     _id?: Id<"catalogInstalls">;
     _creationTime?: number;
     createdAt: number;
+    activeKey?: string;
     deploymentId?: string;
     installedBy: string;
     organizationId: Id<"organizations">;

@@ -234,7 +234,9 @@ const installPorts = (
                 projectId,
             });
 
-            return current.filter((secret) => names.includes(secret.name)) satisfies SealedSecret[];
+            const wanted = new Set(names);
+
+            return current.filter((secret) => wanted.has(secret.name)) satisfies SealedSecret[];
         },
         storedSecretNames: async () => {
             const rows = await storedSecrets();

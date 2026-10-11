@@ -891,6 +891,7 @@ export const catalogInstalls = sqliteTable("catalogInstalls", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     createdAt: real("createdAt").notNull(),
+    activeKey: text("activeKey"),
     deploymentId: text("deploymentId"),
     installedBy: text("installedBy").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
@@ -899,6 +900,7 @@ export const catalogInstalls = sqliteTable("catalogInstalls", {
     status: text("status", { mode: "json" }).$type<"installing" | "live">().notNull(),
     version: text("version").notNull(),
 }, (t) => ({
+    by_active: uniqueIndex("by_active").on(t.activeKey),
     by_project: index("by_project").on(t.projectId),
     by_org: index("by_org").on(t.organizationId),
 }));

@@ -1,6 +1,7 @@
 import { useQuery } from "@lunora/react";
+import { useQuery as useCatalogQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,10 +52,16 @@ const fetchCatalog = async (organizationId: OrgId): Promise<CatalogPayload> => {
         credentials: "include",
         signal: AbortSignal.timeout(BROWSE_TIMEOUT_MS),
     });
-    const payload = (await response.json().catch(() => null)) as { apps?: CatalogAppView[]; error?: string; skipped?: CatalogSkipped[] } | null;
+    if (!response.ok) {
+        const failure = (await response.json().catch(() => null)) as { error?: string } | null;
 
-    if (!response.ok || !payload?.apps) {
-        throw new Error(payload?.error ?? `could not load the catalog (HTTP ${String(response.status)})`);
+        throw new Error(failure?.error ?? `could not load the catalog (HTTP ${String(response.status)})`);
+    }
+
+    const payload = (await response.json().catch(() => null)) as { apps?: CatalogAppView[]; skipped?: CatalogSkipped[] } | null;
+
+    if (!payload?.apps) {
+        throw new Error("the catalog answered without its apps");
     }
 
     return { apps: payload.apps, skipped: payload.skipped ?? [] };
@@ -144,6 +151,15 @@ const SkippedList = ({ skipped }: { skipped: CatalogSkipped[] }): ReactElement |
     );
 };
 
+/** The line the section shows for a failed browse, or `null` while there is no failure. */
+const loadErrorText = (error: unknown): null | string => {
+    if (error === null) {
+        return null;
+    }
+
+    return error instanceof Error ? error.message : "could not load the catalog";
+};
+
 /**
  * Cloud "Catalog": the apps published to the official catalog, and the org's
  * projects that already run each one. Installing an app deploys it into a chosen
@@ -153,35 +169,14 @@ const SkippedList = ({ skipped }: { skipped: CatalogSkipped[] }): ReactElement |
 export const CatalogSection = ({ organizationId }: { organizationId: OrgId }): ReactElement => {
     const projects = useQuery(api.projects.listByOrg, { organizationId });
     const role = useMyRole(organizationId);
-    const [catalog, setCatalog] = useState<CatalogPayload | undefined>(undefined);
-    const [loadError, setLoadError] = useState<null | string>(null);
-    const [reloadKey, setReloadKey] = useState(0);
     const [openSlug, setOpenSlug] = useState<null | string>(null);
-
-    useEffect(() => {
-        let active = true;
-
-        const load = async (): Promise<void> => {
-            try {
-                const loaded = await fetchCatalog(organizationId);
-
-                if (active) {
-                    setCatalog(loaded);
-                    setLoadError(null);
-                }
-            } catch (error: unknown) {
-                if (active) {
-                    setLoadError(error instanceof Error ? error.message : "could not load the catalog");
-                }
-            }
-        };
-
-        void load();
-
-        return () => {
-            active = false;
-        };
-    }, [organizationId, reloadKey]);
+    const catalogQuery = useCatalogQuery({
+        queryFn: () => fetchCatalog(organizationId),
+        queryKey: ["catalog", organizationId],
+        retry: false,
+    });
+    const catalog = catalogQuery.data;
+    const loadError = loadErrorText(catalogQuery.error);
 
     // Installing is a manager action; until the roster answers the role is unknown and the action stays hidden.
     const canInstall = canManage(role);
@@ -197,7 +192,7 @@ export const CatalogSection = ({ organizationId }: { organizationId: OrgId }): R
     };
 
     const handleInstalled = (): void => {
-        setReloadKey((key) => key + 1);
+        void catalogQuery.refetch();
     };
 
     return (

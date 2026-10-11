@@ -41,14 +41,20 @@ const installRequest = async (body: Record<string, unknown>): Promise<InstallOut
         method: "POST",
         signal: AbortSignal.timeout(INSTALL_TIMEOUT_MS),
     });
-    const payload = (await response.json().catch(() => null)) as { error?: string; field?: string; generated?: string[]; kept?: string[] } | null;
+    if (!response.ok) {
+        const failure = (await response.json().catch(() => null)) as { error?: string; field?: string } | null;
 
-    if (!response.ok || !payload?.generated || !payload.kept) {
         return {
-            ...(payload?.field === undefined ? {} : { field: payload.field }),
-            message: payload?.error ?? `could not install the app (HTTP ${String(response.status)})`,
+            ...(failure?.field === undefined ? {} : { field: failure.field }),
+            message: failure?.error ?? `could not install the app (HTTP ${String(response.status)})`,
             ok: false,
         };
+    }
+
+    const payload = (await response.json().catch(() => null)) as { generated?: string[]; kept?: string[] } | null;
+
+    if (!payload?.generated || !payload.kept) {
+        return { message: "the install answered without its outcome", ok: false };
     }
 
     return { generated: payload.generated, kept: payload.kept, ok: true };
@@ -235,7 +241,15 @@ export const CatalogInstallForm = ({ form, onClose, onInstalled, organizationId,
 
             {selectedProject === undefined ? null : (
                 <div className="flex items-start gap-2 text-sm sm:col-span-2">
-                    <input checked={confirmed} className="mt-0.5" id={fieldId("confirm", "replace")} onChange={handleConfirmChange} required type="checkbox" />
+                    <input
+                        aria-label={`Replace the production release of ${selectedProject.name}`}
+                        checked={confirmed}
+                        className="mt-0.5"
+                        id={fieldId("confirm", "replace")}
+                        onChange={handleConfirmChange}
+                        required
+                        type="checkbox"
+                    />
                     <label htmlFor={fieldId("confirm", "replace")}>{`Replace the production release of ${selectedProject.name}`}</label>
                 </div>
             )}

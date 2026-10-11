@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/server";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -29,6 +30,7 @@ export interface CatalogInstallView {
 
 interface InstallRow {
     _id: Id<"catalogInstalls">;
+    activeKey?: string;
     createdAt: number;
     deploymentId?: string;
     installedBy: string;
@@ -45,9 +47,9 @@ export const installs = query
     .query(async ({ ctx: context, args: { organizationId } }): Promise<CatalogInstallView[]> => {
         await assertMember(context, organizationId);
 
-        const { page } = await context.db.catalogInstalls.findMany({ where: { organizationId } });
+        const rows = await collectAll<InstallRow>((cursor) => context.db.catalogInstalls.findMany({ cursor, where: { organizationId } }));
 
-        return (page as unknown as InstallRow[])
+        return rows
             .filter((row) => row.status === "live" && row.deploymentId !== undefined)
             .toSorted((a, b) => b.createdAt - a.createdAt)
             .map((row) => {
@@ -67,8 +69,12 @@ export const installs = query
 /**
  * Claim a project for one install (SYSTEM). Refuses while another install of the
  * project holds a live claim; a claim past its lease is a crashed install and is
- * dropped. Lunora mutations on one shard are serialized, so the check and the
- * insert are one step.
+ * dropped.
+ *
+ * The check is a read and the claim is an insert, so two claims can both read an
+ * empty project. The unique `by_active` index is what makes the claim exclusive: the
+ * insert fails for the second one, which then reports busy. The stored key is
+ * the project id, and a live install gives its key up in `finishInstall`.
  */
 export const claimInstall = internalMutation
     .input({
@@ -79,24 +85,39 @@ export const claimInstall = internalMutation
         version: boundedString(LIMITS.id),
     })
     .mutation(async ({ ctx: context, args }): Promise<{ busy: true } | { busy: false; installId: string }> => {
-        const { page } = await context.db.catalogInstalls.findMany({ where: { projectId: args.projectId } });
+        const holderOf = async (): Promise<InstallRow | undefined> => {
+            const { page } = await context.db.catalogInstalls.findMany({ where: { activeKey: args.projectId } });
 
-        for (const row of page as unknown as InstallRow[]) {
-            if (row.status !== "installing") {
-                continue;
-            }
+            return (page as unknown as InstallRow[]).at(0);
+        };
 
-            if (context.now - row.createdAt < CLAIM_LEASE_MS) {
+        const holder = await holderOf();
+
+        if (holder !== undefined) {
+            if (context.now - holder.createdAt < CLAIM_LEASE_MS) {
                 return { busy: true };
             }
 
-            // eslint-disable-next-line no-await-in-loop -- a handful of stale claims per project
-            await context.db.delete(row._id);
+            await context.db.delete(holder._id);
         }
 
-        const installId = await context.db.insert("catalogInstalls", { ...args, createdAt: context.now, status: "installing" });
+        try {
+            const installId = await context.db.insert("catalogInstalls", {
+                ...args,
+                activeKey: args.projectId,
+                createdAt: context.now,
+                status: "installing",
+            });
 
-        return { busy: false, installId };
+            return { busy: false, installId };
+        } catch (error) {
+            // The unique key refused the insert: another claim landed between the read and this write.
+            if ((await holderOf()) !== undefined) {
+                return { busy: true };
+            }
+
+            throw error;
+        }
     });
 
 /** Mark a claim live once its release is up (SYSTEM). */
@@ -109,12 +130,13 @@ export const finishInstall = internalMutation
             throw new LunoraError("CONFLICT", "no install is in progress for this claim");
         }
 
-        await context.db.patch(installId, { deploymentId, status: "live" });
+        // A live row keys on its own install id, so no claim on the project can match it.
+        await context.db.patch(installId, { activeKey: `live:${installId}`, deploymentId, status: "live" });
 
         // A project runs one production release, so the new live row replaces every earlier one.
-        const { page } = await context.db.catalogInstalls.findMany({ where: { projectId: row.projectId } });
+        const rows = await collectAll<InstallRow>((cursor) => context.db.catalogInstalls.findMany({ cursor, where: { projectId: row.projectId } }));
 
-        for (const other of page as unknown as InstallRow[]) {
+        for (const other of rows) {
             if (other._id !== installId && other.status === "live") {
                 // eslint-disable-next-line no-await-in-loop -- a handful of superseded releases per project
                 await context.db.delete(other._id);

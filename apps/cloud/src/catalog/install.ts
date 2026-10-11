@@ -379,14 +379,29 @@ export const planInstall = (input: InstallInput, stored: ReadonlySet<string>): I
     return { ok: true, plan: { generated: secrets.generated, kept: secrets.kept, request, secrets: secrets.secrets } };
 };
 
+/**
+ * Run `task` over `items` one step at a time, in order, so a failure knows exactly
+ * which steps ran. A rejected step stops the sequence, because the next step is only
+ * reached after this one has settled.
+ */
+const inSequence = async <T>(items: ReadonlyArray<T>, task: (item: T) => Promise<void>): Promise<void> => {
+    if (items.length === 0) {
+        return;
+    }
+
+    const [first, ...rest] = items;
+
+    await task(first);
+    await inSequence(rest, task);
+};
+
 /** Put the project's secrets back the way the install found them. Best effort: each step is tried. */
 const restore = async (ports: InstallPorts, touched: string[], snapshot: Map<string, SealedSecret>): Promise<void> => {
-    for (const name of touched) {
+    await inSequence(touched, (name) => {
         const previous = snapshot.get(name);
 
-        // eslint-disable-next-line no-await-in-loop -- secrets are put back one at a time, in the order they were changed
-        await (previous === undefined ? ports.removeSecret(name) : ports.restoreSecret(previous)).catch(() => {});
-    }
+        return (previous === undefined ? ports.removeSecret(name) : ports.restoreSecret(previous)).catch(() => {});
+    });
 };
 
 /**
@@ -445,11 +460,10 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts): Prom
 
         snapshot = new Map(sealed.map((secret) => [secret.name, secret]));
 
-        for (const name of names) {
+        await inSequence(names, async (name) => {
             touched.push(name);
-            // eslint-disable-next-line no-await-in-loop -- one secret at a time, so a failure knows exactly what changed
             await ports.storeSecret(name, plan.secrets[name] ?? "");
-        }
+        });
     } catch {
         await restore(ports, touched, snapshot);
 

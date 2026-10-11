@@ -11,6 +11,10 @@ import { defineTable, v } from "@lunora/server";
 export const catalogTables = {
     catalogInstalls: defineTable({
         createdAt: v.number(),
+        // The project id while the claim is held, then `live:<installId>` once the release is up.
+        // A unique index refuses a second claim on one project; NULLs are distinct, so the
+        // rows that carry no key never collide.
+        activeKey: v.optional(v.string()),
         // Set once the release is live.
         deploymentId: v.optional(v.string()),
         installedBy: v.string(),
@@ -22,5 +26,6 @@ export const catalogTables = {
     })
         .global()
         .index("by_org", ["organizationId"])
-        .index("by_project", ["projectId"]),
+        .index("by_project", ["projectId"])
+        .index("by_active", ["activeKey"], { unique: true }),
 };
