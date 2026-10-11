@@ -70,6 +70,7 @@ const TAB_GATES: Partial<Record<StudioTab, TabGate>> = {
     organizations: { feature: "auth" },
     payments: { feature: "payments" },
     pitr: { capability: "pointInTimeRecovery" },
+    privacyRequests: { feature: "privacy" },
     queues: { capability: "queues", feature: "queues" },
     reactors: { capability: "serverReactors" },
     schedule: { capability: "scheduler", feature: "scheduler" },

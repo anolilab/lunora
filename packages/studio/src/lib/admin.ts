@@ -627,8 +627,11 @@ export interface StudioFeaturesResult {
     mail: boolean;
     notifications: boolean;
     payments: boolean;
+
     /** The worker's deploy target and its capability levels; absent from a worker that predates it or has no matrix. */
     platform?: StudioPlatform;
+    /** `@lunora/privacy` is a declared dependency. It backs the Privacy requests page. */
+    privacy: boolean;
     queues: boolean;
     scheduler: boolean;
     storage: boolean;

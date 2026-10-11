@@ -103,6 +103,7 @@ const STUDIO_FEATURE_KEYS = [
     "mail",
     "notifications",
     "payments",
+    "privacy",
     "platform",
     "queues",
     "scheduler",
@@ -379,6 +380,28 @@ describe("studio", () => {
         expect(screen.getByTestId("dash-tab-logs")).toBeDefined();
     });
 
+    it("hides the privacy requests page when the app does not declare @lunora/privacy", async () => {
+        expect.hasAssertions();
+
+        render(renderStudio(createClient({ privacy: false })));
+
+        await screen.findByTestId("dash-tab-logs");
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("dash-tab-privacyRequests")).toBeNull();
+        });
+    });
+
+    it("shows the privacy requests page when the app declares @lunora/privacy", async () => {
+        expect.hasAssertions();
+
+        render(renderStudio(createClient({ privacy: true })));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("dash-tab-privacyRequests")).toBeDefined();
+        });
+    });
+
     it("hides the notifications page when @lunora/notify isn't wired", async () => {
         expect.hasAssertions();
 
@@ -434,6 +457,7 @@ describe("studio", () => {
             "mail",
             "notifications",
             "payments",
+            "privacy",
             "platform",
             "queues",
             "scheduler",
