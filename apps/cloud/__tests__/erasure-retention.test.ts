@@ -382,8 +382,29 @@ describe("retention sweep", () => {
 
         const result = await prune.handler(ctx, {});
 
-        expect(result).toStrictEqual({ auditLog: 0, events: 0, financial: 1 });
+        expect(result).toStrictEqual({ auditLog: 0, deployments: 0, events: 0, financial: 1 });
         expect(deletedIds(ops)).toEqual(["old"]);
+    });
+
+    it("keeps a financial row through the calendar year of its tenth anniversary", async () => {
+        // A row from 31 December 2015 may go once 2026 has begun: its period runs to 31 December 2025.
+        const lastOfYear = Date.UTC(2015, 11, 31, 23, 59);
+
+        const beforeYear = makeCtx(
+            { auditLog: [], payment_events: [], payment_sessions: [{ _id: "row", referenceId: "erased", updatedAt: lastOfYear }], payment_subscriptions: [] },
+            { now: Date.UTC(2025, 11, 31, 23, 59) },
+        );
+
+        await expect(prune.handler(beforeYear.ctx, {})).resolves.toMatchObject({ financial: 0 });
+        expect(deletedIds(beforeYear.ops)).toEqual([]);
+
+        const afterYear = makeCtx(
+            { auditLog: [], payment_events: [], payment_sessions: [{ _id: "row", referenceId: "erased", updatedAt: lastOfYear }], payment_subscriptions: [] },
+            { now: Date.UTC(2026, 0, 1) },
+        );
+
+        await expect(prune.handler(afterYear.ctx, {})).resolves.toMatchObject({ financial: 1 });
+        expect(deletedIds(afterYear.ops)).toEqual(["row"]);
     });
 
     it("never sweeps a live payment row, however old", async () => {
@@ -421,7 +442,7 @@ describe("retention sweep", () => {
 
         const result = await prune.handler(ctx, {});
 
-        expect(result).toStrictEqual({ auditLog: 1, events: 1, financial: 0 });
+        expect(result).toStrictEqual({ auditLog: 1, deployments: 0, events: 1, financial: 0 });
         expect(deletedIds(ops)).toEqual(expect.arrayContaining(["audit_old", "event_old"]));
         expect(deletedIds(ops)).not.toContain("audit_new");
         expect(deletedIds(ops)).not.toContain("event_new");

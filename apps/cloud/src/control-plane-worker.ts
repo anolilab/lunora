@@ -18,7 +18,7 @@ import ssrHandler from "@tanstack/react-start/server-entry";
 import { LUNORA_CRONS } from "../lunora/_generated/crons.js";
 import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
 import { openApiSpec } from "../lunora/_generated/openapi.js";
-import schema from "../lunora/schema.js";
+import schema from "../lunora/schema";
 import { currentAuth } from "./auth";
 import type { ControlPlaneEnv } from "./control-plane-env";
 import { buildExec } from "./d1-store";

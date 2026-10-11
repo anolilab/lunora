@@ -10,6 +10,7 @@ import { isUsageAlertMeter, previousPeriodStart, usageThresholdSuggestion, usage
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import type { MemberRole } from "./authz";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
@@ -72,15 +73,36 @@ const assertInOrg = (row: null | { organizationId: Id<"organizations"> }, organi
     }
 };
 
-/** An org's alert rules, most-recent first (any member). */
+/**
+ * What a member who may not read delivery destinations sees in their place. A Slack
+ * webhook URL or a PagerDuty routing key is a credential: anyone who can read it can
+ * post into the organization's channel.
+ */
+const REDACTED_DESTINATION = "redacted";
+
+/** Owners and admins read destinations; other members see the rows with the destination redacted. */
+const withDestination = <T extends { destination: string }>(rows: T[], role: MemberRole): T[] => {
+    if (role === "owner" || role === "admin") {
+        return rows;
+    }
+
+    return rows.map((row) => {
+        return { ...row, destination: REDACTED_DESTINATION };
+    });
+};
+
+/** An org's alert rules, most-recent first. Destinations are redacted for members below admin. */
 export const rules = query
     .input({ organizationId: v.id("organizations") })
     .query(async ({ ctx: context, args: { organizationId } }): Promise<AlertRuleRow[]> => {
-        await assertMember(context, organizationId);
+        const member = await assertMember(context, organizationId);
 
         const { page } = await context.db.alertRules.findMany({ where: { organizationId } });
 
-        return page.toSorted((a, b) => b.createdAt - a.createdAt);
+        return withDestination(
+            page.toSorted((a, b) => b.createdAt - a.createdAt),
+            member.role,
+        );
     });
 
 /**
@@ -353,13 +375,16 @@ export const deleteRule = mutation
         return id;
     });
 
-/** An org's fired alerts, most-recent first (any member). */
+/** An org's fired alerts, most-recent first. Destinations are redacted for members below admin. */
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<AlertRow[]> => {
-    await assertMember(context, organizationId);
+    const member = await assertMember(context, organizationId);
 
     const { page } = await context.db.alerts.findMany({ where: { organizationId } });
 
-    return page.toSorted((a, b) => b.createdAt - a.createdAt);
+    return withDestination(
+        page.toSorted((a, b) => b.createdAt - a.createdAt),
+        member.role,
+    );
 });
 
 /**

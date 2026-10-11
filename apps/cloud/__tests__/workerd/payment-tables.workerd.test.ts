@@ -22,7 +22,7 @@ import type { MutationCtx } from "../../lunora/_generated/server";
 import { orgEntitlements } from "../../lunora/entitlements";
 import { purgeDeleted } from "../../lunora/organizations";
 import { ERASED_REFERENCE } from "../../lunora/purge";
-import { FINANCIAL_RETENTION_MS, prune, WEBHOOK_EVENT_RETENTION_MS } from "../../lunora/retention";
+import { financialCutoff, prune, WEBHOOK_EVENT_RETENTION_MS } from "../../lunora/retention";
 import schema from "../../lunora/schema";
 import { buildExec, controlPlaneDatabase } from "../../src/d1-store";
 
@@ -208,9 +208,9 @@ describe("payment tables (workerd, real D1)", () => {
                 state: "captured",
                 ...fields,
             }) as Promise<string>;
-        const expired = await session({ referenceId: ERASED_REFERENCE, updatedAt: now - FINANCIAL_RETENTION_MS - DAY });
-        const kept = await session({ referenceId: ERASED_REFERENCE, updatedAt: now - FINANCIAL_RETENTION_MS + DAY });
-        const live = await session({ referenceId: "org_live", updatedAt: now - FINANCIAL_RETENTION_MS - DAY });
+        const expired = await session({ referenceId: ERASED_REFERENCE, updatedAt: financialCutoff(now) - DAY });
+        const kept = await session({ referenceId: ERASED_REFERENCE, updatedAt: financialCutoff(now) + DAY });
+        const live = await session({ referenceId: "org_live", updatedAt: financialCutoff(now) - DAY });
         const oldEvent = `evt_${crypto.randomUUID()}`;
         const newEvent = `evt_${crypto.randomUUID()}`;
 

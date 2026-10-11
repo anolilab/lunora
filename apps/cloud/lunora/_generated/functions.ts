@@ -1462,7 +1462,7 @@ export interface Caller {
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
     };
     retention: {
-        prune: (args?: {}) => Promise<{ auditLog: number; events: number; financial: number; }>;
+        prune: (args?: {}) => Promise<{ auditLog: number; deployments: number; events: number; financial: number; }>;
     };
     rollouts: {
         abortRollout: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<unknown>;

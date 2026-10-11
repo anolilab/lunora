@@ -1,11 +1,16 @@
 import { LunoraError } from "@lunora/server";
 
-import type { Id } from "./_generated/dataModel.js";
+import type { Id, TableName } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, v } from "./_generated/server.js";
 import { legacySetRoleTargetRole } from "./members";
 import { collectAll } from "./paginate";
 import { anonymiseScopedRows, purgeScopedRows } from "./purge";
+
+/** The one read the export and the erasure make on a table picked by name. */
+interface AuthoredFacade {
+    findMany: (query: { limit?: number; where: Record<string, unknown> }) => Promise<{ page: { _id: string; organizationId?: string }[] }>;
+}
 
 /** Rows per list in one export. A caller with more than this gets the first page and a flag. */
 const EXPORT_LIMIT = 1000;
@@ -22,6 +27,21 @@ export const ACCOUNT_EXPORT_FORMAT = "lunora-account-export/2";
  * cannot be told apart or linked back to an account.
  */
 export const DELETED_ACTOR = "deleted-user";
+
+/**
+ * Every column that records the user who created or acted on a row. The
+ * account export lists those rows, and the erasure replaces the user id in them
+ * with {@link DELETED_ACTOR}. One list for both, so they cannot disagree.
+ */
+const AUTHORED_COLUMNS: ReadonlyArray<readonly [TableName, string]> = [
+    ["deployments", "createdBy"],
+    ["catalogInstalls", "installedBy"],
+    ["halts", "haltedBy"],
+    ["boxEnrolments", "createdBy"],
+    ["cloudflareAccounts", "createdBy"],
+    ["anomalySilences", "createdBy"],
+    ["invitations", "invitedBy"],
+];
 
 /**
  * The personal data the control plane holds about the signed-in caller, as a
@@ -49,7 +69,19 @@ export const exportMine = internalQuery.query(async ({ ctx: context }): Promise<
         where: { actorUserId: userId },
     });
 
+    const authored: Record<string, unknown>[] = [];
+
+    for (const [table, column] of AUTHORED_COLUMNS) {
+        // eslint-disable-next-line no-await-in-loop -- one bounded read per table; the export is small
+        const { page } = await (context.db[table] as unknown as AuthoredFacade).findMany({ limit: EXPORT_LIMIT, where: { [column]: userId } });
+
+        for (const row of page) {
+            authored.push({ column, id: row._id, organizationId: row.organizationId ?? null, table });
+        }
+    }
+
     return {
+        authoredRecords: authored,
         auditEntries: entries.map((entry) => {
             return {
                 action: entry.action,
@@ -165,6 +197,20 @@ const rewriteLegacySetRoleTargets = async (context: MutationContext, userId: str
     }
 };
 
+/** Record an `organization.ownerless` entry for each organization the user's removal left without an owner. */
+const recordOwnerless = async (context: MutationContext, organizations: ReadonlyArray<SoleOwnedOrganization>): Promise<void> => {
+    for (const organization of organizations) {
+        // eslint-disable-next-line no-await-in-loop -- one entry per ownerless organization; rare
+        await context.db.insert("auditLog", {
+            action: OWNERLESS_ACTION,
+            actorUserId: DELETED_ACTOR,
+            createdAt: context.now,
+            organizationId: organization.id,
+            target: "account-deletion",
+        });
+    }
+};
+
 /**
  * Remove what the control plane holds about a user whose account is being or
  * has been removed: the audit entries they authored stay for their retention
@@ -190,7 +236,8 @@ const rewriteLegacySetRoleTargets = async (context: MutationContext, userId: str
  *
  * Every membership goes. Every audit write happens before the memberships go,
  * because the sweep finds unfinished work by the memberships: a run cut short in
- * between is still found. Idempotent: a second run changes nothing.
+ * between is still found. A second run after an interruption changes nothing but
+ * may repeat an {@link OWNERLESS_ACTION} entry already written.
  *
  * Not isolated: the tables are `.global()` (D1, which has no interactive
  * transaction), so another owner can leave an organization between the
@@ -216,25 +263,31 @@ export const eraseUser = internalMutation
             }
         }
 
+        // Found and recorded while the memberships still exist: the sweep finds
+        // unfinished work by memberships, so an entry written after they go is lost
+        // if the run is cut short. A retry after an interruption repeats the entry.
+        const ownerless = await organizationsWithoutOtherOwner(context, ownerOf, userId);
+
+        await recordOwnerless(context, ownerless);
         await rewriteLegacySetRoleTargets(context, userId, new Set(memberships.map((membership) => membership.organizationId)));
         await anonymiseScopedRows(context, "auditLog", { actorUserId: userId }, () => {
             return { actorUserId: DELETED_ACTOR };
         });
-        await purgeScopedRows(context, ["members"], { userId });
 
-        // The user has no membership left, so "no owner other than userId" is "no owner".
-        const ownerless = await organizationsWithoutOtherOwner(context, ownerOf, userId);
-
-        for (const organization of ownerless) {
-            // eslint-disable-next-line no-await-in-loop -- one entry per ownerless organization; rare
-            await context.db.insert("auditLog", {
-                action: OWNERLESS_ACTION,
-                actorUserId: DELETED_ACTOR,
-                createdAt: context.now,
-                organizationId: organization.id,
-                target: "account-deletion",
+        for (const [table, column] of AUTHORED_COLUMNS) {
+            // eslint-disable-next-line no-await-in-loop -- one pass per table; a user's rows are few
+            await anonymiseScopedRows(context, table, { [column]: userId }, () => {
+                return { [column]: DELETED_ACTOR };
             });
         }
 
-        return { ownerless };
+        await purgeScopedRows(context, ["members"], { userId });
+
+        // A co-owner who left while this ran is caught here; the ones found above are not repeated.
+        const ownerlessAfter = await organizationsWithoutOtherOwner(context, ownerOf, userId);
+        const raced = ownerlessAfter.filter((organization) => !ownerless.some((found) => found.id === organization.id));
+
+        await recordOwnerless(context, raced);
+
+        return { ownerless: [...ownerless, ...raced] };
     });

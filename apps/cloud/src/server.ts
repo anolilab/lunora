@@ -6,7 +6,7 @@ import type { ExecutionContextLike, ScheduledControllerLike } from "@lunora/runt
 import { Creem } from "creem";
 
 import { createShardDO } from "../lunora/_generated/shard.js";
-import schema from "../lunora/schema.js";
+import schema from "../lunora/schema";
 import { ensureAuth } from "./auth";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import type { ControlPlaneEnv } from "./control-plane-env";

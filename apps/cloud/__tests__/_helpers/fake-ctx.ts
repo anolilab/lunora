@@ -57,6 +57,9 @@ const inRange = (actual: unknown, range: { gt?: number; lt?: number }): boolean 
 const matches = (row: Row, where: Row): boolean =>
     Object.entries(where).every(([field, value]) => (isRange(value) ? inRange(row[field], value) : row[field] === value));
 
+/** Tables the account erasure and export read; a test that does not seed one sees it empty. */
+const EMPTY_UNLESS_SEEDED = ["anomalySilences", "boxEnrolments", "catalogInstalls", "cloudflareAccounts", "deployments", "halts", "invitations"];
+
 /**
  * Build the double.
  *
@@ -129,7 +132,9 @@ const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?
         query: () => emptyQuery,
     };
 
-    for (const table of Object.keys(tables)) {
+    // Every table the erasure and export read exists, empty when a test does not seed it:
+    // the real database always has them, so a fake that omits one is not a faithful double.
+    for (const table of new Set([...Object.keys(tables), ...EMPTY_UNLESS_SEEDED])) {
         database[table] = facade(table);
     }
 

@@ -8,7 +8,7 @@
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { createD1CtxDb } from "@lunora/d1";
 
-import schema from "../lunora/schema.js";
+import schema from "../lunora/schema";
 import type { ControlPlaneDatabase } from "./store";
 
 /** A {@link ControlPlaneDatabase} that can also read one row by id — what the real ctx-db offers. */

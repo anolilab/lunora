@@ -131,9 +131,14 @@ describe("operator erasure", () => {
         members.findMany = async (args) => {
             const answer = await read(args);
 
+            // The owner reads are: the operator check, the ownerless check before the
+            // writes, and the re-read after them. The co-owner leaves after the second.
             if (args.where["organizationId"] === "org_2" && args.where["role"] === "owner") {
                 ownerReads += 1;
-                tables.members = tables.members.filter((row) => row._id !== "m4");
+
+                if (ownerReads === 2) {
+                    tables.members = tables.members.filter((row) => row._id !== "m4");
+                }
             }
 
             return answer;
@@ -141,7 +146,7 @@ describe("operator erasure", () => {
 
         const result = await eraseUser.handler(ctx, { operator: true, userId: "usr_me" });
 
-        expect(ownerReads).toBe(2);
+        expect(ownerReads).toBe(3);
         expect(result).toStrictEqual({ ownerless: [{ id: "org_2", name: "Globex" }] });
         expect(deletes(ops)).toStrictEqual(["m3"]);
         expect(auditInserts(ops)).toMatchObject([{ action: OWNERLESS_ACTION, createdAt: 42, organizationId: "org_2" }]);
