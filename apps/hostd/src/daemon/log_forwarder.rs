@@ -358,13 +358,16 @@ impl LogForwarder {
         }));
     }
 
-    /// Stop posting, after one last attempt (bounded by the post timeout).
+    /// Stop posting, after one last attempt (bounded by the post timeout, twice over at most).
     pub async fn stop(self: &Arc<Self>) {
         if let Some(timer) = lock(&self.timer).take() {
             timer.abort();
         }
 
         lock(&self.buffer).next_attempt_at = 0;
+        // A post already in flight drained the buffer before the newest lines were pushed, and this flush joins it.
+        // The second flush posts what it left behind; with nothing left it returns without a request.
+        self.flush().await;
         self.flush().await;
     }
 
@@ -809,6 +812,22 @@ mod tests {
         harness.forwarder.stop().await;
 
         assert_eq!(bodies(&harness.posted.lock().unwrap()), ["ticked", "stopped"]);
+    }
+
+    #[tokio::test]
+    async fn stop_posts_lines_pushed_while_a_post_was_in_flight() {
+        let harness = forwarder_with("http://cloud.example", &[]).await;
+
+        harness.forwarder.configure(telemetry(&harness.endpoint));
+        harness.forwarder.push(LogLine::new(Level::Error, LogSource::Hostd, "first"));
+
+        // One poll drains "first" into a post that is now in flight, awaiting its response.
+        assert!(harness.forwarder.flush().now_or_never().is_none());
+
+        harness.forwarder.push(LogLine::new(Level::Error, LogSource::Hostd, "stopped"));
+        harness.forwarder.stop().await;
+
+        assert_eq!(bodies(&harness.posted.lock().unwrap()), ["first", "stopped"]);
     }
 
     #[test]
