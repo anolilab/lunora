@@ -802,11 +802,11 @@ export const createDeployRouter = (): HttpRouterLike => {
             },
         },
         { handler: handleLogsIngestRoute, method: "POST", path: "/v1/logs/ingest", spec: { auth: "deployKey" } },
-        { handler: handleTelemetryRoute, method: "POST", path: "/v1/telemetry", spec: { auth: "deployKey" } },
+        { handler: handleTelemetryRoute, method: "POST", path: "/v1/telemetry", spec: { auth: "deployKey", rateTier: "telemetry" } },
         // Standard OTLP/HTTP+JSON ingest (bearer-authed) — any OTel SDK/Collector.
-        { handler: handleOtlpTracesRoute, method: "POST", path: "/v1/traces", spec: { auth: "deployKey" } },
-        { handler: handleOtlpLogsRoute, method: "POST", path: "/v1/logs", spec: { auth: "deployKey" } },
-        { handler: handleOtlpMetricsRoute, method: "POST", path: "/v1/metrics", spec: { auth: "deployKey" } },
+        { handler: handleOtlpTracesRoute, method: "POST", path: "/v1/traces", spec: { auth: "deployKey", rateTier: "telemetry" } },
+        { handler: handleOtlpLogsRoute, method: "POST", path: "/v1/logs", spec: { auth: "deployKey", rateTier: "telemetry" } },
+        { handler: handleOtlpMetricsRoute, method: "POST", path: "/v1/metrics", spec: { auth: "deployKey", rateTier: "telemetry" } },
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
         // Agent-queryable billing (plan 365 W6): read-only, org-wide deploy key, opted in as tools.
         {
@@ -920,7 +920,7 @@ export const createDeployRouter = (): HttpRouterLike => {
     // guards — can never dispatch into it.
     const adminRoutes: RegisteredRoute<RouteHandler>[] = [
         { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
-        { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
+        { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken", rateTier: "previewAuth" } },
         { handler: handleTenantRecursionRoute, method: "POST", path: "/v1/tenants/recursion", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
@@ -976,8 +976,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         return method === "POST" ? postRoutes : undefined;
     };
 
-    // Standard OTLP + native telemetry ingest → the per-token telemetry tier.
-    const telemetryPaths = new Set(["/v1/logs", "/v1/metrics", "/v1/telemetry", "/v1/traces"]);
+    // The rate-limit tier each route names in its spec, keyed by path. A path with none is limited by the shared per-IP `api` bucket.
+    const rateTierByPath = new Map(guardedRoutes.flatMap((route) => (route.spec.rateTier === undefined ? [] : [[route.path, route.spec.rateTier] as const])));
 
     const rateLimited = async (request: Request, pathname: string): Promise<Response | undefined> => {
         const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
@@ -987,7 +987,9 @@ export const createDeployRouter = (): HttpRouterLike => {
         // starving others. Non-telemetry paths use the shared per-IP `api` limit.
         let verdict;
 
-        if (pathname === "/v1/tenants/preview-auth") {
+        const tier = rateTierByPath.get(pathname);
+
+        if (tier === "previewAuth") {
             // Keyed on the END USER's address, forwarded by the dispatcher. `ip` here
             // is the dispatcher itself, so keying on it alone would put every user of
             // every protected preview into one bucket — no isolation of a grinder, and
@@ -1002,7 +1004,7 @@ export const createDeployRouter = (): HttpRouterLike => {
             // preview). Composed, a spoofer can only ever divide their OWN budget, and
             // a victim's bucket is unreachable from another connection.
             verdict = await limiter.limit("previewAuth", { key: `${ip}|${request.headers.get("x-lunora-client-ip") ?? ""}` });
-        } else if (telemetryPaths.has(pathname)) {
+        } else if (tier === "telemetry") {
             const ipVerdict = await limiter.limit("telemetryIp", { key: ip });
 
             verdict = ipVerdict.ok ? await limiter.limit("telemetry", { key: otlpBearer(request) ?? ip }) : ipVerdict;

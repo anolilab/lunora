@@ -37,6 +37,9 @@ export type RouteAuth =
     // Provider HMAC signature (GitHub `x-hub-signature-256`, Creem `creem-signature`).
     | "webhookHmac";
 
+/** A rate-limit bucket a route may draw on (`createDeployRouter`); absent is the shared per-IP `api` bucket. */
+export type RateTier = "previewAuth" | "telemetry";
+
 export interface RouteSpec {
     auth: RouteAuth;
 
@@ -45,6 +48,9 @@ export interface RouteSpec {
      * auth / webhook routes — see the MCP surface's deny-list.
      */
     mcp?: { description: string };
+
+    /** The rate-limit tier this route draws on; absent is the shared per-IP `api` bucket. */
+    rateTier?: RateTier;
     /** Required when `auth === "public"`: why the route is safe unauthenticated. */
     reason?: string;
 }

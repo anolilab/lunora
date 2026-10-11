@@ -1,3 +1,4 @@
+import { RateLimiter } from "@lunora/ratelimit";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDeployRouter } from "../src/deploy/router";
@@ -104,6 +105,34 @@ describe(createDeployRouter, () => {
 
         expect(last.status).toBe(429);
         expect(last.headers.get("retry-after")).not.toBeNull();
+    });
+
+    it("draws each path on the rate-limit bucket its route names, and the shared api bucket otherwise", async () => {
+        const limitSpy = vi.spyOn(RateLimiter.prototype, "limit");
+        const router = createDeployRouter();
+        // The bucket names a request is limited under, in order. The handler behind the
+        // limiter may refuse the request; only the limiter calls matter here.
+        const bucketsFor = async (path: string): Promise<string[]> => {
+            limitSpy.mockClear();
+            await router
+                .fetch(new Request(`https://control.lunora.app${path}`, { headers: { "cf-connecting-ip": "tier-probe" }, method: "POST" }), {})
+                .catch(() => undefined);
+
+            return limitSpy.mock.calls.map((call) => String(call[0]));
+        };
+
+        await expect(bucketsFor("/v1/tenants/preview-auth")).resolves.toStrictEqual(["previewAuth"]);
+
+        for (const path of ["/v1/logs", "/v1/metrics", "/v1/telemetry", "/v1/traces"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential, one probe per path
+            await expect(bucketsFor(path)).resolves.toStrictEqual(["telemetryIp", "telemetry"]);
+        }
+
+        await expect(bucketsFor("/v1/deploy")).resolves.toStrictEqual(["api"]);
+        await expect(bucketsFor("/v1/usage")).resolves.toStrictEqual(["api"]);
+        await expect(bucketsFor("/v1/unknown")).resolves.toStrictEqual(["api"]);
+
+        limitSpy.mockRestore();
     });
 });
 
