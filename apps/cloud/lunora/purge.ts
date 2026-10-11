@@ -52,10 +52,10 @@ export const anonymiseScopedRows = async (
     context: MutationContext,
     table: TableName,
     where: Record<string, unknown>,
-    redact: (row: { _id: string }) => Record<string, unknown>,
+    redact: (row: Record<string, unknown> & { _id: string }) => Record<string, unknown>,
 ): Promise<void> => {
     const facade = context.db[table] as unknown as {
-        findMany: (query: { where: Record<string, unknown> }) => Promise<{ page: { _id: string }[] }>;
+        findMany: (query: { where: Record<string, unknown> }) => Promise<{ page: (Record<string, unknown> & { _id: string })[] }>;
     };
     const seen = new Set<string>();
 

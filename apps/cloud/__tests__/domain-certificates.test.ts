@@ -46,7 +46,6 @@ const PURGED_TABLES = [
     "builds",
     "catalogInstalls",
     "cloudflareAccounts",
-    "customers",
     "dashboards",
     "deployKeys",
     "domains",
@@ -62,15 +61,16 @@ const PURGED_TABLES = [
     "notificationDeliveries",
     "observations",
     "overageDebits",
-    "paymentSessions",
+    "payment_customers",
+    "payment_sessions",
+    "payment_subscriptions",
+    "payment_usageEvents",
     "platformUsage",
     "projects",
     "secrets",
-    "subscriptions",
     "tenantLogs",
     "uptimeChecks",
     "uptimeState",
-    "usageEvents",
 ];
 
 /** What a stubbed `fetch` is called with. */
@@ -360,7 +360,7 @@ describe("domains.recordCertificate / removalTarget / remove", () => {
                     ...world(),
                     organizations: organization === undefined ? [] : [organization],
                     projects: [{ _id: "proj_1", organizationId: "org_1" }],
-                    subscriptions: [{ _id: "sub_1", plan: "pro", referenceId: "org_1", status: "active" }],
+                    payment_subscriptions: [{ _id: "sub_1", plan: "pro", referenceId: "org_1", status: "active" }],
                 },
                 { now: Date.now() },
             );

@@ -1,7 +1,7 @@
 /**
  * Dunning state machine (GAPS.md C2). Payment failure → grace window → suspend,
  * driven off the synced subscription state (`@lunora/payment` webhooks keep the
- * `subscriptions` table current). Pure: the evaluator maps an org's
+ * `payment_subscriptions` table current). Pure: the evaluator maps an org's
  * subscription states + failure timestamp to a phase; the enforcement cron does
  * the I/O. Deletion after prolonged suspension is deliberately manual —
  * erasure goes through the D3 offboarding flow, never automatically.

@@ -38,7 +38,7 @@ describe(productionAliasCandidates, () => {
 
 describe("projects.create", () => {
     const world = (aliasOwnership: Row[] = []): Record<string, Row[]> => {
-        return { aliasOwnership, members: [owner("org_1")], projects: [], subscriptions: [] };
+        return { aliasOwnership, members: [owner("org_1")], projects: [], payment_subscriptions: [] };
     };
 
     it("claims the slug as the production alias when it is free", async () => {

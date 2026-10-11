@@ -816,6 +816,87 @@ export const usageSourceStatus = sqliteTable("usageSourceStatus", {
     by_source: uniqueIndex("by_source").on(t.target, t.scopeKey),
 }));
 
+export const payment_customers = sqliteTable("payment_customers", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    email: text("email"),
+    provider: text("provider").notNull(),
+    providerCustomerId: text("providerCustomerId").notNull(),
+    referenceId: text("referenceId").notNull(),
+}, (t) => ({
+    by_reference: index("by_reference").on(t.referenceId),
+    by_provider_customer: uniqueIndex("by_provider_customer").on(t.provider, t.providerCustomerId),
+}));
+
+export const payment_events = sqliteTable("payment_events", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    processedAt: real("processedAt").notNull(),
+    provider: text("provider").notNull(),
+    providerEventId: text("providerEventId").notNull(),
+    type: text("type").notNull(),
+}, (t) => ({
+    by_provider_event: uniqueIndex("by_provider_event").on(t.provider, t.providerEventId),
+}));
+
+export const payment_sessions = sqliteTable("payment_sessions", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    amountMinor: real("amountMinor").notNull(),
+    capturedMinor: real("capturedMinor").notNull(),
+    createdAt: real("createdAt").notNull(),
+    currency: text("currency").notNull(),
+    provider: text("provider").notNull(),
+    providerSessionId: text("providerSessionId").notNull(),
+    referenceId: text("referenceId").notNull(),
+    refundedMinor: real("refundedMinor").notNull(),
+    state: text("state").notNull(),
+    subscriptionId: text("subscriptionId"),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_reference: index("by_reference").on(t.referenceId),
+    by_provider_subscription: index("by_provider_subscription").on(t.provider, t.subscriptionId),
+    by_provider_session: uniqueIndex("by_provider_session").on(t.provider, t.providerSessionId),
+}));
+
+export const payment_subscriptions = sqliteTable("payment_subscriptions", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    cancelAtPeriodEnd: integer("cancelAtPeriodEnd", { mode: "boolean" }).notNull(),
+    createdAt: real("createdAt").notNull(),
+    currentPeriodEnd: real("currentPeriodEnd"),
+    currentPeriodStart: real("currentPeriodStart"),
+    lastEventAt: real("lastEventAt"),
+    priceId: text("priceId").notNull(),
+    priceIds: text("priceIds", { mode: "json" }).$type<Array<string>>(),
+    provider: text("provider").notNull(),
+    providerSubscriptionId: text("providerSubscriptionId").notNull(),
+    quantity: real("quantity").notNull(),
+    referenceId: text("referenceId").notNull(),
+    state: text("state").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_reference: index("by_reference").on(t.referenceId),
+    by_provider_subscription: uniqueIndex("by_provider_subscription").on(t.provider, t.providerSubscriptionId),
+}));
+
+export const payment_usageEvents = sqliteTable("payment_usageEvents", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    featureId: text("featureId").notNull(),
+    idempotencyKey: text("idempotencyKey").notNull(),
+    mode: text("mode"),
+    provider: text("provider").notNull(),
+    quantity: real("quantity").notNull(),
+    referenceId: text("referenceId").notNull(),
+    reportedToProvider: integer("reportedToProvider", { mode: "boolean" }).notNull(),
+}, (t) => ({
+    by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
+    by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
+}));
+
 export const customers = sqliteTable("customers", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

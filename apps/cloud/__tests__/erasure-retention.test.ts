@@ -72,17 +72,28 @@ describe("organization erasure: payment mirror", () => {
                 buildLogs: [],
                 builds: [],
                 catalogInstalls: [],
-                customers: [{ _id: "cus_1", email: "buyer@example.de", providerCustomerId: "pc_1", referenceId: "org_1" }],
                 deployments: [],
                 domains: [],
                 halts: [],
                 members: [],
                 organizations: [{ _id: "org_1", deletionRequestedAt: 1 }],
-                paymentSessions: [{ _id: "ps_1", amountMinor: 4900, providerSessionId: "sess_1", referenceId: "org_1" }],
+                payment_customers: [{ _id: "cus_1", email: "buyer@example.de", provider: "creem", providerCustomerId: "pc_1", referenceId: "org_1" }],
+                payment_sessions: [
+                    { _id: "ps_1", amountMinor: 4900, currency: "EUR", providerSessionId: "sess_1", referenceId: "org_1", state: "captured" },
+                    {
+                        _id: "ps_2",
+                        amountMinor: 4900,
+                        currency: "EUR",
+                        providerSessionId: "sess_2",
+                        referenceId: "org_1",
+                        state: "captured",
+                        subscriptionId: "subscr_1",
+                    },
+                ],
+                payment_subscriptions: [{ _id: "sub_1", providerSubscriptionId: "subscr_1", referenceId: "org_1", state: "active" }],
+                payment_usageEvents: [{ _id: "use_1", featureId: "requests", referenceId: "org_1" }],
                 projects: [],
                 secrets: [],
-                subscriptions: [{ _id: "sub_1", providerSubscriptionId: "subscr_1", referenceId: "org_1", state: "active" }],
-                usageEvents: [{ _id: "use_1", featureId: "requests", referenceId: "org_1" }],
                 ...extra,
             },
             { now: NOW },
@@ -102,10 +113,13 @@ describe("organization erasure: payment mirror", () => {
         await purgeDeleted.handler(ctx, {});
 
         expect(deletedIds(ops)).not.toContain("ps_1");
+        expect(deletedIds(ops)).not.toContain("ps_2");
         expect(deletedIds(ops)).not.toContain("sub_1");
         expect(patches(ops)).toEqual(
             expect.arrayContaining([
                 { id: "ps_1", patch: { providerSessionId: "erased:ps_1", referenceId: "erased" } },
+                // The provider subscription id a payment carries goes with it.
+                { id: "ps_2", patch: { providerSessionId: "erased:ps_2", referenceId: "erased", subscriptionId: "erased:ps_2" } },
                 { id: "sub_1", patch: { providerSubscriptionId: "erased:sub_1", referenceId: "erased" } },
             ]),
         );
@@ -200,21 +214,21 @@ describe("erasure: tenant backups", () => {
         const tables: Record<string, Record<string, unknown>[]> = {
             ...(ORG_TABLES as Record<string, Record<string, unknown>[]>),
             aliasOwnership: [],
-            customers: [],
             deployments: [],
             edgeRules: [],
             organizations: [
                 { _id: "org_1", deletionRequestedAt: 1 },
                 { _id: "org_2", plan: "pro" },
             ],
-            paymentSessions: [],
+            payment_customers: [],
+            payment_sessions: [],
+            payment_subscriptions: [],
+            payment_usageEvents: [],
             projects: [
                 { _id: "prj_gone", organizationId: "org_1" },
                 { _id: "prj_live", organizationId: "org_2" },
             ],
-            subscriptions: [],
             tenantBackups: [...erasedBackups, ...liveBackups],
-            usageEvents: [],
         };
         const { ctx, ops } = makeCtx(tables, { now: NOW });
 
@@ -296,12 +310,12 @@ describe("retention sweep", () => {
         const { ctx, ops } = makeCtx(
             {
                 auditLog: [],
-                events: [],
-                paymentSessions: [
+                payment_events: [],
+                payment_sessions: [
                     { _id: "old", referenceId: "erased", updatedAt: NOW - 11 * YEAR },
                     { _id: "recent", referenceId: "erased", updatedAt: NOW - 2 * YEAR },
                 ],
-                subscriptions: [],
+                payment_subscriptions: [],
             },
             { now: NOW },
         );
@@ -316,9 +330,9 @@ describe("retention sweep", () => {
         const { ctx, ops } = makeCtx(
             {
                 auditLog: [],
-                events: [],
-                paymentSessions: [{ _id: "live", referenceId: "org_1", updatedAt: NOW - 20 * YEAR }],
-                subscriptions: [],
+                payment_events: [],
+                payment_sessions: [{ _id: "live", referenceId: "org_1", updatedAt: NOW - 20 * YEAR }],
+                payment_subscriptions: [],
             },
             { now: NOW },
         );
@@ -335,12 +349,12 @@ describe("retention sweep", () => {
                     { _id: "audit_old", createdAt: NOW - 4 * YEAR },
                     { _id: "audit_new", createdAt: NOW - 1 * YEAR },
                 ],
-                events: [
+                payment_events: [
                     { _id: "event_old", processedAt: NOW - 100 * DAY },
                     { _id: "event_new", processedAt: NOW - 30 * DAY },
                 ],
-                paymentSessions: [],
-                subscriptions: [],
+                payment_sessions: [],
+                payment_subscriptions: [],
             },
             { now: NOW },
         );

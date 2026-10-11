@@ -248,7 +248,7 @@ describe("cloudflareAccounts", () => {
 
     it("connects an account, audits it, and refuses the same account twice", async () => {
         const fake = makeCtx(
-            { cloudflareAccounts: [], members: [owner("org_1")], organizations: [{ _id: "org_1", cellId: "cell_1" }], subscriptions: [] },
+            { cloudflareAccounts: [], members: [owner("org_1")], organizations: [{ _id: "org_1", cellId: "cell_1" }], payment_subscriptions: [] },
             { now: NOW },
         );
 
@@ -266,13 +266,13 @@ describe("cloudflareAccounts", () => {
             expect.objectContaining({ document: expect.objectContaining({ action: "cloudflare_account.connect", target: ACCOUNT }), table: "auditLog" }),
         );
 
-        const again = makeCtx({ cloudflareAccounts: [account()], members: [owner("org_1")], subscriptions: [] }, { now: NOW });
+        const again = makeCtx({ cloudflareAccounts: [account()], members: [owner("org_1")], payment_subscriptions: [] }, { now: NOW });
 
         await expect(connect.handler(again.ctx, connectArgs({ accountId: ACCOUNT }) as never)).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
     it("holds the free plan to one connected account", async () => {
-        const fake = makeCtx({ cloudflareAccounts: [account()], members: [owner("org_1")], subscriptions: [] }, { now: NOW });
+        const fake = makeCtx({ cloudflareAccounts: [account()], members: [owner("org_1")], payment_subscriptions: [] }, { now: NOW });
 
         await expect(connect.handler(fake.ctx, connectArgs({ accountId: OTHER_ACCOUNT }) as never)).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
@@ -309,7 +309,7 @@ describe("cloudflareAccounts", () => {
 
     it("refuses a member who is not an owner or admin", async () => {
         const fake = makeCtx(
-            { cloudflareAccounts: [], members: [{ _id: "m_1", organizationId: "org_1", role: "member", userId: "usr_1" }], subscriptions: [] },
+            { cloudflareAccounts: [], members: [{ _id: "m_1", organizationId: "org_1", role: "member", userId: "usr_1" }], payment_subscriptions: [] },
             { now: NOW },
         );
 

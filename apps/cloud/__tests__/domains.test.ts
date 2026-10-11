@@ -34,7 +34,7 @@ const world = (over: { domains?: Row[]; entitlements?: string[] } = {}) => {
         // so the fixture needs a real `priceId` out of `LUNORA_CLOUD_PLANS`. Custom
         // domains are a paid feature: with no active subscription the org falls back
         // to the free baseline and `add` refuses before validating anything at all.
-        subscriptions: [{ _id: "sub_1", priceId: "price_pro_monthly", provider: "creem", referenceId: ORG, state: "active" }],
+        payment_subscriptions: [{ _id: "sub_1", priceId: "price_pro_monthly", provider: "creem", referenceId: ORG, state: "active" }],
     };
 };
 

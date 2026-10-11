@@ -5,10 +5,10 @@ import { assertWithinQuota, orgLimit, toSubscription } from "../lunora/entitleme
 
 type Sub = { currentPeriodStart?: number; priceId: string; state: string };
 
-/** Fake ctx whose `subscriptions.findMany` returns the given rows. */
+/** Fake ctx whose `payment_subscriptions.findMany` returns the given rows. */
 const makeCtx = (subscriptions: Sub[]): QueryCtx =>
     ({
-        db: { subscriptions: { findMany: () => Promise.resolve({ page: subscriptions }) } },
+        db: { payment_subscriptions: { findMany: () => Promise.resolve({ page: subscriptions }) } },
     }) as unknown as QueryCtx;
 
 const org = "org_1" as Parameters<typeof orgLimit>[1];

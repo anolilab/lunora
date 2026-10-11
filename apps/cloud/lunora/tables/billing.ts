@@ -26,7 +26,7 @@ export const billingTables = {
     // Platform resource-metering events (§4), summed per org per billing period
     // for quota + overage billing. Written by the platform metering ingestion
     // endpoint (`POST /v1/usage`) and the Analytics-Engine stream. Distinct from
-    // the `@lunora/payment` `usageEvents` ledger below (which meters *billing*
+    // the `@lunora/payment` `payment_usageEvents` ledger below (which meters *billing*
     // features); this one meters platform resources — every Cloudflare billing
     // dimension in `usageMeter`, not just compute, so a storage- or
     // DO-duration-shaped runaway is visible to the spend cap.
@@ -110,11 +110,105 @@ export const billingTables = {
 
     // ── @lunora/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-
-    // package `...paymentTables` spread). `@lunora/payment`'s exported
-    // `paymentTables` is the canonical column reference these mirror; the payment
-    // store reads/writes them via `ctx.payments`. All `.global()` so billing state
-    // lives in the control-plane D1 alongside the org metadata it keys on
-    // (referenceId === organizations._id).
+    // package spread). `@lunora/payment`'s `paymentExtension` (its `src/schema.ts`)
+    // is the canonical column reference these mirror, under the physical names its
+    // store reads and writes (`PAYMENT_TABLES`: `payment_customers`, …). All
+    // `.global()` so billing state lives in the control-plane D1 alongside the org
+    // metadata it keys on (referenceId === organizations._id). Every row is written
+    // by the payment store through `ctx.payments` (checkout, webhook sync,
+    // `track`), never by a `ctx.db.insert` in lunora/ — hence `.externallyManaged()`.
+    payment_customers: defineTable({
+        createdAt: v.number(),
+        email: v.optional(v.string()),
+        provider: v.string(),
+        providerCustomerId: v.string(),
+        referenceId: v.string(),
+    })
+        .externallyManaged()
+        .global()
+        .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
+
+    // Append-only webhook log: inbound idempotency + audit + debugging.
+    payment_events: defineTable({
+        processedAt: v.number(),
+        provider: v.string(),
+        providerEventId: v.string(),
+        type: v.string(),
+    })
+        .externallyManaged()
+        .global()
+        .index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
+
+    payment_sessions: defineTable({
+        // Minor units as `v.number()` where the package declares `v.bigint()`:
+        // `defineSchema` refuses a bigint on a `.global()` table (see the legacy
+        // `paymentSessions` below for why), and every table here is global.
+        amountMinor: v.number(),
+        capturedMinor: v.number(),
+        createdAt: v.number(),
+        currency: v.string(),
+        provider: v.string(),
+        providerSessionId: v.string(),
+        referenceId: v.string(),
+        refundedMinor: v.number(),
+        state: v.string(),
+        // The provider subscription this payment started.
+        subscriptionId: v.optional(v.string()),
+        updatedAt: v.number(),
+    })
+        .externallyManaged()
+        .global()
+        .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
+        .index("by_provider_subscription", ["provider", "subscriptionId"])
+        .index("by_reference", ["referenceId"]),
+
+    payment_subscriptions: defineTable({
+        cancelAtPeriodEnd: v.boolean(),
+        createdAt: v.number(),
+        currentPeriodEnd: v.optional(v.number()),
+        currentPeriodStart: v.optional(v.number()),
+        // Provider time of the newest webhook applied — an older redelivery is ignored as stale.
+        lastEventAt: v.optional(v.number()),
+        priceId: v.string(),
+        // Every price id the subscription bills; absent reads as `[priceId]`.
+        priceIds: v.optional(v.array(v.string())),
+        provider: v.string(),
+        providerSubscriptionId: v.string(),
+        quantity: v.number(),
+        referenceId: v.string(),
+        state: v.string(),
+        updatedAt: v.number(),
+    })
+        .externallyManaged()
+        .global()
+        .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
+
+    // Metered-usage ledger backing `ctx.payments.track` / `check` (billing
+    // features). Separate from `platformUsage` above (platform resources).
+    payment_usageEvents: defineTable({
+        createdAt: v.number(),
+        featureId: v.string(),
+        idempotencyKey: v.string(),
+        // `"add"` (default when absent) or `"set"`.
+        mode: v.optional(v.string()),
+        provider: v.string(),
+        quantity: v.number(),
+        referenceId: v.string(),
+        reportedToProvider: v.boolean(),
+    })
+        .externallyManaged()
+        .global()
+        .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
+        .index("by_reference_feature", ["referenceId", "featureId"]),
+
+    // ── Legacy @lunora/payment tables ─────────────────────────────────────────
+    // The names the payment store used before it moved to `payment_*`. Nothing
+    // reads or writes them any more except `billing.moveLegacyPaymentTables`,
+    // which moves their rows into the tables above and needs them declared to
+    // read them. Delete these five once that mutation reports
+    // `remaining: false` in every environment.
     customers: defineTable({
         createdAt: v.number(),
         email: v.optional(v.string()),
@@ -122,8 +216,6 @@ export const billingTables = {
         providerCustomerId: v.string(),
         referenceId: v.string(),
     })
-        // The `@lunora/payment` store writes these rows through `ctx.payments`
-        // (checkout + webhook sync), never via a `ctx.db.insert` in lunora/.
         .externallyManaged()
         .global()
         .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
@@ -135,7 +227,6 @@ export const billingTables = {
         providerEventId: v.string(),
         type: v.string(),
     })
-        // Written by the `@lunora/payment` webhook sync (see `customers`).
         .externallyManaged()
         .global()
         .index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
@@ -167,7 +258,6 @@ export const billingTables = {
         state: v.string(),
         updatedAt: v.number(),
     })
-        // Written by the `@lunora/payment` checkout flow (see `customers`).
         .externallyManaged()
         .global()
         .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
@@ -186,14 +276,11 @@ export const billingTables = {
         state: v.string(),
         updatedAt: v.number(),
     })
-        // Written by the `@lunora/payment` webhook sync (see `customers`).
         .externallyManaged()
         .global()
         .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
         .index("by_reference", ["referenceId"]),
 
-    // Metered-usage ledger backing `ctx.payments.track` / `check` (billing
-    // features). Separate from `platformUsage` above (platform resources).
     usageEvents: defineTable({
         createdAt: v.number(),
         featureId: v.string(),
@@ -203,7 +290,6 @@ export const billingTables = {
         referenceId: v.string(),
         reportedToProvider: v.boolean(),
     })
-        // Written by `ctx.payments.track` metered-usage reporting (see `customers`).
         .externallyManaged()
         .global()
         .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
