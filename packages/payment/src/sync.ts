@@ -320,6 +320,13 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         // caller's rethrow triggers — would zero the amount and lose the refund entirely.
         await refund?.release();
 
+        // A value the store cannot hold (a money amount beyond 2^53 minor units) fails the same way on
+        // every retry, so retrying only keeps the event undelivered. Nothing was written: acknowledge it
+        // as `unstorable` so the provider stops, and the observer records the reason.
+        if (error instanceof LunoraPaymentError && error.code === "VALIDATION_ERROR") {
+            return { applied: false, reason: "unstorable" };
+        }
+
         throw error;
     }
 
