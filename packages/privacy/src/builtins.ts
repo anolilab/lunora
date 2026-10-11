@@ -4,7 +4,7 @@
  * plain `defineDataset` call, so an app that stores these differently overrides
  * the names rather than rewriting the description.
  */
-import type {Dataset} from "./dataset";
+import type { Dataset } from "./dataset";
 import { defineDataset } from "./dataset";
 
 /** The better-auth tables that hold a user's data, by their default names. */
