@@ -267,19 +267,20 @@ interface Privacy {
 ### `PrivacyConfig` (interface)
 
 ```ts
-interface PrivacyConfig {
-    readonly data: DataPort;
+interface PrivacyConfig<C> {
     readonly datasets: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
     readonly exclude?: Readonly<Record<string, string>>;
-    readonly files: StorePort;
-    readonly newId: () => string;
-    readonly now: () => Date;
+    readonly ports: (context: C) => PrivacyPorts;
     readonly presets?: ReadonlyArray<PrivacyPreset>;
-    readonly store: RequestStore;
     readonly subjectKey?: (subjectId: string) => string;
-    readonly tombstones?: TombstonePort;
 }
+```
+
+### `PrivacyFor` (type)
+
+```ts
+type PrivacyFor<C> = (context: C) => Privacy;
 ```
 
 ### `PrivacyPolicy` (interface)
@@ -290,6 +291,19 @@ interface PrivacyPolicy {
     readonly extensionMonths: number;
     readonly responseMonths: number;
     readonly reviewRequired: boolean;
+}
+```
+
+### `PrivacyPorts` (interface)
+
+```ts
+interface PrivacyPorts {
+    readonly data: DataPort;
+    readonly files: StorePort;
+    readonly newId: () => string;
+    readonly now: () => Date;
+    readonly store: RequestStore;
+    readonly tombstones?: TombstonePort;
 }
 ```
 
@@ -307,6 +321,20 @@ interface PrivacyPreset {
 
 ```ts
 type PrivacyTableName = "archive" | "events" | "holds" | "requests" | "tombstones";
+```
+
+### `PrivacyWorkflowContext` (interface)
+
+```ts
+interface PrivacyWorkflowContext {
+    readonly params: {
+        readonly requestId: string;
+    };
+    readonly step: {
+        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
+    };
+}
 ```
 
 ### `RequestRecord` (interface)
@@ -540,7 +568,7 @@ const defineDataset: (id: string, spec: DatasetSpec) => Dataset;
 ### `definePrivacy` (const)
 
 ```ts
-const definePrivacy: (config: PrivacyConfig) => Privacy;
+const definePrivacy: <C>(config: PrivacyConfig<C>) => PrivacyFor<C>;
 ```
 
 ### `dispositionOf` (const)
@@ -753,20 +781,6 @@ const eu: (options?: EuOptions) => PrivacyPreset;
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
-
-### `PrivacyWorkflowContext` (interface)
-
-```ts
-interface PrivacyWorkflowContext {
-    readonly params: {
-        readonly requestId: string;
-    };
-    readonly step: {
-        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
-        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
-    };
-}
-```
 
 ### `TombstonePort` (interface)
 

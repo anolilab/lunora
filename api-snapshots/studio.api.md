@@ -850,7 +850,7 @@ type PrivacyRequestType = "erasure" | "export";
 ```ts
 interface PrivacyRequestsSource {
     listOpenPrivacyRequests: () => Promise<ReadonlyArray<PrivacyRequestRow>>;
-    retryPrivacyRequest: (id: string) => Promise<void>;
+    retryPrivacyRequest: (id: string) => Promise<unknown>;
 }
 ```
 
