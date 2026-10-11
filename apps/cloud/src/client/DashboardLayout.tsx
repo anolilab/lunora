@@ -99,8 +99,9 @@ export const DashboardLayout = ({
 
     return (
         <TooltipProvider delay={0}>
-            <SidebarProvider className="h-svh min-h-0" defaultOpen={sidebarOpen}>
-                <div className="relative isolate flex h-full w-full overflow-hidden">
+            <SidebarProvider className="h-svh min-h-0 md:p-3" defaultOpen={sidebarOpen}>
+                {/* The window: the rail and the inset content panel sit inside one rounded frame. */}
+                <div className="relative isolate flex h-full w-full overflow-hidden md:rounded-3xl md:border md:border-border md:bg-card md:shadow-card">
                     {/* `absolute h-full` (merged over the primitive's `fixed h-svh`) pins
                         the rail to this layout rather than the viewport edge; `z-20`
                         lifts it over the sticky header so the org switcher, which opens
