@@ -169,6 +169,64 @@ export const holdsClaim = internalQuery.input({ installId: v.id("catalogInstalls
     return row?.status === "installing" && context.now - row.createdAt < RELEASE_LEASE_MS - CLAIM_FENCE_MARGIN_MS;
 });
 
+interface IndexStateRow {
+    _id: Id<"catalogIndexState">;
+    indexUrl: string;
+    issuedAt: number;
+    keyId: string;
+    updatedAt: number;
+}
+
+/**
+ * Record a verified catalog index for its URL, and say whether it may be served (SYSTEM).
+ * `issuedAt` only moves forward. An index older than the stored one is refused. An equal
+ * one is accepted without a write, so refreshing the same index never fails. The row is
+ * shared by every isolate, which is what stops a cold isolate serving an older index than
+ * another one has seen.
+ */
+export const advanceIndexState = internalMutation
+    .input({ indexUrl: boundedString(LIMITS.url), issuedAt: v.number(), keyId: boundedString(LIMITS.id) })
+    .mutation(async ({ ctx: context, args }): Promise<{ accepted: boolean }> => {
+        const holderOf = async (): Promise<IndexStateRow | undefined> => {
+            const { page } = await context.db.catalogIndexState.findMany({ where: { indexUrl: args.indexUrl } });
+
+            return (page as unknown as IndexStateRow[]).at(0);
+        };
+
+        const settle = async (row: IndexStateRow): Promise<{ accepted: boolean }> => {
+            if (args.issuedAt < row.issuedAt) {
+                return { accepted: false };
+            }
+
+            if (args.issuedAt > row.issuedAt) {
+                await context.db.patch(row._id, { issuedAt: args.issuedAt, keyId: args.keyId, updatedAt: context.now });
+            }
+
+            return { accepted: true };
+        };
+
+        const row = await holderOf();
+
+        if (row !== undefined) {
+            return settle(row);
+        }
+
+        try {
+            await context.db.insert("catalogIndexState", { ...args, updatedAt: context.now });
+
+            return { accepted: true };
+        } catch (error) {
+            // The unique URL key refused the insert: another isolate recorded this index between the read and this write.
+            const raced = await holderOf();
+
+            if (raced === undefined) {
+                throw error;
+            }
+
+            return settle(raced);
+        }
+    });
+
 /** Give up a claim whose install did not go live (SYSTEM). */
 export const abandonInstall = internalMutation
     .input({ installId: v.id("catalogInstalls") })

@@ -78,9 +78,10 @@ Both routes are session-authenticated (`auth: "session"`) and org-scoped.
 `lunora-catalog-index:v1` (`index.sig` holds `{ keyId, signature }`).
 
 - `issuedAt` is an ISO timestamp. An index older than 14 days, or dated more than 5
-  minutes in the future, is refused. An isolate also refuses an index older than the newest
-  one it has served. That high-water mark is module state, so the guarantee holds per isolate:
-  a cold isolate accepts any index still inside the 14-day window.
+  minutes in the future, is refused. The control plane also refuses an index older than the
+  newest one verified for its URL. That high-water mark is the `catalogIndexState` row
+  (one per index URL, `lunora/tables/catalog.ts`), advanced by `advanceIndexState`, so every
+  isolate shares it and a cold isolate cannot serve an index an older one has already passed.
 - Each entry is `{ slug, version, name, summary?, artifactUrl, manifestUrl, manifestSha256, signatureUrl }`.
   `artifactUrl` is the zip. `manifestUrl` is the release's manifest, whose bytes hash to
   `manifestSha256`. `signatureUrl` is that manifest's signature. All three are https.

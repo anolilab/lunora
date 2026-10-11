@@ -442,6 +442,7 @@ class AppBuilder<Env extends object> {
             ["subscriptions", { mode: { kind: "global" } }],
             ["usageEvents", { mode: { kind: "global" } }],
             ["catalogInstalls", { mode: { kind: "global" } }],
+            ["catalogIndexState", { mode: { kind: "global" } }],
         ]);
 
         options.listSchemaTables = () => [...tableSharding.keys()];

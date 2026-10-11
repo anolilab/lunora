@@ -43,11 +43,15 @@ const STATUS_FOR: Record<InstallFailureKind, number> = {
     verification: 422,
 };
 
-/** The fetch and clock the catalog service reads through. */
-const catalogTransport = (environment: CatalogRouterEnv): CatalogDeps => {
+/** The fetch, clock and index watermark the catalog service reads through. The watermark is the database's, so every isolate shares it. */
+const catalogTransport = (environment: CatalogRouterEnv, context: ReturnType<typeof requireContext>): CatalogDeps => {
     return {
         env: environment,
         fetch: (url) => fetch(url),
+        indexState: {
+            advance: (indexUrl, keyId, issuedAt) =>
+                context.runMutation<{ accepted: boolean }>(internal.catalog.advanceIndexState, { indexUrl, issuedAt, keyId }),
+        },
         now: () => Date.now(),
     };
 };
@@ -71,7 +75,7 @@ export const handleCatalogRoute = async (request: Request, environment: RouterEn
     try {
         const listing = await listCatalog(
             {
-                ...catalogTransport(environment),
+                ...catalogTransport(environment, context),
                 installs: (organization) => context.runQuery<CatalogInstallRow[]>(api.catalog.installs, { organizationId: organization }),
             },
             organizationId,
@@ -299,9 +303,10 @@ const runStreamedInstall = async (
     installedBy: string,
     adapters: InstallAdapters,
     env: CatalogRouterEnv,
+    context: ReturnType<typeof requireContext>,
 ): Promise<void> => {
     try {
-        const outcome = await installApp(catalogTransport(env), { ...body, installedBy }, adapters);
+        const outcome = await installApp(catalogTransport(env, context), { ...body, installedBy }, adapters);
 
         events.send(
             outcome.ok
@@ -384,7 +389,7 @@ export const handleCatalogInstallRoute = async (request: Request, environment: R
         target: () => projectTargetOf(context, body.organizationId, body.projectId),
     };
     // Registered so the install runs to its end even if the client has gone: a half-done install must still roll back.
-    const install = runStreamedInstall(events, body, installedBy, adapters, env);
+    const install = runStreamedInstall(events, body, installedBy, adapters, env, context);
 
     environment.__executionCtx?.waitUntil?.(install);
 

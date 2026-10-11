@@ -142,6 +142,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:reportTarget": lunora_builds_4.reportTarget as unknown as RegisteredLunoraFunction,
     "builds:reusableRelease": lunora_builds_4.reusableRelease as unknown as RegisteredLunoraFunction,
     "catalog:abandonInstall": lunora_catalog_5.abandonInstall as unknown as RegisteredLunoraFunction,
+    "catalog:advanceIndexState": lunora_catalog_5.advanceIndexState as unknown as RegisteredLunoraFunction,
     "catalog:claimInstall": lunora_catalog_5.claimInstall as unknown as RegisteredLunoraFunction,
     "catalog:finishInstall": lunora_catalog_5.finishInstall as unknown as RegisteredLunoraFunction,
     "catalog:holdsClaim": lunora_catalog_5.holdsClaim as unknown as RegisteredLunoraFunction,
@@ -1257,6 +1258,7 @@ export interface Caller {
     };
     catalog: {
         abandonInstall: (args: { installId: Id<"catalogInstalls"> }) => Promise<void>;
+        advanceIndexState: (args: { indexUrl: unknown; issuedAt: number; keyId: unknown }) => Promise<{ accepted: boolean; }>;
         claimInstall: (args: { installedBy: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; slug: unknown; version: unknown }) => Promise<{ busy: true; } | { busy: false; installId: string; }>;
         finishInstall: (args: { deploymentId: unknown; installId: Id<"catalogInstalls"> }) => Promise<void>;
         holdsClaim: (args: { installId: Id<"catalogInstalls"> }) => Promise<boolean>;
@@ -1581,6 +1583,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     catalog: {
         abandonInstall: (args) => callRegistered(context, "catalog:abandonInstall", args),
+        advanceIndexState: (args) => callRegistered(context, "catalog:advanceIndexState", args),
         claimInstall: (args) => callRegistered(context, "catalog:claimInstall", args),
         finishInstall: (args) => callRegistered(context, "catalog:finishInstall", args),
         holdsClaim: (args) => callRegistered(context, "catalog:holdsClaim", args),

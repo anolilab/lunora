@@ -40,4 +40,15 @@ export const catalogTables = {
         .index("by_org", ["organizationId"])
         .index("by_project", ["projectId"])
         .index("by_active", ["activeKey"], { unique: true }),
+    // The newest catalog index this deployment has verified, one row per index URL. Every isolate
+    // reads and advances the same row, so an index an isolate has seen stops an older one anywhere.
+    // `issuedAt` only moves forward; `keyId` records the key that signed the stored index.
+    catalogIndexState: defineTable({
+        indexUrl: v.string(),
+        issuedAt: v.number(),
+        keyId: v.string(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_url", ["indexUrl"], { unique: true }),
 };

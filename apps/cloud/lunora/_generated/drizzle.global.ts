@@ -909,3 +909,14 @@ export const catalogInstalls = sqliteTable("catalogInstalls", {
     by_project: index("by_project").on(t.projectId),
     by_org: index("by_org").on(t.organizationId),
 }));
+
+export const catalogIndexState = sqliteTable("catalogIndexState", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    indexUrl: text("indexUrl").notNull(),
+    issuedAt: real("issuedAt").notNull(),
+    keyId: text("keyId").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_url: uniqueIndex("by_url").on(t.indexUrl),
+}));

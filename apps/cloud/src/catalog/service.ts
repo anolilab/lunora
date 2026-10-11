@@ -111,10 +111,20 @@ export const readCatalogConfig = (env: CatalogEnv): CatalogConfig => {
     return { fingerprint: `${indexUrl}\n${keysText}`, indexUrl, keys: parsed.keys, kind: "ready" };
 };
 
-/** The transport the service reads through: a fetch, and a clock. */
+/**
+ * The shared record of the newest verified index per URL. Backed by the database, so
+ * every isolate reads the same watermark; `accepted` is `false` for an index older than
+ * the stored one.
+ */
+export interface IndexStateStore {
+    advance: (indexUrl: string, keyId: string, issuedAt: number) => Promise<{ accepted: boolean }>;
+}
+
+/** The transport the service reads through: a fetch, a clock, and the index watermark. */
 export interface CatalogDeps {
     env: CatalogEnv;
     fetch: (url: string) => Promise<Response>;
+    indexState: IndexStateStore;
     now: () => number;
 }
 
@@ -161,13 +171,9 @@ interface CachedIndex {
 /** The last index that verified, served until it expires. Only verified results are ever stored. */
 let cachedIndex: CachedIndex | undefined;
 
-/** The newest index this isolate has verified. An older signed index is refused, so a host cannot roll the catalog back. */
-let highestIssuedAt = 0;
-
 /** Drop the cached index. Tests use this; production lets the TTL expire. */
 export const resetCatalogIndexCache = (): void => {
     cachedIndex = undefined;
-    highestIssuedAt = 0;
 };
 
 class FetchFailure extends Error {}
@@ -265,11 +271,18 @@ const loadIndex = async (deps: CatalogDeps, config: ReadyConfig): Promise<IndexL
         return { error: `the catalog index failed verification: ${verified.error.message}`, ok: false };
     }
 
-    if (verified.issuedAt < highestIssuedAt) {
+    let recorded: { accepted: boolean };
+
+    try {
+        recorded = await deps.indexState.advance(config.indexUrl, signature.keyId, verified.issuedAt);
+    } catch (error) {
+        return { error: `the catalog index could not be recorded: ${messageOf(error)}`, ok: false };
+    }
+
+    if (!recorded.accepted) {
         return { error: "the catalog index is older than one this control plane has already served", ok: false };
     }
 
-    highestIssuedAt = verified.issuedAt;
     cachedIndex = { entries: verified.entries, expiresAt: now + INDEX_TTL_MS, fingerprint: config.fingerprint };
 
     return { entries: verified.entries, ok: true };

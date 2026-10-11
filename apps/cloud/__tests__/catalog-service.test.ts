@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { advanceIndexState } from "../lunora/catalog";
 import type { CatalogForm } from "../src/catalog/artifact";
 import { verifyCatalogIndex } from "../src/catalog/index";
 import type { InstallPorts, SealedSecret } from "../src/catalog/install";
 import { packArtifact } from "../src/catalog/pack";
-import type { CatalogDeps, CatalogEnv, InstallAdapters, InstallRequest, InstallTarget } from "../src/catalog/service";
+import type { CatalogDeps, CatalogEnv, IndexStateStore, InstallAdapters, InstallRequest, InstallTarget } from "../src/catalog/service";
 import { INDEX_TTL_MS, installApp, listCatalog, readCatalogConfig, resetCatalogIndexCache } from "../src/catalog/service";
 import type { TrustedCatalogKey } from "../src/catalog/signature";
 import { ARTIFACT_SIGNING_DOMAIN, INDEX_SIGNING_DOMAIN, sha256Hex, signPayload } from "../src/catalog/signature";
@@ -12,6 +13,7 @@ import { ARTIFACT_SIGNING_DOMAIN, INDEX_SIGNING_DOMAIN, sha256Hex, signPayload }
 const encoder = new TextEncoder();
 const BASE = "https://catalog.example.test/releases";
 const INDEX_URL = "https://catalog.example.test/index.json";
+const OTHER_INDEX_URL = "https://mirror.example.test/index.json";
 
 /** The verifier's clock: every index in these tests is issued at this instant. */
 const NOW = Date.UTC(2026, 9, 10);
@@ -105,13 +107,14 @@ const publishApp = async (
 const publishIndex = async (
     key: SigningKey,
     apps: PublishedApp[],
-    options: { indexKey?: SigningKey; issuedAt?: string } = {},
+    options: { indexKey?: SigningKey; indexUrl?: string; issuedAt?: string } = {},
 ): Promise<Map<string, Served>> => {
+    const indexUrl = options.indexUrl ?? INDEX_URL;
     const indexBytes = encoder.encode(JSON.stringify({ apps: apps.map((app) => app.entry), format: 1, issuedAt: options.issuedAt ?? ISSUED }));
     const indexSignature = await signatureFile(options.indexKey ?? key, INDEX_SIGNING_DOMAIN, indexBytes);
     const served = new Map<string, Served>([
-        [INDEX_URL, { body: indexBytes }],
-        [new URL("index.sig", INDEX_URL).href, { body: indexSignature }],
+        [indexUrl, { body: indexBytes }],
+        [new URL("index.sig", indexUrl).href, { body: indexSignature }],
     ]);
 
     for (const app of apps) {
@@ -123,8 +126,55 @@ const publishIndex = async (
     return served;
 };
 
-const envFor = (keys: SigningKey[]): CatalogEnv => {
-    return { CATALOG_INDEX_URL: INDEX_URL, CATALOG_PUBLIC_KEYS: publicKeysEnv(keys) };
+const envFor = (keys: SigningKey[], indexUrl: string = INDEX_URL): CatalogEnv => {
+    return { CATALOG_INDEX_URL: indexUrl, CATALOG_PUBLIC_KEYS: publicKeysEnv(keys) };
+};
+
+interface IndexStateRow {
+    _id: string;
+    indexUrl: string;
+    issuedAt: number;
+    keyId: string;
+    updatedAt: number;
+}
+
+/**
+ * The `catalogIndexState` table as the control plane's real mutation sees it: an
+ * in-memory database behind `advanceIndexState`'s own handler. Every service instance
+ * built over one `store` shares its rows, as every isolate shares the database.
+ */
+const indexStateDb = (): { rows: IndexStateRow[]; store: IndexStateStore } => {
+    const rows: IndexStateRow[] = [];
+    const ctx = {
+        db: {
+            catalogIndexState: {
+                findMany: ({ where }: { where: { indexUrl: string } }) =>
+                    Promise.resolve({ continueCursor: null, isDone: true, page: rows.filter((row) => row.indexUrl === where.indexUrl) }),
+            },
+            insert: (_table: string, document: Omit<IndexStateRow, "_id">) => {
+                if (rows.some((row) => row.indexUrl === document.indexUrl)) {
+                    return Promise.reject(new Error("unique index violated"));
+                }
+
+                const id = `row_${String(rows.length + 1)}`;
+
+                rows.push({ ...document, _id: id });
+
+                return Promise.resolve(id);
+            },
+            patch: (id: string, patch: Partial<IndexStateRow>) => {
+                Object.assign(rows.find((row) => row._id === id) ?? {}, patch);
+
+                return Promise.resolve();
+            },
+        },
+        now: NOW,
+    };
+    const store: IndexStateStore = {
+        advance: async (indexUrl, keyId, issuedAt) => advanceIndexState.handler(ctx, { indexUrl, issuedAt, keyId }),
+    };
+
+    return { rows, store };
 };
 
 /** A fake host: serves the given routes and records every URL it was asked for. */
@@ -145,10 +195,16 @@ const hostFrom = (routes: Map<string, Served>) => {
     return { fetch: fetcher, requests };
 };
 
-const catalogDeps = (env: CatalogEnv, fetcher: (url: string) => Promise<Response>, clock: { now: number }): CatalogDeps => {
+const catalogDeps = (
+    env: CatalogEnv,
+    fetcher: (url: string) => Promise<Response>,
+    clock: { now: number },
+    indexState: IndexStateStore = indexStateDb().store,
+): CatalogDeps => {
     return {
         env,
         fetch: fetcher,
+        indexState,
         now: () => clock.now,
     };
 };
@@ -338,6 +394,77 @@ describe(listCatalog, () => {
         }
 
         await expect(listCatalog(deps, "org_1")).resolves.toMatchObject({ error: expect.stringContaining("older than one"), ok: false });
+    });
+
+    it("advances the stored index forward, and accepts a refresh of the same index without a write", async () => {
+        const key = await generateKey("catalog-2026");
+        const app = await publishApp(key, { name: "Counter", slug: "counter", version: "1.0.0" });
+        const older = await publishIndex(key, [app], { issuedAt: new Date(NOW - 60 * 60 * 1000).toISOString() });
+        const newer = await publishIndex(key, [app], { issuedAt: ISSUED });
+        const routes = new Map(older);
+        const clock = { now: NOW };
+        const { rows, store } = indexStateDb();
+        const deps = { ...catalogDeps(envFor([key]), hostFrom(routes).fetch, clock, store), installs: async () => [] };
+
+        await expect(listCatalog(deps, "org_1")).resolves.toMatchObject({ ok: true });
+        expect(rows).toMatchObject([{ indexUrl: INDEX_URL, issuedAt: NOW - 60 * 60 * 1000, keyId: "catalog-2026" }]);
+
+        clock.now += INDEX_TTL_MS;
+        for (const [url, response] of newer) {
+            routes.set(url, response);
+        }
+
+        await expect(listCatalog(deps, "org_1")).resolves.toMatchObject({ ok: true });
+        expect(rows).toMatchObject([{ issuedAt: NOW }]);
+
+        clock.now += INDEX_TTL_MS;
+
+        await expect(listCatalog(deps, "org_1")).resolves.toMatchObject({ ok: true });
+        expect(rows).toMatchObject([{ issuedAt: NOW }]);
+    });
+
+    it("refuses an older index in a fresh isolate, because the watermark lives in the shared store", async () => {
+        const key = await generateKey("catalog-2026");
+        const app = await publishApp(key, { name: "Counter", slug: "counter", version: "1.0.0" });
+        const newer = await publishIndex(key, [app], { issuedAt: ISSUED });
+        const older = await publishIndex(key, [app], { issuedAt: new Date(NOW - 60 * 60 * 1000).toISOString() });
+        const { store } = indexStateDb();
+        const clock = { now: NOW };
+
+        await expect(
+            listCatalog({ ...catalogDeps(envFor([key]), hostFrom(newer).fetch, clock, store), installs: async () => [] }, "org_1"),
+        ).resolves.toMatchObject({ ok: true });
+
+        // A cold isolate: no in-memory index, the same database.
+        resetCatalogIndexCache();
+
+        await expect(
+            listCatalog({ ...catalogDeps(envFor([key]), hostFrom(older).fetch, clock, store), installs: async () => [] }, "org_1"),
+        ).resolves.toMatchObject({ error: expect.stringContaining("older than one"), ok: false });
+    });
+
+    it("keeps the watermark per index URL, so another catalog URL is not held back by this one", async () => {
+        const key = await generateKey("catalog-2026");
+        const app = await publishApp(key, { name: "Counter", slug: "counter", version: "1.0.0" });
+        const official = await publishIndex(key, [app], { issuedAt: ISSUED });
+        const mirror = await publishIndex(key, [app], { indexUrl: OTHER_INDEX_URL, issuedAt: new Date(NOW - 60 * 60 * 1000).toISOString() });
+        const { rows, store } = indexStateDb();
+        const clock = { now: NOW };
+
+        await expect(
+            listCatalog({ ...catalogDeps(envFor([key]), hostFrom(official).fetch, clock, store), installs: async () => [] }, "org_1"),
+        ).resolves.toMatchObject({ ok: true });
+
+        resetCatalogIndexCache();
+
+        await expect(
+            listCatalog({ ...catalogDeps(envFor([key], OTHER_INDEX_URL), hostFrom(mirror).fetch, clock, store), installs: async () => [] }, "org_1"),
+        ).resolves.toMatchObject({ ok: true });
+
+        expect(rows.map((row) => [row.indexUrl, row.issuedAt])).toStrictEqual([
+            [INDEX_URL, NOW],
+            [OTHER_INDEX_URL, NOW - 60 * 60 * 1000],
+        ]);
     });
 });
 
