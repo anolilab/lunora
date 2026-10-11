@@ -2295,7 +2295,6 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
     queueHandler?: QueueForwardHandler;
     replicaReads?: boolean;
-    requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;
     restEdgeCache?: HttpCacheLike | null;

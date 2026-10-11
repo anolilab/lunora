@@ -422,13 +422,21 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toBeUndefined();
     });
 
-    describe("enforcement via LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN", () => {
-        const ENFORCED = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN: "1" };
+    describe("ephemeral WS token enforcement (master token never admitted via ?token=)", () => {
+        const ENFORCED = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
 
         it("stamps admin:false for the raw master token in ?token=", async () => {
             expect.assertions(1);
 
             const attachment = await upgradeAndCaptureAttachment(ENFORCED, `https://shard.internal/?token=${ADMIN_TOKEN}`);
+
+            expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
+        });
+
+        it("stamps admin:false for the raw master token in ?token= with no env flag set (no opt-out)", async () => {
+            expect.assertions(1);
+
+            const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
 
             expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
         });
@@ -452,7 +460,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
             expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
         });
 
-        it("leaves the master token in ?token= working when the env value reads as off", async () => {
+        it("refuses the master token in ?token= even when the env value reads as off", async () => {
             expect.assertions(1);
 
             const attachment = await upgradeAndCaptureAttachment(
@@ -460,7 +468,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
                 `https://shard.internal/?token=${ADMIN_TOKEN}`,
             );
 
-            expect(attachment).toEqual({ admin: true, adminBinding: expect.any(String) as string, connectionId: expect.any(String), subs: {} });
+            expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
         });
     });
 });

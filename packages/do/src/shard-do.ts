@@ -273,7 +273,7 @@ import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
     batchedTableLookup,
     readAdminAuditLog,
@@ -13762,25 +13762,21 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the upgrade presented an admin credential: the master
-     * `LUNORA_ADMIN_TOKEN` (constant-time compared) or a short-lived sub-token
-     * the worker minted with it (`POST /_lunora/admin/ws-token` —
-     * HMAC-verified statelessly here, since both isolates hold the master token
-     * in `env`). The ephemeral token is what the studio sends in `?token=`, so
-     * the master credential stays out of URLs/logs. Closed (resolves `false`)
+     * Whether the upgrade presented an admin credential. Two shapes are admitted:
+     * a short-lived sub-token the worker minted (`POST /_lunora/admin/ws-token`)
+     * from either the `Authorization` header or the `?token=` query parameter
+     * (HMAC-verified statelessly here, since both isolates hold the master token
+     * in `env`), and the master `LUNORA_ADMIN_TOKEN` from the `Authorization`
+     * header only (constant-time compared). Browsers can't set that header on a
+     * WS upgrade, so the master token never rides a URL.
+     *
+     * The master token in `?token=` is never admitted: the query string is exactly
+     * where it leaks (access logs / history / `Referer`). Closed (resolves `false`)
      * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
      * path so admin streaming is opt-in rather than exposed by default.
-     *
-     * Enforcement is ON by default: a raw master token in the `?token=` query
-     * parameter is rejected — the query string is exactly where it leaks (access
-     * logs / history / `Referer`). Set `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` to
-     * `0`/`false`/`off`/`no`/`disabled` to opt back out for a legacy client. The
-     * `Authorization` header path still takes the master token: browsers can't
-     * set it on a WS upgrade, so it never rides a URL.
      */
     private async isAdminSocket(request: Request): Promise<boolean> {
-        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN?: string };
-        const adminToken = env.LUNORA_ADMIN_TOKEN;
+        const adminToken = ((this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string }).LUNORA_ADMIN_TOKEN;
 
         if (!adminToken || adminToken.length === 0) {
             return false;
@@ -13796,16 +13792,9 @@ abstract class ShardDO {
             return true;
         }
 
-        // `suppliedWsToken` prefers the header; the token came from the query
-        // string only when no bearer header was present.
-        const fromQuery = extractBearerToken(request.headers.get("authorization")) === undefined;
-        const requireEphemeral = isEnvFlagEnabled(env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN, true);
+        const headerBearer = extractBearerToken(request.headers.get("authorization"));
 
-        if (fromQuery && requireEphemeral) {
-            return false;
-        }
-
-        return constantTimeEqual(supplied, adminToken);
+        return headerBearer !== undefined && constantTimeEqual(headerBearer, adminToken);
     }
 
     /**
