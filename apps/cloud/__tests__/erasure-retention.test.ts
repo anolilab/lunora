@@ -378,9 +378,12 @@ describe("account export", () => {
 
         const exported = (await exportMine.handler(ctx, {})) as {
             auditEntries: { action: string }[];
+            format: string;
             memberships: { organizationId: string; role: string }[];
             truncated: boolean;
         };
+
+        expect(exported.format).toBe("lunora-account-export/2");
 
         expect(exported.memberships).toStrictEqual([{ createdAt: 1, organizationId: "org_1", role: "owner" }]);
         expect(exported.auditEntries.map((entry) => entry.action)).toStrictEqual(["project.create"]);

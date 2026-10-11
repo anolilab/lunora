@@ -11,6 +11,7 @@ import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
+import { handleAccountEraseRoute, handleAccountExportRoute } from "./routes/account";
 import { handleAdminRoute } from "./routes/admin-proxy";
 import { handleAlertTestRoute } from "./routes/alerts";
 import { handleBillingWebhookRoute } from "./routes/billing";
@@ -171,6 +172,8 @@ export const createDeployRouter = (): HttpRouterLike => {
             spec: { auth: "session" },
         },
         { handler: handleNotificationChannelRoute, method: "POST", path: "/v1/notification-channels", spec: { auth: "session" } },
+        // session — the caller's own account export; the query reads only the session user's rows.
+        { handler: handleAccountExportRoute, method: "GET", path: "/v1/account/export", spec: { auth: "session" } },
         // session — both handlers resolve the session themselves and check owner/admin before binding.
         { handler: handleGitHubInstallRoute, method: "GET", path: "/v1/github/install", spec: { auth: "session" } },
         { handler: handleGitHubSetupRoute, method: "GET", path: "/v1/github/setup", spec: { auth: "session" } },
@@ -245,6 +248,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleHostdRolloutRoute, method: "POST", path: "/v1/hostd/rollout", spec: { auth: "adminToken" } },
         // The platform's own metrics (GAPS.md E1): operator-only, never an MCP tool.
         { handler: handlePlatformMetricsRoute, method: "GET", path: "/v1/platform/metrics", spec: { auth: "adminToken" } },
+        // Account deletion: called in-process by the auth layer's before-delete hook (`src/account-deletion.ts`).
+        { handler: handleAccountEraseRoute, method: "POST", path: "/v1/account/erase", spec: { auth: "adminToken" } },
     ];
 
     // A route's classification must match the table it sits in, or its guard would be the wrong one.
