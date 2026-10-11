@@ -1763,7 +1763,7 @@ class RelayMember extends RelayLink {
             // at the first throw — and its own docblock argues that is safe rather
             // than accidental: parts are buffered and applied only at `pokeEnd`, so
             // an abandoned poke leaves the client's view untouched, and
-            // `handlePokeStart` evicts the oldest buffer once the map exceeds its
+            // `PokeAssembler.start` (packages/client/src/shape-state.ts) evicts the oldest buffer once the map exceeds its
             // cap. Of the three senders, that one is the odd one out;
             // `subscriptionFrames`' sender uses this form too. The verdict is the
             // same either way — one failed frame makes `complete` false — so the
