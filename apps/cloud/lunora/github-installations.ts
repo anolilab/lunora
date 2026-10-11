@@ -8,9 +8,9 @@ import { rateLimit } from "./guards";
 /**
  * GitHub App installations (GAPS.md A4), staged-claim model: the HMAC-verified
  * webhook {@link record}s an installation with **no org linkage** (so a spoofed
- * RPC call stages a harmless orphan row at worst), and an org owner/admin
- * {@link claim}s it from the dashboard. Push-to-deploy only trusts claimed
- * installations (`builds.recordPush` checks the pair).
+ * RPC call stages a harmless orphan row at worst). The signed setup callback
+ * {@link bind}s it to an org, and only after proving the install. Push-to-deploy
+ * only trusts bound installations (`builds.recordPush` checks the pair).
  */
 
 interface InstallationRow {
@@ -46,16 +46,19 @@ export const record = internalMutation
     });
 
 /**
- * Claim a staged installation for the caller's org (owner/admin). The audit
- * trail records who linked what; an already-claimed installation cannot be
- * re-claimed by another org.
+ * Bind a staged installation to an organization. `internal` — the only caller is
+ * the signed setup callback (`GET /v1/github/setup`, `src/github/setup-flow.ts`),
+ * which verifies the install state, the session user and that user's owner/admin
+ * role first. There is no public claim: a staged installation id proves nothing
+ * about who installed the App, so an owner of any org could otherwise link
+ * another org's installation before its owner did.
+ *
+ * An already-claimed installation cannot be re-bound by another org. The audit
+ * trail records who linked what.
  */
-export const claim = mutation
-    .use(rateLimit("sensitive"))
-    .input({ installationId: v.number(), organizationId: v.id("organizations") })
-    .mutation(async ({ ctx: context, args: { installationId, organizationId } }): Promise<void> => {
-        const { organizationId: memberOrganizationId, userId } = await assertMember(context, organizationId, ["owner", "admin"]);
-
+export const bind = internalMutation
+    .input({ installationId: v.number(), organizationId: v.id("organizations"), userId: v.string() })
+    .mutation(async ({ ctx: context, args: { installationId, organizationId, userId } }): Promise<void> => {
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
         const installation = page[0];
 
@@ -67,12 +70,12 @@ export const claim = mutation
             throw new LunoraError("CONFLICT", "installation is already claimed by another organization");
         }
 
-        await context.db.patch(installation._id, { claimedAt: context.now, organizationId: memberOrganizationId });
+        await context.db.patch(installation._id, { claimedAt: context.now, organizationId });
         await context.db.insert("auditLog", {
             action: "github.installation.claim",
             actorUserId: userId,
             createdAt: context.now,
-            organizationId: memberOrganizationId,
+            organizationId,
             target: `${installation.accountLogin}#${String(installationId)}`,
         });
     });

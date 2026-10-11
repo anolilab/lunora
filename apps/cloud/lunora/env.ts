@@ -39,6 +39,18 @@ export const env = defineEnv({
     GITHUB_APP_PRIVATE_KEY: v.optional(v.string()),
 
     /**
+     * The GitHub App's URL slug, the last part of its github.com/apps address.
+     * The install route sends the browser there; absent, installs refuse to start.
+     */
+    GITHUB_APP_SLUG: v.optional(v.string()),
+
+    /**
+     * HMAC key that signs the install state GitHub carries through the install
+     * screens. Absent, no installation can be bound to an organization.
+     */
+    GITHUB_SETUP_STATE_SECRET: v.optional(v.string()),
+
+    /**
      * The apex customer boxes' default hostnames live under
      * (`{alias}.{slug}.{LUNORA_BOX_DOMAIN}`, plan 458 D9). Read here only so the
      * studio can show a box's hostname (`boxes.domain`); the box routes and

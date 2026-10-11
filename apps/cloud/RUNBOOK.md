@@ -127,9 +127,16 @@ Apps → New):
   `GITHUB_WEBHOOK_SECRET`.
 - **Repository permissions:** Contents: Read (source tarballs and push diffs),
   Commit statuses: Read & write (build / release status), Metadata: Read.
+- **Setup URL:** `https://<staging control-plane origin>/v1/github/setup`, with
+  "Redirect on update" left off. An installation is bound to an organization only
+  when GitHub returns the browser here carrying the signed state that
+  `/v1/github/install` issued, so this URL must match exactly.
 - **Subscribe to events:** Push, Pull request.
 - Generate a private key. Store the App id as `GITHUB_APP_ID` and the PEM as
-  `GITHUB_APP_PRIVATE_KEY` (Worker secrets, `--env staging`).
+  `GITHUB_APP_PRIVATE_KEY` (Worker secrets, `--env staging`). Store the App's
+  URL slug (the last part of `github.com/apps/<slug>`) as `GITHUB_APP_SLUG`.
+- Generate `GITHUB_SETUP_STATE_SECRET` (`openssl rand -hex 32`) as a Worker
+  secret. Without it, no installation can be bound to an organization.
 
 Fork pull requests are built but never deployed (plan 458 Thermos fix), so the
 App can be installed on public repositories.
@@ -143,7 +150,8 @@ App can be installed on public repositories.
 
 - `lunora-cloud`: `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, `SECRET_ENCRYPTION_KEY`
   (64 hex), `CLOUDFLARE_API_TOKEN` (the cell token), `GITHUB_WEBHOOK_SECRET`,
-  `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CREEM_API_KEY`,
+  `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_SLUG`,
+  `GITHUB_SETUP_STATE_SECRET`, `CREEM_API_KEY`,
   `CREEM_WEBHOOK_SECRET`, `LUNORA_TAIL_SECRET`, `LUNORA_STATE_STORE_URL` +
   `LUNORA_STATE_STORE_TOKEN` (step 1; for `cloudflare-workers`), the four
   `BACKUP_OFFSITE_*` values for the off-site backup copy (a bucket and R2 token in

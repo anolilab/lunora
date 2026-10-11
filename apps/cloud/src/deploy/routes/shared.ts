@@ -46,6 +46,10 @@ export type RouterEnv = {
     __lunoraCtx?: LunoraActionContext;
     GITHUB_APP_ID?: string;
     GITHUB_APP_PRIVATE_KEY?: string;
+    /** The App's URL slug, the last part of its github.com/apps address; the install route sends the browser there. */
+    GITHUB_APP_SLUG?: string;
+    /** HMAC key for the signed install state the setup callback verifies. Absent → installs refuse to bind. */
+    GITHUB_SETUP_STATE_SECRET?: string;
     GITHUB_WEBHOOK_SECRET?: string;
     /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
     LUNORA_ADMIN_TOKEN?: string;

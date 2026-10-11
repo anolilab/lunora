@@ -1856,6 +1856,7 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
 
 - **Control plane** (`wrangler.jsonc`): `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`,
   `SECRET_ENCRYPTION_KEY`, `CLOUDFLARE_API_TOKEN`, `GITHUB_WEBHOOK_SECRET`,
+  `GITHUB_SETUP_STATE_SECRET` (signs the GitHub App install flow's state),
   `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, plus the optional
   `LUNORA_TAIL_SECRET`, `R2_SQL_TOKEN`, `RESEND_API_KEY`, `GITHUB_APP_*`, the
   four `BACKUP_OFFSITE_*` values (off-site backup copy, all or none) and the

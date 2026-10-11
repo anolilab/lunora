@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { claim, list, unclaim } from "../lunora/github-installations";
+import { bind, list, unclaim } from "../lunora/github-installations";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
@@ -25,20 +25,28 @@ const world = (rows: Row[]) => {
     return { githubInstallations: rows, members: [owner(ORG), owner(OTHER, "usr_other")] };
 };
 
-describe("github_installations.claim", () => {
-    it("links a staged installation to the caller's organization", async () => {
+describe("github_installations.bind", () => {
+    it("has no public claim: a staged installation id alone never links an organization", async () => {
+        const module = await import("../lunora/github-installations");
+
+        expect(module).not.toHaveProperty("claim");
+    });
+
+    it("links a staged installation to the organization the verified setup names, and audits who did it", async () => {
         const { ctx, ops } = makeCtx(world([installation()]));
 
-        await claim.handler(ctx, { installationId: 42, organizationId: ORG as never });
+        await bind.handler(ctx, { installationId: 42, organizationId: ORG as never, userId: "usr_1" });
 
         expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "inst_1", patch: { organizationId: ORG } });
-        expect(ops.find((op) => op.kind === "insert" && op.table === "auditLog")).toMatchObject({ document: { action: "github.installation.claim" } });
+        expect(ops.find((op) => op.kind === "insert" && op.table === "auditLog")).toMatchObject({
+            document: { action: "github.installation.claim", actorUserId: "usr_1" },
+        });
     });
 
     it("refuses an installation the App has never staged", async () => {
         const { ctx } = makeCtx(world([]));
 
-        await expect(claim.handler(ctx, { installationId: 42, organizationId: ORG as never })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(bind.handler(ctx, { installationId: 42, organizationId: ORG as never, userId: "usr_1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     /**
@@ -49,21 +57,15 @@ describe("github_installations.claim", () => {
     it("refuses an installation already claimed by another organization", async () => {
         const { ctx } = makeCtx(world([installation({ claimedAt: 1, organizationId: OTHER })]));
 
-        await expect(claim.handler(ctx, { installationId: 42, organizationId: ORG as never })).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(bind.handler(ctx, { installationId: 42, organizationId: ORG as never, userId: "usr_1" })).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
     it("is idempotent for the organization that already holds it", async () => {
         const { ctx, ops } = makeCtx(world([installation({ claimedAt: 1, organizationId: ORG })]));
 
-        await claim.handler(ctx, { installationId: 42, organizationId: ORG as never });
+        await bind.handler(ctx, { installationId: 42, organizationId: ORG as never, userId: "usr_1" });
 
         expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "inst_1" });
-    });
-
-    it("refuses a caller who is not an owner or admin", async () => {
-        const { ctx } = makeCtx({ githubInstallations: [installation()], members: [{ _id: "m", organizationId: ORG, role: "member", userId: "usr_1" }] });
-
-        await expect(claim.handler(ctx, { installationId: 42, organizationId: ORG as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 });
 

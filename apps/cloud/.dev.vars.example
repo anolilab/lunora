@@ -168,6 +168,11 @@ SECRET_ENCRYPTION_KEY=replace-with-openssl-rand-hex-32
 # needs a build-container binding (see GAPS.md A3).
 # GITHUB_APP_ID=replace-me
 # GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----"
+# The App's URL slug (the last part of github.com/apps/<slug>); the install route redirects there.
+# GITHUB_APP_SLUG=replace-me
+# Signs the install state that GET /v1/github/setup verifies before binding an installation.
+# Generate with: openssl rand -hex 32. Absent → no installation can be bound to an organization.
+# GITHUB_SETUP_STATE_SECRET=replace-with-openssl-rand-hex-32
 
 # Apex domain tenant subdomains hang off, and this cell's name for the
 # `x-lunora-id` debug header. Both default; set them once you run more than one cell.

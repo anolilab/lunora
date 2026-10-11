@@ -202,7 +202,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "edge:setDdosSensitivity": lunora_edge_13.setDdosSensitivity as unknown as RegisteredLunoraFunction,
     "edge:setRecursionPolicy": lunora_edge_13.setRecursionPolicy as unknown as RegisteredLunoraFunction,
     "fanout:tick": lunora_fanout_14.tick as unknown as RegisteredLunoraFunction,
-    "github_installations:claim": lunora_github_installations_15.claim as unknown as RegisteredLunoraFunction,
+    "github_installations:bind": lunora_github_installations_15.bind as unknown as RegisteredLunoraFunction,
     "github_installations:list": lunora_github_installations_15.list as unknown as RegisteredLunoraFunction,
     "github_installations:record": lunora_github_installations_15.record as unknown as RegisteredLunoraFunction,
     "github_installations:remove": lunora_github_installations_15.remove as unknown as RegisteredLunoraFunction,
@@ -701,12 +701,13 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_github_installations_15.claim.args, (source) => {
+installCompiledValidatorMap(lunora_github_installations_15.bind.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
-return { "installationId": source["installationId"], "organizationId": source["organizationId"] };
+if (typeof source["userId"] !== "string") return DEFER;
+return { "installationId": source["installationId"], "organizationId": source["organizationId"], "userId": source["userId"] };
 });
 installCompiledValidatorMap(lunora_github_installations_15.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1226,7 +1227,7 @@ export interface Caller {
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<({ organizationId: Id<"organizations">; createdAt: number; deploymentId?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; projectId: Id<"projects">; branch: string; commitSha: string; fromFork?: false | true; pullRequest?: number; trigger?: "push" | "pull_request"; bundleHash?: string; _id: Id<"builds">; pathFiltered?: false | true; processingBy?: string; processingStartedAt?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; runtime?: null | "worker"; skipReason?: string } & { advisoryNotes: number; advisoryWarnings: number; })[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
         recordAdvisory: (args: { advisory: { cacheKey: unknown; detail: unknown; file: unknown; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: unknown; remediation: unknown; title: unknown }; buildId: Id<"builds">; runnerId: string }) => Promise<void>;
-        recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string; } | { duplicate: true; pathFiltered?: true; skipped?: string; }>;
+        recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<({ buildId: Id<"builds">; pathFiltered?: true; projectId: Id<"projects">; reused: boolean; skipped?: string; } | { duplicate: true; pathFiltered?: true; projectId: Id<"projects">; skipped?: string; })[]>;
         releaseTarget: (args: { buildId: Id<"builds"> }) => Promise<null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
         reusableRelease: (args: { buildId: Id<"builds"> }) => Promise<null | { advisories?: import("../../src/builds/runner.js").BuildAdvisory[]; bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
@@ -1313,7 +1314,7 @@ export interface Caller {
         tick: (args?: {}) => Promise<{ ok: true; }>;
     };
     github_installations: {
-        claim: (args: { installationId: number; organizationId: Id<"organizations"> }) => Promise<void>;
+        bind: (args: { installationId: number; organizationId: Id<"organizations">; userId: string }) => Promise<void>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
         record: (args: { accountLogin: string; installationId: number }) => Promise<Id<"githubInstallations">>;
         remove: (args: { installationId: number }) => Promise<void>;
@@ -1634,7 +1635,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         tick: (args) => callRegistered(context, "fanout:tick", args),
     },
     github_installations: {
-        claim: (args) => callRegistered(context, "github_installations:claim", args),
+        bind: (args) => callRegistered(context, "github_installations:bind", args),
         list: (args) => callRegistered(context, "github_installations:list", args),
         record: (args) => callRegistered(context, "github_installations:record", args),
         remove: (args) => callRegistered(context, "github_installations:remove", args),

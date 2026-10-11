@@ -38,6 +38,7 @@ import { handleCatalogInstallRoute, handleCatalogRoute } from "./routes/catalog"
 import { handleCloudflareAccountConnectRoute, handleCloudflareAlertRecipientsRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
 import { handleDomainAddRoute, handleDomainRemoveRoute, handleDomainVerifyRoute } from "./routes/domains";
+import { handleGitHubInstallRoute, handleGitHubSetupRoute } from "./routes/github-setup";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import { handlePlatformMetricsRoute } from "./routes/platform-metrics";
@@ -860,6 +861,9 @@ export const createDeployRouter = (): HttpRouterLike => {
             spec: { auth: "session" },
         },
         { handler: handleNotificationChannelRoute, method: "POST", path: "/v1/notification-channels", spec: { auth: "session" } },
+        // session — both handlers resolve the session themselves and check owner/admin before binding.
+        { handler: handleGitHubInstallRoute, method: "GET", path: "/v1/github/install", spec: { auth: "session" } },
+        { handler: handleGitHubSetupRoute, method: "GET", path: "/v1/github/setup", spec: { auth: "session" } },
         // webhookHmac — provider signature (Creem / GitHub).
         { handler: handleBillingWebhookRoute, method: "POST", path: "/v1/billing/webhook", spec: { auth: "webhookHmac" } },
         { handler: handleWebhookRoute, method: "POST", path: "/v1/github/webhook", spec: { auth: "webhookHmac" } },

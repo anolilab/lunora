@@ -96,7 +96,6 @@ export interface ApiTypes {
         setRecursionPolicy: FunctionReference<"mutation", { organizationId: Id<"organizations">; policy: "terminate" | "allow" }, null>;
     };
     github_installations: {
-        claim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
         unclaim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
     };
@@ -300,7 +299,6 @@ export const api: ApiTypes = {
         setRecursionPolicy: { __lunoraRef: "edge:setRecursionPolicy" },
     },
     github_installations: {
-        claim: { __lunoraRef: "github_installations:claim" },
         list: { __lunoraRef: "github_installations:list" },
         unclaim: { __lunoraRef: "github_installations:unclaim" },
     },
