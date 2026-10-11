@@ -106,15 +106,18 @@ describe(startInstall, () => {
 describe(completeInstall, () => {
     type Bind = (installationId: number, organizationId: string, userId: string) => Promise<void>;
 
+    /** The default case is a linked user whose GitHub account installed the App. */
     const complete = (over: Partial<Parameters<typeof completeInstall>[0]> = {}, bind = vi.fn<Bind>(() => Promise.resolve())) =>
         completeInstall({
             bind,
             installationId: "42",
             isOwnerOrAdmin: () => Promise.resolve(true),
+            linkedGitHubAccountIds: () => Promise.resolve(["1001"]),
             now: NOW,
             secret: SECRET,
             sessionUserId: "usr_1",
             setupAction: "install",
+            stagedInstaller: () => Promise.resolve({ installedByGithubId: 1001 }),
             state: null,
             ...over,
         });
@@ -122,6 +125,14 @@ describe(completeInstall, () => {
     it("binds the installation when the state verifies and the session user still administers the org", async () => {
         const bind = vi.fn<Bind>(() => Promise.resolve());
         const outcome = await complete({ state: await signed() }, bind);
+
+        expect(outcome).toStrictEqual({ ok: true, value: { installationId: 42, organizationId: "org_1" } });
+        expect(bind).toHaveBeenCalledWith(42, "org_1", "usr_1");
+    });
+
+    it("binds when one of several linked GitHub accounts is the one that installed the App", async () => {
+        const bind = vi.fn<Bind>(() => Promise.resolve());
+        const outcome = await complete({ linkedGitHubAccountIds: () => Promise.resolve(["999", "1001"]), state: await signed() }, bind);
 
         expect(outcome).toStrictEqual({ ok: true, value: { installationId: 42, organizationId: "org_1" } });
         expect(bind).toHaveBeenCalledWith(42, "org_1", "usr_1");
@@ -170,6 +181,65 @@ describe(completeInstall, () => {
         const bind = vi.fn<Bind>(() => Promise.resolve());
 
         await expect(complete({ state: null }, bind)).resolves.toMatchObject({ ok: false, status: 403 });
+        expect(bind).not.toHaveBeenCalled();
+    });
+
+    it("refuses a linked user whose GitHub account did not install the App", async () => {
+        const bind = vi.fn<Bind>(() => Promise.resolve());
+
+        await expect(complete({ linkedGitHubAccountIds: () => Promise.resolve(["3003"]), state: await signed() }, bind)).resolves.toMatchObject({
+            ok: false,
+            status: 403,
+        });
+        expect(bind).not.toHaveBeenCalled();
+    });
+
+    it("refuses a user with no linked GitHub account, and says to link one first", async () => {
+        const bind = vi.fn<Bind>(() => Promise.resolve());
+        const outcome = await complete({ linkedGitHubAccountIds: () => Promise.resolve([]), state: await signed() }, bind);
+
+        expect(outcome).toMatchObject({ ok: false, status: 403 });
+        expect(outcome.ok ? "" : outcome.error).toContain("link your GitHub account");
+        expect(bind).not.toHaveBeenCalled();
+    });
+
+    it("refuses a staged installation with no recorded installer, and says to reinstall", async () => {
+        const bind = vi.fn<Bind>(() => Promise.resolve());
+        const outcome = await complete({ stagedInstaller: () => Promise.resolve({}), state: await signed() }, bind);
+
+        expect(outcome).toMatchObject({ ok: false, status: 403 });
+        expect(outcome.ok ? "" : outcome.error).toContain("reinstall the GitHub App from Lunora");
+        expect(bind).not.toHaveBeenCalled();
+    });
+
+    it("reports an installation with nothing staged under its id as not yet reported", async () => {
+        const bind = vi.fn<Bind>(() => Promise.resolve());
+
+        await expect(complete({ stagedInstaller: () => Promise.resolve(null), state: await signed() }, bind)).resolves.toMatchObject({
+            ok: false,
+            status: 404,
+        });
+        expect(bind).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The attacker is an owner of their own org and holds a valid state for it. They know
+     * the victim's unclaimed installation id 42, which the victim's GitHub account (2002)
+     * staged. The attacker's linked GitHub account is 3003, so the bind is refused.
+     */
+    it("refuses an owner of another org who knows an unclaimed installation id", async () => {
+        const bind = vi.fn<Bind>(() => Promise.resolve());
+        const outcome = await complete(
+            {
+                linkedGitHubAccountIds: () => Promise.resolve(["3003"]),
+                sessionUserId: "usr_attacker",
+                stagedInstaller: () => Promise.resolve({ installedByGithubId: 2002 }),
+                state: await signed({ organizationId: "org_attacker", userId: "usr_attacker" }),
+            },
+            bind,
+        );
+
+        expect(outcome).toMatchObject({ ok: false, status: 403 });
         expect(bind).not.toHaveBeenCalled();
     });
 

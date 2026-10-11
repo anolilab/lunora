@@ -53,10 +53,14 @@ export interface CompleteInstallInput {
     installationId: null | string;
     /** Whether `userId` is an owner or admin of `organizationId` right now. */
     isOwnerOrAdmin: (organizationId: string, userId: string) => Promise<boolean>;
+    /** The `accountId`s of the signed-in user's GitHub accounts. Empty when none is linked. */
+    linkedGitHubAccountIds: () => Promise<string[]>;
     now: number;
     secret: string | undefined;
     sessionUserId: string | undefined;
     setupAction: null | string;
+    /** The staged installation's recorded installer, or `null` when nothing is staged under that id. */
+    stagedInstaller: (installationId: number) => Promise<null | { installedByGithubId?: number }>;
     state: null | string;
 }
 
@@ -86,9 +90,14 @@ const refuseBind = (error: unknown): SetupOutcome<never> | undefined => {
 
 /**
  * Verify the callback and bind the installation. Refuses unless the state
- * verifies and is unexpired, the session is the user the state names, and that
- * user still owns or administers the organization the state names. A replayed
+ * verifies and is unexpired, the session is the user the state names, that
+ * user still owns or administers the organization the state names, and the
+ * session's linked GitHub account is the one that installed the App. A replayed
  * state within its lifetime binds the same installation again, which is harmless.
+ *
+ * The GitHub link is the claim's proof: a staged installation id alone names no
+ * one, and an owner of any organization can hold a valid state for their own org.
+ * Only the account that installed the App can finish the bind.
  */
 export const completeInstall = async (input: CompleteInstallInput): Promise<SetupOutcome<{ installationId: number; organizationId: string }>> => {
     if (!input.secret) {
@@ -125,6 +134,26 @@ export const completeInstall = async (input: CompleteInstallInput): Promise<Setu
 
     if (!(await input.isOwnerOrAdmin(state.organizationId, state.userId))) {
         return { error: "only owners and admins can install the GitHub App", ok: false, status: 403 };
+    }
+
+    const staged = await input.stagedInstaller(installationId);
+
+    if (staged === null) {
+        return { error: "GitHub has not reported this installation yet; try again in a moment", ok: false, status: 404 };
+    }
+
+    if (staged.installedByGithubId === undefined) {
+        return { error: "this installation has no recorded installer; reinstall the GitHub App from Lunora", ok: false, status: 403 };
+    }
+
+    const linked = await input.linkedGitHubAccountIds();
+
+    if (linked.length === 0) {
+        return { error: "link your GitHub account to this Lunora account before finishing the install", ok: false, status: 403 };
+    }
+
+    if (!linked.includes(String(staged.installedByGithubId))) {
+        return { error: "the GitHub account linked to this Lunora account did not install this App", ok: false, status: 403 };
     }
 
     try {

@@ -20,6 +20,16 @@ const isOwnerOrAdmin = async (context: LunoraActionContext, organizationId: stri
     return role === "owner" || role === "admin";
 };
 
+/**
+ * The GitHub account ids linked to the session's user, from better-auth's account
+ * list. Fails closed: with no auth or no session, nothing is linked.
+ */
+const linkedGitHubAccountIds = async (headers: Headers): Promise<string[]> => {
+    const accounts = (await currentAuth()?.api.listUserAccounts({ headers })) ?? [];
+
+    return accounts.filter((account) => account.providerId === "github").map((account) => account.accountId);
+};
+
 /** `GET /v1/github/install?organizationId=…` — redirect to the GitHub App's install page, carrying a signed state. */
 export const handleGitHubInstallRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -68,9 +78,12 @@ export const handleGitHubSetupRoute = async (request: Request, environment: Rout
             }),
         installationId: url.searchParams.get("installation_id"),
         isOwnerOrAdmin: (organizationId, userId) => isOwnerOrAdmin(context, organizationId, userId),
+        linkedGitHubAccountIds: () => linkedGitHubAccountIds(request.headers),
         now: Date.now(),
         secret: environment.GITHUB_SETUP_STATE_SECRET,
         setupAction: url.searchParams.get("setup_action"),
+        stagedInstaller: (installationId) =>
+            context.runQuery<null | { installedByGithubId?: number }>(internal.github_installations.stagedInstaller, { installationId }),
         sessionUserId: session?.user?.id,
         state: url.searchParams.get("state"),
     });

@@ -85,10 +85,11 @@ export const stagedInstaller = internalQuery
 /**
  * Bind a staged installation to an organization. `internal` — the only caller is
  * the signed setup callback (`GET /v1/github/setup`, `src/github/setup-flow.ts`),
- * which verifies the install state, the session user and that user's owner/admin
- * role first. There is no public claim: a staged installation id proves nothing
- * about who installed the App, so an owner of any org could otherwise link
- * another org's installation before its owner did.
+ * which verifies the install state, the session user, that user's owner/admin
+ * role, and that the session's linked GitHub account installed the App. There is
+ * no public claim: a staged installation id alone proves nothing about who
+ * installed the App, so an owner of any org could otherwise link another org's
+ * installation before its owner did.
  *
  * An already-claimed installation cannot be re-bound by another org. The audit
  * trail records who linked what.
