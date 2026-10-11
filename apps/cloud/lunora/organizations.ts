@@ -8,7 +8,7 @@ import { releaseIdleAliases } from "./deployments";
 import { queueCertificateReleases } from "./domains";
 import { releaseEdgeRules } from "./edge";
 import { rateLimit } from "./guards";
-import { purgeScopedRows } from "./purge";
+import { anonymiseScopedRows, ERASED_REFERENCE, purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -238,8 +238,8 @@ export const cancelDeletion = mutation
 /** Organizations one purge tick erases. Bounds a single mutation; a backlog drains over ticks. */
 const PURGE_BATCH = 100;
 
-/** The `@lunora/payment` tables keyed by an organization's id (`referenceId`). */
-const PAYMENT_REFERENCE_TABLES = ["customers", "paymentSessions", "subscriptions", "usageEvents"] as const;
+/** The `@lunora/payment` rows an organization erasure deletes outright. */
+const PAYMENT_DELETE_TABLES = ["customers", "usageEvents"] as const;
 
 /**
  * Purge orgs whose deletion request has aged past the retention window
@@ -324,10 +324,28 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         await queueCertificateReleases(context, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
         await purgeScopedRows(context, orgScopedTables, { organizationId });
-        // The payment mirror is keyed by the organization id as its reference. It holds
-        // the customer's email and provider ids, so an erasure removes it with the rest.
+        // The payment mirror is keyed by the organization id as its reference. The
+        // customer record (email, provider id) and metered usage are personal or
+        // operational data with no retention duty, so they are deleted. Payment and
+        // subscription rows are financial records (AO § 147, HGB § 257): they keep
+        // amounts, currency, dates and state, and lose the link to the organization
+        // and the provider ids, then age out under the retention sweep.
         // eslint-disable-next-line no-await-in-loop -- see above
-        await purgeScopedRows(context, PAYMENT_REFERENCE_TABLES, { referenceId: organizationId });
+        await purgeScopedRows(context, PAYMENT_DELETE_TABLES, { referenceId: organizationId });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await anonymiseScopedRows(context, "paymentSessions", { referenceId: organizationId }, (row) => {
+            return {
+                providerSessionId: `erased:${row._id}`,
+                referenceId: ERASED_REFERENCE,
+            };
+        });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await anonymiseScopedRows(context, "subscriptions", { referenceId: organizationId }, (row) => {
+            return {
+                providerSubscriptionId: `erased:${row._id}`,
+                referenceId: ERASED_REFERENCE,
+            };
+        });
         // eslint-disable-next-line no-await-in-loop -- see above
         await releaseIdleAliases(context, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
