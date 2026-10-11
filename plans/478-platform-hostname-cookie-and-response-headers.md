@@ -1,87 +1,93 @@
 # Plan 478 — Stop sibling tenants from setting cookies the control plane reads; add opt-in response headers at the dispatcher
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** TODO — Phase 0 verification comes first and may change the priority.
+**Status:** PHASE 0 DONE (2026-10-11). Fix verified against better-auth 1.7.7; ready to implement (workstream B). PSL submission (A) is secondary and still to decide.
 
-## 0. Headline finding
+## 0. Verified finding
 
-Every tenant is served from a sibling host of the control plane, under one registrable domain. `lunora.app` is not on the Public
-Suffix List (PSL), so the browser treats every tenant host and the control plane as one site with a shared cookie scope.
+Every tenant is served from a sibling host of the control plane, under one registrable domain. `lunora.app` is not on the Public Suffix
+List (PSL). Checked 2026-10-11 with a positive control (`app` is listed, so the grep is live; `lunora.app` is absent).
 
-Checked 2026-10-11 with a positive control: the PSL file contains `app` (so the grep is live), and no entry for `lunora.app`.
-`pages.dev` is listed; `workers.dev` was not matched by an exact-line grep, so this plan makes no claim about it.
+A browser test on 2026-10-11 (Chrome, real hosts mapped to localhost, no DNS touched) and the pinned better-auth 1.7.7 source give these results:
 
-Consequences:
+| Question | Result | Evidence |
+| -------- | ------ | -------- |
+| Can a tenant page set a cookie the control plane receives? | **Yes.** `better-auth.session_token; Domain=lunora.app` is accepted. | Browser run, `domainCookieAccepted: true` |
+| Does the `__Host-` prefix stop it? | **Yes.** A `__Host-` cookie with a `Domain` attribute is rejected. A tenant can set a `__Host-` cookie only on its own host, which the control plane never receives. | Browser run, `hostPrefixWithDomainAccepted: false` |
+| Does better-auth's **default** prefix stop it? | **No.** On HTTPS the default is `__Secure-`, and a `__Secure-` cookie with `Domain=lunora.app` is accepted. | Browser run, `securePrefixWithDomainAccepted: true`; `better-auth` 1.7.7 `cookies/index.mjs:23` |
+| Which value does the server read when two are sent? | **The first one.** `parseCookies` keeps the first occurrence of a name. A tenant cookie scoped to a more specific path (`/whoami`) is sent first by the browser. | `better-call` 1.4.0 `dist/cookies.cjs` (`if (!cookies.has(key))`); browser run |
+| Can the attacker forge a session? | **No.** `get-session` verifies an HMAC over the value (`api/routes/session.mjs:40`, `getSignedCookie`). | Source; a forged signature returns `session: null` (see readback test) |
+| So what can a sibling do? | **Plant the attacker's own signed session** in the victim's browser. Login CSRF: what the victim does lands in the attacker's account. Not account takeover. | Follows from the three rows above |
 
-1. **Cookie tossing (M, not H).** A tenant page can set a cookie with `Domain=lunora.app`, and the browser sends it to the control
-   plane. better-auth signs its session cookies with the server secret (to confirm against the installed version in Phase 0), so a
-   sibling can plant only a session the server has signed. In practice that is a session for the attacker's own account. The impact is
-   login CSRF: the victim's actions land in the attacker's account. It is not account takeover.
-2. **Same-site requests across tenants (M).** Because every tenant is same-site with the control plane and with each other, `SameSite=Lax`
-   gives no protection between them.
-3. **No platform response headers (M).** The dispatcher sets no `Content-Security-Policy`, `X-Frame-Options`/`frame-ancestors`,
-   `Referrer-Policy` or `X-Content-Type-Options` on tenant responses.
+Severity: **M**, as originally rated. The browser run shows the injection is real, but the impact is login CSRF, not takeover.
 
-Items 1 and 2 are the same fix, and it is a PSL submission, not a cookie change. The `__Host-` prefix is defence in depth on top of it.
-Item 3 is independent.
+Second finding, same root: every tenant is same-site with the control plane and with each other, so `SameSite=Lax` gives no protection between them.
+
+Third finding, independent: the dispatcher sets no `Content-Security-Policy`, `X-Frame-Options`/`frame-ancestors`, `Referrer-Policy` or `X-Content-Type-Options` on tenant responses.
+
+**Correction to the earlier plan:** `__Host-` is the primary fix, not defence in depth. It works with better-auth 1.7.7 and needs no external process. The PSL submission is still worth doing, but for tenant-to-tenant isolation, which `__Host-` does not cover.
 
 ## 1. Current state (audit)
 
-- `apps/cloud/src/auth.ts:81` — `baseURL: env.AUTH_URL ?? requestOrigin`. No `crossSubDomainCookies`, no `cookiePrefix`, no explicit cookie attributes.
-- `apps/cloud/src/auth.ts:115` — `advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] } }`. This is the only `advanced` setting. `grep`
-  finds no `__Host-`, `__Secure-` or `SameSite` configuration in `src` or `lunora`.
-- `apps/cloud/wrangler.jsonc:111, 122` — `LUNORA_APP_DOMAIN: "lunora.app"` and `LUNORA_OTLP_ENDPOINT: "https://cloud.lunora.app"`. The control
-  plane's own route is **not** in `wrangler.jsonc`, so `cloud.lunora.app` is inferred. Confirm the hostname in the dashboard (Phase 0).
+- `apps/cloud/src/auth.ts:81` — `baseURL: env.AUTH_URL ?? requestOrigin`. No cookie options set.
+- `apps/cloud/src/auth.ts:115` — `advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] } }`. The only `advanced` setting.
+- `apps/cloud/wrangler.jsonc:111, 122` — `LUNORA_APP_DOMAIN: "lunora.app"` and `LUNORA_OTLP_ENDPOINT: "https://cloud.lunora.app"`.
+- **Control-plane hostname (P0.2, checked 2026-10-11):** `cloud.lunora.app` does not answer (`curl` returns no HTTP status). `lunora.app` resolves to `51.89.70.16`, an OVH failover IP that is not a Cloudflare address, and serves plain HTTP `200`. So the control plane is not reachable at the hostname this plan assumed. Where it runs is unknown, and the fix below does not depend on it.
 - `apps/cloud/dispatcher.wrangler.jsonc:41` — the dispatcher's route is `*/*` on `lunora.app`, so every sibling host is served by it.
-- The dispatcher sets only `x-lunora-id` on responses (`apps/cloud/src/dispatcher/worker.ts:506`) and the preview cookie (`:237`); `grep` finds no
-  CSP or framing header anywhere in `src/dispatcher`, `src/targets` or `src/edge`.
-- Preview cookies (`apps/cloud/src/dispatcher/preview-auth.ts:146`) are `HttpOnly; Secure; SameSite=Lax` with path `/` and no `Domain`: host-only.
+- The dispatcher sets only `x-lunora-id` on responses (`apps/cloud/src/dispatcher/worker.ts:506`) and the preview cookie (`:237`). No CSP or framing header in `src/dispatcher`, `src/targets` or `src/edge`.
+- Preview cookies (`apps/cloud/src/dispatcher/preview-auth.ts:146`) are `HttpOnly; Secure; SameSite=Lax`, path `/`, no `Domain`: host-only. That is the shape to copy.
 
 ## 2. Existing seams (do not reinvent)
 
-- `preview-auth.ts` already builds a hardened cookie (`previewCookieHeader`). Control-plane cookies should use the same attribute set.
-- better-auth's `advanced` cookie options are where prefixes and attributes are set. Check the installed version's option names first.
-- `worker.ts:237` already sets `set-cookie` for the preview login; the dispatcher's response path is where header policy would go.
+- `preview-auth.ts` already builds a hardened cookie (`previewCookieHeader`). Use the same attribute set.
+- better-auth's `advanced.cookies` option sets a cookie's name and attributes. Verified below.
+- `worker.ts:237` already sets `set-cookie` for the preview login; the dispatcher's response path is where header policy goes.
 
 ## 3. The behavioural contract to preserve
 
-- A signed-in user of the control plane stays signed in across the change, or is asked to sign in once, with a stated reason.
+- A signed-in user stays signed in across the change, or is signed out once with a stated reason. The cookie rename signs everyone out once.
 - Tenant apps that set their own CSP keep it when the platform policy is opt-in. The platform never overrides a tenant policy silently.
 - Preview password cookies keep their current attributes.
 
 ## 4. Design decisions
 
-1. **Primary fix: submit `lunora.app` to the PSL private section.** Each tenant host becomes its own site, so a tenant can no longer set a cookie
-   that the control plane or another tenant reads, and cross-tenant `SameSite` protection starts working. It is an external process with a lead
-   time of weeks, so it starts first and does not block the rest.
-   *Rejected:* moving the control plane to another registrable domain (DNS and customer-facing URL changes for a problem the PSL entry solves);
-   the `__Host-` prefix alone (it protects the control plane's cookie, but tenants stay same-site with each other).
-2. **Defence in depth: `__Host-` prefix on control-plane session cookies.** Must be `Secure`, `Path=/`, no `Domain`, so no other host can set it.
-   Configure through better-auth's options, against the installed version, and verify the `Set-Cookie` names in a test.
-3. **Platform headers are opt-in, report-only first.** A per-project setting selects `report-only` CSP, then `enforce`. The default is off.
-   *Rejected:* enforce by default. Tenant apps are arbitrary Lunora apps with inline scripts and third-party embeds; an enforced default breaks them on deploy.
-4. **Always-on headers:** `X-Content-Type-Options: nosniff` on every response, and `Referrer-Policy: strict-origin-when-cross-origin` only when the tenant
-   sets no value.
+1. **Primary fix: `__Host-` session cookies, configured explicitly.** Verified with better-auth 1.7.7 in a real run (see §5, P0.4). The configuration:
 
-## 5. Workstreams
+   ```ts
+   advanced: {
+     // Turn off the automatic __Secure- prefix; it does not stop a sibling's Domain attribute.
+     useSecureCookies: false,
+     cookies: {
+       session_token: { name: "__Host-better-auth.session_token", attributes: { secure: true, path: "/" } },
+       session_data: { name: "__Host-better-auth.session_data", attributes: { secure: true, path: "/" } },
+       account_data: { name: "__Host-better-auth.account_data", attributes: { secure: true, path: "/" } },
+       dont_remember: { name: "__Host-better-auth.dont_remember", attributes: { secure: true, path: "/" } },
+     },
+   },
+   ```
 
-**Phase 0 — verify (S, staging).**
-- P0.1 (done 2026-10-11): PSL membership, with the positive control above.
-- P0.2: confirm the control plane's production and staging hostnames in the dashboard.
-- P0.3: the cross-host cookie test. From a tenant host on staging, set a cookie with `Domain=<apex>` named like the control plane's session cookie, then send
-  a control-plane request and record which cookie the server reads. Decisive: a negative result means item 1 is not exploitable on current browsers and the cookie work drops.
-- P0.4: read the installed better-auth source and confirm the session cookie is signed; a test that an unsigned or mis-signed value is rejected.
-- P0.5: record the exact cookie names the control plane sets today.
+   Output of the run: `__Host-better-auth.session_token; Max-Age=604800; Path=/; HttpOnly; Secure; SameSite=Lax` (no `Domain`). `get-session` returns the session for that cookie, and a forged signature returns `null`.
+   *Rejected:* `useSecureCookies: true` alone. It gives `__Secure-`, which a sibling can still set with `Domain`. *Rejected:* a name starting `__Host-` with the automatic prefix on. better-auth prepends `__Secure-`, which produces an invalid name.
+   Each of the four cookies needs the override, or a leftover unprefixed cookie stays readable.
+2. **Secondary: PSL submission of `lunora.app`.** Browsers then treat each tenant host as its own site. That isolates tenants from each other, which `__Host-` does not do, and it makes cross-tenant `SameSite` work. It is an external process with a lead time of weeks. Start it, but it does not block item 1.
+   *Rejected:* moving the control plane to another domain. The `__Host-` fix makes it unnecessary.
+3. **Platform headers are opt-in, report-only first.** A per-project setting selects `report-only` CSP, then `enforce`. Default off.
+   *Rejected:* enforce by default. It breaks arbitrary Lunora apps with inline scripts and third-party embeds on deploy.
+4. **Always-on headers:** `X-Content-Type-Options: nosniff` on every response, and `Referrer-Policy: strict-origin-when-cross-origin` only when the tenant sets no value.
 
-**A. PSL submission (S of work, long lead time, ops).** Prepare and submit. Track the submission date in this file. Re-check the list on any deploy that touches cookie scope.
+## 5. Workstreams and results
 
-**B. `__Host-` prefix and migration (S, if P0.3 reproduces or P0.4 shows a weak point).** Configure prefix and attributes; test the `Set-Cookie` attributes and that an
-old-named cookie is not read as a session. Users with the old cookie are signed out once; state this in the release notes and on the sign-in page.
+**Phase 0 — verify.**
+- **P0.1 done (2026-10-11):** PSL membership, with the positive control above.
+- **P0.2 done (2026-10-11), result negative:** `cloud.lunora.app` is not reachable; `lunora.app` resolves to a non-Cloudflare host. The production control plane's location must be confirmed before deploy. Not a blocker for the cookie fix.
+- **P0.3 done (2026-10-11), result positive:** the cross-host browser test (table in §0). Script kept at `/tmp/cookie-check/run.mjs` (throwaway).
+- **P0.4 done (2026-10-11), result:** the session cookie is signed (`api/routes/session.mjs:40`). The `__Host-` configuration in §4.1 was run against better-auth 1.7.7 with an in-memory adapter. It sets the expected name and attributes, reads the session back, and rejects a forged signature.
+- **P0.5 done (2026-10-11), result:** the default names on HTTPS are `__Secure-better-auth.session_token`, `__Secure-better-auth.session_data`, and the matching `account_data` and `dont_remember`. Confirmed by the run (default config).
 
+**B. `__Host-` configuration and migration (S, ready).** Apply §4.1. Tests: `Set-Cookie` names and attributes for all four cookies; a session is read back with the new name; the old `__Secure-` name is not read as a session (users are signed out once). Release note and sign-in page notice.
 **C. Always-on headers (S).** `nosniff` and the conditional referrer policy in the dispatcher's response path for non-101 responses, one test per rule.
-
-**D. Opt-in CSP (M).** `report-only` then `enforce`, a `Content-Security-Policy-Report-Only` header with a report endpoint, and a studio toggle. Default policy allows `'self'` and
-reports everything else. No enforce setting is offered before a clean report-only window.
+**D. Opt-in CSP (M).** `report-only` then `enforce`, a `Content-Security-Policy-Report-Only` header with a report endpoint, and a studio toggle. Default policy allows `'self'` and reports everything else. No enforce setting before a clean report-only window.
+**A. PSL submission (S of work, long lead time, ops).** Prepare and submit. Track the submission date here. Re-check the list on any deploy that touches cookie scope.
 
 ## 6. Platform parity
 
@@ -91,32 +97,27 @@ Not applicable. Control-plane and dispatcher behaviour, not a framework `ctx.*` 
 
 | Phase | Work | Gate |
 | ----- | ---- | ---- |
-| 0 | P0.2–P0.5 | Results recorded here. If P0.3 is negative, B drops and item 1 becomes a note. |
-| A | PSL submission | Submitted; acceptance date recorded. Runs in parallel with 1. |
-| 1 | B | Attribute tests; a manual sign-in check on staging in two browsers |
+| 0 | P0.1–P0.5 | Done (above). P0.2 needs the production control-plane location before deploy. |
+| 1 | B | Cookie-attribute tests green; a manual sign-in check on staging in two browsers; the browser cross-host test rerun against the staging control plane shows the sibling cookie is **not** read |
+| A | PSL submission | Submitted; acceptance date recorded. Parallel with 1. |
 | 2 | C | Header tests per rule; no change to the existing end-to-end suite |
 | 3 | D | Report-only policy on staging for one week, reports reviewed before any enforce setting is offered |
 
 ## 8. Risks & STOP conditions
 
-- **STOP** if P0.3 shows the control plane reads a sibling-set cookie even with the `__Host-` prefix in place. The problem is in the session lookup; re-scope.
-- **Risk:** the PSL submission is rejected or delayed. *Mitigate:* B still closes the control-plane cookie; tenant-to-tenant isolation waits for the list.
+- **STOP** if the staging browser test still reads a sibling-set cookie after B. The problem is then not the name; re-scope.
+- **Risk:** the `useSecureCookies: false` override changes other better-auth behaviour. *Mitigate:* the run in §5 showed the expected attributes; the tests in B cover sign-in, get-session and sign-out on staging.
 - **Risk:** the sign-out migration locks a user out mid-task. *Mitigate:* a one-time notice and the normal sign-in flow.
 - **Risk:** a CSP breaks a tenant app. *Mitigate:* report-only first; per-project switch defaults off.
 - **Perf watch:** none material; header work is O(1) per response.
 
-## 9. Open questions
+## 9. Open questions — decided
 
-1. Is the staging test conclusive? Recommendation: yes; the browser rule is the same on staging and production, and the test uses the real hostnames.
-2. Where do CSP reports go? Recommendation: a control-plane endpoint writing to the existing logs or the platform metrics dataset.
+1. **Is the staging test conclusive?** Decided: the browser run already shows the mechanism. The staging rerun in §7 Phase 1 confirms it on the real control plane.
+2. **Where do CSP reports go?** Decided: a control-plane endpoint writing to the platform metrics dataset.
 
 ## 10. Checked and not gaps (2026-10-11)
 
-- **Client-supplied header trust, framework runtime: not a gap on the paths read.** The upgrade path strips every client-supplied `x-lunora-*` header and re-sets
-  identity from the server (`packages/runtime/src/create-worker.ts:2626-2675`, `SERVER_MINTED_HEADER_NAMES` and `buildUpgradeHeaders`). A test asserts it
-  (`packages/runtime/__tests__/identity-layer.test.ts:235`). **Residual:** plain HTTP paths build their forward context through `resolveForwardContext`; not every HTTP route was traced.
-- **Client-supplied header trust, dispatcher: not a gap.** The dispatcher deletes only `x-lunora-lineage` (`apps/cloud/src/dispatcher/worker.ts:393`). The rest reaches
-  the tenant runtime, which applies the check above. `x-lunora-client-ip` (`worker.ts:206`) is set on the dispatcher's own outbound request, not copied from the client.
-- **Preview data isolation: not a gap, by construction.** A preview is a separate provisioning stack keyed by its own script name: `release-core.ts:331` sets
-  `alias: release.scriptName`, and the preview name is `previewScriptName(alias, branch)` (`apps/cloud/src/deploy/preview.ts:25`). The provision box keys stacks by alias
-  (`apps/cloud/src/targets/provision-box/contract.ts:72`). **Residual:** confirm the resource names on a staging preview. A preview sharing production's data would be H and reopen this section.
+- **Client-supplied header trust, framework runtime: not a gap on the paths read.** The upgrade path strips every client-supplied `x-lunora-*` header and re-sets identity from the server (`packages/runtime/src/create-worker.ts:2626-2675`). A test asserts it (`packages/runtime/__tests__/identity-layer.test.ts:235`). **Residual:** plain HTTP paths build their forward context through `resolveForwardContext`; not every HTTP route was traced.
+- **Client-supplied header trust, dispatcher: not a gap.** The dispatcher deletes only `x-lunora-lineage` (`apps/cloud/src/dispatcher/worker.ts:393`). `x-lunora-client-ip` (`worker.ts:206`) is set on the dispatcher's own outbound request, not copied from the client.
+- **Preview data isolation: not a gap, by construction.** A preview is a separate provisioning stack keyed by its own script name: `release-core.ts:331` sets `alias: release.scriptName`, and `previewScriptName(alias, branch)` (`apps/cloud/src/deploy/preview.ts:25`) names it. The provision box keys stacks by alias (`apps/cloud/src/targets/provision-box/contract.ts:72`). **Residual:** confirm the resource names on a staging preview.

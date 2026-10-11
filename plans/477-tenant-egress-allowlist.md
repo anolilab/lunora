@@ -1,7 +1,7 @@
 # Plan 477 — Per-project egress allowlist for tenant Workers, enforced in the dispatch namespace's Outbound Worker
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** TODO (Phase 0 probe gates the design; see §5). Default: opt-in, default-open for every project, with a report-first flow.
+**Status:** BLOCKED on account access — Workers for Platforms is not enabled on the Lunora account, so the Phase 0 probe cannot run (§5). Default: opt-in, default-open for every project, with a report-first flow.
 
 ## 0. Headline finding
 
@@ -81,7 +81,9 @@ Size: **M–L**. The enforcement is small; the policy plumbing, the probe and th
 
 ## 5. Workstreams
 
-**Phase 0 — probe (S, a real staging account).** Five questions, each answer recorded in this file:
+**Phase 0 — result (2026-10-11): BLOCKED on the account, not on the design.** The Lunora Cloudflare account has no Workers for Platforms. `wrangler dispatch-namespace list` returns error 10121 ("You do not have access to dispatch namespaces"), and every question below needs a dispatch namespace and the Outbound Worker on it. Nothing was run. Unblock by enabling Workers for Platforms on the account (dashboard), or by pointing the probe at an account that has it. Q5 has no non-WfP route.
+
+**Phase 0 — probe (S, a real staging account, once WfP is available).** Five questions, each answer recorded in this file:
 
 - Q1: can an `outbound` parameter carry a structured object, or only a string? What is the size limit?
 - Q2: when a tenant follows a redirect it received, does that second request pass through the Outbound Worker again?

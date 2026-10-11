@@ -1,7 +1,7 @@
 # Plan 481 — Tenant Workflows on the targets that can run them, and an honest refusal everywhere else
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** TODO — Phase 0 probe decides whether WfP is in scope.
+**Status:** PARTIAL — BYO workflows verified positive on the Lunora account; workstream A (BYO native) is unblocked. WfP is blocked on account access; celld Q3 not run.
 
 ## 0. Headline finding
 
@@ -56,7 +56,12 @@ Size: **M** for the BYO path, **L or blocked** for WfP.
 
 ## 5. Workstreams
 
-**Phase 0 — probe (S, two accounts).**
+**Phase 0 — result (2026-10-11).**
+- **Q2 (BYO): verified positive on the Lunora account.** A plain Worker deployed with a `workflows` binding (`class_name` exported, `WorkflowEntrypoint`). An instance ran to `Completed` with `step.do` and `step.sleep` (`Last Successful Step: finish-1`, output `"hi"`), in about one second. The `cloudflare-workers` refusal at `provision-contract.ts:438` is **stale**; workstream A is unblocked. The probe Worker and its workflow were deleted afterwards.
+- **Q1 (WfP): blocked** by the account (no dispatch namespaces, error 10121).
+- **Q3 (celld): not run.** No celld binary is installed here, and this base has no install script for it.
+
+**Phase 0 — probe (S, two accounts), original questions.**
 - Q1 (WfP): can a Worker uploaded into a dispatch namespace declare a `workflows` binding with a class export? Record the exact error if not.
 - Q2 (BYO): can a plain Worker in a customer account declare a `workflows` binding, and does the provision box create the Workflow on deploy?
 - Q3 (celld): does a workflow run to completion with `step.do`, `step.sleep` and `waitForEvent` on the box?

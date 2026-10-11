@@ -1,7 +1,7 @@
 # Plan 480 — Service bindings and org-owned connectors on Workers for Platforms, with cycles refused at deploy time
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** BLOCKED — the framework side (plan 457, "service bindings to sibling Workers") is not in this base's plans index, so its status here is unknown. Verify it before starting, and run the Phase 0 probe. Connector ownership decided: **per org**.
+**Status:** PARTIAL — the BYO service-binding path is verified on the Lunora account; the WfP path is blocked on account access (no Workers for Platforms). Plan 457 is restored and its framework side is in place. Connector ownership decided: **per org**.
 
 ## 0. Headline finding
 
@@ -74,7 +74,13 @@ Size: **L**. Depends on a probe that could make the design smaller or larger.
 
 ## 5. Workstreams
 
-**Phase 0 — probe (S, staging account).** Each answer recorded in this file:
+**Phase 0 — result (2026-10-11): partial.**
+- **BYO path, verified on the Lunora account.** A caller Worker binds a callee Worker with `services: [{ binding: "CALLEE", service: "pcheck-svc-callee", entrypoint: "CalleeApi" }]` and gets a typed RPC result (`[{"id":"c1","name":"Example"}]`). Named entrypoints work; a default export with only an RPC class fails the deploy with error 10068 ("no registered event handlers"), so the callee also needs a `fetch`. Both probe Workers were deleted afterwards.
+- **WfP questions Q1 and Q2: blocked** by the account (no dispatch namespaces, error 10121). See plan 477 §5.
+- **Q3 (`props`) and Q4 (tail attribution): not run.** Q4 is cheap on the BYO path and can be run next.
+- **Plan 457 is restored and mostly shipped** (`plans/457-service-bindings.md`). The typed-service snapshot it left open is implemented by #1024, so this plan's framework dependency is in place.
+
+**Phase 0 — probe (S, staging account), original questions:** Each answer recorded in this file:
 - Q1: can a dispatch-namespace user Worker declare a service binding to another script in the same namespace, at upload time?
 - Q2: can it bind to a script in a different namespace or an account-level Worker?
 - Q3: can the binding carry `props` (fixed per binding), enough to tell a connector which org it serves?
