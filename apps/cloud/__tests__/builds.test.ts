@@ -68,6 +68,22 @@ describe(parseInstallationEvent, () => {
         expect(parseInstallationEvent({ ...payload, action: "suspend" })).toBeNull();
         expect(parseInstallationEvent({ action: "created" })).toBeNull();
     });
+
+    it("carries the sender who installed the App, when the payload names one", () => {
+        const payload = {
+            action: "created",
+            installation: { account: { login: "acme" }, id: 42 },
+            sender: { id: 1001, login: "octocat" },
+        };
+
+        expect(parseInstallationEvent(payload)).toStrictEqual({
+            accountLogin: "acme",
+            action: "created",
+            installationId: 42,
+            installedByGithubId: 1001,
+            installedByLogin: "octocat",
+        });
+    });
 });
 
 describe(withinBudget, () => {

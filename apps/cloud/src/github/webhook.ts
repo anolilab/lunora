@@ -220,11 +220,15 @@ export interface InstallationIntent {
     accountLogin: string;
     action: "created" | "deleted";
     installationId: number;
+    /** The GitHub user who installed the App (the webhook's `sender`), when the payload names one. */
+    installedByGithubId?: number;
+    installedByLogin?: string;
 }
 
 interface InstallationPayload {
     action?: string;
     installation?: { account?: { login?: string }; id?: number };
+    sender?: { id?: number; login?: string };
 }
 
 /** Map an `installation` webhook payload to a link/unlink intent (GAPS.md A4), or `null`. */
@@ -242,7 +246,16 @@ export const parseInstallationEvent = (payload: unknown): InstallationIntent | n
     }
 
     if (event.action === "created" || event.action === "deleted") {
-        return { accountLogin, action: event.action, installationId };
+        const installedByGithubId = event.sender?.id;
+        const installedByLogin = event.sender?.login;
+
+        return {
+            accountLogin,
+            action: event.action,
+            installationId,
+            ...(typeof installedByGithubId === "number" ? { installedByGithubId } : {}),
+            ...(typeof installedByLogin === "string" ? { installedByLogin } : {}),
+        };
     }
 
     return null;

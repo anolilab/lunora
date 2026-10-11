@@ -207,6 +207,10 @@ export const platformTables = {
         claimedAt: v.optional(v.number()),
         createdAt: v.number(),
         installationId: v.number(),
+        // The GitHub user who installed the App, from the webhook's `sender`. The
+        // setup callback binds only when the session's linked GitHub account matches it.
+        installedByGithubId: v.optional(v.number()),
+        installedByLogin: v.optional(v.string()),
         // Set at claim time (owner/admin session), never by the webhook.
         organizationId: v.optional(v.id("organizations")),
     })

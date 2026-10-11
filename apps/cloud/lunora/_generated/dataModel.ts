@@ -119,6 +119,8 @@ export interface Doc_githubInstallations {
     claimedAt?: number;
     createdAt: number;
     installationId: number;
+    installedByGithubId?: number;
+    installedByLogin?: string;
     organizationId?: Id<"organizations">;
 }
 
@@ -1173,6 +1175,8 @@ export interface Insert_githubInstallations {
     claimedAt?: number;
     createdAt: number;
     installationId: number;
+    installedByGithubId?: number;
+    installedByLogin?: string;
     organizationId?: Id<"organizations">;
 }
 

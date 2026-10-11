@@ -96,7 +96,7 @@ export interface ApiTypes {
         setRecursionPolicy: FunctionReference<"mutation", { organizationId: Id<"organizations">; policy: "terminate" | "allow" }, null>;
     };
     github_installations: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; installedByGithubId?: number; installedByLogin?: string; organizationId?: Id<"organizations"> }[]>;
         unclaim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
     };
     halts: {

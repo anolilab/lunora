@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 
@@ -19,6 +19,8 @@ interface InstallationRow {
     claimedAt?: number;
     createdAt: number;
     installationId: number;
+    installedByGithubId?: number;
+    installedByLogin?: string;
     organizationId?: Id<"organizations">;
 }
 
@@ -29,12 +31,25 @@ interface InstallationRow {
  * invokes it (`context.runMutation`), never a public RPC client.
  */
 export const record = internalMutation
-    .input({ accountLogin: v.string(), installationId: v.number() })
-    .mutation(async ({ ctx: context, args: { accountLogin, installationId } }): Promise<Id<"githubInstallations">> => {
+    .input({
+        accountLogin: v.string(),
+        installationId: v.number(),
+        installedByGithubId: v.optional(v.number()),
+        installedByLogin: v.optional(v.string()),
+    })
+    .mutation(async ({ ctx: context, args: { accountLogin, installationId, installedByGithubId, installedByLogin } }): Promise<Id<"githubInstallations">> => {
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
         const existing = page[0];
 
+        // A redelivered webhook fills in a sender a row staged without one; it never replaces a recorded one.
         if (existing) {
+            if (existing.installedByGithubId == null && installedByGithubId !== undefined) {
+                await context.db.patch(existing._id, {
+                    installedByGithubId,
+                    ...(installedByLogin === undefined ? {} : { installedByLogin }),
+                });
+            }
+
             return existing._id;
         }
 
@@ -42,7 +57,29 @@ export const record = internalMutation
             accountLogin: accountLogin.toLowerCase(),
             createdAt: context.now,
             installationId,
+            ...(installedByGithubId === undefined ? {} : { installedByGithubId }),
+            ...(installedByLogin === undefined ? {} : { installedByLogin }),
         });
+    });
+
+/**
+ * The GitHub user who installed a staged installation, for the setup callback to
+ * check against the session's linked GitHub account. `null` when nothing is staged
+ * under that id; `installedByGithubId` is absent when the webhook carried no sender.
+ * `internal` — only the signed setup callback reads it.
+ */
+export const stagedInstaller = internalQuery
+    .input({ installationId: v.number() })
+    .query(async ({ ctx: context, args: { installationId } }): Promise<null | { installedByGithubId?: number }> => {
+        const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
+        const installation = page[0];
+
+        if (!installation) {
+            return null;
+        }
+
+        // A row staged before the sender was recorded reads back `null`, which is the same as no sender.
+        return typeof installation.installedByGithubId === "number" ? { installedByGithubId: installation.installedByGithubId } : {};
     });
 
 /**

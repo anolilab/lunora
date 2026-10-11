@@ -206,6 +206,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "github_installations:list": lunora_github_installations_15.list as unknown as RegisteredLunoraFunction,
     "github_installations:record": lunora_github_installations_15.record as unknown as RegisteredLunoraFunction,
     "github_installations:remove": lunora_github_installations_15.remove as unknown as RegisteredLunoraFunction,
+    "github_installations:stagedInstaller": lunora_github_installations_15.stagedInstaller as unknown as RegisteredLunoraFunction,
     "github_installations:unclaim": lunora_github_installations_15.unclaim as unknown as RegisteredLunoraFunction,
     "halts:aliasHalted": lunora_halts_16.aliasHalted as unknown as RegisteredLunoraFunction,
     "halts:beginConverge": lunora_halts_16.beginConverge as unknown as RegisteredLunoraFunction,
@@ -720,9 +721,29 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["accountLogin"] !== "string") return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
-return { "accountLogin": source["accountLogin"], "installationId": source["installationId"] };
+let __has1 = false;
+let __val1;
+if (source["installedByGithubId"] !== undefined) {
+if (typeof source["installedByGithubId"] !== "number" || !Number.isFinite(source["installedByGithubId"])) return DEFER;
+__val1 = source["installedByGithubId"];
+__has1 = true;
+}
+let __has2 = false;
+let __val2;
+if (source["installedByLogin"] !== undefined) {
+if (typeof source["installedByLogin"] !== "string") return DEFER;
+__val2 = source["installedByLogin"];
+__has2 = true;
+}
+return { "accountLogin": source["accountLogin"], "installationId": source["installationId"], ...(__has1 ? { "installedByGithubId": __val1 } : {}), ...(__has2 ? { "installedByLogin": __val2 } : {}) };
 });
 installCompiledValidatorMap(lunora_github_installations_15.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
+return { "installationId": source["installationId"] };
+});
+installCompiledValidatorMap(lunora_github_installations_15.stagedInstaller.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
@@ -1315,9 +1336,10 @@ export interface Caller {
     };
     github_installations: {
         bind: (args: { installationId: number; organizationId: Id<"organizations">; userId: string }) => Promise<void>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
-        record: (args: { accountLogin: string; installationId: number }) => Promise<Id<"githubInstallations">>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; installedByGithubId?: number; installedByLogin?: string; organizationId?: Id<"organizations"> }[]>;
+        record: (args: { accountLogin: string; installationId: number; installedByGithubId?: number; installedByLogin?: string }) => Promise<Id<"githubInstallations">>;
         remove: (args: { installationId: number }) => Promise<void>;
+        stagedInstaller: (args: { installationId: number }) => Promise<{ installedByGithubId?: number; } | null>;
         unclaim: (args: { installationId: number; organizationId: Id<"organizations"> }) => Promise<void>;
     };
     halts: {
@@ -1639,6 +1661,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         list: (args) => callRegistered(context, "github_installations:list", args),
         record: (args) => callRegistered(context, "github_installations:record", args),
         remove: (args) => callRegistered(context, "github_installations:remove", args),
+        stagedInstaller: (args) => callRegistered(context, "github_installations:stagedInstaller", args),
         unclaim: (args) => callRegistered(context, "github_installations:unclaim", args),
     },
     halts: {

@@ -118,6 +118,8 @@ export const githubInstallations = sqliteTable("githubInstallations", {
     claimedAt: real("claimedAt"),
     createdAt: real("createdAt").notNull(),
     installationId: real("installationId").notNull(),
+    installedByGithubId: real("installedByGithubId"),
+    installedByLogin: text("installedByLogin"),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id),
 }, (t) => ({
     by_org: index("by_org").on(t.organizationId),
