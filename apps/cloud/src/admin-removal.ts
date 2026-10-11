@@ -27,12 +27,15 @@ import type { AuthEnv } from "./auth";
 
 const REMOVE_USER_PATH = "/admin/remove-user";
 
+/** The part of a role the guard reads. Any role the admin plugin accepts has an `authorize`, whatever its statements. */
+type RoleMap = Partial<Record<string, Pick<(typeof ADMIN_ROLES)[keyof typeof ADMIN_ROLES], "authorize">>>;
+
 /**
  * Whether a session's role string grants `user:delete` under the role map the
  * admin plugin is configured with. Exported for the test that pins it.
  */
-export const canDeleteUsers = (role: null | string | undefined, roles: Partial<typeof ADMIN_ROLES> = ADMIN_ROLES): boolean =>
-    (role ?? "user").split(",").some((name) => roles[name as keyof typeof ADMIN_ROLES]?.authorize({ user: ["delete"] }).success === true);
+export const canDeleteUsers = (role: null | string | undefined, roles: RoleMap = ADMIN_ROLES): boolean =>
+    (role ?? "user").split(",").some((name) => roles[name]?.authorize({ user: ["delete"] }).success === true);
 
 const targetUserId = (body: unknown): string | undefined => {
     const userId = (body as null | { userId?: unknown } | undefined)?.userId;

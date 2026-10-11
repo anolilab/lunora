@@ -1,3 +1,5 @@
+import { createAccessControl } from "better-auth/plugins/access";
+import { defaultStatements } from "better-auth/plugins/admin/access";
 import { describe, expect, it } from "vitest";
 
 import { canDeleteUsers } from "../src/admin-removal";
@@ -17,20 +19,11 @@ describe("admin-removal guard permission", () => {
     });
 
     it("follows the role map it is given rather than a built-in copy", () => {
-        const grantsDelete = {
-            authorize: () => {
-                return { success: true };
-            },
-        };
-        const refuses = {
-            authorize: () => {
-                return { success: false };
-            },
-        };
-        const roles = { ...ADMIN_ROLES, moderator: grantsDelete, user: refuses };
+        const granting = createAccessControl(defaultStatements).newRole({ user: ["delete"] });
+        const roles = { ...ADMIN_ROLES, user: granting };
 
-        expect(canDeleteUsers("moderator", roles)).toBe(true);
-        expect(canDeleteUsers("user", roles)).toBe(false);
+        expect(canDeleteUsers("user", roles)).toBe(true);
+        expect(canDeleteUsers("user", ADMIN_ROLES)).toBe(false);
     });
 
     it("refuses a role the map does not name", () => {
