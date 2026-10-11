@@ -85,8 +85,9 @@ export type EraseUserResult = { erased: false; soleOwnerOf: SoleOwnedOrganizatio
  * organization: the organization would be left with nobody able to manage or
  * delete it. An organization already scheduled for deletion does not block,
  * because the purge removes it anyway. Every check runs before the first write,
- * and the mutation is one transaction, so an owner leaving at the same moment
- * cannot slip between the check and the removal.
+ * so a refusal changes nothing. The tables are `.global()` (D1, which has no
+ * interactive transaction), so the check and the writes are not isolated from
+ * another owner leaving at the same moment.
  *
  * Runs from the authentication layer's before-delete hook through
  * `POST /v1/account/erase`, after the password check and before the account
