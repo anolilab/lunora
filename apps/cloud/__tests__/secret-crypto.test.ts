@@ -30,4 +30,8 @@ describe("secret crypto", () => {
     it("rejects a malformed master key", async () => {
         await expect(encryptSecret("not-32-bytes", "x")).rejects.toThrow(/32 bytes/u);
     });
+
+    it("rejects a 64-character master key that is not hex", async () => {
+        await expect(encryptSecret("z".repeat(64), "x")).rejects.toThrow(/must be hex/u);
+    });
 });

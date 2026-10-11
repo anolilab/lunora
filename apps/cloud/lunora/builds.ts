@@ -789,10 +789,13 @@ export const logs = query
                 throw new LunoraError("NOT_FOUND", "build not found in this organization");
             }
 
-            const { page } = await context.db.buildLogs.findMany({ where: { buildId } });
             const cursor = afterCreatedAt ?? 0;
+            const { page } = await context.db.buildLogs.findMany({
+                orderBy: [{ createdAt: "asc" }],
+                where: { buildId, createdAt: { gt: cursor } },
+            });
 
-            return page.filter((row) => row.createdAt > cursor).toSorted((a, b) => a.createdAt - b.createdAt);
+            return page;
         },
     );
 

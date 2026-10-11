@@ -222,7 +222,14 @@ const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: Dep
             return;
         }
 
-        const event = JSON.parse(trimmed) as DeployEvent;
+        let event: DeployEvent;
+
+        try {
+            event = JSON.parse(trimmed) as DeployEvent;
+        } catch {
+            // A non-JSON line (an HTML error page, a truncated frame) names no event; say so, with a bounded excerpt.
+            throw new Error(`deploy stream sent a line that is not JSON: ${trimmed.slice(0, 200)}`);
+        }
 
         onEvent(event);
 
@@ -249,6 +256,9 @@ const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: Dep
             newline = buffer.indexOf("\n");
         }
     }
+
+    // Flush the decoder: a multi-byte character split across the last chunk is held until here.
+    buffer += decoder.decode();
 
     consume(buffer);
 

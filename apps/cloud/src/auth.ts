@@ -202,7 +202,13 @@ export const ensureAuth = async (env: AuthEnv, requestOrigin: string): Promise<L
         await ensureMigrated(createAuth({ ...authOptions(env, requestOrigin), database: env.DB as never }));
 
         return instance;
-    })();
+    })().catch((error: unknown) => {
+        // A failed migration must not stay cached: the next request retries the setup
+        // instead of rethrowing the same rejection for the life of the isolate.
+        authReady = null;
+
+        throw error;
+    });
 
     auth = await authReady;
 

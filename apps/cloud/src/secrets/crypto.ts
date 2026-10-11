@@ -11,8 +11,12 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+const HEX_DIGITS = /^[\da-f]*$/iu;
+
 const hexToBytes = (hex: string): Uint8Array => {
-    if (hex.length % 2 !== 0) {
+    // `parseInt` maps a non-hex pair to NaN, and `Uint8Array` stores that as 0, so a
+    // malformed key would import silently as a different key. Reject it here.
+    if (hex.length % 2 !== 0 || !HEX_DIGITS.test(hex)) {
         throw new Error("SECRET_ENCRYPTION_KEY must be hex");
     }
 
@@ -38,11 +42,11 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
 const base64ToBytes = (value: string): Uint8Array => Uint8Array.from(atob(value), (character) => character.codePointAt(0) ?? 0);
 
 const importKey = async (keyHex: string): Promise<CryptoKey> => {
-    const raw = hexToBytes(keyHex);
-
-    if (raw.length !== 32) {
+    if (keyHex.length !== 64) {
         throw new Error("SECRET_ENCRYPTION_KEY must be 32 bytes (64 hex chars)");
     }
+
+    const raw = hexToBytes(keyHex);
 
     return crypto.subtle.importKey("raw", raw as BufferSource, { name: "AES-GCM" }, false, ["decrypt", "encrypt"]);
 };
