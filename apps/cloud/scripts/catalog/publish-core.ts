@@ -10,8 +10,8 @@ import { join, relative, sep } from "node:path";
 
 import type { CatalogForm, CatalogRuntime } from "../../src/catalog/artifact";
 import { CATALOG_FORMAT, parseForm, verifyArtifact } from "../../src/catalog/artifact";
+import type { CatalogIndexEntry } from "../../src/catalog/catalog-index";
 import { isRecord, MAX_NAME_LENGTH, MAX_SUMMARY_LENGTH } from "../../src/catalog/fields";
-import type { CatalogIndexEntry } from "../../src/catalog/index";
 import { packArtifact } from "../../src/catalog/pack";
 import type { DetachedSignature, TrustedCatalogKey } from "../../src/catalog/signature";
 import { INDEX_SIGNING_DOMAIN, sha256Hex, signPayload } from "../../src/catalog/signature";

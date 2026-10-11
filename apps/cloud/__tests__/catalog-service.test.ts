@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { advanceIndexState } from "../lunora/catalog";
 import type { CatalogForm } from "../src/catalog/artifact";
 import { MAX_INFLATED_BYTES } from "../src/catalog/artifact";
-import { verifyCatalogIndex } from "../src/catalog/index";
+import { verifyCatalogIndex } from "../src/catalog/catalog-index";
 import type { InstallPorts, SealedSecret } from "../src/catalog/install";
 import { packArtifact } from "../src/catalog/pack";
 import type { CatalogDeps, CatalogEnv, IndexStateStore, InstallAdapters, InstallRequest, InstallTarget } from "../src/catalog/service";

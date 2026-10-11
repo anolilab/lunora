@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppSource, AppSpec } from "../scripts/catalog/publish-core";
 import { compareVersions, generateKeyPair, importPrivateKey, packApp, publishCatalog, readAppSource, writeCatalog } from "../scripts/catalog/publish-core";
 import { verifyArtifact } from "../src/catalog/artifact";
-import { verifyCatalogIndex } from "../src/catalog/index";
+import { verifyCatalogIndex } from "../src/catalog/catalog-index";
 import type { DetachedSignature, TrustedCatalogKey } from "../src/catalog/signature";
 import { parseDetachedSignature, sha256Hex } from "../src/catalog/signature";
 import okOf from "./catalog-helpers";

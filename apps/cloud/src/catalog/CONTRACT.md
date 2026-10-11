@@ -97,7 +97,7 @@ signed under `lunora-catalog-artifact:v1`. `runtime` is `worker` unless it says 
 - `CatalogManifest`, `CatalogForm`, `FormVariable`, `FormSecret`: `src/catalog/artifact.ts`.
 - `verifyArtifact`, `parseManifest`, `parseForm`: `src/catalog/artifact.ts`.
 - `packArtifact`: `src/catalog/pack.ts`.
-- `verifyCatalogIndex` and the index entry type: `src/catalog/index.ts`.
+- `verifyCatalogIndex` and the index entry type: `src/catalog/catalog-index.ts`.
 - `listCatalog`, `installApp`, `InstallAdapters`, `InstallOutcome`: `src/catalog/service.ts`.
 - `planInstall`, `runInstall`, `InstallPorts`, `InstallResult`: `src/catalog/install.ts`.
 - The publisher core (`publishCatalog`, `writeCatalog`, `generateKeyPair`): `scripts/catalog/publish-core.ts`.

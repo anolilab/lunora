@@ -2,7 +2,7 @@ import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { CATALOG_FORMAT, verifyArtifact } from "../src/catalog/artifact";
-import { manifestMatchesIndex, verifyCatalogIndex } from "../src/catalog/index";
+import { manifestMatchesIndex, verifyCatalogIndex } from "../src/catalog/catalog-index";
 import type { TrustedCatalogKey } from "../src/catalog/signature";
 import { ARTIFACT_SIGNING_DOMAIN, decodeBase64, INDEX_SIGNING_DOMAIN, sha256Hex } from "../src/catalog/signature";
 import okOf from "./catalog-helpers";

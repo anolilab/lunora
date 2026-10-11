@@ -10,9 +10,9 @@
  */
 import type { ArtifactErrorCode, CatalogForm, CatalogManifest } from "./artifact";
 import { MAX_ARTIFACT_BYTES, verifyArchive, verifyManifestBytes } from "./artifact";
+import type { CatalogIndexEntry } from "./catalog-index";
+import { manifestMatchesIndex, verifyCatalogIndex } from "./catalog-index";
 import { isHttpsUrl, messageOf } from "./fields";
-import type { CatalogIndexEntry } from "./index";
-import { manifestMatchesIndex, verifyCatalogIndex } from "./index";
 import type { InstallFailure, InstallPhase, InstallPorts, InstallValues } from "./install";
 import { runInstall } from "./install";
 import type { DetachedSignature, TrustedCatalogKey } from "./signature";
