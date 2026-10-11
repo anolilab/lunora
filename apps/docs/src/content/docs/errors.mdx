@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 180 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 186 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -216,6 +216,10 @@ Narrow the snapshot with `backupTables`, or take this backup off-platform with `
 ### `BAD_ROW`
 
 `400` — Malformed import row
+
+### `BAD_SIGNATURE`
+
+`422` — Catalog signature does not verify
 
 ### `BAD_SUBSCRIPTION_ARGS`
 
@@ -425,6 +429,10 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `400` — Global-table introspector not configured
 
+### `HASH_MISMATCH`
+
+`422` — Catalog file hash mismatch
+
 ### `HTTP_STREAM_BAD_CHUNK`
 
 `502` — Malformed HTTP stream chunk
@@ -521,9 +529,17 @@ A write queued offline was replayed on a session that now belongs to someone els
 
 `409` — Import session belongs to an earlier session of the same id
 
+### `INVALID_INDEX`
+
+`502` — Invalid catalog index
+
 ### `INVALID_INPUT`
 
 `400` — Invalid input
+
+### `INVALID_MANIFEST`
+
+`422` — Invalid catalog manifest
 
 ### `INVALID_SCHEDULE_ID`
 
@@ -865,6 +881,10 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 
 `404` — Unknown column
 
+### `UNKNOWN_KEY`
+
+`422` — Catalog signed by an unknown key
+
 ### `UNKNOWN_MUTATION_FN`
 
 `404` — Unknown mutation function
@@ -876,6 +896,10 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 ### `UNPROCESSABLE`
 
 `422` — Unprocessable
+
+### `UNSUPPORTED_FORMAT`
+
+`422` — Unsupported catalog format
 
 ### `VALIDATION_ERROR`
 

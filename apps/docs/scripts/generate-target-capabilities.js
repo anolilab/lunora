@@ -51,6 +51,7 @@ const CONTRACT_PATH = path.join(ROOT_DIR, "apps", "cloud", "src", "provision-con
  */
 const MODULE_SOURCES = {
     "@lunora/config/celld": path.join(ROOT_DIR, "packages", "config", "src", "celld", "index.ts"),
+    "@lunora/config/celld-names": path.join(ROOT_DIR, "packages", "config", "src", "celld-names", "index.ts"),
 };
 const CLOUD_DOCS_DIR = path.join(__dirname, "..", "src", "content", "docs", "cloud");
 
@@ -397,14 +398,20 @@ const readContract = (source, readFile = (filePath) => readFileSync(filePath, "u
     const contract = parseModule(source, CONTRACT_PATH);
     const context = { load, locals: new Map(), module: contract, readFile };
 
+    // A constant the contract re-exports (the token permissions live beside it in
+    // `cloudflare-permissions.ts`) is followed to its declaration, as an import would be.
     const read = (name) => {
         const initializer = contract.constants.get(name);
 
-        if (initializer === undefined) {
+        if (initializer !== undefined) {
+            return evaluate(initializer, context);
+        }
+
+        if (!contract.reexports.has(name) && !contract.imports.has(name)) {
             throw new Error(`provision-contract.ts no longer declares \`${name}\`, which the cloud docs are generated from`);
         }
 
-        return evaluate(initializer, context);
+        return resolveExport(contract, name, context);
     };
 
     return {
