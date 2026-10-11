@@ -87,9 +87,11 @@ export const list = query
     );
 
 /**
- * A project's encrypted secrets for the deploy path. Authorized by a member
- * session OR a valid `deployKey` (CI). Returns ciphertext + IV; the edge
- * decrypts and injects them into the tenant Worker — they never reach a browser.
+ * A project's encrypted secrets for the deploy path. Authorized by a valid
+ * `deployKey` (CI), or by an org owner or admin session. Returns ciphertext + IV
+ * that the edge decrypts and injects into the tenant Worker. Ciphertext is
+ * still returned to any session that passes the role check, so the role check
+ * is what keeps viewers and members out.
  */
 export const listEncrypted = query
     .input({
@@ -102,7 +104,7 @@ export const listEncrypted = query
     })
     .query(
         async ({ ctx: context, args: { deployKey, environment, organizationId, projectId } }): Promise<{ ciphertext: string; iv: string; name: string }[]> => {
-            await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId));
+            await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId, ["owner", "admin"]));
             await assertRowInOrg(context, projectId, organizationId, "project");
 
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });

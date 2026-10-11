@@ -947,7 +947,8 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
  * the HTTP action context's `ctx.runMutation`, whose dispatch carries no
  * system-dispatch flag — so an `internalMutation` would be unreachable from that
  * seam (it would 404 at the RPC visibility gate). Authorization is enforced
- * here instead (deploy key or org membership).
+ * here instead: a deploy key, or an org owner or admin. A plain member may not
+ * retarget a deployment's status or URL.
  */
 export const updateStatus = mutation
     .use(rateLimit("machine"))
@@ -976,7 +977,7 @@ export const updateStatus = mutation
 
         await (deployKey
             ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
-            : assertMember(context, existing.organizationId, ["owner", "admin", "member"]));
+            : assertMember(context, existing.organizationId, ["owner", "admin"]));
 
         const { now } = context;
         const phaseColumn = PHASE_TIMESTAMP[status];
