@@ -147,6 +147,12 @@
                     *) pnpm exec vis run build --filter "./$WORKSPACE..." ;;
                   esac
 
+            - "name": "Generate workspace code"
+              "env":
+                  "WORKSPACE": "${{ matrix.workspace }}"
+              "run": |
+                  pnpm --filter "./$WORKSPACE" run --if-present codegen
+
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
