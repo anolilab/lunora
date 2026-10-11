@@ -67,7 +67,7 @@ interface DashboardLayoutProps {
 }
 
 /**
- * The reusable control-plane shell: a rounded app window over the page backdrop, holding a shadcn `Sidebar` (org switcher + grouped nav + account menu)
+ * The reusable control-plane shell: a full-viewport layout holding a shadcn `Sidebar` (org switcher + grouped nav + account menu)
  * as an icon rail that slides open (trigger or ⌘B), beside a `SidebarInset`
  * content panel with a "Section / Page" breadcrumb header. On mobile the rail
  * becomes a sheet from the left.
@@ -99,19 +99,13 @@ export const DashboardLayout = ({
 
     return (
         <TooltipProvider delay={0}>
-            <SidebarProvider className="h-svh min-h-0 md:p-4 lg:p-5" defaultOpen={sidebarOpen}>
-                {/* The app window: a rounded, translucent frame over the page backdrop,
-                    holding the icon rail and the inset content panel. */}
-                <div className="relative isolate flex h-full w-full overflow-hidden md:rounded-3xl md:border md:border-window-border md:shadow-window">
-                    {/* The frosted glass is a sibling layer, never an ancestor: a
-                        backdrop-filter on an ancestor would re-anchor every `fixed`
-                        descendant (menus, sheets) to the frame instead of the viewport. */}
-                    <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 hidden bg-window backdrop-blur-2xl md:block" />
+            <SidebarProvider className="h-svh min-h-0" defaultOpen={sidebarOpen}>
+                <div className="relative isolate flex h-full w-full overflow-hidden">
                     {/* `absolute h-full` (merged over the primitive's `fixed h-svh`) pins
-                        the rail inside the frame rather than to the viewport edge; `z-20`
+                        the rail to this layout rather than the viewport edge; `z-20`
                         lifts it over the sticky header so the org switcher, which opens
                         out to the right of the collapsed rail, is not painted under it. */}
-                    <Sidebar className="absolute z-20 h-full" collapsible="icon" variant="inset">
+                    <Sidebar className="absolute z-20 h-full" collapsible="icon">
                         <SidebarHeader className="gap-2">
                             {sidebarHeader}
                             {commands.length > 0 ? (

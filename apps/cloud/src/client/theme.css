@@ -2,9 +2,8 @@
  * Lunora Cloud studio styling on Tailwind CSS v4.
  *
  * This file supplies the Tailwind engine, the Geist faces and the theme tokens. The
- * app is framed as a rounded window over a violet/blue backdrop, with rounded cards
- * on a hairline border, monospace numerics and a violet/blue accent pair. Both modes
- * ship: dark is the default (`.dark` on <html>, rendered by __root), and the header
+ * app fills the viewport, with rounded cards on a hairline border, monospace numerics
+ * and a violet/blue accent pair. Both modes ship: dark is the default (`.dark` on <html>, rendered by __root), and the header
  * toggle swaps to the Ivory light theme.
  *
  * The design is expressed as Tailwind utilities in the component JSX. This file
@@ -40,23 +39,19 @@
     --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
 
     /* Soft corners: controls (buttons, inputs, menu items) at 8px, cards and
-       popovers at 12–16px, the app window at 24px. Overrides the shared token
-       scale for the control plane only; marketing keeps its own. */
+       popovers at 12–16px. Overrides the shared token scale for the control plane
+       only; marketing keeps its own. */
     --radius-xs: 4px;
     --radius-sm: 6px;
     --radius-md: 8px;
     --radius-lg: 10px;
     --radius-xl: 12px;
     --radius-2xl: 16px;
-    --radius-3xl: 24px;
 }
 
 /* `inline` so the utilities resolve the per-mode value where they are used. */
 @theme inline {
-    --color-window: var(--window);
-    --color-window-border: var(--window-border);
     --shadow-card: var(--card-shadow);
-    --shadow-window: var(--window-shadow);
 }
 
 /*
@@ -75,17 +70,6 @@
     --avatar-gradient: radial-gradient(circle at 32% 28%, hsl(220 90% 88%), hsl(230 70% 62%) 45%, hsl(255 60% 34%));
     --avatar-shadow: inset 0 -4px 8px hsl(240 60% 10% / 0.35), 0 2px 8px -2px hsl(250 80% 40% / 0.6);
 
-    /* Ivory: a pale lavender/sky wash behind a white window. */
-    --backdrop-base: hsl(232 40% 92%);
-    --backdrop:
-        radial-gradient(60% 55% at 12% 0%, hsl(268 80% 84% / 0.9), transparent 70%),
-        radial-gradient(55% 60% at 100% 8%, hsl(190 70% 82% / 0.8), transparent 70%),
-        radial-gradient(70% 60% at 85% 100%, hsl(226 85% 82% / 0.9), transparent 70%),
-        radial-gradient(60% 50% at 0% 100%, hsl(275 60% 86% / 0.8), transparent 70%);
-    --window: hsl(0 0% 100% / 0.55);
-    --window-border: hsl(240 20% 100% / 0.7);
-    --window-shadow: 0 30px 80px -30px hsl(250 40% 30% / 0.35), 0 0 0 1px hsl(240 20% 50% / 0.08);
-
     --sidebar: transparent;
     --sidebar-accent: hsl(0 0% 100% / 0.85);
     --sidebar-border: hsl(240 16% 50% / 0.14);
@@ -100,7 +84,7 @@
 }
 
 .dark {
-    /* Night: a near-black content panel inside a translucent frame. */
+    /* Night: a near-black canvas. */
     --background: hsl(240 14% 4%);
     --card: hsl(240 12% 6.5%);
     --popover: hsl(240 12% 7.5%);
@@ -111,17 +95,6 @@
     --border: hsl(230 30% 96% / 0.085);
     --input: hsl(230 30% 96% / 0.11);
     --ring: hsl(264 88% 76%);
-
-    --backdrop-base: hsl(250 45% 9%);
-    --backdrop:
-        radial-gradient(55% 45% at 10% -5%, hsl(268 85% 52% / 0.85), transparent 70%),
-        radial-gradient(45% 40% at 55% -10%, hsl(290 75% 50% / 0.55), transparent 70%),
-        radial-gradient(45% 50% at 105% 5%, hsl(192 80% 42% / 0.7), transparent 70%),
-        radial-gradient(60% 55% at 100% 105%, hsl(224 90% 48% / 0.75), transparent 70%),
-        radial-gradient(50% 50% at -5% 100%, hsl(270 70% 40% / 0.7), transparent 70%), linear-gradient(180deg, hsl(248 45% 10%), hsl(232 50% 8%));
-    --window: hsl(240 25% 12% / 0.55);
-    --window-border: hsl(230 40% 96% / 0.1);
-    --window-shadow: 0 40px 120px -40px hsl(250 80% 4% / 0.9), inset 0 1px 0 hsl(230 40% 96% / 0.06);
 
     --sidebar: transparent;
     --sidebar-foreground: hsl(232 14% 68%);
@@ -155,12 +128,8 @@
         color-scheme: dark;
     }
 
-    /* The backdrop sits on the body; the app window frames itself on top. */
     body {
-        @apply text-foreground font-sans text-[14px] leading-[1.5] antialiased;
-        background-color: var(--backdrop-base);
-        background-image: var(--backdrop);
-        background-attachment: fixed;
+        @apply bg-background text-foreground font-sans text-[14px] leading-[1.5] antialiased;
         min-height: 100svh;
         text-rendering: optimizeLegibility;
     }
