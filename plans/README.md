@@ -19,12 +19,13 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                       | Title                                                  | Remaining                                                                                            |
-| ------------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| [460](./460-cloudflare-artifacts.md)       | Cloudflare Artifacts as an action-only `ctx.artifacts` | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
-| [463](./463-experimental-graduation.md)    | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
-| [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                       | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
-| [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                  | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
+| Plan                                       | Title                                                           | Remaining                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [460](./460-cloudflare-artifacts.md)       | Cloudflare Artifacts as an action-only `ctx.artifacts`          | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
+| [463](./463-experimental-graduation.md)    | Graduate the experimental tier to stable                        | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
+| [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                                | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
+| [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                           | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
+| [468](./468-gdpr-package.md)               | `@lunora/privacy`: data-subject rights (export, erasure, holds) | Phase 0: codegen spike; legal and tax review open (§10)                                              |
 
 ## Open (TODO)
 
