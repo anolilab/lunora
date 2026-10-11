@@ -40,30 +40,36 @@ describe(reconcileDomain, () => {
 type Row = Record<string, unknown> & { _id: string };
 
 /** Minimal control-plane store: exact-match `where`, sorted `orderBy`, recording writes. */
-const fakeDatabase = (tables: Record<string, Row[]>): ControlPlaneDatabase & { rows: Record<string, Row[]> } => ({
-    delete: () => Promise.resolve(undefined),
-    findMany: (table, args) => {
-        const [sortKey] = args?.orderBy?.[0] ? Object.entries(args.orderBy[0]) : [];
-        const rows = (tables[table] ?? [])
-            .filter((row) => Object.entries(args?.where ?? {}).every(([key, value]) => row[key] === value))
-            .toSorted((a, b) => (sortKey ? (Number(a[sortKey[0]]) - Number(b[sortKey[0]])) * (sortKey[1] === "desc" ? -1 : 1) : 0));
+const fakeDatabase = (tables: Record<string, Row[]>): ControlPlaneDatabase & { rows: Record<string, Row[]> } => {
+    return {
+        delete: () => Promise.resolve(undefined),
+        findMany: (table, args) => {
+            const [sortKey] = args?.orderBy?.[0] ? Object.entries(args.orderBy[0]) : [];
+            const direction = sortKey?.[1] === "desc" ? -1 : 1;
+            const rows = (tables[table] ?? [])
+                .filter((row) => Object.entries(args?.where ?? {}).every(([key, value]) => row[key] === value))
+                .toSorted((a, b) => (sortKey ? (Number(a[sortKey[0]]) - Number(b[sortKey[0]])) * direction : 0));
 
-        return Promise.resolve({ page: args?.limit === undefined ? rows : rows.slice(0, args.limit) });
-    },
-    insert: (table, document) => {
-        (tables[table] ??= []).push({ _id: `${table}_${String((tables[table] ?? []).length)}`, ...document });
+            return Promise.resolve({ page: args?.limit === undefined ? rows : rows.slice(0, args.limit) });
+        },
+        insert: (table, document) => {
+            // eslint-disable-next-line no-param-reassign -- the fake's state is the record the test passed in and reads back
+            tables[table] ??= [];
+            const rows = tables[table];
+            rows.push({ _id: `${table}_${String(rows.length)}`, ...document });
 
-        return Promise.resolve(undefined);
-    },
-    patch: (id, patch, table) => {
-        const row = (tables[table ?? ""] ?? []).find((candidate) => candidate._id === id);
+            return Promise.resolve(undefined);
+        },
+        patch: (id, patch, table) => {
+            const row = (tables[table ?? ""] ?? []).find((candidate) => candidate._id === id);
 
-        Object.assign(row ?? {}, patch);
+            Object.assign(row ?? {}, patch);
 
-        return Promise.resolve(undefined);
-    },
-    rows: tables,
-});
+            return Promise.resolve(undefined);
+        },
+        rows: tables,
+    };
+};
 
 /** A DNS resolver that answers the TXT token and CNAME for each hostname it is told about. */
 const resolverFor =
@@ -74,15 +80,17 @@ const resolverFor =
 const txt = (token: string): DnsAnswer[] => [{ data: `"${token}"`, type: 16 }];
 const cname = (target: string): DnsAnswer[] => [{ data: `${target}.`, type: 5 }];
 
-const domainRow = (overrides: Row): Row => ({
-    createdAt: 1,
-    hostname: "app.example.com",
-    organizationId: "org",
-    projectId: "proj",
-    txtToken: "tok",
-    updatedAt: 1,
-    ...overrides,
-});
+const domainRow = (overrides: Row): Row => {
+    return {
+        createdAt: 1,
+        hostname: "app.example.com",
+        organizationId: "org",
+        projectId: "proj",
+        txtToken: "tok",
+        updatedAt: 1,
+        ...overrides,
+    };
+};
 
 describe(expireUnverifiedDomains, () => {
     const DAY = 24 * 60 * 60 * 1000;
@@ -164,6 +172,7 @@ describe(runDomainSweep, () => {
         const resolve = resolverFor({});
 
         await runDomainSweep(database, { appDomain: APP, now: NOW, resolve });
+
         expect(database.rows["domains"]?.[0]).toMatchObject({ failedChecks: 1, lastCheckedAt: NOW, verifiedAt: 5 });
         expect(database.rows["notificationDeliveries"] ?? []).toHaveLength(0);
 

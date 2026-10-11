@@ -26,11 +26,11 @@ export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Narrow an untrusted value to a known event name. */
 export const isNotificationEvent = (value: unknown): value is NotificationEvent =>
-    typeof value === "string" && (NOTIFICATION_EVENTS as readonly string[]).includes(value);
+    typeof value === "string" && (NOTIFICATION_EVENTS as ReadonlyArray<string>).includes(value);
 
 /** Narrow an untrusted value to a known channel kind. */
 export const isNotificationKind = (value: unknown): value is NotificationKind =>
-    typeof value === "string" && (NOTIFICATION_KINDS as readonly string[]).includes(value);
+    typeof value === "string" && (NOTIFICATION_KINDS as ReadonlyArray<string>).includes(value);
 
 /** Human label for each event, used as the message subject. */
 export const NOTIFICATION_LABEL: Record<NotificationEvent | "test", string> = {

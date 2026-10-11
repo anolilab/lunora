@@ -950,9 +950,11 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
         await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
         // eslint-disable-next-line no-await-in-loop -- see above
+        const project = await projectNameOf(context, deployment.projectId);
+        // eslint-disable-next-line no-await-in-loop -- see above
         await enqueueNotification(context, deployment.organizationId, "preview.expired", {
             detail: `Preview ${deployment.alias ?? deployment.scriptName} was removed after its expiry time.`,
-            project: await projectNameOf(context, deployment.projectId),
+            project,
         });
     }
 

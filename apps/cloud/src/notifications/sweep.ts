@@ -9,7 +9,8 @@
  */
 import { decryptSecret } from "../secrets/crypto";
 import type { ControlPlaneDatabase } from "../store";
-import { type ChannelTarget, deliverNotification, NotificationDeliveryError, notificationRequestFor } from "./deliver";
+import type { ChannelTarget } from "./deliver";
+import { deliverNotification, NotificationDeliveryError, notificationRequestFor } from "./deliver";
 import type { NotificationKind, NotificationMessage } from "./events";
 
 /**

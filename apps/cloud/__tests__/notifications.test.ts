@@ -180,15 +180,17 @@ const fakeDatabase = (tables: Record<string, Row[]>): ControlPlaneDatabase & { r
 
     return {
         delete: (id, table) => {
+            // eslint-disable-next-line no-param-reassign -- the fake's state is the record the test passed in and reads back
             tables[table ?? ""] = (tables[table ?? ""] ?? []).filter((row) => row._id !== id);
 
             return Promise.resolve(undefined);
         },
         findMany: (table, args) => {
             const [sortKey] = args?.orderBy?.[0] ? Object.entries(args.orderBy[0]) : [];
+            const direction = sortKey?.[1] === "desc" ? -1 : 1;
             const rows = (tables[table] ?? [])
                 .filter((row) => matches(row, args?.where))
-                .toSorted((a, b) => (sortKey ? (Number(a[sortKey[0]]) - Number(b[sortKey[0]])) * (sortKey[1] === "desc" ? -1 : 1) : 0));
+                .toSorted((a, b) => (sortKey ? (Number(a[sortKey[0]]) - Number(b[sortKey[0]])) * direction : 0));
 
             return Promise.resolve({ page: args?.limit === undefined ? rows : rows.slice(0, args.limit) });
         },
@@ -299,6 +301,8 @@ describe(runNotificationSweep, () => {
         const [, init] = fetchSpy.mock.calls[0] ?? [];
         const headers = init?.headers as Record<string, string>;
         const body = init?.body as string;
+        // A fixed test key, never a credential.
+        // eslint-disable-next-line sonarjs/hardcoded-secret-signatures -- fixture key for the signature check
         const expected = createHmac("sha256", "signing-key").update(`1700000000.${body}`).digest("hex");
 
         expect(headers["lunora-signature"]).toBe(`t=1700000000,v1=${expected}`);
