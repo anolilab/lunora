@@ -72,7 +72,7 @@
 
             # apps/hostd/rust-toolchain.toml pins the same channel and components.
             - "name": "Install Rust stable toolchain"
-              "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
+              "uses": "dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067" # v1
               "with":
                   "toolchain": "stable"
                   "components": "rustfmt, clippy"
@@ -129,7 +129,7 @@
             # Not oxc-project/setup-rust (visulima's choice): it rewrites a rust-toolchain.toml at the
             # repository root, and this repository keeps the crate's in apps/hostd.
             - "name": "Install Rust stable toolchain"
-              "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
+              "uses": "dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067" # v1
               "with":
                   "toolchain": "stable"
 
