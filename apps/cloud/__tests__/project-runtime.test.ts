@@ -159,7 +159,7 @@ describe("builds", () => {
             deployments: [{ _id: "dep_old", projectId: "prj_1", status: "live" }],
         });
 
-        await expect(recordPush.handler(switched.ctx, push)).resolves.toStrictEqual({ buildId: "builds_new", reused: false });
+        await expect(recordPush.handler(switched.ctx, push)).resolves.toStrictEqual([{ buildId: "builds_new", projectId: "prj_1", reused: false }]);
         expect(switched.ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { runtime: "worker" } });
     });
 
@@ -171,7 +171,7 @@ describe("builds", () => {
             deployments: [{ _id: "dep_old", projectId: "prj_1", status: "live" }],
         });
 
-        await expect(recordPush.handler(same.ctx, push)).resolves.toStrictEqual({ buildId: "bld_old", reused: true });
+        await expect(recordPush.handler(same.ctx, push)).resolves.toStrictEqual([{ buildId: "bld_old", projectId: "prj_1", reused: true }]);
     });
 
     it("hands the runtime to the runner with the claim, and to the release with its target", async () => {

@@ -249,12 +249,20 @@ export const parseInstallationEvent = (payload: unknown): InstallationIntent | n
 };
 
 /**
- * What recording a build returns: `null` for an unconnected repo; `skipped`
- * when nothing is built (the path filter matched nothing — `pathFiltered` — or
- * a stale push); `duplicate` for a delivery already recorded.
+ * One project's outcome for a push: `buildId` when a build is queued or reused;
+ * `skipped` when it queued nothing (the path filter matched nothing —
+ * `pathFiltered` — or a stale push); `duplicate` for a delivery already recorded.
  */
-export type BuildRecordResult =
-    null | { buildId: string; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true; pathFiltered?: true; skipped?: string };
+export type BuildRecordEntry =
+    | { buildId: string; pathFiltered?: true; projectId: string; reused: boolean; skipped?: string }
+    | { duplicate: true; pathFiltered?: true; projectId: string; skipped?: string };
+
+/**
+ * What recording a build returns: one entry per project in the repository whose
+ * org has claimed the installation, so a push can build several projects. Empty
+ * when no project of the repository has claimed it.
+ */
+export type BuildRecordResult = BuildRecordEntry[];
 
 /** A delivery's `X-GitHub-Delivery` id, which a redelivery repeats — what dedupes it. */
 interface Delivery {
@@ -297,7 +305,7 @@ export interface GitHubWebhookHooks {
             repository: string;
         },
     ) => Promise<BuildRecordResult>;
-    /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns the build id or null when the repo isn't connected. */
+    /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns one entry per candidate project; empty when the repo isn't connected. */
     onPush?: (intent: Delivery & PushIntent) => Promise<BuildRecordResult>;
 
     /**
@@ -342,18 +350,23 @@ const previewChanges = async (intent: PreviewIntent & { commitSha: string; insta
  * Best-effort, like every status: a GitHub failure must not fail the webhook.
  */
 const reportSkip = async (
-    build: BuildRecordResult,
+    builds: BuildRecordResult,
     target: { commitSha: string; installationId: number; repository: string },
     options: GitHubWebhookHooks,
 ): Promise<void> => {
-    // A duplicate still carries its recorded skip, so a redelivery recovers a status the first delivery failed to post.
-    if (build?.pathFiltered !== true || build.skipped === undefined || !options.postCommitStatus) {
+    // A commit status names the commit, not the project: when a sibling project
+    // built, the build owns the status, so a skip is reported only when every
+    // candidate skipped. A duplicate still carries its recorded skip, so a
+    // redelivery recovers a status the first delivery failed to post.
+    const reasons = builds.map((build) => (build.pathFiltered === true ? build.skipped : undefined));
+
+    if (builds.length === 0 || reasons.includes(undefined) || !options.postCommitStatus) {
         return;
     }
 
     try {
         await options.postCommitStatus({
-            description: `Skipped: ${build.skipped}`,
+            description: `Skipped: ${reasons.join("; ")}`,
             installationId: target.installationId,
             repository: target.repository,
             sha: target.commitSha,
@@ -374,7 +387,7 @@ const handlePullRequestIntent = async (intent: PreviewIntent, delivery: Delivery
 
     // Server-side preview build (GAPS.md A3): a PR upsert with a known head
     // commit + installation queues a build just like a default-branch push.
-    let previewBuild: BuildRecordResult = null;
+    let previewBuild: BuildRecordResult = [];
 
     if (intent.action === "upsert" && intent.commitSha && intent.installationId !== undefined && options.onPreviewBuild) {
         const target = { commitSha: intent.commitSha, installationId: intent.installationId, repository: intent.repository };
@@ -396,7 +409,7 @@ const handlePullRequestIntent = async (intent: PreviewIntent, delivery: Delivery
         {
             accepted: true,
             intent,
-            ...(previewBuild ? { previewBuild } : {}),
+            ...(previewBuild.length > 0 ? { previewBuild } : {}),
             previewScriptName: intent.fromFork === true ? forkPreviewScriptName(project.slug, intent.number) : previewScriptName(project.slug, intent.branch),
             projectId: project.projectId, // secret-scanner:allow -- domain field name
         },
@@ -417,19 +430,19 @@ const handlePushEvent = async (
         return Response.json({ ignored: true }, { status: 202 });
     }
 
-    const build = await onPush({ ...delivery, ...push });
+    const builds = await onPush({ ...delivery, ...push });
 
-    if (!build) {
+    if (builds.length === 0) {
         return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
     }
 
-    await reportSkip(build, push, options);
+    await reportSkip(builds, push, options);
 
-    if ("duplicate" in build) {
+    if (builds.every((build) => "duplicate" in build)) {
         return Response.json({ duplicate: true, ignored: true }, { status: 200 });
     }
 
-    return Response.json({ accepted: true, ...build }, { status: 200 });
+    return Response.json({ accepted: true, builds }, { status: 200 });
 };
 
 export const handleGitHubWebhook = async (request: Request, options: GitHubWebhookHooks): Promise<Response> => {

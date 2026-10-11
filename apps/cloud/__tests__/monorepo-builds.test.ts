@@ -38,7 +38,7 @@ describe("builds.recordPush path filter", () => {
 
         const reason = "no changes under apps/web/ or the lockfile (1 files changed)";
 
-        expect(result).toStrictEqual({ buildId: "builds_new", pathFiltered: true, reused: false, skipped: reason });
+        expect(result).toStrictEqual([{ buildId: "builds_new", pathFiltered: true, projectId: "prj_1", reused: false, skipped: reason }]);
         expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({
             document: { rootDirectory: "apps/web", skipReason: reason, status: "skipped" },
         });
@@ -48,20 +48,18 @@ describe("builds.recordPush path filter", () => {
         const recorded = { builtAt: 1, paths: ["packages/ui"], rootDirectory: "apps/web" };
         const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web", workspacePackages: recorded })));
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { files: ["packages/ui/button.tsx"] } })).resolves.toStrictEqual({
-            buildId: "builds_new",
-            reused: false,
-        });
+        await expect(recordPush.handler(ctx, { ...push, changes: { files: ["packages/ui/button.tsx"] } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
     });
 
     it("builds rather than trust workspace packages recorded for another root directory", async () => {
         const recorded = { builtAt: 1, paths: [], rootDirectory: "apps/old" };
         const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web", workspacePackages: recorded })));
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { files: ["packages/ui/button.tsx"] } })).resolves.toStrictEqual({
-            buildId: "builds_new",
-            reused: false,
-        });
+        await expect(recordPush.handler(ctx, { ...push, changes: { files: ["packages/ui/button.tsx"] } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
     });
 
     it("queues a build, logging why, when a watched path changed", async () => {
@@ -69,7 +67,7 @@ describe("builds.recordPush path filter", () => {
 
         const result = await recordPush.handler(ctx, { ...push, changes: { files: ["apps/web/src/index.ts"] } });
 
-        expect(result).toStrictEqual({ buildId: "builds_new", reused: false });
+        expect(result).toStrictEqual([{ buildId: "builds_new", projectId: "prj_1", reused: false }]);
         expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { rootDirectory: "apps/web", status: "pending" } });
         expect(ops.find((op) => op.kind === "insert" && op.table === "buildLogs")).toMatchObject({
             document: { line: "path filter: apps/web/src/index.ts changed" },
@@ -79,27 +77,27 @@ describe("builds.recordPush path filter", () => {
     it("builds when the payload cannot prove its changes", async () => {
         const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web" })));
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
-            buildId: "builds_new",
-            reused: false,
-        });
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
     });
 
     it("builds when the changed-file list is longer than it will check", async () => {
         const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web" })));
         const files = Array.from({ length: 1001 }, (_, index) => `apps/docs/${String(index)}.md`);
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { files } })).resolves.toStrictEqual({ buildId: "builds_new", reused: false });
+        await expect(recordPush.handler(ctx, { ...push, changes: { files } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
     });
 
     it("does not reuse a bundle built from a different root directory", async () => {
         const previous = { _id: "bld_old", bundleHash: "h", commitSha: "abc123", projectId: "prj_1", rootDirectory: "apps/old", status: "successful" };
         const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web" }), [previous]));
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
-            buildId: "builds_new",
-            reused: false,
-        });
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
     });
 
     it("reuses a bundle built from the same root directory while its release still serves", async () => {
@@ -119,7 +117,9 @@ describe("builds.recordPush path filter", () => {
             deployments: [{ _id: "dep_old", projectId: "prj_1", status: "live" }],
         });
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({ buildId: "bld_old", reused: true });
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual([
+            { buildId: "bld_old", projectId: "prj_1", reused: true },
+        ]);
         expect(ops.filter((op) => op.kind === "insert" && op.table === "builds")).toStrictEqual([]);
     });
 
@@ -177,10 +177,9 @@ describe("builds.recordPush path filter", () => {
         const { ctx, ops } = rebuiltCommit(status);
 
         // The branch was reset from the newest commit pushed to it back to abc123.
-        await expect(recordPush.handler(ctx, { ...push, before: "def456", changes: { unknown: "forced push" } })).resolves.toStrictEqual({
-            buildId: "builds_new",
-            reused: false,
-        });
+        await expect(recordPush.handler(ctx, { ...push, before: "def456", changes: { unknown: "forced push" } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
         expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { reusesBuildId: "bld_newest", status: "pending" } });
     });
 
@@ -191,13 +190,15 @@ describe("builds.recordPush path filter", () => {
         const result = await recordPush.handler(ctx, { ...push, before: "parent0", changes: { files: ["src/index.ts"] } });
         const inserted = ops.find((op) => op.kind === "insert" && op.table === "builds") as { document: Row } | undefined;
 
-        expect(result).toMatchObject({
-            buildId: "builds_new",
-            reused: false,
-            skipped: expect.stringContaining("the newest push recorded for it is def456") as unknown,
-        });
+        expect(result).toMatchObject([
+            {
+                buildId: "builds_new",
+                reused: false,
+                skipped: expect.stringContaining("the newest push recorded for it is def456") as unknown,
+            },
+        ]);
         // Not the path filter's: the commit already carries its own build's status.
-        expect(result).not.toHaveProperty("pathFiltered");
+        expect(result[0]).not.toHaveProperty("pathFiltered");
         expect(inserted?.document).toMatchObject({ status: "skipped" });
         expect(inserted?.document).not.toHaveProperty("reusesBuildId");
     });
@@ -205,16 +206,16 @@ describe("builds.recordPush path filter", () => {
     it("records a webhook delivery once: a redelivery records nothing", async () => {
         const fresh = makeCtx({ ...world(project()), githubDeliveries: [] });
 
-        await expect(recordPush.handler(fresh.ctx, { ...push, changes: { unknown: "forced push" }, deliveryId: "guid-1" })).resolves.toMatchObject({
-            buildId: "builds_new",
-        });
+        await expect(recordPush.handler(fresh.ctx, { ...push, changes: { unknown: "forced push" }, deliveryId: "guid-1" })).resolves.toMatchObject([
+            { buildId: "builds_new" },
+        ]);
         expect(fresh.ops.find((op) => op.kind === "insert" && op.table === "githubDeliveries")).toMatchObject({ document: { deliveryId: "guid-1" } });
 
         const redelivered = makeCtx({ ...world(project()), githubDeliveries: [{ _id: "gd_1", deliveryId: "guid-1", receivedAt: 1 }] });
 
-        await expect(recordPush.handler(redelivered.ctx, { ...push, changes: { unknown: "forced push" }, deliveryId: "guid-1" })).resolves.toStrictEqual({
-            duplicate: true,
-        });
+        await expect(recordPush.handler(redelivered.ctx, { ...push, changes: { unknown: "forced push" }, deliveryId: "guid-1" })).resolves.toStrictEqual([
+            { duplicate: true, projectId: "prj_1" },
+        ]);
         expect(redelivered.ops.filter((op) => op.kind === "insert" && op.table !== "rateLimits")).toStrictEqual([]);
     });
 
@@ -232,12 +233,12 @@ describe("builds.recordPush path filter", () => {
         const withSkip = makeCtx({ ...world(project(), [skipped]), githubDeliveries: [{ _id: "gd_1", deliveryId: "guid-1", receivedAt: 1 }] });
         const withStale = makeCtx({ ...world(project(), [stale]), githubDeliveries: [{ _id: "gd_1", deliveryId: "guid-1", receivedAt: 1 }] });
 
-        await expect(recordPush.handler(withSkip.ctx, { ...push, changes: { files: [] }, deliveryId: "guid-1" })).resolves.toStrictEqual({
-            duplicate: true,
-            pathFiltered: true,
-            skipped: "no changes under apps/web/",
-        });
-        await expect(recordPush.handler(withStale.ctx, { ...push, changes: { files: [] }, deliveryId: "guid-1" })).resolves.toStrictEqual({ duplicate: true });
+        await expect(recordPush.handler(withSkip.ctx, { ...push, changes: { files: [] }, deliveryId: "guid-1" })).resolves.toStrictEqual([
+            { duplicate: true, pathFiltered: true, projectId: "prj_1", skipped: "no changes under apps/web/" },
+        ]);
+        await expect(recordPush.handler(withStale.ctx, { ...push, changes: { files: [] }, deliveryId: "guid-1" })).resolves.toStrictEqual([
+            { duplicate: true, projectId: "prj_1" },
+        ]);
     });
 
     it("forgets delivery ids past GitHub's redelivery window as it records new ones", async () => {
@@ -262,10 +263,9 @@ describe("builds.recordPush path filter", () => {
         const previous = { _id: "bld_old", bundleHash: "h", commitSha: "abc123", createdAt: 1, projectId: "prj_1", status: "successful", trigger: "push" };
         const { ctx, ops } = makeCtx(world(project(), [previous]));
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
-            buildId: "builds_new",
-            reused: false,
-        });
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
 
         const inserted = ops.find((op) => op.kind === "insert" && op.table === "builds") as { document: Row } | undefined;
 
@@ -288,7 +288,7 @@ describe("builds.recordPush path filter", () => {
 
         await expect(
             recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" }, fromFork: true, pullRequest: 9, trigger: "pull_request" }),
-        ).resolves.toStrictEqual({ buildId: "bld_fork", reused: true });
+        ).resolves.toStrictEqual([{ buildId: "bld_fork", projectId: "prj_1", reused: true }]);
     });
 
     it("records what triggered the build — it decides production versus preview", async () => {
@@ -334,7 +334,7 @@ describe("builds.recordPush path filter", () => {
 
         await expect(
             recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" }, fromFork: false, pullRequest: 9, trigger: "pull_request" }),
-        ).resolves.toStrictEqual({ buildId: "builds_new", reused: false });
+        ).resolves.toStrictEqual([{ buildId: "builds_new", projectId: "prj_1", reused: false }]);
     });
 
     it("does not let a pull request's preview build stand in for the production push of the same commit", async () => {
@@ -343,10 +343,93 @@ describe("builds.recordPush path filter", () => {
         const previous = { _id: "bld_pr", bundleHash: "h", commitSha: "abc123", projectId: "prj_1", status: "successful", trigger: "pull_request" };
         const { ctx } = makeCtx(world(project(), [previous]));
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
-            buildId: "builds_new",
-            reused: false,
-        });
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
+    });
+});
+
+describe("builds.recordPush across the projects of one repository", () => {
+    // Workspace packages are recorded per project, or a push builds unfiltered.
+    const web = project({
+        _id: "prj_web",
+        name: "web",
+        rootDirectory: "apps/web",
+        slug: "web",
+        workspacePackages: { builtAt: 1, paths: [], rootDirectory: "apps/web" },
+    });
+    const docs = project({
+        _id: "prj_docs",
+        name: "docs",
+        rootDirectory: "apps/docs",
+        slug: "docs",
+        workspacePackages: { builtAt: 1, paths: [], rootDirectory: "apps/docs" },
+    });
+    const twoProjects = (projects: Row[], extra: Record<string, Row[]> = {}): Record<string, Row[]> => {
+        return { ...world(web), githubDeliveries: [], ...extra, projects };
+    };
+    const insertedBuilds = (ops: ReturnType<typeof makeCtx>["ops"]) =>
+        ops.filter((op) => op.kind === "insert" && op.table === "builds").map((op) => (op as { document: Row }).document);
+
+    it("builds only the project whose folder a push touches, and records a skip for the other", async () => {
+        const { ctx, ops } = makeCtx(twoProjects([web, docs]));
+
+        const result = await recordPush.handler(ctx, { ...push, changes: { files: ["apps/web/src/index.ts"] } });
+
+        expect(result).toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_web", reused: false },
+            {
+                buildId: "builds_new",
+                pathFiltered: true,
+                projectId: "prj_docs",
+                reused: false,
+                skipped: "no changes under apps/docs/ or the lockfile (1 files changed)",
+            },
+        ]);
+        expect(insertedBuilds(ops).filter((build) => build.status === "pending")).toMatchObject([{ projectId: "prj_web", rootDirectory: "apps/web" }]);
+        expect(insertedBuilds(ops).filter((build) => build.status === "skipped")).toMatchObject([{ projectId: "prj_docs" }]);
+    });
+
+    it("builds each project a push touches, recording the delivery id once for all of them", async () => {
+        const { ctx, ops } = makeCtx(twoProjects([web, docs]));
+
+        const result = await recordPush.handler(ctx, { ...push, changes: { files: ["apps/web/a.ts", "apps/docs/b.md"] }, deliveryId: "guid-1" });
+
+        expect(result).toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_web", reused: false },
+            { buildId: "builds_new", projectId: "prj_docs", reused: false },
+        ]);
+        expect(insertedBuilds(ops).map((build) => build.projectId)).toStrictEqual(["prj_web", "prj_docs"]);
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "githubDeliveries")).toHaveLength(1);
+    });
+
+    it("never builds a project whose org has not claimed the installation, even when it is listed first", async () => {
+        const squatted = project({ _id: "prj_squat", organizationId: "org_2", rootDirectory: "apps/web", slug: "squat" });
+        const { ctx, ops } = makeCtx(twoProjects([squatted, web]));
+
+        const result = await recordPush.handler(ctx, { ...push, changes: { files: ["apps/web/src/index.ts"] } });
+
+        expect(result).toStrictEqual([{ buildId: "builds_new", projectId: "prj_web", reused: false }]);
+        expect(insertedBuilds(ops).map((build) => build.projectId)).toStrictEqual(["prj_web"]);
+    });
+
+    it("records nothing when no project of the repository has claimed the installation", async () => {
+        const { ctx, ops } = makeCtx(twoProjects([project({ _id: "prj_squat", organizationId: "org_2" })]));
+
+        await expect(recordPush.handler(ctx, { ...push, changes: { files: ["apps/web/a.ts"] } })).resolves.toStrictEqual([]);
+        expect(insertedBuilds(ops)).toStrictEqual([]);
+    });
+
+    it("a redelivery builds nothing new for any project of the repository", async () => {
+        const { ctx, ops } = makeCtx(twoProjects([web, docs], { githubDeliveries: [{ _id: "gd_1", deliveryId: "guid-1", receivedAt: 1 }] }));
+
+        const result = await recordPush.handler(ctx, { ...push, changes: { files: ["apps/web/a.ts", "apps/docs/b.md"] }, deliveryId: "guid-1" });
+
+        expect(result).toStrictEqual([
+            { duplicate: true, projectId: "prj_web" },
+            { duplicate: true, projectId: "prj_docs" },
+        ]);
+        expect(ops.filter((op) => op.kind === "insert" && op.table !== "rateLimits")).toStrictEqual([]);
     });
 });
 

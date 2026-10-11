@@ -134,7 +134,7 @@ describe(handleGitHubWebhook, () => {
             onPreviewBuild: (intent) => {
                 recorded.push(intent);
 
-                return Promise.resolve({ buildId: "b1", reused: false });
+                return Promise.resolve([{ buildId: "b1", projectId: "proj_1", reused: false }]);
             },
             resolveProject: resolveProject(true),
             secret,
@@ -158,7 +158,7 @@ describe(handleGitHubWebhook, () => {
             onPreviewBuild: (intent) => {
                 recorded.push(intent);
 
-                return Promise.resolve({ buildId: "b1", reused: false });
+                return Promise.resolve([{ buildId: "b1", projectId: "proj_1", reused: false }]);
             },
             resolveProject: resolveProject(true),
             secret,
@@ -187,7 +187,7 @@ describe(handleGitHubWebhook, () => {
             onPush: (intent) => {
                 recorded.push(intent);
 
-                return Promise.resolve({ duplicate: true });
+                return Promise.resolve([{ duplicate: true, projectId: "proj_1" }]);
             },
             resolveProject: resolveProject(true),
             secret,
@@ -260,7 +260,7 @@ describe("preview path filter", () => {
             onPreviewBuild: (intent) => {
                 seen = intent.changes;
 
-                return Promise.resolve({ buildId: "b1", reused: false, skipped: "no changes under apps/web/" });
+                return Promise.resolve([{ buildId: "b1", projectId: "proj_1", reused: false, skipped: "no changes under apps/web/" }]);
             },
             resolveProject,
             secret,
@@ -310,9 +310,10 @@ describe("skipped build commit status", () => {
         pull_request: { base: { sha: "base1" }, head: { ref: "feat/x", repo: { full_name: "acme/mono" }, sha: "head1" } },
         repository: { full_name: "acme/mono" },
     });
-    const filtered: BuildRecordResult = {
+    const filtered: BuildRecordResult[number] = {
         buildId: "b1",
         pathFiltered: true,
+        projectId: "proj_1",
         reused: false,
         skipped: "no changes under apps/web/ or the lockfile (1 files changed)",
     };
@@ -345,7 +346,7 @@ describe("skipped build commit status", () => {
     ] as const)("posts a success status naming the skip reason for a path-filtered %s", async (event, sha) => {
         const posted: CommitStatus[] = [];
 
-        await deliver(event, filtered, (status) => {
+        await deliver(event, [filtered], (status) => {
             posted.push(status);
 
             return Promise.resolve();
@@ -364,7 +365,7 @@ describe("skipped build commit status", () => {
 
     it("reposts a recorded path-filter skip on a redelivery, so a failed first post recovers", async () => {
         const posted: CommitStatus[] = [];
-        const response = await deliver("push", { duplicate: true, pathFiltered: true, skipped: filtered.skipped }, (status) => {
+        const response = await deliver("push", [{ duplicate: true, pathFiltered: true, projectId: "proj_1", skipped: filtered.skipped }], (status) => {
             posted.push(status);
 
             return Promise.resolve();
@@ -382,16 +383,16 @@ describe("skipped build commit status", () => {
             return Promise.resolve();
         };
 
-        await deliver("push", { buildId: "b1", reused: false, skipped: "not re-released: stale" }, post);
-        await deliver("push", { buildId: "b1", reused: false }, post);
+        await deliver("push", [{ buildId: "b1", projectId: "proj_1", reused: false, skipped: "not re-released: stale" }], post);
+        await deliver("push", [{ buildId: "b1", projectId: "proj_1", reused: false }], post);
 
         expect(posted).toStrictEqual([]);
     });
 
     it("still acknowledges the push when the status post fails", async () => {
-        const response = await deliver("push", filtered, () => Promise.reject(new Error("github commit status failed: 502")));
+        const response = await deliver("push", [filtered], () => Promise.reject(new Error("github commit status failed: 502")));
 
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toMatchObject({ accepted: true, skipped: filtered.skipped });
+        await expect(response.json()).resolves.toMatchObject({ accepted: true, builds: [expect.objectContaining({ skipped: filtered.skipped })] });
     });
 });

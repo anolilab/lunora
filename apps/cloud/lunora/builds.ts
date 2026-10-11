@@ -7,7 +7,7 @@ import type { BuildAdvisory } from "../src/builds/runner";
 import { isUnconfiguredInfrastructure, MAX_BUILD_ADVISORIES } from "../src/builds/runner";
 import type { ProjectRuntime } from "../src/project-runtime";
 import { runtimeColumn, storedRuntime } from "../src/project-runtime";
-import type { Id } from "./_generated/dataModel.js";
+import type { DataModel, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
 import { fireDeployAlerts } from "./alerts";
@@ -76,20 +76,30 @@ type BuildTrigger = "pull_request" | "push";
  */
 const pushChangesValidator = v.union(v.object({ files: v.array(v.string()) }), v.object({ unknown: v.string() }));
 
-/** `pathFiltered`: the skip is the path filter's — the commit has no other status, so the webhook posts one. */
-type RecordPushResult =
-    null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true; pathFiltered?: true; skipped?: string };
+/**
+ * One entry per candidate project (see {@link recordPush}); empty when no
+ * project in the repository has claimed the installation.
+ */
+type RecordPushResult = ProjectPushResult[];
+
+/**
+ * One candidate project's outcome for a push: the build it queued or reused,
+ * a skip, or — for a redelivery — the answer that nothing new was recorded.
+ */
+type ProjectPushResult =
+    | { buildId: Id<"builds">; pathFiltered?: true; projectId: Id<"projects">; reused: boolean; skipped?: string }
+    | { duplicate: true; pathFiltered?: true; projectId: Id<"projects">; skipped?: string };
 
 /**
  * A redelivery's answer. The first delivery's skip status may never have reached
  * GitHub (its post is best-effort), so the recorded path-filter skip goes back
  * with it for the webhook to post again — the same success status twice is harmless.
  */
-const redelivered = async (context: MutationContext, projectId: Id<"projects">, commitSha: string, trigger: BuildTrigger): Promise<RecordPushResult> => {
+const redelivered = async (context: MutationContext, projectId: Id<"projects">, commitSha: string, trigger: BuildTrigger): Promise<ProjectPushResult> => {
     const { page } = await context.db.builds.findMany({ where: { commitSha, projectId } }); // secret-scanner:allow -- domain field name
     const skip = page.find((row) => row.status === "skipped" && row.pathFiltered === true && (row.trigger ?? "push") === trigger);
 
-    return skip?.skipReason === undefined ? { duplicate: true } : { duplicate: true, pathFiltered: true, skipped: skip.skipReason };
+    return skip?.skipReason === undefined ? { duplicate: true, projectId } : { duplicate: true, pathFiltered: true, projectId, skipped: skip.skipReason };
 };
 
 /**
@@ -223,11 +233,97 @@ const isRedelivery = async (context: MutationContext, deliveryId: string): Promi
 /** A lease older than this is stale — the runner died; the build is reclaimable. */
 export const LEASE_STALE_MS = 30 * 60 * 1000;
 
+/** Records one project's build for a push, or its skip. See {@link recordPush}. */
+const recordProjectPush = async (
+    context: MutationContext,
+    project: DataModel["projects"],
+    push: {
+        before: string | undefined;
+        branch: string;
+        changes: PushChanges;
+        commitSha: string;
+        fromFork: boolean | undefined;
+        pullRequest: number | undefined;
+        trigger: BuildTrigger;
+    },
+): Promise<ProjectPushResult> => {
+    const { now } = context;
+    const { branch, changes, commitSha, fromFork, pullRequest, trigger } = push;
+    const { rootDirectory, watchPaths } = project;
+    const runtime = storedRuntime(project.runtime);
+    const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, runtime, trigger });
+
+    if (prior && (prior.build.fromFork === true || (prior.deployment !== null && SERVING_STATUSES.has(prior.deployment.status)))) {
+        return { buildId: prior.build._id, projectId: project._id, reused: true };
+    }
+
+    // Only a build that recorded a deployment has a stored release to re-release.
+    const rereleased = prior?.deployment == null ? undefined : prior.build;
+    const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
+    const { decision, filtered, reusesBuildId } = planBuild({
+        before: push.before,
+        branch,
+        changes,
+        projectBuilds,
+        rereleased,
+        rootDirectory,
+        trigger,
+        watchPaths,
+        workspacePackages: project.workspacePackages,
+    });
+    const common = {
+        branch,
+        commitSha,
+        createdAt: now,
+        ...(fromFork === true ? { fromFork: true } : {}),
+        organizationId: project.organizationId,
+        projectId: project._id, // secret-scanner:allow -- domain field name
+        ...(pullRequest === undefined ? {} : { pullRequest }),
+        ...(reusesBuildId === undefined ? {} : { reusesBuildId }),
+        ...(rootDirectory === undefined ? {} : { rootDirectory }),
+        ...runtimeColumn(runtime),
+        trigger,
+        updatedAt: now,
+    };
+
+    if (!decision.build) {
+        const buildId = await context.db.insert("builds", { ...common, ...filtered, skipReason: decision.reason, status: "skipped" });
+
+        return { buildId, projectId: project._id, ...filtered, reused: false, skipped: decision.reason };
+    }
+
+    // Backpressure: cap unfinished builds per project so a webhook storm
+    // (or spoofed spam) can't flood the queue.
+    const inFlight = projectBuilds.filter((build) => build.status === "pending" || build.status === "building").length;
+
+    if (inFlight >= 5) {
+        throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
+    }
+
+    const buildId = await context.db.insert("builds", { ...common, status: "pending" });
+
+    // The first line of the build's log says why it ran, so a build that a
+    // monorepo filter should have skipped is diagnosable from the log alone.
+    await context.db.insert("buildLogs", {
+        buildId,
+        createdAt: now,
+        level: "info",
+        line: `path filter: ${decision.reason}`,
+        organizationId: project.organizationId,
+    });
+
+    return { buildId, projectId: project._id, reused: false };
+};
+
 /**
  * Record a build for a push to a connected repository (GAPS.md A4). Resolves
- * the project from the repository name itself — callers cannot aim it at an
- * arbitrary project. Reached via the HMAC-verified webhook edge route; the
- * only spoofable input is build volume, which the per-IP limiter caps.
+ * the projects from the repository name itself — callers cannot aim it at an
+ * arbitrary project. Every project in the repository whose org has claimed the
+ * installation is a candidate, and each candidate gets its own decision: a
+ * push builds the projects whose folder it touches, and each one's dedup,
+ * release and path filter apply on their own. Reached via the HMAC-verified
+ * webhook edge route; the only spoofable input is build volume, which the
+ * per-IP limiter caps.
  * Dedup: an existing successful build for (project, commitSha, rootDirectory,
  * trigger) whose release still serves — or a fork's, which never releases — is
  * returned as-is (`reused: true`) instead of queuing anything. The trigger is
@@ -279,92 +375,33 @@ export const recordPush = internalMutation
             args: { before, branch, changes, commitSha, deliveryId, fromFork, installationId, pullRequest, repository, trigger },
         }): Promise<RecordPushResult> => {
             const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
-            const project = page[0];
-
-            if (!project) {
-                return null;
-            }
-
-            // Only pushes from an installation the project's org has *claimed*
-            // build (staged-claim model, github-installations.ts). A spoofed RPC
-            // call must present a valid (org, installation) pair.
             const { page: installationPage } = await context.db.githubInstallations.findMany({ where: { installationId } });
-            const installation = installationPage[0];
 
-            if (installation?.organizationId !== project.organizationId) {
-                return null;
+            // Each project is checked on its own: it builds from this installation
+            // only when its own org has *claimed* it (staged-claim model,
+            // github-installations.ts). A spoofed RPC call must present a valid
+            // (org, installation) pair, and a squatted sibling project in another
+            // org never builds.
+            const candidates = page.filter((project) => installationPage.some((installation) => installation.organizationId === project.organizationId));
+
+            if (candidates.length === 0) {
+                return [];
             }
 
-            const { now } = context;
+            // One delivery, however many projects it reaches: its id is recorded once.
+            const redelivery = deliveryId !== undefined && (await isRedelivery(context, deliveryId));
+            const results: ProjectPushResult[] = [];
 
-            if (deliveryId !== undefined && (await isRedelivery(context, deliveryId))) {
-                return redelivered(context, project._id, commitSha, trigger);
+            for (const project of candidates) {
+                // eslint-disable-next-line no-await-in-loop -- each project's decision reads the builds the previous one queued
+                const result = await (redelivery
+                    ? redelivered(context, project._id, commitSha, trigger)
+                    : recordProjectPush(context, project, { before, branch, changes, commitSha, fromFork, pullRequest, trigger }));
+
+                results.push(result);
             }
 
-            const { rootDirectory, watchPaths } = project;
-            const runtime = storedRuntime(project.runtime);
-            const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, runtime, trigger });
-
-            if (prior && (prior.build.fromFork === true || (prior.deployment !== null && SERVING_STATUSES.has(prior.deployment.status)))) {
-                return { buildId: prior.build._id, reused: true };
-            }
-
-            // Only a build that recorded a deployment has a stored release to re-release.
-            const rereleased = prior?.deployment == null ? undefined : prior.build;
-            const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
-            const { decision, filtered, reusesBuildId } = planBuild({
-                before,
-                branch,
-                changes,
-                projectBuilds,
-                rereleased,
-                rootDirectory,
-                trigger,
-                watchPaths,
-                workspacePackages: project.workspacePackages,
-            });
-            const common = {
-                branch,
-                commitSha,
-                createdAt: now,
-                ...(fromFork === true ? { fromFork: true } : {}),
-                organizationId: project.organizationId,
-                projectId: project._id, // secret-scanner:allow -- domain field name
-                ...(pullRequest === undefined ? {} : { pullRequest }),
-                ...(reusesBuildId === undefined ? {} : { reusesBuildId }),
-                ...(rootDirectory === undefined ? {} : { rootDirectory }),
-                ...runtimeColumn(runtime),
-                trigger,
-                updatedAt: now,
-            };
-
-            if (!decision.build) {
-                const buildId = await context.db.insert("builds", { ...common, ...filtered, skipReason: decision.reason, status: "skipped" });
-
-                return { buildId, ...filtered, reused: false, skipped: decision.reason };
-            }
-
-            // Backpressure: cap unfinished builds per project so a webhook storm
-            // (or spoofed spam) can't flood the queue.
-            const inFlight = projectBuilds.filter((build) => build.status === "pending" || build.status === "building").length;
-
-            if (inFlight >= 5) {
-                throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
-            }
-
-            const buildId = await context.db.insert("builds", { ...common, status: "pending" });
-
-            // The first line of the build's log says why it ran, so a build that a
-            // monorepo filter should have skipped is diagnosable from the log alone.
-            await context.db.insert("buildLogs", {
-                buildId,
-                createdAt: now,
-                level: "info",
-                line: `path filter: ${decision.reason}`,
-                organizationId: project.organizationId,
-            });
-
-            return { buildId, reused: false };
+            return results;
         },
     );
 
