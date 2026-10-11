@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 186 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 188 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -765,6 +765,10 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 
 `400` — Socket tag budget exceeded
 
+### `SOLE_ORGANIZATION_OWNER`
+
+`409` — Sole organization owner
+
 ### `STORAGE_CHECKSUM_MISMATCH`
 
 `400` — Storage checksum mismatch
@@ -940,5 +944,9 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 ### `WORKFLOWS_REST_ERROR`
 
 `502` — Cloudflare Workflows REST API error
+
+### `YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS`
+
+`403` — Not allowed to delete users
 
 {/* /generated:error-codes */}

@@ -49,6 +49,14 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Not found";
     };
+    readonly SOLE_ORGANIZATION_OWNER: {
+        readonly status: 409;
+        readonly title: "Sole organization owner";
+    };
+    readonly YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS: {
+        readonly status: 403;
+        readonly title: "Not allowed to delete users";
+    };
     readonly CONFLICT: {
         readonly hint: readonly [
             "Another write changed this row while your mutation was running (optimistic concurrency conflict).",

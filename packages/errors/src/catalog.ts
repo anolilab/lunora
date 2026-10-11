@@ -58,6 +58,8 @@ export const ERROR_CATALOG = {
     UNAUTHORIZED: { status: 401, title: "Unauthorized" },
     FORBIDDEN: { status: 403, title: "Forbidden" },
     NOT_FOUND: { status: 404, title: "Not found" },
+    SOLE_ORGANIZATION_OWNER: { status: 409, title: "Sole organization owner" },
+    YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS: { status: 403, title: "Not allowed to delete users" },
 
     CONFLICT: {
         hint: [
