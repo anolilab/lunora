@@ -226,6 +226,24 @@ apps use a separate library for it.
 
 There are four touch points. Phase 0 confirms the codegen constraints behind them.
 
+**Port binding is per invocation (decided with the example app).** `definePrivacy(config)` bound
+`data`, `files`, `store`, `tombstones`, `now` and `newId` when it was called. A Lunora `ctx.db` exists only
+inside a function invocation, so those ports cannot be built at module load. The change: `ports` is a
+function of the invocation's context, and `definePrivacy` returns a factory, `privacyFor(ctx)`, that binds
+the ports for one call and returns the same API:
+
+```ts
+export const privacyFor = definePrivacy({ datasets, presets, exclude, ports: (ctx) => ({ data, files, store, now, newId, tombstones }) });
+// inside a mutation
+await privacyFor(ctx).requestExport({ subjectId });
+```
+
+Reason: the smallest change that keeps one API. The alternatives were a second, port-free `Privacy` object
+that every call site must pass ports to, or a module-level `ctx` that does not exist. The old static
+`PrivacyConfig` is removed rather than kept beside the factory, because this is a pre-release branch. A
+workflow context has no `ctx.db`, so its `ports` reach the data through `ctx.run` into an internal
+function. The example app is the reference for that.
+
 **1. Merge the extension into the schema.** The table set is static and independent of
 configuration, so there is no cycle with step 2.
 

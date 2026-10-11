@@ -40,19 +40,24 @@ import { germany } from "@lunora/privacy/de";
 
 import { tasksData } from "./tasks/privacy";
 
-export const privacy = definePrivacy({
+// The settings are fixed; the ports depend on the call, because `ctx.db` exists only inside one.
+export const privacyFor = definePrivacy({
     datasets: [tasksData],
     presets: [eu(), germany()],
     // Tables that hold a user's data but are not exported, each with the reason a reviewer reads.
     exclude: { featureFlags: "Operator configuration; contains no personal data" },
-    // Your ports: data, files, store, and the clock.
-    data,
-    files,
-    store,
-    now: () => new Date(),
-    newId: () => crypto.randomUUID(),
+    ports: (ctx) => ({
+        // Your ports: the data, the files, the request store, and the clock.
+        data: dataPortOver(ctx),
+        files: filePortOver(ctx),
+        store: requestStoreOver(ctx),
+        now: () => new Date(),
+        newId: () => crypto.randomUUID(),
+    }),
 });
 ```
+
+Call it from a mutation with that mutation's context: `await privacyFor(ctx).requestExport({ subjectId })`.
 
 Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically.
 

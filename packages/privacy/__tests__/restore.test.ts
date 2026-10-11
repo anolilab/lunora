@@ -30,17 +30,21 @@ const build = (tombstones?: TombstonePort) => {
     const data = memoryData({ tasks: 150 });
     let counter = 0;
     const privacy = definePrivacy({
-        data,
         datasets: [tasks],
-        files: memoryFiles(),
-        newId: () => {
-            counter += 1;
-            return `r${String(counter)}`;
+        ports: () => {
+            return {
+                data,
+                files: memoryFiles(),
+                newId: () => {
+                    counter += 1;
+                    return `r${String(counter)}`;
+                },
+                now: () => new Date("2026-10-11T10:00:00.000Z"),
+                store: memoryRequests(),
+                ...(tombstones === undefined ? {} : { tombstones }),
+            };
         },
-        now: () => new Date("2026-10-11T10:00:00.000Z"),
-        store: memoryRequests(),
-        ...(tombstones === undefined ? {} : { tombstones }),
-    });
+    })(undefined);
 
     return { data, privacy };
 };

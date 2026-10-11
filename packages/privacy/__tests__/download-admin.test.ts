@@ -31,16 +31,20 @@ const setup = (data: DataPort = memoryData({ tasks: 0 })) => {
     let clock = new Date("2026-10-11T10:00:00.000Z");
     let counter = 0;
     const privacy = definePrivacy({
-        data,
         datasets: [tasks],
-        files,
-        newId: () => {
-            counter += 1;
-            return `r${String(counter)}`;
+        ports: () => {
+            return {
+                data,
+                files,
+                newId: () => {
+                    counter += 1;
+                    return `r${String(counter)}`;
+                },
+                now: () => clock,
+                store,
+            };
         },
-        now: () => clock,
-        store,
-    });
+    })(undefined);
 
     return {
         advance: (days: number) => {
