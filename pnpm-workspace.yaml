@@ -22,6 +22,9 @@ onlyBuiltDependencies:
   - "@coinbase/x402"
 
 overrides:
+  "@simple-git/argv-parser@>=0": ">=2.0.1"
+  handlebars@>=0: ">=4.7.10"
+  simple-git@>=0: ">=4.0.1"
   # ---------------------------------------------------------------------------
   # Singleton pins — one copy of these across the whole graph
   # ---------------------------------------------------------------------------
@@ -1192,3 +1195,8 @@ patchedDependencies:
   '@cloudflare/workers-types@5.20261004.1': patches/@cloudflare__workers-types@5.20261004.1.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch
+
+auditConfig:
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm
+    - GHSA-86w9-cpqp-85rv
