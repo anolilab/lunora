@@ -13,6 +13,7 @@ import type { MisconfiguredSetting } from "../telemetry/platform-metrics";
 import { recordDispatch, recordMisconfiguration, recordPlanStore, recordRecursion } from "../telemetry/platform-metrics";
 import type { Lineage } from "./lineage";
 import { formatLineageParameter, LINEAGE_HEADER, MAX_LINEAGE_DEPTH, newLineageRoot, readLineage } from "./lineage";
+import { withPlatformHeaders } from "./platform-headers";
 import { guardProtectedPreview } from "./preview-auth";
 
 /**
@@ -477,6 +478,16 @@ interface Inbound {
 }
 
 /**
+ * What {@link serve} hands back: the response, and the `cell:script` id of the tenant that produced it.
+ * `lunoraId` is set only for a tenant response; every refusal, redirect and gate leaves it unset. `fetch`
+ * stamps the platform headers onto `response` once, from these two fields.
+ */
+interface Served {
+    lunoraId?: string;
+    response: Response;
+}
+
+/**
  * Dispatch one admitted request to its tenant and meter the outcome, a failed dispatch included.
  * The timing starts here, after admission, so the duration is the tenant's own work.
  */
@@ -485,7 +496,7 @@ const dispatchTo = async (
     admitted: AdmittedRequest,
     inbound: Inbound,
     egress: { parameter?: string },
-): Promise<Response> => {
+): Promise<Served> => {
     const { env, request, url } = inbound;
     // Captured outside the `try` so the catch can still measure how long the
     // failing dispatch took.
@@ -510,17 +521,9 @@ const dispatchTo = async (
 
         meterRequest(env.USAGE_ANALYTICS, request, response, route, url, startedAt);
 
-        // Debug header (GAPS.md B3): which cell + script served this. A 101
-        // upgrade response is immutable — return it verbatim.
-        if (response.status === 101) {
-            return response;
-        }
-
-        const stamped = new Response(response.body, response);
-
-        stamped.headers.set("x-lunora-id", `${cellOf(env)}:${route.scriptName}`);
-
-        return stamped;
+        // Debug header (GAPS.md B3): which cell + script served this. `fetch` stamps it, with the
+        // platform headers, in its single copy; a 101 upgrade is left untouched there.
+        return { lunoraId: `${cellOf(env)}:${route.scriptName}`, response };
     } catch (error) {
         // Meter the FAILED dispatch too.
         //
@@ -539,7 +542,7 @@ const dispatchTo = async (
         meterRequest(env.USAGE_ANALYTICS, request, failure, route, url, startedAt);
 
         if (error instanceof Error && error.message.startsWith("Worker not found")) {
-            return NOT_FOUND("worker not found");
+            return { response: NOT_FOUND("worker not found") };
         }
 
         throw error;
@@ -551,14 +554,14 @@ const dispatchTo = async (
  * answers runs before the tenant does: redirects, custom domains, the plan
  * (admission), preview protection, then lineage.
  */
-const serveVerified = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined, plane: ConfiguredControlPlane): Promise<Response> => {
+const serveVerified = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined, plane: ConfiguredControlPlane): Promise<Served> => {
     const url = new URL(request.url);
     const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
 
     const redirect = await redirectOnlyDomain(url, appDomain, plane);
 
     if (redirect) {
-        return redirect;
+        return { response: redirect };
     }
 
     const route = await resolveTenant(url.hostname, {
@@ -572,7 +575,7 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
     });
 
     if (!route) {
-        return NOT_FOUND("no tenant for this hostname");
+        return { response: NOT_FOUND("no tenant for this hostname") };
     }
 
     // Admission (GAPS.md C1, plan 365 W3): only a verified servable plan is
@@ -582,7 +585,7 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
     const refused = refusalFor(route.plan);
 
     if (refused) {
-        return refused;
+        return { response: refused };
     }
 
     // Egress (plan 477 §4.5): the one decision for this dispatch. An enforcing policy is refused when the
@@ -591,7 +594,7 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
     const egress = egressOutbound(route.egress, env);
 
     if ("refuse" in egress) {
-        return Response.json({ error: "egress_policy_unenforceable", reason: egress.refuse }, { status: 503 });
+        return { response: Response.json({ error: "egress_policy_unenforceable", reason: egress.refuse }, { status: 503 }) };
     }
 
     // Deployment protection. A preview URL is publicly addressable the moment
@@ -605,7 +608,7 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
         const gate = await guardProtectedPreview(request, url, route.scriptName, { token: plane.token, url: stripTrailingSlashes(plane.url) });
 
         if (gate) {
-            return gate;
+            return { response: gate };
         }
     }
 
@@ -617,7 +620,7 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
     });
 
     if (admitted instanceof Response) {
-        return admitted;
+        return { response: admitted };
     }
 
     return dispatchTo(route, admitted, { env, request, url }, egress);
@@ -628,25 +631,25 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
  * no plan, custom domain, protection or suspension to check, so the tenant is served on the free
  * tier with lineage still honoured.
  */
-const serveUnverified = async (request: Request, env: DispatcherEnv): Promise<Response> => {
+const serveUnverified = async (request: Request, env: DispatcherEnv): Promise<Served> => {
     const url = new URL(request.url);
     const route = await resolveTenant(url.hostname, { appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app" });
 
     if (!route) {
-        return NOT_FOUND("no tenant for this hostname");
+        return { response: NOT_FOUND("no tenant for this hostname") };
     }
 
     const admitted = await admitLineage(request, route, env, undefined);
 
     if (admitted instanceof Response) {
-        return admitted;
+        return { response: admitted };
     }
 
     return dispatchTo({ ...route, plan: "free" }, admitted, { env, request, url }, {});
 };
 
 /** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
-const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
+const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Served> => {
     // The one decision on the control plane for this request. Outside `development`
     // a missing control plane refuses everything, custom and redirect domains included.
     const control = controlPlaneFor(env);
@@ -656,14 +659,14 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
         const refusal = unverifiableLineageRefusal(request, env);
 
         if (refusal) {
-            return refusal;
+            return { response: refusal };
         }
 
         return serveVerified(request, env, context, control);
     }
 
     if (enforced(env)) {
-        return controlPlaneUnconfigured(env, control.missing);
+        return { response: controlPlaneUnconfigured(env, control.missing) };
     }
 
     return serveUnverified(request, env);
@@ -680,11 +683,11 @@ export default {
         const cell = cellOf(env);
 
         try {
-            const response = await serve(request, env, context);
+            const { lunoraId, response } = await serve(request, env, context);
 
             recordDispatch(env.PLATFORM_METRICS, { cell, durationMs: Date.now() - startedAt, outcome: statusClass(response.status) });
 
-            return response;
+            return withPlatformHeaders(response, lunoraId);
         } catch (error) {
             recordDispatch(env.PLATFORM_METRICS, { cell, durationMs: Date.now() - startedAt, outcome: "exception" });
 

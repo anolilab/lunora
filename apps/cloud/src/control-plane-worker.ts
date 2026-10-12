@@ -20,6 +20,7 @@ import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
 import { openApiSpec } from "../lunora/_generated/openapi.js";
 import schema from "../lunora/schema.js";
 import { currentAuth } from "./auth";
+import { withLegacyCookieClearing } from "./auth-legacy-cookies";
 import type { ControlPlaneEnv } from "./control-plane-env";
 import { buildExec } from "./d1-store";
 import { createDeployRouter } from "./deploy/router";
@@ -79,7 +80,7 @@ const buildWorker = (env: ControlPlaneEnv): LunoraWorker => {
         // Dispatch better-auth's `/api/auth/*` routes inside the worker so the
         // studio and the control plane share an origin.
         authAdmin: auth ? createAuthAdmin(auth) : undefined,
-        authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
+        authHandler: withLegacyCookieClearing(async (request) => (auth ? handleAuthRequest(auth, request) : undefined)),
         // Code-first crons (lunora/crons.ts): the cleanup-expired-previews job
         // fires on the worker's `scheduled()` entry. The control plane is an
         // account-level worker, so its cron triggers fire normally (§2.4).

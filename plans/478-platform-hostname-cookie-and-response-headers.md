@@ -1,7 +1,14 @@
 # Plan 478 — Stop sibling tenants from setting cookies the control plane reads; add opt-in response headers at the dispatcher
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** PHASE 0 DONE (2026-10-11). Fix verified against better-auth 1.7.7; ready to implement (workstream B). PSL submission (A) is secondary and still to decide.
+**Status:** PHASE 0 DONE (2026-10-11). Workstream B (`__Host-` session cookies, `apps/cloud/src/auth.ts`) and workstream C (`nosniff` and the default referrer policy, `apps/cloud/src/dispatcher/platform-headers.ts`) are implemented on `feat/cloud-cookie-host-prefix`.
+**Review follow-up (PR #1125):** the dispatcher copies a response once (`withPlatformHeaders` stamps `x-lunora-id` in that copy, with the one 101 check). The rethrown-exception path is not covered: the runtime builds that response, and the existing test pins the rethrow. The first auth request that still carries a pre-rename session cookie, or a sign-out, clears the eight of them (`apps/cloud/src/auth-legacy-cookies.ts`). Users who never sign out are cleaned up on their next auth request; the `__Host-` names are never cleared by the platform. The tenant `nosniff` effect is documented in `cloud/who-can-open-my-app.mdx`.
+**Not done, and not in this PR:**
+
+- Staging browser rerun against the real control plane, and the sign-in notice (B). Not reachable from this workspace; needs a staging control plane.
+- Safari check on `http://localhost`. Not run here. The cookie configuration stays as it is.
+- PSL submission for `lunora.app` (A). External process; owned outside this repo.
+- Opt-in CSP (D). Not started. A separate feature; it is not implemented by this PR.
 
 ## 0. Verified finding
 
@@ -57,18 +64,16 @@ Third finding, independent: the dispatcher sets no `Content-Security-Policy`, `X
     advanced: {
       // Turn off the automatic __Secure- prefix; it does not stop a sibling's Domain attribute.
       useSecureCookies: false,
-      cookies: {
-        session_token: { name: "__Host-better-auth.session_token", attributes: { secure: true, path: "/" } },
-        session_data: { name: "__Host-better-auth.session_data", attributes: { secure: true, path: "/" } },
-        account_data: { name: "__Host-better-auth.account_data", attributes: { secure: true, path: "/" } },
-        dont_remember: { name: "__Host-better-auth.dont_remember", attributes: { secure: true, path: "/" } },
-      },
+      // One prefix names every cookie, including the plugin, OAuth state and passkey cookies,
+      // which better-auth names by bare key. Shipped form; see auth.ts.
+      cookiePrefix: "__Host-better-auth",
+      defaultCookieAttributes: { httpOnly: true, path: "/", sameSite: "lax", secure: true },
     },
     ```
 
     Output of the run: `__Host-better-auth.session_token; Max-Age=604800; Path=/; HttpOnly; Secure; SameSite=Lax` (no `Domain`). `get-session` returns the session for that cookie, and a forged signature returns `null`.
     _Rejected:_ `useSecureCookies: true` alone. It gives `__Secure-`, which a sibling can still set with `Domain`. _Rejected:_ a name starting `__Host-` with the automatic prefix on. better-auth prepends `__Secure-`, which produces an invalid name.
-    Each of the four cookies needs the override, or a leftover unprefixed cookie stays readable.
+    _Superseded:_ a per-cookie `advanced.cookies` list. It missed the passkey cookie and needed an entry for every plugin, so `cookiePrefix` replaces it.
 
 2. **Secondary: PSL submission of `lunora.app`.** Browsers then treat each tenant host as its own site. That isolates tenants from each other, which `__Host-` does not do, and it makes cross-tenant `SameSite` work. It is an external process with a lead time of weeks. Start it, but it does not block item 1.
    _Rejected:_ moving the control plane to another domain. The `__Host-` fix makes it unnecessary.
