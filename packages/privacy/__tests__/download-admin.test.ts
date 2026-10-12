@@ -142,7 +142,8 @@ describe("erasing a subject with a ready export", () => {
 
         expect(store.rows.get(exported.id)?.status).toBe("expired");
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
-        await expect(codeOf(privacy.downloadUrl({ requestId: exported.id }))).resolves.toBe("UNPROCESSABLE");
+        // The erasure rewrote the subject id on the export, so the erased subject no longer finds it at all.
+        await expect(codeOf(privacy.downloadUrl({ requestId: exported.id }))).resolves.toBe("NOT_FOUND");
     });
 
     it("does the same when the erasure workflow runs", async () => {
@@ -158,6 +159,7 @@ describe("erasing a subject with a ready export", () => {
         expect(store.rows.get(erasure.id)?.status).toBe("completed");
         expect(store.rows.get(exported.id)?.status).toBe("expired");
         expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
-        await expect(codeOf(privacy.downloadUrl({ requestId: exported.id }))).resolves.toBe("UNPROCESSABLE");
+        // The erasure rewrote the subject id on the export, so the erased subject no longer finds it at all.
+        await expect(codeOf(privacy.downloadUrl({ requestId: exported.id }))).resolves.toBe("NOT_FOUND");
     });
 });

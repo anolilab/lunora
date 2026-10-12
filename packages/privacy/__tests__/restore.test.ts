@@ -61,6 +61,40 @@ describe("restore", () => {
         expect(rows.tasks).toBe(150);
     });
 
+    it("replaces the raw subject id on every request of the subject with the tombstone key once the erasure completes", async () => {
+        const tombstones = memoryTombstones();
+        const { privacy, runErasureWorkflow, store } = build(tombstones);
+        const exported = await privacy.requestExport();
+
+        await privacy.runExport(exported.id);
+
+        const erased = await privacy.requestErasure();
+
+        await runErasureWorkflow(erased.id);
+
+        const key = tombstoneKeyOf("u1", SECRET);
+
+        expect(store.rows.get(erased.id)).toMatchObject({ status: "completed", subjectId: key });
+        expect(store.rows.get(exported.id)?.subjectId).toBe(key);
+        await expect(store.listForSubject("u1")).resolves.toStrictEqual([]);
+        expect(tombstones.stored.has(key)).toBe(true);
+    });
+
+    it("keeps the raw subject id on a request whose erasure failed, so an operator can retry it", async () => {
+        const failing: TombstonePort = {
+            add: async () => {
+                throw new Error("tombstone store unavailable");
+            },
+            keys: async () => new Set(),
+        };
+        const { privacy, runErasureWorkflow, store } = build(failing);
+        const opened = await privacy.requestErasure();
+
+        await runErasureWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.subjectId).toBe("u1");
+    });
+
     it("leaves the erasure not completed when the tombstone write fails", async () => {
         const failing: TombstonePort = {
             add: async () => {

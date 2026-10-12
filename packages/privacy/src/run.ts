@@ -478,6 +478,20 @@ const eraseDataset = async (scope: Pick<RunScope, "disposition" | "ports">, data
 };
 
 /**
+ * Complete an erasure and drop the raw subject id from the request log: every request of the subject,
+ * this one last, takes the tombstone key as its `subjectId`, so the log keeps the link the tombstone
+ * keeps and nothing more. A retry finds the requests already rewritten and only completes this one.
+ * The subject's own lookups by their id stop finding these requests, which is the point.
+ */
+const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId: string, key: string): Promise<void> => {
+    const requests = await ports.store.listForSubject(subjectId);
+    const others = requests.filter((request) => request.id !== requestId);
+
+    await Promise.all(others.map(async (request) => ports.store.update(request.id, { subjectId: key })));
+    await setStatus(ports, requestId, { from: "processing", patch: { subjectId: key }, to: "completed" });
+};
+
+/**
  * Erase the subject's data: wait out the grace, then erase each dataset in erasure order, then the
  * stored files, then verify. The request completes only when verify finds nothing left but rows a
  * rule still keeps; otherwise it is `failed` and names the leftover tables.
@@ -540,7 +554,7 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         }
 
         const completed = await whileProcessing(scope, steps, requestId, "complete", async () =>
-            setStatus(scope.ports, requestId, { from: "processing", to: "completed" }), );
+            completeErasure(scope.ports, requestId, record.subjectId, tombstoneKeyOf(record.subjectId, tombstones.secret)), );
 
         return { leftover: [], status: completed.status === "processing" ? "completed" : completed.status };
     } catch (error) {
