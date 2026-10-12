@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkCoverage } from "../src/index";
+import { checkCoverage } from "../src/coverage";
 
 describe(checkCoverage, () => {
     it("passes when every owned table is covered by a dataset or excluded with a reason", () => {

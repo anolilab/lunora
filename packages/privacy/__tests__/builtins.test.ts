@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { actionCacheDataset, authDataset, documentHistoryDataset, storageObjectsDataset } from "../src/index";
+import { actionCacheDataset, authDataset, documentHistoryDataset, storageObjectsDataset } from "../src/builtins";
 
 describe(authDataset, () => {
     it("covers better-auth's user tables by their default names", () => {

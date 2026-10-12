@@ -11,15 +11,6 @@ SemVer promise until the package graduates.
 
 ## `@lunora/privacy`
 
-### `ArchiveFile` (interface)
-
-```ts
-interface ArchiveFile {
-    readonly data: Uint8Array | string;
-    readonly path: string;
-}
-```
-
 ### `AuthTableNames` (interface)
 
 ```ts
@@ -122,14 +113,10 @@ type Disposition = {
 const ERASE_BATCH = 100;
 ```
 
-### `ErasureOptions` (interface)
+### `ErasureOptions` (type)
 
 ```ts
-interface ErasureOptions {
-    readonly drainBudgetDays?: number;
-    readonly freshAgeMs?: number;
-    readonly graceDays?: number;
-}
+type ErasureOptions = Partial<ErasureSettings>;
 ```
 
 ### `ErasureOutcome` (interface)
@@ -141,22 +128,6 @@ interface ErasureOutcome {
 }
 ```
 
-### `ErasureSettings` (interface)
-
-```ts
-interface ErasureSettings {
-    readonly drainBudgetDays: number;
-    readonly freshAgeMs: number;
-    readonly graceDays: number;
-}
-```
-
-### `ExportArticle` (type)
-
-```ts
-type ExportArticle = "15" | "20";
-```
-
 ### `ExportOutcome` (interface)
 
 ```ts
@@ -166,59 +137,10 @@ interface ExportOutcome {
 }
 ```
 
-### `InvalidTransitionError` (class)
-
-```ts
-class InvalidTransitionError extends Error {
-    readonly from: RequestStatus;
-    readonly to: RequestStatus;
-    constructor(from: RequestStatus, to: RequestStatus);
-}
-```
-
 ### `LegalBasis` (type)
 
 ```ts
 type LegalBasis = "consent" | "contract" | "legal_obligation" | "legitimate_interest";
-```
-
-### `MANIFEST_FORMAT_VERSION` (const)
-
-```ts
-const MANIFEST_FORMAT_VERSION = 1;
-```
-
-### `MIN_DRAIN_BUDGET_DAYS` (const)
-
-```ts
-const MIN_DRAIN_BUDGET_DAYS = 3;
-```
-
-### `Manifest` (interface)
-
-```ts
-interface Manifest {
-    readonly datasets: ReadonlyArray<ManifestDataset>;
-    readonly formatVersion: typeof MANIFEST_FORMAT_VERSION;
-    readonly generatedAt: string;
-    readonly subjectKey: string;
-}
-```
-
-### `ManifestDataset` (interface)
-
-```ts
-interface ManifestDataset {
-    readonly articles: ReadonlyArray<ExportArticle>;
-    readonly files: ReadonlyArray<string>;
-    readonly id: string;
-    readonly legalBasis: LegalBasis;
-    readonly origin: DataOrigin;
-    readonly purpose: string;
-    readonly recipients: ReadonlyArray<string>;
-    readonly restricted: boolean;
-    readonly retention: string;
-}
 ```
 
 ### `Privacy` (interface)
@@ -417,19 +339,6 @@ type RowDisposition = (dataset: Dataset, table: string, row: {
 }, now: Date) => Disposition;
 ```
 
-### `RunContext` (interface)
-
-```ts
-interface RunContext {
-    readonly data: DataPort;
-    readonly files: StorePort;
-    readonly now: () => Date;
-    readonly rules: ReadonlyMap<string, RetentionRule>;
-    readonly store: RequestStore;
-    readonly subjectKey: string;
-}
-```
-
 ### `StorePort` (interface)
 
 ```ts
@@ -442,26 +351,6 @@ interface StorePort {
     }) => Promise<string>;
     readonly read: (requestId: string, name: string) => Promise<string | undefined>;
     readonly signedUrl: (key: string, ttlSeconds: number) => Promise<string>;
-}
-```
-
-### `SummaryDataset` (interface)
-
-```ts
-interface SummaryDataset {
-    readonly articles: ReadonlyArray<ExportArticle>;
-    readonly id: string;
-    readonly purpose: string;
-    readonly retention: string;
-}
-```
-
-### `TableClassification` (interface)
-
-```ts
-interface TableClassification {
-    readonly dataset?: string;
-    readonly excluded?: string;
 }
 ```
 
@@ -481,91 +370,16 @@ interface TableSpec {
 }
 ```
 
-### `VerifyResult` (interface)
-
-```ts
-interface VerifyResult {
-    readonly complete: boolean;
-    readonly leftover: ReadonlyArray<string>;
-}
-```
-
 ### `actionCacheDataset` (const)
 
 ```ts
 const actionCacheDataset: (table?: string) => Dataset;
 ```
 
-### `addCalendarMonths` (const)
-
-```ts
-const addCalendarMonths: (date: Date, months: number) => Date;
-```
-
-### `articlesFor` (const)
-
-```ts
-const articlesFor: (origin: DataOrigin, legalBasis: LegalBasis) => ReadonlyArray<ExportArticle>;
-```
-
 ### `authDataset` (const)
 
 ```ts
 const authDataset: (names?: AuthTableNames) => Dataset;
-```
-
-### `buildArchive` (const)
-
-```ts
-const buildArchive: (files: ReadonlyArray<ArchiveFile>, generatedAt: Date, level?: 0 | 1 | 6 | 9) => Uint8Array;
-```
-
-### `buildManifest` (const)
-
-```ts
-const buildManifest: (input: {
-    datasets: ReadonlyArray<ManifestDataset>;
-    generatedAt: Date;
-    subjectKey: string;
-}) => Manifest;
-```
-
-### `buildSummaryPdf` (const)
-
-```ts
-const buildSummaryPdf: (input: {
-    datasets: ReadonlyArray<SummaryDataset>;
-    generatedAt: Date;
-    subjectKey: string;
-    title: string;
-}) => Promise<Uint8Array>;
-```
-
-### `canCancel` (const)
-
-```ts
-const canCancel: (type: RequestType, status: RequestStatus) => boolean;
-```
-
-### `canExtend` (const)
-
-```ts
-const canExtend: (receivedAt: Date, now: Date, alreadyExtended: boolean) => boolean;
-```
-
-### `cancelRequest` (const)
-
-```ts
-const cancelRequest: (store: RequestStore, input: {
-    id: string;
-    now: Date;
-}) => Promise<RequestRecord>;
-```
-
-### `checkCoverage` (const)
-
-```ts
-const checkCoverage: (tables: ReadonlyArray<string>, classifications: Readonly<Record<string, TableClassification | undefined>>) => ReadonlyArray<CoverageProblem>;
 ```
 
 ### `defineDataset` (const)
@@ -586,91 +400,16 @@ const definePrivacy: <C>(config: PrivacyConfig<C>) => PrivacyFor<C>;
 const dispositionFor: (rules: ReadonlyMap<string, RetentionRule>) => RowDisposition;
 ```
 
-### `dispositionOf` (const)
-
-```ts
-const dispositionOf: (erase: TableErasure, row: {
-    readonly [column: string]: unknown;
-}, rules: ReadonlyMap<string, RetentionRule>, now: Date) => Disposition;
-```
-
 ### `documentHistoryDataset` (const)
 
 ```ts
 const documentHistoryDataset: (table?: string) => Dataset;
 ```
 
-### `drainUntilEmpty` (const)
-
-```ts
-const drainUntilEmpty: (step: () => Promise<{
-    readonly hasMore: boolean;
-}>, maxRounds?: number) => Promise<number>;
-```
-
-### `dueAt` (const)
-
-```ts
-const dueAt: (receivedAt: Date) => Date;
-```
-
-### `effectiveDueAt` (const)
-
-```ts
-const effectiveDueAt: (receivedAt: Date, extended: boolean) => Date;
-```
-
-### `erasureGraceUntil` (const)
-
-```ts
-const erasureGraceUntil: (receivedAt: Date, graceDays: number, drainBudgetDays: number) => Date;
-```
-
-### `erasureOrder` (const)
-
-```ts
-const erasureOrder: (datasets: ReadonlyArray<Dataset>) => ReadonlyArray<Dataset>;
-```
-
-### `extendRequest` (const)
-
-```ts
-const extendRequest: (store: RequestStore, input: {
-    id: string;
-    now: Date;
-    reason: string;
-}) => Promise<RequestRecord>;
-```
-
-### `extendedDueAt` (const)
-
-```ts
-const extendedDueAt: (receivedAt: Date) => Date;
-```
-
-### `isOverdue` (const)
-
-```ts
-const isOverdue: (receivedAt: Date, extended: boolean, status: RequestStatus, now: Date) => boolean;
-```
-
 ### `isTerminal` (const)
 
 ```ts
 const isTerminal: (status: RequestStatus) => boolean;
-```
-
-### `openRequest` (const)
-
-```ts
-const openRequest: (store: RequestStore, input: {
-    erasure?: ErasureSettings;
-    id: string;
-    now: Date;
-    sessionAgeMs?: number;
-    subjectId: string;
-    type: RequestType;
-}) => Promise<RequestRecord>;
 ```
 
 ### `privacyExtension` (const)
@@ -687,40 +426,10 @@ const retain: (rule: string, options?: {
 }) => RetainDirective;
 ```
 
-### `retainUntil` (const)
-
-```ts
-const retainUntil: (rule: RetentionRule, from: Date) => Date;
-```
-
-### `runErasure` (const)
-
-```ts
-const runErasure: (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord) => Promise<ErasureOutcome>;
-```
-
-### `runExport` (const)
-
-```ts
-const runExport: (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord) => Promise<ExportOutcome>;
-```
-
 ### `storageObjectsDataset` (const)
 
 ```ts
 const storageObjectsDataset: (prefix: (subjectId: string) => string) => Dataset;
-```
-
-### `transition` (const)
-
-```ts
-const transition: (from: RequestStatus, to: RequestStatus) => RequestStatus;
-```
-
-### `verifyErasure` (const)
-
-```ts
-const verifyErasure: (remaining: Readonly<Record<string, number>>, kept?: Readonly<Record<string, number>>) => VerifyResult;
 ```
 
 ## `@lunora/privacy/de`
@@ -796,6 +505,16 @@ const eu: (options?: EuOptions) => PrivacyPreset;
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `ErasureSettings` (interface)
+
+```ts
+interface ErasureSettings {
+    readonly drainBudgetDays: number;
+    readonly freshAgeMs: number;
+    readonly graceDays: number;
+}
+```
 
 ### `PrivacyIdentity` (interface)
 

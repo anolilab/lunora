@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { defineDataset, erasureOrder } from "../src/index";
+import { defineDataset, erasureOrder } from "../src/dataset";
 
 const base = {
     legalBasis: "contract" as const,
