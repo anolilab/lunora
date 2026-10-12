@@ -4,7 +4,8 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PrivacyRequestsPanel } from "../../../src/features/privacy/privacy-requests-panel";
-import type { PrivacyRequestRow, PrivacyRequestsSource } from "../../../src/features/privacy/privacy-requests-source";
+import type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus } from "../../../src/features/privacy/privacy-requests-source";
+import { PRIVACY_REQUEST_STATUSES } from "../../../src/features/privacy/privacy-requests-source";
 import { formatTimestamp } from "../../../src/lib/internal";
 
 type ListFn = PrivacyRequestsSource["listOpenPrivacyRequests"];
@@ -21,7 +22,7 @@ const openRequest: PrivacyRequestRow = {
     dueAt: FUTURE_DUE,
     id: "req_open",
     receivedAt: NOW - DAY,
-    status: "open",
+    status: "received",
     subjectId: "user_open",
     type: "export",
 };
@@ -119,7 +120,7 @@ describe("privacyRequestsPanel", () => {
         expect(cells[0]?.textContent).toBe("req_open");
         expect(cells[1]?.textContent).toBe("Export");
         expect(cells[2]?.textContent).toBe("user_open");
-        expect(cells[3]?.textContent).toBe("open");
+        expect(cells[3]?.textContent).toBe("received");
         expect(cells[4]?.textContent).toBe(formatTimestamp(openRequest.receivedAt));
         expect(cells[5]?.textContent).toBe(formatTimestamp(openRequest.dueAt));
         expect(cells[6]?.textContent).toBe("—");
@@ -155,6 +156,52 @@ describe("privacyRequestsPanel", () => {
         expect(within(rowFor(openRequest.id)).queryByRole("button", { name: "Retry" })).toBeNull();
     });
 
+    it("renders a badge with the status text for every status", async () => {
+        expect.hasAssertions();
+
+        const rows: ReadonlyArray<PrivacyRequestRow> = PRIVACY_REQUEST_STATUSES.map((status: PrivacyRequestStatus) => {
+            return {
+                ...openRequest,
+                id: `req_${status}`,
+                status,
+            };
+        });
+
+        renderPanel(sourceOf(vi.fn<ListFn>(async () => rows)));
+
+        const renderedRows = await waitFor(() => {
+            const found = screen.getAllByTestId("privacy-request-row");
+
+            expect(found).toHaveLength(PRIVACY_REQUEST_STATUSES.length);
+
+            return found;
+        });
+
+        expect(renderedRows.map((row) => within(row).getAllByRole("cell")[3]?.textContent)).toEqual(PRIVACY_REQUEST_STATUSES);
+    });
+
+    it("offers Retry on the failed status only, across every status", async () => {
+        expect.assertions(2);
+
+        const rows: ReadonlyArray<PrivacyRequestRow> = PRIVACY_REQUEST_STATUSES.map((status: PrivacyRequestStatus) => {
+            return {
+                ...openRequest,
+                id: `req_${status}`,
+                status,
+            };
+        });
+
+        renderPanel(sourceOf(vi.fn<ListFn>(async () => rows)));
+
+        const failedRow = await waitFor(() => rowFor("req_failed"));
+
+        expect(within(failedRow).getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+
+        const withRetry = screen.getAllByTestId("privacy-request-row").filter((row) => within(row).queryByRole("button", { name: "Retry" }) !== null);
+
+        expect(withRetry.map((row) => within(row).getAllByRole("cell")[0]?.textContent)).toEqual(["req_failed"]);
+    });
+
     it("calls the source on Retry and refreshes the list", async () => {
         expect.hasAssertions();
 
@@ -162,7 +209,7 @@ describe("privacyRequestsPanel", () => {
         const list = vi
             .fn<ListFn>(async () => [overdueFailed])
             .mockResolvedValueOnce([overdueFailed])
-            .mockResolvedValueOnce([{ ...overdueFailed, status: "open" }]);
+            .mockResolvedValueOnce([{ ...overdueFailed, status: "received" }]);
         const retry = vi.fn<RetryFn>(async () => undefined);
 
         renderPanel(sourceOf(list, retry));

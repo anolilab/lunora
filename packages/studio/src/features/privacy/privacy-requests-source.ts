@@ -13,18 +13,35 @@
  * app's read of what the privacy `admin.open()` API lists. `retryPrivacyRequest(id)`
  * re-runs a failed export or erasure; it is the app's call to `admin.retry(requestId)`.
  *
- * The row shape and status values below are the Studio's own view. They must be
- * reconciled with the app's `RequestRecord` when the real source is written.
+ * The Studio does not import `@lunora/privacy`, so the types below mirror it by
+ * hand. {@link PrivacyRequestType} mirrors `RequestType` and
+ * {@link PrivacyRequestStatus} mirrors `RequestStatus`, both in
+ * `packages/privacy/src/lifecycle.ts`. A test fails if the status list drifts
+ * from that file.
  */
 
-/** Kind of data-subject request. */
+/** Kind of data-subject request. Mirrors `RequestType` in `packages/privacy/src/lifecycle.ts`. */
 type PrivacyRequestType = "erasure" | "export";
 
 /**
- * Lifecycle status of a request. Only `failed` rows offer a Retry action.
- * `processing` is a guess at the in-flight state; reconcile with the app.
+ * Lifecycle status of a request. Mirrors `RequestStatus` in
+ * `packages/privacy/src/lifecycle.ts`. Only `failed` rows offer a Retry action.
  */
-type PrivacyRequestStatus = "failed" | "open" | "processing";
+type PrivacyRequestStatus = "cancelled" | "completed" | "failed" | "grace" | "processing" | "ready" | "received";
+
+/**
+ * Every {@link PrivacyRequestStatus}, for exhaustive iteration in tests. `satisfies`
+ * rejects a value outside the union; the test's `Exclude` check rejects a missing one.
+ */
+const PRIVACY_REQUEST_STATUSES = [
+    "received",
+    "grace",
+    "processing",
+    "ready",
+    "completed",
+    "failed",
+    "cancelled",
+] as const satisfies ReadonlyArray<PrivacyRequestStatus>;
 
 /**
  * One open request as the Studio displays it. Timestamps are epoch milliseconds.
@@ -56,4 +73,4 @@ interface PrivacyRequestsSource {
 const isPrivacyRequestOverdue = (row: PrivacyRequestRow, now: number): boolean => (row.extendedDueAt ?? row.dueAt) < now;
 
 export type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus, PrivacyRequestType };
-export { isPrivacyRequestOverdue };
+export { isPrivacyRequestOverdue, PRIVACY_REQUEST_STATUSES };
