@@ -255,7 +255,7 @@ interface DatabaseWriterLike {
      * rows the caller may read. Required for the same reason as `aggregate`.
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
-    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
     insertMany: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -1407,7 +1407,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return allowed?.["_id"] === id ? { row: allowed, tableName: located.tableName } : null;
         },
 
-        async insert(tableName, document) {
+        // `options` (a caller-pinned `clientId`) is forwarded on both branches: a
+        // caller that keys a row deterministically relies on the primary key
+        // refusing a duplicate, and a dropped option silently mints a fresh id.
+        async insert(tableName, document, options) {
             if (policyTables.has(tableName)) {
                 if (!allowsWrite(tableName, "insert", document)) {
                     throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
@@ -1415,12 +1418,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
                 // Policy table, insert authorized: write through the UNGUARDED
                 // `raw` writer (the guard would deny this protected table).
-                return raw.insert(tableName, document);
+                return raw.insert(tableName, document, options);
             }
 
             // Non-policy table → GUARDED `base` enforces secure-by-default: a
             // protected, policy-less table is denied; a `.public()` one passes.
-            return base.insert(tableName, document);
+            return base.insert(tableName, document, options);
         },
 
         async insertMany(tableName, documents, options) {
@@ -1484,9 +1487,11 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // The update gate of a single patch, against the row as it stands, with the
         // patch's post-image as WITH CHECK. Overriding is mandatory: the `...base`
         // spread would otherwise expose the guard's version, which checks only the
-        // table, and a policy-denied row could be written through it.
-        patchIf: (tableName, id, args) =>
-            gateById(
+        // table, and a policy-denied row could be written through it. The returned
+        // row is a read, so it is handed back only when this caller's `get` would
+        // return it: update rights do not imply read rights.
+        async patchIf(tableName, id, args) {
+            const result = await gateById(
                 id,
                 "update",
                 async (writer) => {
@@ -1500,7 +1505,15 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                     return { ...preRow, ...args.patch };
                 },
                 tableName,
-            ),
+            );
+
+            if (result.doc === null || (await wrapped.get(id, tableName)) !== null) {
+                return result;
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- `doc` is `Record | null`; the read policy hides this row from the caller
+            return { applied: result.applied, doc: null };
+        },
 
         async patchMany(patches, options, expectedTable) {
             assertBatchLimit(patches.length, options?.limit, "patchMany");

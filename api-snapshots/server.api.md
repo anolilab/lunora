@@ -5745,7 +5745,9 @@ interface DatabaseWriterLike {
         key: Record<string, unknown>;
         value: null | number;
     }>>;
-    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    insert: (tableName: string, document: Record<string, unknown>, options?: {
+        clientId?: string;
+    }) => Promise<string>;
     insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: {
         limit?: number;
         skipDuplicates?: boolean;
