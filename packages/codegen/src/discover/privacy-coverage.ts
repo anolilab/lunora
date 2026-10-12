@@ -166,8 +166,10 @@ const propertyEntry = (property: Node): [string, Node] | undefined => {
     }
 
     if (Node.isShorthandPropertyAssignment(property)) {
-        // `{ datasets }`: the name node's symbol is the property's, so follow the value symbol to the variable.
-        const declaration = property.getValueSymbol()?.getValueDeclaration();
+        // `{ datasets }`: the name node's symbol is the property's, so follow the value symbol to the variable,
+        // through an import alias when the variable is imported (as `resolveExpression` does for an identifier).
+        const symbol = property.getValueSymbol();
+        const declaration = (symbol?.isAlias() === true ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
         const value = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
         // Kept even when it cannot be followed, so a `datasets` read from it is unresolvable rather than absent.

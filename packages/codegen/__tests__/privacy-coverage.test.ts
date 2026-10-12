@@ -334,6 +334,22 @@ describe("the privacy coverage lint", () => {
         }).toThrow(/privacy_dataset_unused: "orphanData"/u);
     });
 
+    it("resolves an imported datasets value passed as a shorthand property", () => {
+        expect.assertions(1);
+
+        // `{ datasets }` with `datasets` imported is an alias, which must be followed to its initializer.
+        writeApp({
+            files: {
+                "config.ts": `import { defineDataset } from "@lunora/privacy";\n\nexport const notesData = defineDataset("notes", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Notes the user wrote",\n    tables: { notes: {} },\n});\n\nexport const orphanData = defineDataset("orphan", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Never passed",\n    tables: {},\n});\n\nexport const datasets = [notesData];\n`,
+                "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nimport { datasets } from "./config";\n\nexport const privacy = definePrivacy({ datasets });\n`,
+            },
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_dataset_unused: "orphanData"/u);
+    });
+
     it("refuses an exclusion with a blank reason even when a dataset also covers the table", () => {
         expect.assertions(1);
 
