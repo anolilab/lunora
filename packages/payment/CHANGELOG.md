@@ -1,3 +1,16 @@
+## @lunora/payment [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.193...@lunora/payment@1.0.0-alpha.194) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+* **payment:** store money minor units as number columns ([#1119](https://github.com/anolilab/lunora/issues/1119)) ([d496ff9](https://github.com/anolilab/lunora/commit/d496ff9398625320f2d68b1e8241346e9e3f0fcc))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.191
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+
 ## @lunora/payment [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.192...@lunora/payment@1.0.0-alpha.193) (2026-10-10)
 
 

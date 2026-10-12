@@ -1,3 +1,15 @@
+## @lunora/react [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.209...@lunora/react@1.0.0-alpha.210) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.197
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.124
+
 ## @lunora/react [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.208...@lunora/react@1.0.0-alpha.209) (2026-10-11)
 
 

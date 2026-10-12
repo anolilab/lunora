@@ -1,3 +1,18 @@
+## @lunora/runtime [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.189...@lunora/runtime@1.0.0-alpha.190) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.104
+* **@lunora/observability:** upgraded to 1.0.0-alpha.129
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/do:** upgraded to 1.0.0-alpha.203
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+
 ## @lunora/runtime [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.188...@lunora/runtime@1.0.0-alpha.189) (2026-10-10)
 
 
