@@ -61,10 +61,11 @@
         #                                     Analytics:Read, and Zone:Workers
         #                                     Routes:Edit for the routed zone
         #   CLOUDFLARE_ACCOUNT_ID  (secret) — the account the cell provisions into
-        # Worker SECRETS (SECRET_ENCRYPTION_KEY, AUTH_SECRET, LUNORA_ADMIN_TOKEN,
-        # CREEM_*, GITHUB_WEBHOOK_SECRET, LUNORA_TAIL_SECRET, CONTROL_PLANE_TOKEN …)
-        # are NOT set here: they are per-cell Worker secrets, applied once with
-        # `wrangler secret put --env <cell>`. See apps/cloud/README.md.
+        # Worker SECRETS are GitHub Environment secrets too (AUTH_SECRET,
+        # SECRET_ENCRYPTION_KEY, LUNORA_ADMIN_TOKEN, LUNORA_TAIL_SECRET,
+        # LUNORA_LINEAGE_SECRET, CLOUD_GITHUB_WEBHOOK_SECRET, …). The "Write the Worker
+        # secrets" step fans them out to each Worker through `--secrets-file`. Optional
+        # ones left unset on the environment are left unset on the Worker.
         "environment": "cloud-${{ inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}"
         "outputs":
             "target": "${{ steps.target.outputs.name }}"
@@ -153,6 +154,41 @@
                   "CLOUDFLARE_ENV": "${{ steps.target.outputs.name }}"
               "run": "pnpm --filter @lunora/cloud run build"
 
+            # Worker secrets come from this GitHub Environment, one secret per value,
+            # and are fanned out to each Worker that needs them. A value shared by two
+            # Workers (the admin token, the tail and lineage secrets) is stored once.
+            # GitHub forbids the `GITHUB_` prefix on secret names, hence `CLOUD_GITHUB_*`
+            # here; the script renames them to the Worker's own name.
+            - "name": "Write the Worker secrets"
+              "env":
+                  "AUTH_SECRET": "${{ secrets.AUTH_SECRET }}"
+                  "SECRET_ENCRYPTION_KEY": "${{ secrets.SECRET_ENCRYPTION_KEY }}"
+                  "LUNORA_ADMIN_TOKEN": "${{ secrets.LUNORA_ADMIN_TOKEN }}"
+                  "LUNORA_TAIL_SECRET": "${{ secrets.LUNORA_TAIL_SECRET }}"
+                  "LUNORA_LINEAGE_SECRET": "${{ secrets.LUNORA_LINEAGE_SECRET }}"
+                  "CLOUD_GITHUB_WEBHOOK_SECRET": "${{ secrets.CLOUD_GITHUB_WEBHOOK_SECRET }}"
+                  "CLOUD_GITHUB_SETUP_STATE_SECRET": "${{ secrets.CLOUD_GITHUB_SETUP_STATE_SECRET }}"
+                  "CELL_CLOUDFLARE_API_TOKEN": "${{ secrets.CELL_CLOUDFLARE_API_TOKEN }}"
+              "working-directory": "apps/cloud"
+              "run": |
+                  set -euo pipefail
+
+                  bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-control-plane.json" \
+                      AUTH_SECRET=AUTH_SECRET \
+                      SECRET_ENCRYPTION_KEY=SECRET_ENCRYPTION_KEY \
+                      LUNORA_ADMIN_TOKEN=LUNORA_ADMIN_TOKEN \
+                      LUNORA_TAIL_SECRET=LUNORA_TAIL_SECRET \
+                      GITHUB_WEBHOOK_SECRET=CLOUD_GITHUB_WEBHOOK_SECRET \
+                      GITHUB_SETUP_STATE_SECRET=CLOUD_GITHUB_SETUP_STATE_SECRET \
+                      CLOUDFLARE_API_TOKEN=CELL_CLOUDFLARE_API_TOKEN
+                  bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-dispatcher.json" \
+                      CONTROL_PLANE_TOKEN=LUNORA_ADMIN_TOKEN \
+                      LUNORA_LINEAGE_SECRET=LUNORA_LINEAGE_SECRET
+                  bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-outbound.json" \
+                      LUNORA_LINEAGE_SECRET=LUNORA_LINEAGE_SECRET
+                  bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-tail.json" \
+                      LUNORA_TAIL_SECRET=LUNORA_TAIL_SECRET
+
             # Not `lunora deploy`: this app's `main` is a hand-written entry that
             # Vite builds (TanStack Start route tree, client assets, Tailwind), so
             # what gets published is the plugin's `dist/server` output — deploying
@@ -161,7 +197,7 @@
             # step above; its health probe is the last step of this job.
             - "name": "Deploy the control plane"
               "working-directory": "apps/cloud"
-              "run": "pnpm exec wrangler deploy -c dist/server/wrangler.json"
+              "run": 'pnpm exec wrangler deploy -c dist/server/wrangler.json --secrets-file "${RUNNER_TEMP}/secrets-control-plane.json"'
 
             # The dispatcher, the Outbound Worker and the tail consumer are plain
             # Workers with no Vite build of their own, so they deploy straight from
@@ -172,21 +208,21 @@
               "env":
                   "TARGET": "${{ steps.target.outputs.name }}"
               "run": |
-                  pnpm exec wrangler deploy -c outbound.wrangler.jsonc --env "${TARGET}"
+                  pnpm exec wrangler deploy -c outbound.wrangler.jsonc --env "${TARGET}" --secrets-file "${RUNNER_TEMP}/secrets-outbound.json"
 
             - "name": "Deploy the dispatcher"
               "working-directory": "apps/cloud"
               "env":
                   "TARGET": "${{ steps.target.outputs.name }}"
               "run": |
-                  pnpm exec wrangler deploy -c dispatcher.wrangler.jsonc --env "${TARGET}"
+                  pnpm exec wrangler deploy -c dispatcher.wrangler.jsonc --env "${TARGET}" --secrets-file "${RUNNER_TEMP}/secrets-dispatcher.json"
 
             - "name": "Deploy the tail consumer"
               "working-directory": "apps/cloud"
               "env":
                   "TARGET": "${{ steps.target.outputs.name }}"
               "run": |
-                  pnpm exec wrangler deploy -c tail.wrangler.jsonc --env "${TARGET}"
+                  pnpm exec wrangler deploy -c tail.wrangler.jsonc --env "${TARGET}" --secrets-file "${RUNNER_TEMP}/secrets-tail.json"
 
             # Opt-in, because the cell's reachable origin is not derivable from
             # here: a workers.dev URL carries the account's subdomain, and a custom
@@ -207,6 +243,14 @@
                   fi
 
                   pnpm exec lunora verify --health-url "${HEALTH_URL}" --no-typecheck
+
+            # The secrets files hold plaintext values. Each one is removed as soon as
+            # the deploy is over, whether it succeeded or not, instead of waiting for
+            # the runner to be torn down.
+            - "name": "Remove the Worker secrets files"
+              "if": "always()"
+              "run": |
+                  rm -f "${RUNNER_TEMP}"/secrets-*.json
 
     "release":
         # Production only. A staging deploy is not a release — tagging every alpha
