@@ -7,11 +7,14 @@
  * collected, so a step's result is a receipt, not the rows: a heavy subject's data
  * never has to fit in a single step result.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { ManifestDataset } from "./archive";
 import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
+import type { VerifyResult } from "./erasure";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
 import type { RequestStatus } from "./lifecycle";
 import { transition } from "./lifecycle";
@@ -77,6 +80,65 @@ const deleteRequestFiles = async (files: StorePort, request: RequestRecord): Pro
     }
 
     await Promise.all([...keys].map(async (key) => files.delete(key)));
+};
+
+/** The subject's key prefix for a dataset's files. An empty prefix would match every subject's files, so it is refused. */
+const filesPrefixOf = (dataset: Dataset, subjectId: string): string | undefined => {
+    if (dataset.files === undefined) {
+        return undefined;
+    }
+
+    const prefix = dataset.files.prefix(subjectId);
+
+    if (prefix.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", `Dataset "${dataset.id}" returned an empty files prefix; erasing it would delete every subject's files.`);
+    }
+
+    return prefix;
+};
+
+/**
+ * Delete the subject's stored files: every file each of their requests wrote, in any status,
+ * and every object under each dataset's files prefix for the subject.
+ */
+const eraseSubjectFiles = async (context: Pick<RunContext, "files" | "store">, datasets: ReadonlyArray<Dataset>, subjectId: string): Promise<void> => {
+    const requests = await context.store.listForSubject(subjectId);
+
+    await Promise.all(requests.map(async (request) => deleteRequestFiles(context.files, request)));
+
+    const prefixes = datasets.map((dataset) => filesPrefixOf(dataset, subjectId)).filter((prefix): prefix is string => prefix !== undefined);
+
+    await Promise.all(
+        prefixes.map(async (prefix) => {
+            const keys = await context.files.list(prefix);
+
+            await Promise.all(keys.map(async (key) => context.files.delete(key)));
+        }),
+    );
+};
+
+/**
+ * Read what the erasure left: rows per table, and objects per dataset with files (keyed
+ * `files:` and the dataset id). The erasure is complete only when every count is zero.
+ */
+const verifySubjectErased = async (context: Pick<RunContext, "data" | "files">, datasets: ReadonlyArray<Dataset>, subjectId: string): Promise<VerifyResult> => {
+    const remaining: Record<string, number> = {};
+
+    for (const dataset of datasets) {
+        // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
+        Object.assign(remaining, await context.data.remaining(dataset, subjectId));
+
+        const prefix = filesPrefixOf(dataset, subjectId);
+
+        if (prefix !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- one listing per dataset, in order
+            const keys = await context.files.list(prefix);
+
+            remaining[`files:${dataset.id}`] = keys.length;
+        }
+    }
+
+    return verifyErasure(remaining);
 };
 
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
@@ -219,14 +281,9 @@ const runErasure = async (context: RunContext, datasets: ReadonlyArray<Dataset>,
             await drainUntilEmpty(() => context.data.eraseBatch(dataset, request.subjectId, context.now()));
         }
 
-        const remaining: Record<string, number> = {};
+        await eraseSubjectFiles(context, datasets, request.subjectId);
 
-        for (const dataset of datasets) {
-            // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
-            Object.assign(remaining, await context.data.remaining(dataset, request.subjectId));
-        }
-
-        const verdict = verifyErasure(remaining);
+        const verdict = await verifySubjectErased(context, datasets, request.subjectId);
 
         status = transition(status, verdict.complete ? "completed" : "failed");
         await context.store.update(request.id, { status });
@@ -247,12 +304,14 @@ export {
     collectPart,
     type DataPort,
     deleteRequestFiles,
+    eraseSubjectFiles,
     type ErasureOutcome,
     type ExportOutcome,
     type RunContext,
     runErasure,
     runExport,
     type StorePort,
+    verifySubjectErased,
 };
 
 export { EXPORT_EXPIRY_MS };

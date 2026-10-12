@@ -66,6 +66,7 @@ const memoryRequests = (): RequestStore & { events: string[]; rows: Map<string, 
         events,
         findOpen: async () => undefined,
         get: async (id) => rows.get(id),
+        listForSubject: async (subjectId) => [...rows.values()].filter((row) => row.subjectId === subjectId),
         listOpen: async () => [...rows.values()].filter((row) => !isTerminal(row.status)),
         insert: async (record) => {
             rows.set(record.id, record);

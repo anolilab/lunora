@@ -10,7 +10,7 @@ import type { CoverageProblem, TableClassification } from "./coverage";
 import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
-import { drainUntilEmpty, verifyErasure } from "./erasure";
+import { drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import type { RequestStatus } from "./lifecycle";
 import { effectiveDueAt, isOverdue, isTerminal, transition } from "./lifecycle";
@@ -18,7 +18,7 @@ import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
 import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
-import { assembleExport, collectPart, deleteRequestFiles, EXPORT_EXPIRY_MS, runErasure, runExport } from "./run";
+import { assembleExport, collectPart, deleteRequestFiles, eraseSubjectFiles, EXPORT_EXPIRY_MS, runErasure, runExport, verifySubjectErased } from "./run";
 import type { TombstonePort } from "./tombstones";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
@@ -276,15 +276,10 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                     await context.step.do(`erase:${dataset.id}`, async () => eraseDataset(dataset, record.subjectId));
                 }
 
+                await context.step.do("erase:files", async () => eraseSubjectFiles(ports, config.datasets, record.subjectId));
+
                 await context.step.do("verify", async () => {
-                    const remaining: Record<string, number> = {};
-
-                    for (const dataset of config.datasets) {
-                        // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
-                        Object.assign(remaining, await ports.data.remaining(dataset, record.subjectId));
-                    }
-
-                    const verdict = verifyErasure(remaining);
+                    const verdict = await verifySubjectErased(ports, config.datasets, record.subjectId);
 
                     await setStatus(record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
 

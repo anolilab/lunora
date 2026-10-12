@@ -58,8 +58,8 @@ const actionCacheDataset = (table = "actionCache"): Dataset =>
         tables: { [table]: {} },
     });
 
-/** The subject's files in object storage, under a key prefix the app assigns to the subject. */
-const storageObjectsDataset = (prefix: string): Dataset =>
+/** The subject's files in object storage, under the key prefix `prefix` returns for that subject. */
+const storageObjectsDataset = (prefix: (subjectId: string) => string): Dataset =>
     defineDataset("storageObjects", {
         files: { prefix },
         legalBasis: "contract",

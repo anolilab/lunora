@@ -51,6 +51,9 @@ describe("the other built-in datasets", () => {
     });
 
     it("describes storage objects as files under a prefix, with no tables", () => {
-        expect(storageObjectsDataset("users/u1/")).toMatchObject({ files: { prefix: "users/u1/" }, tableNames: [] });
+        const dataset = storageObjectsDataset((subjectId) => `users/${subjectId}/`);
+
+        expect(dataset.tableNames).toStrictEqual([]);
+        expect(dataset.files?.prefix("u1")).toBe("users/u1/");
     });
 });

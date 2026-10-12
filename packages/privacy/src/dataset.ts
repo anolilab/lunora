@@ -30,8 +30,11 @@ interface TableSpec {
 
 /** The description a module writes for its dataset. */
 interface DatasetSpec {
-    /** Object-storage files the subject owns, under a key prefix. Exported and erased alongside the tables. */
-    readonly files?: { readonly prefix: string };
+    /**
+     * Object-storage files the subject owns. `prefix` returns the key prefix of one subject's
+     * files; it must be specific to that subject, because erasure deletes everything under it.
+     */
+    readonly files?: { readonly prefix: (subjectId: string) => string };
     readonly legalBasis: LegalBasis;
     readonly origin: DataOrigin;
     readonly phase?: DatasetPhase;

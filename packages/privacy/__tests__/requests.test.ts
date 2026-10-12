@@ -17,6 +17,7 @@ const memoryStore = (): RequestStore & { events: string[]; rows: Map<string, Req
         findOpen: async (subjectId, type) =>
             [...rows.values()].find((row) => row.subjectId === subjectId && row.type === type && row.status !== "completed" && row.status !== "cancelled"),
         get: async (id) => rows.get(id),
+        listForSubject: async (subjectId) => [...rows.values()].filter((row) => row.subjectId === subjectId),
         listOpen: async () => [...rows.values()],
         insert: async (record) => {
             rows.set(record.id, record);

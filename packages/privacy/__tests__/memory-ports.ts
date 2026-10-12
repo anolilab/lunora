@@ -21,6 +21,7 @@ export const memoryRequests = (): RequestStore & { events: string[]; rows: Map<s
         insert: async (record) => {
             rows.set(record.id, record);
         },
+        listForSubject: async (subjectId) => [...rows.values()].filter((row) => row.subjectId === subjectId),
         listOpen: async () => [...rows.values()].filter((row) => !isTerminal(row.status)),
         rows,
         update: async (id, patch) => {
