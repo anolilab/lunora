@@ -836,13 +836,13 @@ interface PrivacyRequestRow {
 ### `PrivacyRequestStatus` (type)
 
 ```ts
-type PrivacyRequestStatus = "cancelled" | "completed" | "expired" | "failed" | "grace" | "processing" | "ready" | "received";
+type PrivacyRequestStatus = RequestStatus;
 ```
 
 ### `PrivacyRequestType` (type)
 
 ```ts
-type PrivacyRequestType = "erasure" | "export";
+type PrivacyRequestType = RequestType;
 ```
 
 ### `PrivacyRequestsSource` (interface)
@@ -2872,6 +2872,33 @@ const MESSAGE_IDS: readonly [
 
 ```ts
 type ProbeKind = "live" | "ready";
+```
+
+### `REQUEST_STATUSES` (const)
+
+```ts
+const REQUEST_STATUSES: readonly [
+    "received",
+    "grace",
+    "processing",
+    "ready",
+    "completed",
+    "failed",
+    "cancelled",
+    "expired"
+];
+```
+
+### `RequestStatus` (type)
+
+```ts
+type RequestStatus = (typeof REQUEST_STATUSES)[number];
+```
+
+### `RequestType` (type)
+
+```ts
+type RequestType = "erasure" | "export";
 ```
 
 ### `SavedQuery` (interface)
