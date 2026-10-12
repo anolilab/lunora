@@ -79,6 +79,13 @@ interface PrivacyConfig<C> {
     readonly presets?: ReadonlyArray<PrivacyPreset>;
     /** The identifier the archive shows for the subject. Defaults to the subject id itself. */
     readonly subjectKey?: (subjectId: string) => string;
+
+    /**
+     * The HMAC secret tombstone keys are derived with. Required once the ports pass `tombstones`:
+     * an erasure and `restore` refuse to run without it. Keep it in a secret binding, and keep it
+     * stable, because a new secret no longer matches the tombstones already written.
+     */
+    readonly tombstoneSecret?: string;
 }
 
 /** Binds an invocation's context into the API. Call it once per invocation: `privacyFor(ctx).requestExport(...)`. */
@@ -212,13 +219,23 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             await setStatus(record, transition(current.status, "processing"));
         };
 
+        // Checked before anything is erased, so a missing secret never leaves an erasure completed without its tombstone.
+        const requireTombstoneSecret = (): string => {
+            if (config.tombstoneSecret === undefined || config.tombstoneSecret === "") {
+                throw new LunoraError("BAD_REQUEST", "Tombstones need a secret: pass `tombstoneSecret` to definePrivacy.");
+            }
+
+            return config.tombstoneSecret;
+        };
+
         // One erasure path for the workflow, the public entry and the operator retry: the tombstone is
         // written in every case, so a restored backup is erased again whichever path ran it.
         const eraseAndTombstone = async (record: RequestRecord): Promise<ErasureOutcome> => {
+            const secret = ports.tombstones === undefined ? undefined : requireTombstoneSecret();
             const outcome = await runErasure(contextFor(record), config.datasets, record);
 
-            if (outcome.status === "completed" && ports.tombstones !== undefined) {
-                await ports.tombstones.add(tombstoneKeyOf(record.subjectId), ports.now());
+            if (outcome.status === "completed" && ports.tombstones !== undefined && secret !== undefined) {
+                await ports.tombstones.add(tombstoneKeyOf(record.subjectId, secret), ports.now());
             }
 
             return outcome;
@@ -269,6 +286,8 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             }
 
             try {
+                const secret = ports.tombstones === undefined ? undefined : requireTombstoneSecret();
+
                 await context.step.do("start", async () => startRun(record));
 
                 for (const dataset of erasureOrder(config.datasets)) {
@@ -284,8 +303,8 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
 
                     await setStatus(record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
 
-                    if (verdict.complete && ports.tombstones !== undefined) {
-                        await ports.tombstones.add(tombstoneKeyOf(record.subjectId), ports.now());
+                    if (verdict.complete && ports.tombstones !== undefined && secret !== undefined) {
+                        await ports.tombstones.add(tombstoneKeyOf(record.subjectId, secret), ports.now());
                     }
                 });
             } catch (error) {
@@ -343,7 +362,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                     throw new LunoraError("BAD_REQUEST", "restore needs a tombstone store: pass `tombstones` to definePrivacy.");
                 }
 
-                const subjects = await subjectsToReerase(restoredSubjectIds, ports.tombstones);
+                const subjects = await subjectsToReerase(restoredSubjectIds, ports.tombstones, requireTombstoneSecret());
 
                 for (const subjectId of subjects) {
                     // Re-erase each subject's rows in the same order a first erasure uses.
