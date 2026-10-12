@@ -7,7 +7,7 @@ import type { MisconfiguredSetting } from "../telemetry/platform-metrics";
 import { recordDispatch, recordMisconfiguration, recordRecursion } from "../telemetry/platform-metrics";
 import type { Lineage } from "./lineage";
 import { formatLineageParameter, LINEAGE_HEADER, MAX_LINEAGE_DEPTH, newLineageRoot, readLineage } from "./lineage";
-import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
+import { guardProtectedPreview } from "./preview-auth";
 
 /**
  * The Lunora Cloud dispatcher Worker — a SEPARATE,
@@ -64,8 +64,17 @@ interface ConfiguredControlPlane {
     url: string;
 }
 
-/** What {@link buildResolvers} decides for one request: a configured control plane, or the settings that are missing. */
-type ControlPlaneState = ConfiguredControlPlane | { kind: "unconfigured"; missing: string };
+/** The two environment settings a control plane needs. */
+type ControlPlaneSetting = "CONTROL_PLANE_TOKEN" | "CONTROL_PLANE_URL";
+
+/** What {@link controlPlaneFor} decides for one request: a configured control plane, or the settings that are missing. */
+type ControlPlaneState = ConfiguredControlPlane | { kind: "unconfigured"; missing: ControlPlaneSetting[] };
+
+/** The operator-facing name of each setting, as it appears in refusal bodies and logs. */
+const SETTING_LABELS: Record<ControlPlaneSetting, string> = {
+    CONTROL_PLANE_TOKEN: "control plane token (CONTROL_PLANE_TOKEN secret)",
+    CONTROL_PLANE_URL: "control plane URL (CONTROL_PLANE_URL)",
+};
 
 /**
  * The one shape for a 503 the dispatcher refuses with: a stable `error` code and a
@@ -86,6 +95,9 @@ const SUSPENDED = (): Response => refuse("suspended", "this deployment is suspen
  */
 const enforced = (env: DispatcherEnv): boolean => env.LUNORA_ENVIRONMENT !== "development";
 
+/** The cell this deployment belongs to: stamped on every metric and on the `X-Lunora-Id` header. */
+const cellOf = (env: DispatcherEnv): string => env.LUNORA_CELL ?? "default";
+
 /** The settings already logged in this isolate. Each is logged once; the counter is written on every refusal. */
 const loggedMisconfigurations = new Set<MisconfiguredSetting>();
 
@@ -99,7 +111,7 @@ const refuseMisconfigured = (env: DispatcherEnv, setting: MisconfiguredSetting, 
         console.error(`[dispatcher] ${log} for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
     }
 
-    recordMisconfiguration(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default", setting });
+    recordMisconfiguration(env.PLATFORM_METRICS, { cell: cellOf(env), setting });
 };
 
 /**
@@ -194,132 +206,31 @@ const meterRequest = (
     }
 };
 
-/** Path the protection login form posts to. Owned by the dispatcher, never forwarded to the tenant. */
-const PREVIEW_AUTH_PATH = "/__lunora/preview-auth";
-
-/**
- * The password prompt. Deliberately a plain, dependency-free document: it is
- * served in front of someone else's application, so it must not assume a
- * framework, a stylesheet or a build step, and it must render identically
- * whatever the tenant happens to be.
- */
-const PREVIEW_LOGIN_STYLE =
-    "body{font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0d1117;color:#e3e8ef}" +
-    "form{display:grid;gap:12px;width:min(320px,90vw)}h1{font-size:19px;margin:0}p{margin:0;color:#97a2b0;font-size:14px}" +
-    "input,button{font:inherit;padding:9px 12px;border-radius:6px;border:1px solid #28313c}" +
-    "input{background:#161c24;color:inherit}button{background:#e3e8ef;color:#0d1117;border:0;cursor:pointer;font-weight:600}" +
-    ".e{color:#de7a70;font-size:14px}";
-
-const previewLoginPage = (failed: boolean): Response =>
-    new Response(
-        `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex">
-<title>Protected preview</title>
-<style>${PREVIEW_LOGIN_STYLE}</style></head><body>
-<form method="POST" action="${PREVIEW_AUTH_PATH}">
-<h1>This preview is protected</h1>
-<p>Enter the password shared by the project's team.</p>
-<input type="password" name="password" aria-label="Preview password" autocomplete="current-password" autofocus required><!-- secret-scanner:allow -- an autocomplete hint on a login form, not a credential -->
-${failed ? `<p class="e">That password did not match.</p>` : ""}
-<button type="submit">View preview</button>
-</form></body></html>`,
-        // 401 rather than 200: this is an authentication challenge, and a crawler
-        // or an uptime check must not record a protected preview as healthy
-        // content. `no-store` because a cached prompt would survive the login.
-        { headers: { "cache-control": "no-store", "content-type": "text/html; charset=utf-8" }, status: 401 },
-    );
-
-/**
- * Enforce deployment protection for one request, or return `undefined` to let it
- * through.
- *
- * Handles the login POST itself so the tenant never sees the password: a form
- * submission to {@link PREVIEW_AUTH_PATH} is verified against the control plane,
- * and on success the dispatcher mints its own signed cookie and redirects back.
- */
-
-/**
- * Ask the control plane whether a submitted password is the project's. Never throws.
- *
- * Forwards the END USER's address so the control plane can throttle guesses per
- * attacker. Without it every attempt keys on the dispatcher, which neither
- * isolates one grinder nor stops them throttling everybody else.
- */
-const passwordAccepted = async (password: string, scriptName: string, plane: ConfiguredControlPlane, clientIp: null | string): Promise<boolean> => {
-    try {
-        const response = await fetch(`${stripTrailingSlashes(plane.url)}/v1/tenants/preview-auth`, {
-            body: JSON.stringify({ password, scriptName }),
-            headers: {
-                authorization: `Bearer ${plane.token}`,
-                "content-type": "application/json",
-                "x-lunora-client-ip": clientIp ?? "unknown",
-            },
-            method: "POST",
-        });
-
-        if (!response.ok) {
-            return false;
-        }
-
-        const body: { ok?: boolean } = await response.json();
-
-        return body.ok === true;
-    } catch {
-        // A control-plane blip must not accept a password it never verified.
-        return false;
-    }
-};
-
-/** Handle the login form POST: verify, then mint the cookie. */
-const handlePreviewLogin = async (request: Request, scriptName: string, plane: ConfiguredControlPlane): Promise<Response> => {
-    const form = await request.formData().catch(() => undefined);
-    const password = form?.get("password");
-
-    if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, plane, request.headers.get("cf-connecting-ip")))) {
-        return previewLoginPage(true);
-    }
-
-    // 303 so the browser follows with GET — a 302 would replay the POST.
-    return new Response(null, {
-        headers: {
-            location: "/",
-            "set-cookie": previewCookieHeader(await signPreviewToken(scriptName, plane.token)),
-        },
-        status: 303,
-    });
-};
-
-const guardProtectedPreview = async (request: Request, url: URL, scriptName: string, plane: ConfiguredControlPlane): Promise<Response | undefined> => {
-    if (request.method === "POST" && url.pathname === PREVIEW_AUTH_PATH) {
-        return handlePreviewLogin(request, scriptName, plane);
-    }
-
-    const cookie = readCookie(request.headers.get("cookie"));
-
-    if (cookie !== undefined && (await verifyPreviewToken(cookie, scriptName, plane.token))) {
-        return undefined;
-    }
-
-    return previewLoginPage(false);
-};
-
 // The configured control plane for this isolate, rebuilt only when its URL or token changes: the
 // plan and custom-domain resolvers cache per control plane, so a rebuild on every request would
 // throw the cache away.
 let configured: ConfiguredControlPlane | undefined;
 
 /**
- * Decide once per request whether the control plane is configured. A missing URL or token is
- * reported as `unconfigured` with the setting names, so the caller decides what that means.
+ * The control plane for one request, read from the environment: a configured one (cached per
+ * isolate, keyed by the raw URL and token) or the setting names that are missing. The caller
+ * decides what missing settings mean; this only reports them.
  */
-const buildResolvers = (env: DispatcherEnv): ControlPlaneState => {
+const controlPlaneFor = (env: DispatcherEnv): ControlPlaneState => {
     const { CONTROL_PLANE_TOKEN: token, CONTROL_PLANE_URL: url } = env;
 
     if (!url || !token) {
-        const missing = [...(url ? [] : ["control plane URL (CONTROL_PLANE_URL)"]), ...(token ? [] : ["control plane token (CONTROL_PLANE_TOKEN secret)"])];
+        const missing: ControlPlaneSetting[] = [];
 
-        return { kind: "unconfigured", missing: missing.join(" and ") };
+        if (!url) {
+            missing.push("CONTROL_PLANE_URL");
+        }
+
+        if (!token) {
+            missing.push("CONTROL_PLANE_TOKEN");
+        }
+
+        return { kind: "unconfigured", missing };
     }
 
     const current = configured;
@@ -348,10 +259,12 @@ const buildResolvers = (env: DispatcherEnv): ControlPlaneState => {
  * silently turn all of them into no-ops. The body names the missing setting so
  * the operator needs nothing else to fix it.
  */
-const controlPlaneUnconfigured = (env: DispatcherEnv, missing: string): Response => {
-    refuseMisconfigured(env, "control_plane", `refusing all traffic: ${missing} not set`);
+const controlPlaneUnconfigured = (env: DispatcherEnv, missing: ControlPlaneSetting[]): Response => {
+    const names = missing.map((setting) => SETTING_LABELS[setting]).join(" and ");
 
-    return refuse("control_plane_unconfigured", `${missing} not set for this environment`, { retryAfter: "30" });
+    refuseMisconfigured(env, "control_plane", `refusing all traffic: ${names} not set`);
+
+    return refuse("control_plane_unconfigured", `${names} not set for this environment`, { retryAfter: "30" });
 };
 
 /**
@@ -363,8 +276,8 @@ const controlPlaneUnconfigured = (env: DispatcherEnv, missing: string): Response
  * status — this runs before the dispatch try/catch, so an invalid row would
  * otherwise 500 every request for that hostname instead of falling through.
  */
-const redirectOnlyDomain = async (url: URL, appDomain: string, plane: ConfiguredControlPlane | undefined): Promise<Response | undefined> => {
-    if (plane === undefined || url.hostname.toLowerCase().endsWith(`.${appDomain}`)) {
+const redirectOnlyDomain = async (url: URL, appDomain: string, plane: ConfiguredControlPlane): Promise<Response | undefined> => {
+    if (url.hostname.toLowerCase().endsWith(`.${appDomain}`)) {
         return undefined;
     }
 
@@ -398,10 +311,10 @@ const recursionReports = new Map<string, number>();
  * log (`POST /v1/tenants/recursion`, admin-token gated; the control plane maps
  * the script to its org from its own rows). Best-effort and throttled.
  */
-const reportRecursionStop = (plane: ConfiguredControlPlane | undefined, scriptName: string, depth: number, context: WaitUntil | undefined): void => {
+const reportRecursionStop = (plane: ConfiguredControlPlane, scriptName: string, depth: number, context: WaitUntil | undefined): void => {
     const now = Date.now();
 
-    if (plane === undefined || now - (recursionReports.get(scriptName) ?? 0) < RECURSION_REPORT_WINDOW_MS) {
+    if (now - (recursionReports.get(scriptName) ?? 0) < RECURSION_REPORT_WINDOW_MS) {
         return;
     }
 
@@ -420,21 +333,27 @@ const reportRecursionStop = (plane: ConfiguredControlPlane | undefined, scriptNa
     context?.waitUntil(sent);
 };
 
+/** A request admitted past lineage: the depth it runs at, and the request the tenant will see (header stripped). */
+interface AdmittedRequest {
+    lineage: Lineage;
+    request: Request;
+}
+
 /**
  * Decide an invocation's lineage before the tenant runs: the verified depth (0
  * for a request from outside), and the request with the lineage header
  * stripped so the tenant never sees it. A forged or stale header answers 400;
  * a chain at {@link MAX_LINEAGE_DEPTH} answers 508 unless the org's policy is
- * `allow`. Both are metered, and a termination is audited.
+ * `allow`. Both are metered, and a termination is audited through `onTerminated`
+ * (absent without a control plane, where there is no audit log to write to).
  */
 const admitLineage = async (
     request: Request,
     route: { recursion?: "allow"; scriptName: string },
     env: DispatcherEnv,
-    context: WaitUntil | undefined,
-    plane: ConfiguredControlPlane | undefined,
-): Promise<Response | { lineage: Lineage; request: Request }> => {
-    const cell = env.LUNORA_CELL ?? "default";
+    onTerminated: ((depth: number) => void) | undefined,
+): Promise<AdmittedRequest | Response> => {
+    const cell = cellOf(env);
     const header = request.headers.get(LINEAGE_HEADER);
 
     // A lineage header that cannot be verified is refused outside `development`
@@ -459,7 +378,7 @@ const admitLineage = async (
     if (lineage.depth >= MAX_LINEAGE_DEPTH) {
         if (route.recursion !== "allow") {
             recordRecursion(env.PLATFORM_METRICS, { cell, depth: lineage.depth, outcome: "terminated" });
-            reportRecursionStop(plane, route.scriptName, lineage.depth, context);
+            onTerminated?.(lineage.depth);
 
             return Response.json(
                 { depth: lineage.depth, error: "loop detected: this request re-entered Lunora Cloud too many times in one chain" },
@@ -498,90 +417,19 @@ const refusalFor = (plan: string | undefined): Response | undefined => {
     return undefined;
 };
 
-/** The protection gate for a protected preview, or `undefined`. Needs a configured control plane: the cookie is keyed by its token. */
-const protectionGate = async (
-    request: Request,
-    url: URL,
-    route: { protected?: boolean; scriptName: string },
-    plane: ConfiguredControlPlane | undefined,
-): Promise<Response | undefined> => {
-    if (plane === undefined || route.protected !== true) {
-        return undefined;
-    }
+/** The request, its URL and the environment a dispatch needs beyond the route itself. */
+interface Inbound {
+    env: DispatcherEnv;
+    request: Request;
+    url: URL;
+}
 
-    return guardProtectedPreview(request, url, route.scriptName, plane);
-};
-
-/** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
-const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
-    // The one decision on the control plane for this request. Fail closed before anything is routed,
-    // custom and redirect domains included, outside `development`.
-    const control = buildResolvers(env);
-
-    if (control.kind === "unconfigured" && enforced(env)) {
-        return controlPlaneUnconfigured(env, control.missing);
-    }
-
-    // A configured control plane, or — only under `development` — none at all, which serves the free tier.
-    const plane = control.kind === "configured" ? control : undefined;
-    const url = new URL(request.url);
-    const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
-
-    const redirect = await redirectOnlyDomain(url, appDomain, plane);
-
-    if (redirect) {
-        return redirect;
-    }
-
-    const route = await resolveTenant(url.hostname, {
-        appDomain,
-        resolveCustomDomain: async (hostname) => {
-            const custom = await plane?.customDomainResolver(hostname);
-
-            return custom?.scriptName ?? null;
-        },
-        resolvePlan: plane?.planResolver,
-    });
-
-    if (!route) {
-        return NOT_FOUND("no tenant for this hostname");
-    }
-
-    // Admission (GAPS.md C1, plan 365 W3): only a verified servable plan is
-    // served. `suspended` is a suspended or over-cap org; `unknown` a script no
-    // verified row serves; anything else a lookup that failed or answered
-    // nonsense — refused, never served on a default tier. Without a control plane
-    // (`plane` undefined) only the environment's `development` gets here, and it
-    // is the one place the free tier is served.
-    const plan = plane === undefined ? "free" : route.plan;
-    const refused = refusalFor(plan);
-
-    if (refused) {
-        return refused;
-    }
-
-    // Deployment protection. A preview URL is publicly addressable the moment
-    // it exists — that is what makes it shareable, and also what serves
-    // unreleased work to anyone forwarded the link. When the project has a
-    // password, nothing reaches the tenant until a valid signed cookie does.
-    //
-    // Gated BEFORE dispatch, deliberately: a check inside the tenant would run
-    // the tenant's own code (and bill for it) on every unauthenticated probe.
-    const gate = await protectionGate(request, url, route, plane);
-
-    if (gate) {
-        return gate;
-    }
-
-    // Recursion protection (plan 365 W5): the invocation's depth, from a verified
-    // lineage header or 0 for a request from outside. Decided here, server-side,
-    // before the tenant runs — so a refused loop never bills the tenant invocation.
-    const lineage = await admitLineage(request, route, env, context, plane);
-
-    if (lineage instanceof Response) {
-        return lineage;
-    }
-
+/**
+ * Dispatch one admitted request to its tenant and meter the outcome, a failed dispatch included.
+ * The timing starts here, after admission, so the duration is the tenant's own work.
+ */
+const dispatchTo = async (route: { plan?: string; scriptName: string }, admitted: AdmittedRequest, inbound: Inbound): Promise<Response> => {
+    const { env, request, url } = inbound;
     // Captured outside the `try` so the catch can still measure how long the
     // failing dispatch took.
     const startedAt = Date.now();
@@ -591,14 +439,14 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
         // plan, falling back to the free tier when the plan is unknown. The
         // lineage rides to the Outbound Worker as a binding parameter, which
         // tenant code can neither read nor set.
-        const limits = limitsForPlan(plan);
-        const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits, outbound: { lineage: formatLineageParameter(lineage.lineage) } });
+        const limits = limitsForPlan(route.plan);
+        const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits, outbound: { lineage: formatLineageParameter(admitted.lineage) } });
         // A WebSocket upgrade returns a 101 response carrying `webSocket`;
         // returning it verbatim hands the hibernatable socket back to the
         // eyeball (Lunora's `/_lunora/ws` subscription path). Post-upgrade
         // message invocations run inside the tenant's DO, not back through
         // this dispatcher — see spikes/ws-dispatch for the live validation.
-        const response = await userWorker.fetch(lineage.request);
+        const response = await userWorker.fetch(admitted.request);
 
         meterRequest(env.USAGE_ANALYTICS, request, response, route, url, startedAt);
 
@@ -610,7 +458,7 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
 
         const stamped = new Response(response.body, response);
 
-        stamped.headers.set("x-lunora-id", `${env.LUNORA_CELL ?? "default"}:${route.scriptName}`);
+        stamped.headers.set("x-lunora-id", `${cellOf(env)}:${route.scriptName}`);
 
         return stamped;
     } catch (error) {
@@ -638,6 +486,113 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
     }
 };
 
+/**
+ * Route a request under a configured control plane. Every check the control plane
+ * answers runs before the tenant does: redirects, custom domains, the plan
+ * (admission), preview protection, then lineage.
+ */
+const serveVerified = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined, plane: ConfiguredControlPlane): Promise<Response> => {
+    const url = new URL(request.url);
+    const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
+
+    const redirect = await redirectOnlyDomain(url, appDomain, plane);
+
+    if (redirect) {
+        return redirect;
+    }
+
+    const route = await resolveTenant(url.hostname, {
+        appDomain,
+        resolveCustomDomain: async (hostname) => {
+            const custom = await plane.customDomainResolver(hostname);
+
+            return custom?.scriptName ?? null;
+        },
+        resolvePlan: plane.planResolver,
+    });
+
+    if (!route) {
+        return NOT_FOUND("no tenant for this hostname");
+    }
+
+    // Admission (GAPS.md C1, plan 365 W3): only a verified servable plan is
+    // served. `suspended` is a suspended or over-cap org; `unknown` a script no
+    // verified row serves; anything else a lookup that failed or answered
+    // nonsense — refused, never served on a default tier.
+    const refused = refusalFor(route.plan);
+
+    if (refused) {
+        return refused;
+    }
+
+    // Deployment protection. A preview URL is publicly addressable the moment
+    // it exists — that is what makes it shareable, and also what serves
+    // unreleased work to anyone forwarded the link. When the project has a
+    // password, nothing reaches the tenant until a valid signed cookie does.
+    //
+    // Gated BEFORE dispatch, deliberately: a check inside the tenant would run
+    // the tenant's own code (and bill for it) on every unauthenticated probe.
+    if (route.protected === true) {
+        const gate = await guardProtectedPreview(request, url, route.scriptName, { token: plane.token, url: stripTrailingSlashes(plane.url) });
+
+        if (gate) {
+            return gate;
+        }
+    }
+
+    // Recursion protection (plan 365 W5): the invocation's depth, from a verified
+    // lineage header or 0 for a request from outside. Decided here, server-side,
+    // before the tenant runs — so a refused loop never bills the tenant invocation.
+    const admitted = await admitLineage(request, route, env, (depth) => {
+        reportRecursionStop(plane, route.scriptName, depth, context);
+    });
+
+    if (admitted instanceof Response) {
+        return admitted;
+    }
+
+    return dispatchTo(route, admitted, { env, request, url });
+};
+
+/**
+ * Route a request with no control plane. Only `development` reaches this (see `serve`): there is
+ * no plan, custom domain, protection or suspension to check, so the tenant is served on the free
+ * tier with lineage still honoured.
+ */
+const serveUnverified = async (request: Request, env: DispatcherEnv): Promise<Response> => {
+    const url = new URL(request.url);
+    const route = await resolveTenant(url.hostname, { appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app" });
+
+    if (!route) {
+        return NOT_FOUND("no tenant for this hostname");
+    }
+
+    const admitted = await admitLineage(request, route, env, undefined);
+
+    if (admitted instanceof Response) {
+        return admitted;
+    }
+
+    return dispatchTo({ ...route, plan: "free" }, admitted, { env, request, url });
+};
+
+/** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
+const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
+    // The one decision on the control plane for this request. Outside `development`
+    // a missing control plane refuses everything, custom and redirect domains included.
+    const control = controlPlaneFor(env);
+
+    if (control.kind === "configured") {
+        return serveVerified(request, env, context, control);
+    }
+
+    if (enforced(env)) {
+        return controlPlaneUnconfigured(env, control.missing);
+    }
+
+    return serveUnverified(request, env);
+};
+
 export default {
     /**
      * Every request, timed end to end for the platform's own latency and outcome
@@ -646,7 +601,7 @@ export default {
      */
     async fetch(request: Request, env: DispatcherEnv, context?: WaitUntil): Promise<Response> {
         const startedAt = Date.now();
-        const cell = env.LUNORA_CELL ?? "default";
+        const cell = cellOf(env);
 
         try {
             const response = await serve(request, env, context);
