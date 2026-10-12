@@ -32,10 +32,8 @@ When a plan ships: delete its file and remove its row here in the same change.
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                                               | decisions D1–D6 open; Phase 0 first                           |
 | [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                                    | replay engine, frame handlers, admin surface; decisions D1–D3 |
-| [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot                   | P2 bug; breaking for id-less runtimes                         |
-| [481](./481-presence-bounded-members-and-sweep.md)     | Cap presence sessions after dedup; bound the sweep read                                | P2 perf/bug; workerd gate                                     |
-| [482](./482-ratelimit-db-store-atomic-consume.md)      | Reproduce the database rate-limit lost update on workerd, then make consume atomic     | P2; repro not yet confirmed; workerd gate                     |
-| [488](./488-node-dispatch-route-for-queues.md)         | Serve the Node scheduler dispatch route so queue and topic handlers can call functions | P2; option B recorded; keeps `emulated`                       |
+| [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot | blocked: needs a read-only check of production pool rows for `inFlightIds` |
+| [482](./482-ratelimit-db-store-atomic-consume.md) | Make the ratelimit consume atomic on the D1-backed `.global()` table | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress) |
 | [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                                   | umbrella; phase/exit-criteria tracker for `alpha → main`      |
 | [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                                         | P2                                                            |
 | [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts                               | spike; deliverable is a decision                              |
@@ -63,6 +61,8 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 | 485  | Stop presence `setData` heartbeats before mount or on the server            | c52580876, 7ac090ea7 |
 | 486  | Gate raw data-read and observability MCP tools behind scopes                | ed2a1abe3, 88b7c1997 |
 | 487  | Never send the master admin token in a WebSocket URL                        | 5e89bec39            |
+| 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722) |
+| 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722) |
 
 ## Reference designs
 
