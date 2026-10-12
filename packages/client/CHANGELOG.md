@@ -1,3 +1,19 @@
+## @lunora/client [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.195...@lunora/client@1.0.0-alpha.196) (2026-10-11)
+
+### Bug Fixes
+
+* **client:** reject auth admin calls on a closed client ([#1118](https://github.com/anolilab/lunora/issues/1118)) ([9c7312e](https://github.com/anolilab/lunora/commit/9c7312ea889ffb33793d99a1faa37cb4b7dbfea7))
+
+### Code Refactoring
+
+* **client:** extract follower subscription frames ([#1115](https://github.com/anolilab/lunora/issues/1115)) ([db384f9](https://github.com/anolilab/lunora/commit/db384f9affea7dba93bbfaa564e84a5176ecc245)), closes [#1112](https://github.com/anolilab/lunora/issues/1112)
+* **client:** extract tab leadership hooks ([#1114](https://github.com/anolilab/lunora/issues/1114)) ([0bd035b](https://github.com/anolilab/lunora/commit/0bd035b0d3ac38c6c5624c8bfb600045f47d4d51))
+* **client:** move poke buffering and commit out of the class ([#1106](https://github.com/anolilab/lunora/issues/1106)) ([0029b52](https://github.com/anolilab/lunora/commit/0029b521b34ddeae95a9672203bcac93b86fbe8a)), closes [#1107](https://github.com/anolilab/lunora/issues/1107) [#1108](https://github.com/anolilab/lunora/issues/1108) [#1109](https://github.com/anolilab/lunora/issues/1109) [#1110](https://github.com/anolilab/lunora/issues/1110)
+* **client:** move the admin methods into per-area modules ([#1117](https://github.com/anolilab/lunora/issues/1117)) ([c08ee31](https://github.com/anolilab/lunora/commit/c08ee31bb22eee76fa2488093c50f58ca7987b25))
+* **client:** move the shape row fan-out out of the class ([#1116](https://github.com/anolilab/lunora/issues/1116)) ([dea0bb0](https://github.com/anolilab/lunora/commit/dea0bb0228d1a28526281a51ee573ab1d4b51c9c))
+* **client:** remove the error router and cover the epoch-without-cursor rule ([#1112](https://github.com/anolilab/lunora/issues/1112)) ([3e529a1](https://github.com/anolilab/lunora/commit/3e529a1341d4bf56f46b0bee596d28e091ba5f41))
+* **client:** service error reuse, wire-helper tests, and plan trail ([#1105](https://github.com/anolilab/lunora/issues/1105)) ([8597a6b](https://github.com/anolilab/lunora/commit/8597a6b7277ee25286de4bb9223c5de6d4445430))
+
 ## @lunora/client [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.194...@lunora/client@1.0.0-alpha.195) (2026-10-10)
 
 ### Bug Fixes
