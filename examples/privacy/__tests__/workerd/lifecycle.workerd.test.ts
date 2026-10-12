@@ -198,7 +198,14 @@ describe("privacy example lifecycle (workerd)", () => {
         await withShard(async (db) => {
             await seed(db);
 
-            const reerased = await privacyFor(contextFor(db, "restore")).restore({ restoredSubjectIds: [SUBJECT, OTHER] });
+            // The restore workflow the operator's `restorePrivacyErasures` starts, with the ids the restored shard holds.
+            const reerased = await privacyWorkflows.restoreHandler(
+                workflowContext({
+                    env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+                    params: { restoredSubjectIds: [SUBJECT, OTHER] },
+                    run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
+                }),
+            );
 
             expect(reerased).toStrictEqual([SUBJECT]);
             await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);

@@ -49,9 +49,11 @@ export interface WorkflowReference<Params = Record<string, unknown>> {
 export interface WorkflowsRef {
     privacyErasure: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.privacyErasure>>;
     privacyExport: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.privacyExport>>;
+    privacyRestore: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.privacyRestore>>;
 }
 
 export const workflows: WorkflowsRef = {
     privacyErasure: { isLunoraWorkflow: true, className: "PrivacyErasureWorkflow", name: "privacyErasure" },
     privacyExport: { isLunoraWorkflow: true, className: "PrivacyExportWorkflow", name: "privacyExport" },
+    privacyRestore: { isLunoraWorkflow: true, className: "PrivacyRestoreWorkflow", name: "privacyRestore" },
 };

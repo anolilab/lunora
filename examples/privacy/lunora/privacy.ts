@@ -24,8 +24,16 @@ export const tasksData = defineDataset("tasks", {
     tables: { tasks: {} },
 });
 
-/** A query's or a mutation's context, or a workflow step's context, which reaches the database through `ctx.run`. */
-export type PrivacyContext = MutationCtx | QueryCtx | WorkflowRunContext<{ requestId: string }>;
+/** The params of the restore workflow: the subject ids the restored shard holds. */
+export interface RestoreParameters {
+    restoredSubjectIds: string[];
+}
+
+/** A request's workflow, or the restore workflow. Both reach the database through `ctx.run`. */
+type PrivacyWorkflowRun = WorkflowRunContext<RestoreParameters> | WorkflowRunContext<{ requestId: string }>;
+
+/** A query's or a mutation's context, or a workflow's. */
+export type PrivacyContext = MutationCtx | PrivacyWorkflowRun | QueryCtx;
 
 /**
  * The HMAC secret that keys the erasure tombstones. Set `PRIVACY_TOMBSTONE_SECRET` as a Worker
@@ -35,7 +43,7 @@ export type PrivacyContext = MutationCtx | QueryCtx | WorkflowRunContext<{ reque
 const tombstoneSecret = process.env.PRIVACY_TOMBSTONE_SECRET;
 
 /** A workflow step's ports: the shard through `ctx.run`, and the tombstones, which live outside it, through `ctx.env`. */
-const workflowPorts = (context: WorkflowRunContext<{ requestId: string }>) => {
+const workflowPorts = (context: PrivacyWorkflowRun) => {
     return {
         ...remotePorts(async (call) => context.run(internal.requests.privacyPort, call)),
         tombstones: tombstonesFrom(context.env),
@@ -57,10 +65,19 @@ export const privacyConfig: PrivacyConfig<PrivacyContext> = {
 export const privacyFor = definePrivacy(privacyConfig);
 
 /**
+ * After a point-in-time restore of the shard, erase again every restored subject the tombstone store
+ * says was erased. The package reads the tombstone keys and re-runs each dataset's erasure, which is
+ * idempotent, so a retried step finishes the work rather than repeating it. Returns the re-erased ids.
+ */
+const restoreHandler = async (context: WorkflowRunContext<RestoreParameters>): Promise<string[]> =>
+    context.step.do("restore", async () => [...(await privacyFor(context).restore({ restoredSubjectIds: context.params.restoredSubjectIds }))]);
+
+/**
  * The durable handlers. Each one binds the ports from its own context, so the step
  * functions run against the database through `ctx.run`.
  */
 export const privacyWorkflows = {
     erasureHandler: async (context: WorkflowRunContext<{ requestId: string }>): Promise<void> => privacyFor(context).workflows.erasureHandler(context),
     exportHandler: async (context: WorkflowRunContext<{ requestId: string }>): Promise<void> => privacyFor(context).workflows.exportHandler(context),
+    restoreHandler,
 };

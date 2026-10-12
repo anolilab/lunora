@@ -7,6 +7,7 @@ import type { FunctionReference } from "lunorash/client";
 export interface InternalApiTypes {
     admin: {
         listOpenPrivacyRequests: FunctionReference<"query", {}, import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
+        restorePrivacyErasures: FunctionReference<"action", {}, { id: string; subjects: number; }>;
         retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
     };
     requests: {
@@ -19,6 +20,7 @@ export interface InternalApiTypes {
 export const internal: InternalApiTypes = {
     admin: {
         listOpenPrivacyRequests: { __lunoraRef: "admin:listOpenPrivacyRequests" },
+        restorePrivacyErasures: { __lunoraRef: "admin:restorePrivacyErasures" },
         retryPrivacyRequest: { __lunoraRef: "admin:retryPrivacyRequest" },
     },
     requests: {

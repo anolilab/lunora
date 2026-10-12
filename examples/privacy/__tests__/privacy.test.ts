@@ -169,6 +169,29 @@ describe("privacy example", () => {
         await expect(t.withIdentity(OTHER).mutation(cancelRequest, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
+    it("erases a restored subject again through the restore workflow, and leaves the others", async () => {
+        expect.assertions(3);
+
+        const request = await openErasure(t, SUBJECT.userId);
+
+        await privacyWorkflows.erasureHandler(contextFor(t, request.id, tombstones));
+
+        // A point-in-time restore brings the subject's rows back; the tombstone store keeps its keys.
+        await t.withIdentity(SUBJECT).mutation(addTask, { title: "book flights" });
+
+        const reerased = await privacyWorkflows.restoreHandler(
+            workflowContext({
+                env: { PRIVACY_TOMBSTONES: tombstones },
+                params: { restoredSubjectIds: [SUBJECT.userId, OTHER.userId] },
+                run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
+            }),
+        );
+
+        expect(reerased).toStrictEqual([SUBJECT.userId]);
+        await expect(t.withIdentity(SUBJECT).query(myTasks, {})).resolves.toStrictEqual([]);
+        await expect(t.withIdentity(OTHER).query(myTasks, {})).resolves.toHaveLength(1);
+    });
+
     it("refuses an erasure from a session with no issued-at claim", async () => {
         expect.assertions(1);
 

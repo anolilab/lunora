@@ -35,6 +35,13 @@
             },
             "name": "privacy-export",
         },
+        "PrivacyRestoreWorkflow": {
+            "type": "workflow",
+            "limits": {
+                "steps": 25000,
+            },
+            "name": "privacy-restore",
+        },
     },
     "triggers": {
         "crons": ["0 6 * * *"],

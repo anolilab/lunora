@@ -150,6 +150,7 @@ type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params
 export interface LunoraWorkflows {
     get(name: "privacyErasure"): WorkflowHandle<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.privacyErasure>>;
     get(name: "privacyExport"): WorkflowHandle<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.privacyExport>>;
+    get(name: "privacyRestore"): WorkflowHandle<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.privacyRestore>>;
 }
 
 /**

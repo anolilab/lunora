@@ -62,6 +62,7 @@ export interface RegisteredLunoraFunction {
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "admin:listOpenPrivacyRequests": lunora_admin_0.listOpenPrivacyRequests as unknown as RegisteredLunoraFunction,
+    "admin:restorePrivacyErasures": lunora_admin_0.restorePrivacyErasures as unknown as RegisteredLunoraFunction,
     "admin:retryPrivacyRequest": lunora_admin_0.retryPrivacyRequest as unknown as RegisteredLunoraFunction,
     "requests:cancelRequest": lunora_requests_1.cancelRequest as unknown as RegisteredLunoraFunction,
     "requests:downloadUrl": lunora_requests_1.downloadUrl as unknown as RegisteredLunoraFunction,
@@ -171,6 +172,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     admin: {
         listOpenPrivacyRequests: (args?: {}) => Promise<import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
+        restorePrivacyErasures: (args?: {}) => Promise<{ id: string; subjects: number; }>;
         retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
     };
     requests: {
@@ -228,6 +230,7 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 export const createCaller = (context: CallerCtx): Caller => ({
     admin: {
         listOpenPrivacyRequests: (args) => callRegistered(context, "admin:listOpenPrivacyRequests", args),
+        restorePrivacyErasures: (args) => callRegistered(context, "admin:restorePrivacyErasures", args),
         retryPrivacyRequest: (args) => callRegistered(context, "admin:retryPrivacyRequest", args),
     },
     requests: {

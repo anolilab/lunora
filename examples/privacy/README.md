@@ -23,16 +23,20 @@ data, erases it, cancels a pending erasure, and sees their requests.
   `privacyErasure`. The workflow sleeps through the grace, erases the rows one dataset
   at a time, then verifies that every table reads zero. A `cancelRequest` during the
   grace stops it.
-- **Deadlines.** A daily cron runs the internal `privacyTick`, which lists requests
-  due within seven days and any already overdue.
+- **Deadlines and housekeeping.** A daily cron runs the internal `privacyTick`, which
+  lists requests due within seven days and any already overdue, and `privacySweep`,
+  which expires finished exports past their download window and purges the archive.
 - **Tombstones outside the shard.** A completed erasure records an HMAC of the subject
   id in the `PRIVACY_TOMBSTONES` Durable Object (`src/server/privacy-tombstones-do.ts`),
   not in the shard. `lunora backup pitr --restore` rolls the shard back, and a tombstone
   stored there would be rolled back with the rows it exists to re-erase. Only the
   erasure workflow reaches the store (through `ctx.env`), so an erasure run from a
   mutation is refused rather than completed without its tombstone.
-- **Operator view.** `lunora/admin.ts` holds two internal functions, the open list
-  (`admin.open()`) and a retry of a failed request. They are what a Studio
+- **After a restore.** Call the internal `admin:restorePrivacyErasures` once the shard is
+  restored. It starts `privacyRestore` with every subject the restored `tasks` table
+  holds; the workflow reads the tombstones and erases those subjects again.
+- **Operator view.** `lunora/admin.ts` holds the internal open list (`admin.open()`)
+  and a retry of a failed request. They are what a Studio
   `privacyRequests` source calls. A failed erasure is retried by restarting its
   workflow, which is the only path that writes its tombstone. Extending a deadline is
   an operator decision with a reason, so no client function offers it.
@@ -41,21 +45,21 @@ data, erases it, cancels a pending erasure, and sees their requests.
 
 ## Layout
 
-| File                                  | Role                                                                       |
-| ------------------------------------- | -------------------------------------------------------------------------- |
-| `lunora/schema.ts`                    | `tasks`, the export parts table, rate limits, and `privacyExtension`       |
-| `lunora/tasks.ts`                     | the task list the subject owns                                             |
-| `lunora/privacy.ts`                   | the dataset, `definePrivacy`, and the workflow handlers                    |
-| `lunora/privacy-ports.ts`             | the request store, dataset reader and file ports over `ctx.db`             |
-| `lunora/privacy-tombstones.ts`        | the tombstone port over the `PRIVACY_TOMBSTONES` Durable Object            |
-| `src/server/privacy-tombstones-do.ts` | the tombstone store, with its own SQLite outside the shard                 |
-| `lunora/admin.ts`                     | the operator's open list and retry, for the Studio's Privacy requests page |
-| `lunora/requests.ts`                  | the client functions, and the internal `privacyTick` and `privacyPort`     |
-| `lunora/workflows.ts`                 | `privacyExport` and `privacyErasure`, built from the package's handlers    |
-| `lunora/crons.ts`                     | the daily deadline sweep                                                   |
-| `lunora/subject.ts`                   | the subject and session age, taken from the caller's session               |
-| `lunora/limits.ts`                    | the rate limit every public write shares                                   |
-| `__tests__/privacy.test.ts`           | export, download, erasure, cancel and the session check                    |
+| File                                  | Role                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------- |
+| `lunora/schema.ts`                    | `tasks`, the export parts table, rate limits, and `privacyExtension` |
+| `lunora/tasks.ts`                     | the task list the subject owns                                       |
+| `lunora/privacy.ts`                   | the dataset, `definePrivacy`, and the workflow handlers              |
+| `lunora/privacy-ports.ts`             | the request store, dataset reader and file ports over `ctx.db`       |
+| `lunora/privacy-tombstones.ts`        | the tombstone port over the `PRIVACY_TOMBSTONES` Durable Object      |
+| `src/server/privacy-tombstones-do.ts` | the tombstone store, with its own SQLite outside the shard           |
+| `lunora/admin.ts`                     | the operator's open list, retry and post-restore re-erasure          |
+| `lunora/requests.ts`                  | the client functions, and the internal tick, sweep and `privacyPort` |
+| `lunora/workflows.ts`                 | `privacyExport`, `privacyErasure` and `privacyRestore`               |
+| `lunora/crons.ts`                     | the daily deadline check and the housekeeping sweep                  |
+| `lunora/subject.ts`                   | the subject and session age, taken from the caller's session         |
+| `lunora/limits.ts`                    | the rate limit every public write shares                             |
+| `__tests__/privacy.test.ts`           | export, download, erasure, cancel and the session check              |
 
 ## Run it
 
