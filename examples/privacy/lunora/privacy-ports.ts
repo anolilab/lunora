@@ -7,19 +7,26 @@
  * format is JSON with tagged values, so a `Date`, a `Set`, a byte array and `undefined`
  * survive the hop.
  */
-import type { DataPort, Dataset, PrivacyPorts, RequestRecord, RequestStore, StorePort } from "@lunora/privacy";
-import { ERASE_BATCH, isTerminal } from "@lunora/privacy";
+import type { DataPort, Dataset, PrivacyPorts, RequestRecord, RequestStore, RowDisposition, StorePort } from "@lunora/privacy";
+import { dispositionFor, ERASE_BATCH, isTerminal } from "@lunora/privacy";
 import type { WorkflowRunContext } from "@lunora/workflow";
 import { LunoraError } from "lunorash/errors";
 
 import type { Doc as Document_ } from "./_generated/dataModel.js";
 import { internal } from "./_generated/internal.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import { presets } from "./privacy-presets";
 
 type RequestRow = Document_<"privacy_requests">;
 
 /** A query can read the ports but not write them; a mutation can do both. */
 type LocalContext = MutationCtx | QueryCtx;
+
+/**
+ * The erasure verdict for a row, from the presets' retention rules. The workflow cannot send a
+ * function over the wire, so the dispatcher derives it here; a mutation's own call passes its own.
+ */
+const DISPOSITION: RowDisposition = dispositionFor(new Map(presets.flatMap((preset) => preset.retention).map((rule) => [rule.id, rule] as const)));
 
 /** Every status except the two terminal ones, which `isTerminal` names. */
 const OPEN_STATUSES: ReadonlyArray<RequestRow["status"]> = ["received", "grace", "processing", "ready", "failed"];
@@ -107,6 +114,14 @@ const requestStore = (ctx: LocalContext): RequestStore => {
                 ...(record.erasureGraceUntil === undefined ? {} : { erasureGraceUntil: record.erasureGraceUntil.getTime() }),
             });
         },
+        listForSubject: async (subjectId) => {
+            const rows = await ctx.db
+                .query("privacy_requests")
+                .withIndex("bySubject", (q) => q.eq("subjectId", subjectId))
+                .collect();
+
+            return rows.map((row) => toRecord(row));
+        },
         listOpen: async () => {
             // Read per open status through the status index, so the sweep never scans the table.
             const batches = await Promise.all(
@@ -146,7 +161,7 @@ const dataPort = (ctx: LocalContext): DataPort => {
                 }),
             };
         },
-        eraseBatch: async (dataset, subjectId) => {
+        eraseBatch: async (dataset, subjectId, now, disposition) => {
             requireTasks(dataset);
 
             const rows = await ctx.db
@@ -156,7 +171,17 @@ const dataPort = (ctx: LocalContext): DataPort => {
 
             const database = writerOf(ctx);
 
-            await Promise.all(rows.map(async (row) => database.delete(row._id)));
+            // Tasks carry no retention rule, so every row is deleted. Any other verdict is a
+            // configuration this example does not write, and it fails loudly rather than guessing.
+            await Promise.all(
+                rows.map(async (row) => {
+                    if (disposition(dataset, "tasks", { ...row }, now).kind !== "delete") {
+                        throw new LunoraError("INTERNAL", "privacy-example has no retention rule for tasks.");
+                    }
+
+                    await database.delete(row._id);
+                }),
+            );
 
             return { hasMore: rows.length === ERASE_BATCH };
         },
@@ -171,6 +196,16 @@ const dataPort = (ctx: LocalContext): DataPort => {
             return { tasks: rows.length };
         },
     };
+};
+
+/** The stored file a `${requestId}/${name}` key names, or `null`. */
+const fileRowOf = async (ctx: LocalContext, key: string) => {
+    const [requestId = "", ...rest] = key.split("/");
+
+    return ctx.db
+        .query("exportFiles")
+        .withIndex("byRequestAndName", (q) => q.eq("requestId", requestId).eq("name", rest.join("/")))
+        .first();
 };
 
 /**
@@ -205,6 +240,22 @@ const filePort = (ctx: LocalContext): StorePort => {
             return row?.encoding === "text" ? row.body : undefined;
         },
         signedUrl: (key, ttlSeconds) => Promise.resolve(`/privacy/files/${key}?expires_in=${String(ttlSeconds)}`),
+        delete: async (key) => {
+            const row = await fileRowOf(ctx, key);
+
+            if (row !== null) {
+                await writerOf(ctx).delete(row._id);
+            }
+        },
+        list: async (prefix) => {
+            const requestId = prefix.split("/")[0] ?? "";
+            const rows = await ctx.db
+                .query("exportFiles")
+                .withIndex("byRequestAndName", (q) => q.eq("requestId", requestId))
+                .collect();
+
+            return rows.map((row) => `${row.requestId}/${row.name}`).filter((key) => key.startsWith(prefix));
+        },
     };
 };
 
@@ -221,11 +272,27 @@ const tombstonePort = (ctx: LocalContext): Tombstones => {
     };
 };
 
-/** The ports for one call: a mutation's, a query's (reads only), or the workflow's dispatcher. */
-export const localPorts = (ctx: LocalContext): PrivacyPorts => {
+/**
+ * The authenticated subject a call acts for. Resolved by the handler from its session
+ * before the call (`identityOf`), never from an argument.
+ */
+export type CallIdentity = ReturnType<PrivacyPorts["identity"]>;
+
+/**
+ * The ports for one call: a mutation's, a query's (reads only), or the workflow's dispatcher.
+ * `identity` is set only for a subject's own call; an operator call or a workflow step has none.
+ */
+export const localPorts = (ctx: LocalContext, identity?: CallIdentity): PrivacyPorts => {
     return {
         data: dataPort(ctx),
         files: filePort(ctx),
+        identity: () => {
+            if (identity === undefined) {
+                throw new LunoraError("INTERNAL", "This privacy call has no authenticated subject.");
+            }
+
+            return identity;
+        },
         newId: () => crypto.randomUUID(),
         now: () => new Date(),
         store: requestStore(ctx),
@@ -312,7 +379,7 @@ type PortCall = (ports: PrivacyPorts, values: ReadonlyArray<unknown>) => Promise
 
 const PORT_CALLS: Readonly<Record<string, PortCall>> = {
     "data.collect": (ports, values) => ports.data.collect(values[0] as Dataset, values[1] as string),
-    "data.eraseBatch": (ports, values) => ports.data.eraseBatch(values[0] as Dataset, values[1] as string, values[2] as Date),
+    "data.eraseBatch": (ports, values) => ports.data.eraseBatch(values[0] as Dataset, values[1] as string, values[2] as Date, DISPOSITION),
     "data.remaining": (ports, values) => ports.data.remaining(values[0] as Dataset, values[1] as string),
     "files.put": (ports, values) => ports.files.put(values[0] as string, values[1] as Parameters<StorePort["put"]>[1]),
     "files.read": (ports, values) => ports.files.read(values[0] as string, values[1] as string),
@@ -321,6 +388,9 @@ const PORT_CALLS: Readonly<Record<string, PortCall>> = {
     "store.findOpen": (ports, values) => ports.store.findOpen(values[0] as string, values[1] as RequestRecord["type"]),
     "store.get": (ports, values) => ports.store.get(values[0] as string),
     "store.insert": (ports, values) => ports.store.insert(values[0] as RequestRecord),
+    "files.delete": (ports, values) => ports.files.delete(values[0] as string),
+    "files.list": (ports, values) => ports.files.list(values[0] as string),
+    "store.listForSubject": (ports, values) => ports.store.listForSubject(values[0] as string),
     "store.listOpen": (ports) => ports.store.listOpen(),
     "store.update": (ports, values) => ports.store.update(values[0] as string, values[1] as Partial<Omit<RequestRecord, "id">>),
     "tombstones.add": (ports, values) => requireTombstones(ports).add(values[0] as string, values[1] as Date),
@@ -369,9 +439,16 @@ export const remotePorts = (run: WorkflowRunContext["run"]): PrivacyPorts => {
             remaining: async (dataset, subjectId) => (await call("data.remaining", [dataset, subjectId])) as Record<string, number>,
         },
         files: {
+            delete: async (key) => {
+                await call("files.delete", [key]);
+            },
+            list: async (prefix) => (await call("files.list", [prefix])) as ReadonlyArray<string>,
             put: async (requestId, file) => (await call("files.put", [requestId, file])) as string,
             read: async (requestId, name) => maybe<string>("files.read", [requestId, name]),
             signedUrl: async (key, ttlSeconds) => (await call("files.signedUrl", [key, ttlSeconds])) as string,
+        },
+        identity: () => {
+            throw new LunoraError("INTERNAL", "A workflow step has no authenticated subject.");
         },
         newId: () => crypto.randomUUID(),
         now: () => new Date(),
@@ -384,6 +461,7 @@ export const remotePorts = (run: WorkflowRunContext["run"]): PrivacyPorts => {
             insert: async (record) => {
                 await call("store.insert", [record]);
             },
+            listForSubject: async (subjectId) => (await call("store.listForSubject", [subjectId])) as ReadonlyArray<RequestRecord>,
             listOpen: async () => (await call("store.listOpen", [])) as ReadonlyArray<RequestRecord>,
             update: async (id, patch) => {
                 await call("store.update", [id, patch]);

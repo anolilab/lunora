@@ -7,5 +7,6 @@ export default defineConfig({
     test: {
         environment: "node",
         include: ["__tests__/**/*.test.ts"],
+        env: { PRIVACY_TOMBSTONE_SECRET: "example-test-secret" },
     },
 });

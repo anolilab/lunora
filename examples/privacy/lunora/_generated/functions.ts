@@ -159,13 +159,13 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     requests: {
-        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled"; type: "export" | "erasure" }>;
+        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
         downloadUrl: (args: { requestId: string }) => Promise<string>;
-        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled"; type: "export" | "erasure" }[]>;
+        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }[]>;
         privacyPort: (args: { method: string; payload: string }) => Promise<string>;
         privacyTick: (args?: {}) => Promise<{ approaching: string[]; overdue: string[]; }>;
-        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled"; type: "export" | "erasure" }>;
-        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled"; type: "export" | "erasure" }>;
+        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
+        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
     };
     tasks: {
         addTask: (args: { title: string }) => Promise<Id<"tasks">>;

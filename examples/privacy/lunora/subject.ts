@@ -19,9 +19,20 @@ export const subjectOf = (ctx: { auth: { userId?: null | string } }): string => 
  * session with no `iat` is treated as infinitely old, so an erasure is refused: the
  * package refuses an erasure from a sign-in older than 24 hours.
  */
-export const sessionAgeMs = async (ctx: { auth: { getIdentity: () => Promise<Record<string, unknown> | null> }; now: number }): Promise<number> => {
+const sessionAgeMs = async (ctx: { auth: { getIdentity: () => Promise<Record<string, unknown> | null> }; now: number }): Promise<number> => {
     const identity = await ctx.auth.getIdentity();
     const issuedAt = identity?.iat;
 
     return typeof issuedAt === "number" ? ctx.now - issuedAt * 1000 : Number.POSITIVE_INFINITY;
+};
+
+/** The authenticated subject and the age of their sign-in, for the privacy ports. */
+export const identityOf = async (ctx: {
+    auth: { getIdentity: () => Promise<Record<string, unknown> | null>; userId?: null | string };
+    now: number;
+}): Promise<{ sessionAgeMs: number; subjectId: string }> => {
+    return {
+        sessionAgeMs: await sessionAgeMs(ctx),
+        subjectId: subjectOf(ctx),
+    };
 };

@@ -1,7 +1,7 @@
 /**
  * The export and erasure paths, through the generated functions on the in-memory harness.
  *
- * A request opens through `privacyFor(appCtx(ctx))`, the call the mutations make. The mutations
+ * A request opens through `privacyAs(appCtx(ctx), identity)`, the call the mutations make. The mutations
  * then start a Workflow instance through `ctx.workflows`, which the harness stubs, so the
  * workflow handlers run here directly. Their steps reach the database through the same
  * dispatcher a deployed workflow reaches with `ctx.run`.
@@ -11,7 +11,7 @@ import type { WorkflowRunContext } from "@lunora/workflow";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server.js";
-import { privacyFor, privacyWorkflows } from "../lunora/privacy";
+import { privacyAs, privacyWorkflows } from "../lunora/privacy";
 import { dispatchPort } from "../lunora/privacy-ports";
 import { cancelRequest, downloadUrl, myRequests, requestErasure } from "../lunora/requests";
 import schema from "../lunora/schema";
@@ -50,7 +50,7 @@ const workflowContext = (t: Harness, requestId: string): Context => {
  * then starts the workflow, which the harness stubs, so the test calls the package directly.
  * The session check stays in the mutation, and a test below covers it.
  */
-const openErasure = async (t: Harness, subjectId: string) => t.run(async (ctx) => privacyFor(appCtx(ctx)).requestErasure({ sessionAgeMs: 60_000, subjectId }));
+const openErasure = async (t: Harness, subjectId: string) => t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId }).requestErasure());
 
 const SUBJECT = { userId: "u1" };
 const OTHER = { userId: "u2" };
@@ -75,7 +75,7 @@ describe("privacy example", () => {
     it("exports the subject's own rows and leaves other subjects out", async () => {
         expect.assertions(4);
 
-        const request = await t.run(async (ctx) => privacyFor(appCtx(ctx)).requestExport({ subjectId: SUBJECT.userId }));
+        const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
         await privacyWorkflows.exportHandler(workflowContext(t, request.id));
 
@@ -112,7 +112,7 @@ describe("privacy example", () => {
     it("gives the subject a download link for their export, and refuses anyone else", async () => {
         expect.assertions(2);
 
-        const request = await t.run(async (ctx) => privacyFor(appCtx(ctx)).requestExport({ subjectId: SUBJECT.userId }));
+        const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
         await privacyWorkflows.exportHandler(workflowContext(t, request.id));
 

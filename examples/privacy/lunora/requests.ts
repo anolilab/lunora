@@ -12,9 +12,9 @@ import type { Doc as Document_ } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { internalMutation, mutation, query } from "./_generated/server.js";
 import { byCaller, limiter } from "./limits";
-import { privacyFor } from "./privacy";
+import { privacyAs, privacyFor } from "./privacy";
 import { dispatchPort } from "./privacy-ports";
-import { sessionAgeMs, subjectOf } from "./subject";
+import { identityOf, subjectOf } from "./subject";
 
 /** A request as the caller's own list shows it. Dates are epoch milliseconds. */
 export interface RequestSummary {
@@ -53,7 +53,7 @@ const requireOwnRequest = async (ctx: MutationCtx, requestId: string): Promise<v
 };
 
 export const requestExport = mutation.use(rateLimit(limiter, "write", byCaller)).mutation(async ({ ctx }): Promise<RequestSummary> => {
-    const request = await privacyFor(ctx).requestExport({ subjectId: subjectOf(ctx) });
+    const request = await privacyAs(ctx, await identityOf(ctx)).requestExport();
 
     await ctx.workflows.get("privacyExport").create({ id: request.id, params: { requestId: request.id } });
     ctx.log.info("privacy export requested", { requestId: request.id });
@@ -62,7 +62,7 @@ export const requestExport = mutation.use(rateLimit(limiter, "write", byCaller))
 });
 
 export const requestErasure = mutation.use(rateLimit(limiter, "write", byCaller)).mutation(async ({ ctx }): Promise<RequestSummary> => {
-    const request = await privacyFor(ctx).requestErasure({ sessionAgeMs: await sessionAgeMs(ctx), subjectId: subjectOf(ctx) });
+    const request = await privacyAs(ctx, await identityOf(ctx)).requestErasure();
 
     await ctx.workflows.get("privacyErasure").create({ id: request.id, params: { requestId: request.id } });
     ctx.log.info("privacy erasure requested", { requestId: request.id });
@@ -76,7 +76,7 @@ export const cancelRequest = mutation
     .mutation(async ({ args: { requestId }, ctx }): Promise<RequestSummary> => {
         await requireOwnRequest(ctx, requestId);
 
-        const request = await privacyFor(ctx).cancelRequest({ requestId });
+        const request = await privacyAs(ctx, await identityOf(ctx)).cancelRequest({ requestId });
 
         ctx.log.info("privacy request cancelled", { requestId });
 
@@ -107,7 +107,7 @@ export const myRequests = query.query(async ({ ctx }): Promise<RequestSummary[]>
 /** A link to a finished export. Refused for anyone but the subject, and once the export has expired. */
 export const downloadUrl = query
     .input({ requestId: v.string().max(64) })
-    .query(async ({ args: { requestId }, ctx }) => privacyFor(ctx).downloadUrl({ requestId, subjectId: subjectOf(ctx) }));
+    .query(async ({ args: { requestId }, ctx }) => privacyAs(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
 
 /** The daily deadline sweep. Internal: only the cron calls it. */
 export const privacyTick = internalMutation.mutation(async ({ ctx }) => {

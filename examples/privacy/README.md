@@ -54,6 +54,11 @@ Then open <http://localhost:5173>. Every privacy call needs a signed-in session,
 this example has no sign-in, so the page shows `UNAUTHENTICATED` until you add
 `@lunora/auth` (see `examples/auth-playground`).
 
+Erasure keys its tombstones with `PRIVACY_TOMBSTONE_SECRET`. Copy `.dev.vars.example` to
+`.dev.vars` for local runs, and set the secret in production with
+`wrangler secret put PRIVACY_TOMBSTONE_SECRET`. Without it an erasure fails with a clear
+message instead of writing unkeyed tombstones.
+
 ## What is not wired up
 
 - **Download links.** The package asks the host for a signed URL. This example has
