@@ -56,6 +56,7 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
                 v.literal("completed"),
                 v.literal("failed"),
                 v.literal("cancelled"),
+                v.literal("expired"),
             ),
             storageKey: v.optional(v.string()),
             subjectId: v.string(),
