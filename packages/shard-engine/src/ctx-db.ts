@@ -1731,6 +1731,9 @@ const applyOnUpdate = (
  * omitted key (not an own-enumerable property) stays a no-op, so callers who
  * never set a key keep their existing behaviour.
  */
+/** Bounded re-reads for `patchIf` when a concurrent write wins the row (see the local branch). */
+const PATCH_IF_MAX_ATTEMPTS = 5;
+
 const assertNoExplicitUndefined = (op: "patch" | "patchIf" | "replace", document: Record<string, unknown>): void => {
     for (const field of Object.keys(document)) {
         if (document[field] === undefined) {
@@ -2823,6 +2826,68 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         rowToDocument,
         schema,
         sql,
+    };
+
+    /** Whether `id`'s row still satisfies `where`, read in the same synchronous stretch as the caller's locate. */
+    const rowMatchesPatchIf = (tableName: string, id: string, where: WhereInput): boolean => {
+        const condition = compileWhereSql(where, doWhereSqlStrategy);
+
+        return (
+            condition === undefined ||
+            runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${dsql.identifier("id")} = ${id} AND ${condition}`).toArray().length > 0
+        );
+    };
+
+    /**
+     * `.dropStalePatches()` would make `patch` drop this write as a no-op; decided here so the
+     * `patchIf` result says it did not apply. Reports the drop and returns whether it happened.
+     */
+    const droppedAsStale = (tableName: string, id: string, patch: Record<string, unknown>, row: Record<string, unknown>): boolean => {
+        if (!isStalePatch(tableName, id, patch, row)) {
+            return false;
+        }
+
+        onStalePatchDropped?.({ fields: Object.keys(stripReservedPatchFields(patch)), id, table: tableName });
+
+        return true;
+    };
+
+    /**
+     * One attempt of `patchIf`'s local branch. `undefined` means a concurrent write won the row
+     * and the caller may re-read and try again; any other value is the final outcome.
+     */
+    const patchIfAttempt = async (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; where: WhereInput },
+        canRetry: boolean,
+        patchRow: (patch: Record<string, unknown>) => Promise<void>,
+    ): Promise<{ applied: boolean; doc: Record<string, unknown> | null } | undefined> => {
+        const located = locateRowById(id, tableName);
+
+        if (!located) {
+            // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
+            return { applied: false, doc: null };
+        }
+
+        onRead(tableName, id);
+
+        if (!rowMatchesPatchIf(tableName, id, args.where) || droppedAsStale(tableName, id, args.patch, located.row)) {
+            return { applied: false, doc: located.row };
+        }
+
+        try {
+            await patchRow(args.patch);
+        } catch (error) {
+            if (error instanceof ConflictError && error.kind === "occ" && canRetry) {
+                return undefined;
+            }
+
+            throw error;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- the row can only be gone if an after-update trigger deleted it
+        return { applied: true, doc: locateRowById(id, tableName)?.row ?? null };
     };
 
     const writer: DatabaseWriterLike = {
@@ -4075,36 +4140,19 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
-            const located = locateRowById(id, tableName);
+            // A before-update trigger's await can let a concurrent write in, and `patch`'s CAS then
+            // raises an `occ` ConflictError. Re-locate and re-evaluate `where` on the new row image,
+            // a bounded number of times, so a row that no longer matches reports `applied: false`.
+            for (let attempt = 1; attempt <= PATCH_IF_MAX_ATTEMPTS; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row after a conflict
+                const outcome = await patchIfAttempt(tableName, id, args, attempt < PATCH_IF_MAX_ATTEMPTS, (patch) => writer.patch(id, patch, tableName));
 
-            if (!located) {
-                // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
-                return { applied: false, doc: null };
+                if (outcome !== undefined) {
+                    return outcome;
+                }
             }
 
-            onRead(tableName, id);
-
-            const condition = compileWhereSql(args.where, doWhereSqlStrategy);
-            const matched =
-                condition === undefined ||
-                runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${dsql.identifier("id")} = ${id} AND ${condition}`).toArray().length > 0;
-
-            if (!matched) {
-                return { applied: false, doc: located.row };
-            }
-
-            // `.dropStalePatches()` would make `patch` drop this write as a no-op;
-            // decided here so the result says it did not apply.
-            if (isStalePatch(tableName, id, args.patch, located.row)) {
-                onStalePatchDropped?.({ fields: Object.keys(stripReservedPatchFields(args.patch)), id, table: tableName });
-
-                return { applied: false, doc: located.row };
-            }
-
-            await writer.patch(id, args.patch, tableName);
-
-            // eslint-disable-next-line unicorn/no-null -- the row can only be gone if an after-update trigger deleted it
-            return { applied: true, doc: locateRowById(id, tableName)?.row ?? null };
+            throw new ConflictError(`patchIf on "${tableName}" kept conflicting; the row changed on every attempt`, "occ");
         },
 
         async patchMany(patches, batchOptions, expectedTable) {

@@ -51,7 +51,7 @@
  * The middleware is signature-compatible with the builder's `Middleware<>`,
  * so `.use(rls(policies))` slots in like any other middleware.
  */
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 // The traversal itself, not a structural mirror of it. Every other read here is
 // table-named, so the wrapper can `route()` it; a traversal DISCOVERS its tables
 // as it walks, so the only way to route one per hop is to run the walk here over
@@ -1507,7 +1507,24 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                 tableName,
             );
 
-            if (result.doc === null || (await wrapped.get(id, tableName)) !== null) {
+            if (result.doc === null) {
+                return result;
+            }
+
+            // Under `.rls("required")` a table with no read policy makes the guarded read throw,
+            // after the write has committed. The caller cannot read that row, so it is not visible.
+            const visible = await wrapped.get(id, tableName).then(
+                (row) => row !== null,
+                (error: unknown) => {
+                    if (isLunoraError(error) && error.code === "RLS_REQUIRED") {
+                        return false;
+                    }
+
+                    throw error;
+                },
+            );
+
+            if (visible) {
                 return result;
             }
 
