@@ -26,11 +26,21 @@ interface PrivacyRequestsPanelProps {
     readonly source?: PrivacyRequestsSource;
 }
 
-/** Badge variant per status: a failed request is the one an operator must act on. */
-const STATUS_VARIANT: Readonly<Record<PrivacyRequestStatus, "destructive" | "secondary" | "warning">> = {
+type StatusBadgeVariant = "destructive" | "info" | "outline" | "secondary" | "success" | "warning";
+
+/**
+ * Badge variant per status. Exhaustive over {@link PrivacyRequestStatus}: a status
+ * added to the union without a variant here fails to compile. A failed request is
+ * the one an operator must act on, so it is the only destructive badge.
+ */
+const STATUS_VARIANT: Readonly<Record<PrivacyRequestStatus, StatusBadgeVariant>> = {
+    cancelled: "outline",
+    completed: "success",
     failed: "destructive",
-    open: "secondary",
+    grace: "secondary",
     processing: "warning",
+    ready: "success",
+    received: "info",
 };
 
 /** Human-readable deadline cell: the extended date when one is set, otherwise a dash. */
