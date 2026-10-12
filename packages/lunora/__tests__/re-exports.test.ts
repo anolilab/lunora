@@ -110,6 +110,7 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["platform-celld", "host/engine layer — experimental celld host, never app code"],
     ["platform-cloudflare", "host/engine layer — consumed by @lunora/do, never app code"],
     ["platform-node", "host/engine layer — experimental Node host, never app code"],
+    ["privacy", "add-on — installed directly when used"],
     ["queue", "add-on — installed directly when used"],
     ["react", "framework adapter — installed per framework, not part of the base surface"],
     ["react-native", "framework adapter — installed per framework, not part of the base surface"],
