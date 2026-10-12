@@ -1,7 +1,7 @@
 # @lunora-example/privacy
 
 A task list that shows the whole `@lunora/privacy` surface: a user exports their
-data, erases it, cancels a pending erasure, and sees the requests they have open.
+data, erases it, cancels a pending erasure, and sees their requests.
 
 > **Experimental.** The legal and tax values in `@lunora/privacy` are pending review.
 > This example shows how the pieces fit; it is not a compliance checklist.

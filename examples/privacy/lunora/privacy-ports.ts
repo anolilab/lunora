@@ -6,8 +6,8 @@
  * `privacyPort` mutation, which hands them to the package's `dispatchPort`
  * (`@lunora/privacy/workflow`). The wire format and the method table are the package's.
  */
-import type { DataPort, Dataset, PrivacyPorts, RequestRecord, RequestStore, StorePort } from "@lunora/privacy";
-import { ERASE_BATCH, isTerminal } from "@lunora/privacy";
+import type { DataPort, Dataset, PrivacyPorts, RequestStore, StorePort } from "@lunora/privacy";
+import { ERASE_BATCH, fromRequestRow, isTerminal, OPEN_STATUSES, toRequestPatch, toRequestRow } from "@lunora/privacy";
 import { LunoraError } from "lunorash/errors";
 
 import type { Doc as Document_ } from "./_generated/dataModel.js";
@@ -19,46 +19,10 @@ type RequestRow = Document_<"privacy_requests">;
 /** A query can read the ports but not write them; a mutation can do both. */
 type LocalContext = MutationCtx | QueryCtx;
 
-/** Every status except the two terminal ones, which `isTerminal` names. */
-const OPEN_STATUSES: ReadonlyArray<RequestRow["status"]> = ["received", "grace", "processing", "ready", "failed"];
-
 const requireTasks = (dataset: Dataset): void => {
     if (dataset.id !== "tasks") {
         throw new LunoraError("INTERNAL", `privacy-example has no reader for dataset "${dataset.id}".`);
     }
-};
-
-/** A stored request, as the package sees it: dates are `Date`s. */
-const toRecord = (row: RequestRow): RequestRecord => {
-    return {
-        dueAt: new Date(row.dueAt),
-        id: row.requestId,
-        receivedAt: new Date(row.receivedAt),
-        status: row.status,
-        subjectId: row.subjectId,
-        type: row.type,
-        ...(row.erasureGraceUntil === undefined ? {} : { erasureGraceUntil: new Date(row.erasureGraceUntil) }),
-        ...(row.expiresAt === undefined ? {} : { expiresAt: new Date(row.expiresAt) }),
-        ...(row.extendedDueAt === undefined ? {} : { extendedDueAt: new Date(row.extendedDueAt) }),
-        ...(row.reason === undefined ? {} : { reason: row.reason }),
-        ...(row.storageKey === undefined ? {} : { storageKey: row.storageKey }),
-    };
-};
-
-/** Only the keys the package sets, so an unset optional stays unset rather than becoming `undefined`. */
-const toPatch = (patch: Partial<Omit<RequestRecord, "id">>): Partial<Omit<RequestRow, "_id" | "_creationTime" | "requestId">> => {
-    return {
-        ...(patch.status === undefined ? {} : { status: patch.status }),
-        // On a completed erasure the package replaces the subject id with its tombstone key.
-        ...(patch.subjectId === undefined ? {} : { subjectId: patch.subjectId }),
-        ...(patch.dueAt === undefined ? {} : { dueAt: patch.dueAt.getTime() }),
-        ...(patch.receivedAt === undefined ? {} : { receivedAt: patch.receivedAt.getTime() }),
-        ...(patch.erasureGraceUntil === undefined ? {} : { erasureGraceUntil: patch.erasureGraceUntil.getTime() }),
-        ...(patch.expiresAt === undefined ? {} : { expiresAt: patch.expiresAt.getTime() }),
-        ...(patch.extendedDueAt === undefined ? {} : { extendedDueAt: patch.extendedDueAt.getTime() }),
-        ...(patch.reason === undefined ? {} : { reason: patch.reason }),
-        ...(patch.storageKey === undefined ? {} : { storageKey: patch.storageKey }),
-    };
 };
 
 /** The writer for this call. A query has none, so a write from one throws instead of silently dropping. */
@@ -88,24 +52,15 @@ const requestStore = (ctx: LocalContext): RequestStore => {
                 .collect();
             const open = rows.find((row) => !isTerminal(row.status));
 
-            return open === undefined ? undefined : toRecord(open);
+            return open === undefined ? undefined : fromRequestRow(open);
         },
         get: async (id) => {
             const row = await rowFor(ctx, id);
 
-            return row === undefined ? undefined : toRecord(row);
+            return row === undefined ? undefined : fromRequestRow(row);
         },
         insert: async (record) => {
-            await writerOf(ctx).insert("privacy_requests", {
-                dueAt: record.dueAt.getTime(),
-                progress: 0,
-                receivedAt: record.receivedAt.getTime(),
-                requestId: record.id,
-                status: record.status,
-                subjectId: record.subjectId,
-                type: record.type,
-                ...(record.erasureGraceUntil === undefined ? {} : { erasureGraceUntil: record.erasureGraceUntil.getTime() }),
-            });
+            await writerOf(ctx).insert("privacy_requests", { ...toRequestRow(record) });
         },
         listForSubject: async (subjectId) => {
             const rows = await ctx.db
@@ -113,7 +68,7 @@ const requestStore = (ctx: LocalContext): RequestStore => {
                 .withIndex("bySubject", (q) => q.eq("subjectId", subjectId))
                 .collect();
 
-            return rows.map((row) => toRecord(row));
+            return rows.map((row) => fromRequestRow(row));
         },
         listOpen: async () => {
             // Read per open status through the status index, so the sweep never scans the table.
@@ -126,13 +81,13 @@ const requestStore = (ctx: LocalContext): RequestStore => {
                 ),
             );
 
-            return batches.flat().map((row) => toRecord(row));
+            return batches.flat().map((row) => fromRequestRow(row));
         },
         update: async (id, patch) => {
             const row = await rowFor(ctx, id);
 
             if (row !== undefined) {
-                await writerOf(ctx).patch(row._id, toPatch(patch));
+                await writerOf(ctx).patch(row._id, toRequestPatch(patch));
             }
         },
     };

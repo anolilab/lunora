@@ -61,27 +61,13 @@ export const privacy_events = sqliteTable("privacy_events", {
     byRequest: index("byRequest").on(t.requestId, t.at),
 }));
 
-export const privacy_holds = sqliteTable("privacy_holds", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    datasetId: text("datasetId").notNull(),
-    requestId: text("requestId"),
-    retainUntil: real("retainUntil").notNull(),
-    rule: text("rule").notNull(),
-    subjectId: text("subjectId").notNull(),
-}, (t) => ({
-    bySubject: index("bySubject").on(t.subjectId),
-}));
-
 export const privacy_requests = sqliteTable("privacy_requests", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     dueAt: real("dueAt").notNull(),
-    errorMessage: text("errorMessage"),
     erasureGraceUntil: real("erasureGraceUntil"),
     expiresAt: real("expiresAt"),
     extendedDueAt: real("extendedDueAt"),
-    progress: real("progress").notNull(),
     reason: text("reason"),
     receivedAt: real("receivedAt").notNull(),
     requestId: text("requestId").notNull(),
@@ -89,20 +75,8 @@ export const privacy_requests = sqliteTable("privacy_requests", {
     storageKey: text("storageKey"),
     subjectId: text("subjectId").notNull(),
     type: text("type", { mode: "json" }).$type<"export" | "erasure">().notNull(),
-    verifiedAt: real("verifiedAt"),
-    workflowInstanceId: text("workflowInstanceId"),
 }, (t) => ({
     byRequestId: index("byRequestId").on(t.requestId),
     bySubject: index("bySubject").on(t.subjectId, t.type),
     byStatus: index("byStatus").on(t.status, t.dueAt),
-}));
-
-export const privacy_tombstones = sqliteTable("privacy_tombstones", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    erasedAt: real("erasedAt").notNull(),
-    scope: text("scope").notNull(),
-    subjectKey: text("subjectKey").notNull(),
-}, (t) => ({
-    bySubjectKey: index("bySubjectKey").on(t.subjectKey),
 }));

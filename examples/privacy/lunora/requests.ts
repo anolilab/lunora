@@ -69,11 +69,11 @@ export const cancelRequest = mutation
         return view(request);
     });
 
-/** The caller's own open requests, newest first. */
+/** The caller's own requests in every status, newest first, as the package lists them. */
 export const myRequests = query.query(async ({ ctx }): Promise<RequestSummary[]> => {
     const requests = await privacyFor(ctx, await identityOf(ctx)).myRequests();
 
-    return requests.toSorted((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime()).map((request) => view(request));
+    return requests.map((request) => view(request));
 });
 
 /** A link to a finished export. Refused for anyone but the subject, and once the export has expired. */

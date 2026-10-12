@@ -235,9 +235,7 @@ class AppBuilder<Env extends object> {
             ["ratelimit_buckets", { mode: { kind: "root" } }],
             ["privacy_archive", { mode: { kind: "root" } }],
             ["privacy_events", { mode: { kind: "root" } }],
-            ["privacy_holds", { mode: { kind: "root" } }],
             ["privacy_requests", { mode: { kind: "root" } }],
-            ["privacy_tombstones", { mode: { kind: "root" } }],
         ]);
 
         options.listSchemaTables = () => [...tableSharding.keys()];
