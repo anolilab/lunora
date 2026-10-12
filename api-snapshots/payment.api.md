@@ -24,7 +24,7 @@ interface AdapterRegistry {
 ```ts
 interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled";
+    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
 }
 ```
 
@@ -875,17 +875,6 @@ const isZeroMoney: (a: Money) => boolean;
 
 ```ts
 const lunoraDatabaseToPaymentDatabase: (database: LunoraDatabaseLike) => PaymentDatabase;
-```
-
-### `migrateLegacyPaymentTables` (const)
-
-```ts
-const migrateLegacyPaymentTables: (database: LunoraDatabaseLike, options?: {
-    batchSize?: number;
-}) => Promise<{
-    moved: number;
-    remaining: boolean;
-}>;
 ```
 
 ### `money` (const)

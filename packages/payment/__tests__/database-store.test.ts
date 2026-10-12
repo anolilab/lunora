@@ -1,8 +1,15 @@
+import { createHmac } from "node:crypto";
+
+import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
+import { createPayment } from "../src/create-payment";
 import type { PaymentDatabase, PaymentRow } from "../src/database-store";
 import { createDatabasePaymentStore } from "../src/database-store";
 import { money } from "../src/money";
+import type { CreemClientLike } from "../src/providers/creem";
+import { createCreemAdapter } from "../src/providers/creem";
+import paymentExtension from "../src/schema";
 import { MemoryPaymentStore } from "../src/store";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
 
@@ -107,6 +114,41 @@ const makeDb = (): ProbedDatabase => {
     };
 };
 
+type PaymentTableName = keyof typeof paymentExtension.tables;
+
+/**
+ * `makeDb`, but every write is checked against the column validators `paymentExtension` declares,
+ * as the real `ctx.db` checks it. The plain double stores whatever it is handed, so a codec that
+ * wrote a value the column rejects (a `bigint` into `v.number()`) would pass over it.
+ */
+const makeValidatingDb = (): ProbedDatabase => {
+    const db = makeDb();
+    const tableById = new Map<string, string>();
+    const shapeOf = (table: string) => paymentExtension.tables[table.replace(/^payment_/u, "") as PaymentTableName].shape;
+
+    return {
+        ...db,
+        insert: async (table, document) => {
+            v.object(shapeOf(table)).parse(document);
+
+            const id = await db.insert(table, document);
+
+            tableById.set(id, table);
+
+            return id;
+        },
+        patch: async (id, patch) => {
+            const shape = shapeOf(tableById.get(id) ?? "");
+
+            for (const [field, value] of Object.entries(patch)) {
+                shape[field]?.parse(value);
+            }
+
+            return db.patch(id, patch);
+        },
+    };
+};
+
 const customer: Customer = { createdAt: 1, email: "a@b.test", id: "cus_1", provider: "stripe", referenceId: "user_1" };
 
 const session: PaymentSession = {
@@ -182,6 +224,37 @@ describe("createDatabasePaymentStore", () => {
 
         expect(loaded).toEqual(session);
         expect(loaded?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("refuses a stored money column that is not a safe integer", async () => {
+        expect.assertions(2);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+
+        const row = await db.findFirst("payment_sessions", { provider: "stripe", providerSessionId: "pi_1" });
+
+        await db.patch(row!._id, { capturedMinor: 1.5 });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toThrow("`capturedMinor` is not a safe integer");
+    });
+
+    it("refuses a stored session with a money column missing, rather than reading it as zero", async () => {
+        expect.assertions(1);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+
+        const row = await db.findFirst("payment_sessions", { provider: "stripe", providerSessionId: "pi_1" });
+
+        await db.patch(row!._id, { capturedMinor: null });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
     it("upserts in place rather than duplicating", async () => {
@@ -463,5 +536,67 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
         // Releasing an unknown id is a harmless no-op.
         await expect(store.releaseEvent("stripe", "never_claimed")).resolves.toBeUndefined();
+    });
+
+    it("stores money as a number column the schema accepts", async () => {
+        expect.assertions(2);
+
+        const db = makeValidatingDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+        await store.upsertPaymentSession({ ...session, refundedAmount: money(250, "USD"), state: "partially_refunded" });
+
+        const { rows } = await db.findMany("payment_sessions", {});
+
+        expect(rows.map((row) => [row["amountMinor"], row["capturedMinor"], row["refundedMinor"]])).toStrictEqual([[1000, 1000, 250]]);
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ refundedAmount: money(250n, "USD") });
+    });
+
+    it("stores the largest safe amount exactly and refuses one that would round", async () => {
+        expect.assertions(4);
+
+        const db = makeValidatingDb();
+        const store = createDatabasePaymentStore(db);
+        const ceiling = BigInt(Number.MAX_SAFE_INTEGER);
+
+        await store.upsertPaymentSession({ ...session, amount: money(ceiling, "USD") });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ amount: money(ceiling, "USD") });
+
+        // 2^53 + 1 has no double: `Number()` would silently store 2^53.
+        for (const field of ["amount", "capturedAmount", "refundedAmount"] as const) {
+            // eslint-disable-next-line no-await-in-loop -- one write per money column, each must be refused on its own
+            await expect(store.upsertPaymentSession({ ...session, [field]: money(ceiling + 2n, "USD"), id: `pi_${field}` })).rejects.toThrow(
+                /outside the safe-integer range/u,
+            );
+        }
+    });
+
+    it("applies a signed Creem checkout.completed webhook into the payment_sessions row", async () => {
+        expect.assertions(3);
+
+        const secret = "creem-fixture-signing-key"; // gitleaks:allow -- test fixture signing key, not a real secret
+        const db = makeValidatingDb();
+        const store = createDatabasePaymentStore(db);
+        // `parseWebhook` only verifies and normalizes; it never calls the client.
+        const payment = createPayment({ adapter: createCreemAdapter({ client: {} as CreemClientLike, webhookSecret: secret }), store });
+        const body = JSON.stringify({
+            eventType: "checkout.completed",
+            id: "evt_checkout_1",
+            object: { customer: "cust_1", id: "ch_1", metadata: { referenceId: "org_1" }, order: { amount: 4900, currency: "EUR", status: "paid" } },
+        });
+        const signature = createHmac("sha256", Buffer.from(secret)).update(body).digest("hex");
+
+        const response = await payment.handleWebhook(
+            new Request("https://app.test/webhooks/creem", { body, headers: { "creem-signature": signature }, method: "POST" }),
+        );
+
+        expect(response.status).toBe(200);
+        await expect(store.getPaymentSession("creem", "ch_1")).resolves.toMatchObject({ amount: money(4900, "EUR"), referenceId: "org_1", state: "captured" });
+
+        const { rows } = await db.findMany("payment_sessions", { provider: "creem" });
+
+        expect(rows[0]?.["amountMinor"]).toBe(4900);
     });
 });

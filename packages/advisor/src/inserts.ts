@@ -25,6 +25,11 @@ export interface AdvisorInsertWrite {
  * input alongside {@link AdvisorInsertWrite}.
  */
 export interface AdvisorTableWrite extends AdvisorInsertWrite {
+    /**
+     * The fields a `patch` / `patchMany` writes, or `undefined` for any other method
+     * and when the patch argument is not an object literal.
+     */
+    fields?: string[];
     /** The writer method called, e.g. `patch`, `deleteMany`, `upsert`. */
     method: string;
 }

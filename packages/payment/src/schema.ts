@@ -11,7 +11,11 @@
  * `payment` key (`payment_customers`, `payment_events`, `payment_sessions`, `payment_subscriptions`,
  * `payment_usageEvents`), the names `PAYMENT_TABLES` in `./database-store` reads and writes.
  *
- * Money is stored as `(amountMinor: bigint, currency: string)` columns; every row carries a
+ * Money is stored as `(amountMinor: number, currency: string)` columns. A double holds every
+ * integer up to 2^53 exactly — about 90 trillion dollars in cents — and the row codec in
+ * `./database-store` refuses any amount that is not a safe integer, so nothing is ever rounded. A
+ * number column, unlike a `v.bigint()` one, is also accepted on a `.global()` table and compares
+ * numerically there. Every row carries a
  * `provider` discriminator so multiple providers can coexist during a migration. A refund is folded
  * into its `sessions` row (`refundedMinor` + a `refunded`/`partially_refunded` state), not a separate
  * ledger table.
@@ -64,14 +68,14 @@ const subscriptions = defineTable({
     .index("by_reference", ["referenceId"]);
 
 const sessions = defineTable({
-    amountMinor: v.bigint(),
-    capturedMinor: v.bigint(),
+    amountMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+    capturedMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
     createdAt: v.number(),
     currency: v.string(),
     provider: v.string(),
     providerSessionId: v.string(),
     referenceId: v.string(),
-    refundedMinor: v.bigint(),
+    refundedMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
     state: v.string(),
     // The provider subscription this payment started — lends its owner to an unattributed subscription row.
     subscriptionId: v.optional(v.string()),

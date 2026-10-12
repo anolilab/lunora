@@ -96,7 +96,14 @@ describe("discoverTableWrites", () => {
         const orphans = discoverTableWrites(project, join(workdir, "lunora")).filter((write) => write.scope.kind === "helper");
 
         expect(orphans).toStrictEqual([
-            { file: "todos", line: markerLine(SOURCE, "orphan"), method: "patch", scope: { callers: [], kind: "helper", name: "helper" }, table: "todos" },
+            {
+                fields: [],
+                file: "todos",
+                line: markerLine(SOURCE, "orphan"),
+                method: "patch",
+                scope: { callers: [], kind: "helper", name: "helper" },
+                table: "todos",
+            },
         ]);
     });
 

@@ -1,5 +1,5 @@
-import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node, SyntaxKind, ts } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
+import { Node, SyntaxKind, ts, VariableDeclarationKind } from "ts-morph";
 
 import type { CallEdgeIR } from "../ir";
 import { collectCallRows, collectNodeRows, functionKeyOf, isFunctionLike, isSameNode, RUN_METHODS } from "./ast";
@@ -65,6 +65,65 @@ const runEdge = (method: string, reference: TsNode | undefined): CallSiteEdge | 
         : undefined;
 };
 
+/**
+ * The top-level property names of an object literal, or `undefined` when a spread
+ * hides some of them, since then the keys cannot be known.
+ */
+const keysOfObjectLiteral = (object: ObjectLiteralExpression): string[] | undefined => {
+    const keys: string[] = [];
+
+    for (const property of object.getProperties()) {
+        if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
+            return undefined;
+        }
+
+        keys.push(property.getName());
+    }
+
+    return keys;
+};
+
+/**
+ * The top-level property names of a dispatch's args: `[]` when there are no args, the
+ * keys of an object literal, or the keys of a `const` the args name whose initializer
+ * is an object literal. `undefined` when the keys cannot be read, which includes a
+ * `let` or a value built some other way. The cursor decision belongs to the lint.
+ */
+const argumentKeysOf = (args: TsNode | undefined): string[] | undefined => {
+    if (args === undefined) {
+        return [];
+    }
+
+    if (Node.isObjectLiteralExpression(args)) {
+        return keysOfObjectLiteral(args);
+    }
+
+    if (Node.isIdentifier(args)) {
+        const declaration = args.getSymbol()?.getDeclarations()[0];
+
+        if (Node.isVariableDeclaration(declaration) && declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const) {
+            const initializer = declaration.getInitializer();
+
+            return Node.isObjectLiteralExpression(initializer) ? keysOfObjectLiteral(initializer) : undefined;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The schedule facts of a dispatch: the literal `runAfter` delay, and the arg keys.
+ * `runAt` has no delay, so only `runAfter` carries one.
+ */
+const scheduleFactsOf = (method: string, first: TsNode | undefined, args: TsNode | undefined): Pick<CallEdgeIR, "schedule"> => {
+    return {
+        schedule: {
+            argKeys: argumentKeysOf(args),
+            ...(method === "runAfter" && first !== undefined && Node.isNumericLiteral(first) ? { delayMs: first.getLiteralValue() } : {}),
+        },
+    };
+};
+
 /** The edge one call expression contributes, or `undefined` when it is not an edge-shaped call. */
 const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
     const callee = call.getExpression();
@@ -74,7 +133,7 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
     }
 
     const method = callee.getName();
-    const [first, second] = call.getArguments();
+    const [first, second, args] = call.getArguments();
 
     if (RUN_METHODS.has(method)) {
         return runEdge(method, first);
@@ -87,7 +146,7 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
 
         return target === undefined
             ? { kind: "schedule", reason: 'the scheduled function is not a static api.* / internal.* chain or a "namespace:export" key' }
-            : { kind: "schedule", target };
+            : { kind: "schedule", target, ...scheduleFactsOf(method, first, args) };
     }
 
     const producer = SURFACE_METHODS.get(method);

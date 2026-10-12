@@ -4,7 +4,7 @@
  * `createDatabasePaymentStore` over a REAL shard-engine `ctx.db` on Durable Object
  * SQLite — the storage it ships to. The node suite runs the store against an
  * in-memory double, which cannot say whether the unique indexes behind webhook
- * dedupe and usage idempotency hold, whether bigint money survives the column
+ * dedupe and usage idempotency hold, whether money survives the number column
  * codec, or whether keyset paging walks workerd's SQLite correctly.
  *
  * The `ctx.db` is built exactly as the generated ShardDO builds it
@@ -18,10 +18,8 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import type { LunoraDatabaseLike } from "../../src/context";
 import { lunoraDatabaseToPaymentDatabase } from "../../src/context";
 import { createDatabasePaymentStore } from "../../src/database-store";
-import migrateLegacyPaymentTables from "../../src/migrate-legacy-tables";
 import { money } from "../../src/money";
 import paymentExtension from "../../src/schema";
 import type { PaymentStore } from "../../src/store";
@@ -34,15 +32,15 @@ const schema = defineSchema({}).extend(paymentExtension) as unknown as SchemaLik
 const UNIQUE_VIOLATION = /unique constraint/iu;
 
 /** Run `body` inside a fresh Durable Object, with the payment store over its own SQLite. */
-const withStore = async (body: (store: PaymentStore, db: DatabaseWriterLike) => Promise<void>, storeSchema: SchemaLike = schema): Promise<void> => {
+const withStore = async (body: (store: PaymentStore, db: DatabaseWriterLike) => Promise<void>): Promise<void> => {
     const stub = env.PAYMENT_DO.get(env.PAYMENT_DO.newUniqueId());
 
     await runInDurableObject(stub, async (_instance, state) => {
         const sql = state.storage.sql as unknown as Parameters<typeof runShardMigrations>[0];
 
-        runShardMigrations(sql, storeSchema);
+        runShardMigrations(sql, schema);
 
-        const db = createShardCtxDb({ broadcast: () => undefined, schema: storeSchema, sql });
+        const db = createShardCtxDb({ broadcast: () => undefined, schema, sql });
 
         await body(createDatabasePaymentStore(lunoraDatabaseToPaymentDatabase(db)), db);
     });
@@ -112,13 +110,13 @@ describe("database payment store on workerd", () => {
         });
     });
 
-    it("round-trips a payment session, bigint money and the subscription link included", async () => {
-        expect.assertions(4);
+    it("round-trips a payment session, money at the safe-integer ceiling and the subscription link included", async () => {
+        expect.assertions(6);
 
-        // Past Number.MAX_SAFE_INTEGER: a codec that went through a double would round it.
-        const huge = 9_007_199_254_740_993n;
+        // The largest amount a number column holds exactly.
+        const huge = BigInt(Number.MAX_SAFE_INTEGER);
 
-        await withStore(async (store) => {
+        await withStore(async (store, db) => {
             await store.upsertPaymentSession(session({ amount: money(huge, "EUR"), subscriptionId: "sub_1" }));
             await store.upsertPaymentSession(
                 session({
@@ -142,6 +140,14 @@ describe("database payment store on workerd", () => {
                 }),
             );
             expect(typeof stored?.amount.minorUnits).toBe("bigint");
+
+            // Stored as a plain number, which a `.global()` table accepts and compares numerically.
+            const { page } = await db.findMany("payment_sessions", {});
+
+            expect(page.map((row) => typeof row["amountMinor"])).toStrictEqual(["number"]);
+
+            // One past the ceiling would round, so the write is refused instead.
+            await expect(store.upsertPaymentSession(session({ amount: money(huge + 2n, "EUR"), id: "cs_3" }))).rejects.toThrow(/safe-integer range/u);
 
             // A session without a subscription reads the column back as absent.
             await store.upsertPaymentSession(session({ id: "cs_2" }));
@@ -336,48 +342,5 @@ describe("database payment store on workerd", () => {
             });
             await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 2000, state: "active" });
         });
-    });
-
-    it("moves the legacy inline tables into the extension's tables", async () => {
-        expect.assertions(5);
-
-        // An app mid-upgrade: still declaring the old inline tables, and the extension beside them.
-        // The legacy names were the bare ones, except `sessions`, which was `paymentSessions`.
-        const legacyTables = Object.fromEntries(
-            Object.entries(paymentExtension.tables).map(([name, table]) => [name === "sessions" ? "paymentSessions" : name, table]),
-        );
-        const upgrading = defineSchema(legacyTables).extend(paymentExtension) as unknown as SchemaLike;
-
-        await withStore(async (store, db) => {
-            const legacyDb = db as unknown as LunoraDatabaseLike;
-
-            await legacyDb.insert("paymentSessions", {
-                amountMinor: 1000n,
-                capturedMinor: 0n,
-                createdAt: 1,
-                currency: "EUR",
-                provider: "stripe",
-                providerSessionId: "cs_1",
-                referenceId: "org_1",
-                refundedMinor: 0n,
-                state: "initiated",
-                updatedAt: 1,
-            });
-            await legacyDb.insert("events", { processedAt: 1, provider: "stripe", providerEventId: "evt_1", type: "payment.captured" });
-            await legacyDb.insert("events", { processedAt: 1, provider: "stripe", providerEventId: "evt_2", type: "payment.captured" });
-            // Already moved (the store claimed it after the deploy): the legacy copy is dropped, not duplicated.
-            await store.markEventProcessed("stripe", "evt_2", "payment.captured");
-
-            await expect(migrateLegacyPaymentTables(legacyDb, { batchSize: 2 })).resolves.toStrictEqual({ moved: 2, remaining: true });
-            await expect(migrateLegacyPaymentTables(legacyDb, { batchSize: 2 })).resolves.toStrictEqual({ moved: 1, remaining: false });
-
-            // The bigint money survived the copy through workerd's column codec.
-            await expect(store.getPaymentSession("stripe", "cs_1")).resolves.toMatchObject({ amount: money(1000, "EUR"), referenceId: "org_1" });
-
-            const moved = await db.findMany("payment_events", {});
-
-            expect(moved.page.map((row) => row["providerEventId"]).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["evt_1", "evt_2"]);
-            await expect(db.findMany("events", {})).resolves.toMatchObject({ page: [] });
-        }, upgrading);
     });
 });

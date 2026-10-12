@@ -43,6 +43,7 @@ import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 import type { AdvisorRawRowReturn } from "./raw-row-returns";
 import type { AdvisorRelationLoad } from "./relation-loads";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
+import type { AdvisorRowEffect } from "./row-effects";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
 import type { AdvisorShape } from "./shapes";
@@ -264,6 +265,13 @@ export interface LintContext {
      * the container lints find nothing.
      */
     containers?: ReadonlyArray<AdvisorContainer>;
+
+    /**
+     * The `namespace:export` keys of the function-targeted cron jobs. A cron fires
+     * its target without a request, so the target is server-driven even when it is
+     * public. Supplied by the codegen feeder; absent for runtime callers.
+     */
+    cronTargets?: ReadonlyArray<string>;
 
     /**
      * CDC export-sink constructions (`defineExportSink` / `webhookExportSink` /
@@ -612,6 +620,13 @@ export interface LintContext {
      * runtime callers, where the lint finds nothing.
      */
     rlsProcedures?: ReadonlyArray<AdvisorRlsProcedure>;
+
+    /**
+     * Row-changing writes each export reaches, including writes in helpers it calls
+     * (even in other files). The sweep lints count these as progress. Absent for
+     * runtime callers, where a helper's write is then not seen.
+     */
+    rowEffects?: ReadonlyArray<AdvisorRowEffect>;
 
     /** The declared schema under audit, normalized to the feeder-agnostic {@link AdvisorSchema}. */
     schema: AdvisorSchema;
