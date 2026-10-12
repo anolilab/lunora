@@ -3982,6 +3982,7 @@ abstract class ShardDO {
             mail: false,
             notifications: false,
             payments: false,
+            privacy: false,
             queues: false,
             scheduler: false,
             storage: false,
