@@ -370,7 +370,7 @@ const admitLineage = async (
     if (inbound.status === "invalid") {
         recordRecursion(env.PLATFORM_METRICS, { cell, depth: 0, outcome: "forged" });
 
-        return Response.json({ error: "invalid lineage" }, { status: 400 });
+        return Response.json({ error: "invalid_lineage", message: "the lineage header could not be verified" }, { status: 400 });
     }
 
     const lineage = inbound.status === "valid" ? inbound.lineage : { depth: 0, root: newLineageRoot() };
@@ -381,7 +381,11 @@ const admitLineage = async (
             onTerminated?.(lineage.depth);
 
             return Response.json(
-                { depth: lineage.depth, error: "loop detected: this request re-entered Lunora Cloud too many times in one chain" },
+                {
+                    depth: lineage.depth,
+                    error: "loop_detected",
+                    message: "this request re-entered Lunora Cloud too many times in one chain",
+                },
                 { status: 508 },
             );
         }

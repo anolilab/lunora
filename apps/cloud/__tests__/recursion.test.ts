@@ -130,6 +130,7 @@ describe("dispatcher recursion protection", () => {
         const response = await dispatcher.fetch(forged, env as never);
 
         expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: "invalid_lineage" });
         expect(tenant).not.toHaveBeenCalled();
         expect(recursionPoints(writeDataPoint)).toStrictEqual([["forged", 0]]);
     });
@@ -148,6 +149,7 @@ describe("dispatcher recursion protection", () => {
         const response = await dispatcher.fetch(await signedRequest(MAX_LINEAGE_DEPTH, "loopy.lunora.app"), env as never);
 
         expect(response.status).toBe(508);
+        await expect(response.json()).resolves.toMatchObject({ depth: MAX_LINEAGE_DEPTH, error: "loop_detected" });
         expect(tenant).not.toHaveBeenCalled();
         expect(recursionPoints(writeDataPoint)).toStrictEqual([["terminated", MAX_LINEAGE_DEPTH]]);
 
