@@ -140,6 +140,18 @@ const isShadowed = (identifier: Identifier): boolean =>
             !Node.isImportClause(declaration),
     );
 
+/**
+ * Whether `identifier` is bound by a namespace import of a validator module. The
+ * receiver text `ns.v` alone cannot say so: a same-file helper's parameter `ns`
+ * spells the same text while binding something else.
+ */
+const isValidatorNamespaceBinding = (identifier: Identifier): boolean =>
+    (identifier.getSymbol()?.getDeclarations() ?? []).some(
+        (declaration) =>
+            Node.isNamespaceImport(declaration) &&
+            validatorModule(declaration.getFirstAncestorByKindOrThrow(SyntaxKind.ImportDeclaration).getModuleSpecifierValue()),
+    );
+
 /** The `v.<name>(…)` factory a call expression invokes, or `undefined` when it is not one. */
 const vFactoryName = (node: Node, scope: ValidatorScope): string | undefined => {
     if (!Node.isCallExpression(node)) {
@@ -155,7 +167,14 @@ const vFactoryName = (node: Node, scope: ValidatorScope): string | undefined => 
             return undefined;
         }
 
-        return Node.isIdentifier(receiver) && isShadowed(receiver) ? undefined : expression.getName();
+        if (Node.isIdentifier(receiver)) {
+            return isShadowed(receiver) ? undefined : expression.getName();
+        }
+
+        // `ns.v`: the `ns` must be the namespace import itself, not a same-named local.
+        const namespace = Node.isPropertyAccessExpression(receiver) ? receiver.getExpression() : undefined;
+
+        return Node.isIdentifier(namespace) && isValidatorNamespaceBinding(namespace) ? expression.getName() : undefined;
     }
 
     if (Node.isIdentifier(expression)) {

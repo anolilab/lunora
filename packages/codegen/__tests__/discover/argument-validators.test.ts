@@ -183,6 +183,30 @@ const SHADOWED_V_IN_HELPER = `
     });
 `;
 
+/** A same-file helper whose parameter `ns` shadows the namespace import `ns`; its `ns.v.any()` is not a validator call. */
+const SHADOWED_NAMESPACE_IN_HELPER = `
+    import * as ns from "@lunora/values";
+    import { mutation } from "@lunora/server";
+
+    const label = (ns: { v: { any: () => string } }) => ns.v.any();
+
+    export const update = mutation({
+        args: { name: label({ v: { any: () => "text" } }) },
+        handler: async () => null,
+    });
+`;
+
+/** A real namespace import `ns`, used directly: `ns.v.any()` is a validator call. */
+const NAMESPACE_IMPORT_ANY = `
+    import * as ns from "@lunora/values";
+    import { mutation } from "@lunora/server";
+
+    export const update = mutation({
+        args: { payload: ns.v.any() },
+        handler: async () => null,
+    });
+`;
+
 /** A local function named `any` that is not the validator namespace. */
 const UNRELATED_ANY = `
     import { mutation } from "@lunora/server";
@@ -332,6 +356,25 @@ describe("discoverArgumentValidators", () => {
         writeFileSync(join(workdir, "lunora", "update.ts"), SHADOWED_V_IN_HELPER, "utf8");
 
         expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does NOT flag a v.any() on a namespace-import name shadowed by a helper parameter", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), SHADOWED_NAMESPACE_IN_HELPER, "utf8");
+
+        expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a v.any() on a real namespace import named ns", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), NAMESPACE_IMPORT_ANY, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.anyArgs).toStrictEqual(["payload"]);
     });
 
     it("does NOT flag a non-validator call named any", () => {
