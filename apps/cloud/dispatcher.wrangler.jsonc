@@ -39,6 +39,8 @@
         // Control-plane base URL is set per deployed environment below. Unset here on purpose:
         // the dispatcher refuses all traffic outside `development` when it is missing (plan 475).
         // Set CONTROL_PLANE_TOKEN as a secret: `wrangler secret put CONTROL_PLANE_TOKEN -c dispatcher.wrangler.jsonc --env <name>`.
+        // Hours a control-plane outage may keep serving a persisted plan (plan 476). Suspensions ignore it.
+        "PLAN_MAX_STALE_HOURS": "48",
         // LUNORA_LINEAGE_SECRET (recursion protection) is a secret too, the same value
         // as on the Outbound Worker; outside `development` a lineage header is refused without it.
     },
@@ -66,6 +68,7 @@
                 "CONTROL_PLANE_URL": "<replace-with-staging-control-plane-url>",
                 "LUNORA_APP_DOMAIN": "staging.lunora.app",
                 "LUNORA_ENVIRONMENT": "staging",
+                "PLAN_MAX_STALE_HOURS": "48",
             },
         },
         "production": {
@@ -85,6 +88,7 @@
                 "CONTROL_PLANE_URL": "<replace-with-production-control-plane-url>",
                 "LUNORA_APP_DOMAIN": "lunora.app",
                 "LUNORA_ENVIRONMENT": "production",
+                "PLAN_MAX_STALE_HOURS": "48",
             },
         },
     },

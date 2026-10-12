@@ -1,10 +1,15 @@
 import { limitsForPlan } from "../billing/plans";
+import type { PlanFacts } from "../plans/plan-facts";
+import { SERVABLE_PLANS } from "../plans/plan-facts";
+import { createPlanResolver, parsePlanMaxStaleHours } from "../plans/plan-resolver";
+import type { KvNamespaceLike } from "../plans/plan-store-kv";
+import { createKvPlanReader } from "../plans/plan-store-kv";
 import type { AnalyticsEngineDatasetLike } from "../targets/cloudflare-wfp/analytics";
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../targets/cloudflare-wfp/analytics";
-import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
-import { createCustomDomainResolver, createPlanResolver, resolveTenant, SERVABLE_PLANS } from "../targets/cloudflare-wfp/route";
+import type { CustomDomainRoute } from "../targets/cloudflare-wfp/route";
+import { createCustomDomainResolver, resolveTenant } from "../targets/cloudflare-wfp/route";
 import type { MisconfiguredSetting } from "../telemetry/platform-metrics";
-import { recordDispatch, recordMisconfiguration, recordRecursion } from "../telemetry/platform-metrics";
+import { recordDispatch, recordMisconfiguration, recordPlanStore, recordRecursion } from "../telemetry/platform-metrics";
 import type { Lineage } from "./lineage";
 import { formatLineageParameter, LINEAGE_HEADER, MAX_LINEAGE_DEPTH, newLineageRoot, readLineage } from "./lineage";
 import { guardProtectedPreview } from "./preview-auth";
@@ -49,6 +54,10 @@ interface DispatcherEnv {
      * and refused elsewhere (plan 475 §4.3). A secret.
      */
     LUNORA_LINEAGE_SECRET?: string;
+    /** Last-verified plans the control plane persists (plan 476). Read only. Absent ⇒ a control-plane outage refuses every cold lookup. */
+    PLAN_KV?: Pick<KvNamespaceLike, "get">;
+    /** Maximum age in hours of a persisted non-suspended plan (plan 476 §4.2). Absent or invalid ⇒ 48. */
+    PLAN_MAX_STALE_HOURS?: string;
     /** Platform self-metrics dataset (GAPS.md E1, `src/telemetry/platform-metrics.ts`). Optional. */
     PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
     /** Analytics Engine dataset for per-request metering (§4). Optional. */
@@ -58,8 +67,10 @@ interface DispatcherEnv {
 /** The control plane once both its URL and token are set. Nothing below `serve` re-reads the environment for it. */
 interface ConfiguredControlPlane {
     customDomainResolver: (hostname: string) => Promise<CustomDomainRoute | null>;
+    /** Every input the resolvers were built from, so a changed binding rebuilds them. */
+    key: string;
     kind: "configured";
-    planResolver: (scriptName: string) => Promise<ScriptFacts>;
+    planResolver: (scriptName: string) => Promise<PlanFacts>;
     token: string;
     url: string;
 }
@@ -213,7 +224,7 @@ let configured: ConfiguredControlPlane | undefined;
 
 /**
  * The control plane for one request, read from the environment: a configured one (cached per
- * isolate, keyed by the raw URL and token) or the setting names that are missing. The caller
+ * isolate, keyed by the URL, the token and the plan settings) or the setting names that are missing. The caller
  * decides what missing settings mean; this only reports them.
  */
 const controlPlaneFor = (env: DispatcherEnv): ControlPlaneState => {
@@ -233,9 +244,11 @@ const controlPlaneFor = (env: DispatcherEnv): ControlPlaneState => {
         return { kind: "unconfigured", missing };
     }
 
+    const maxStaleHours = parsePlanMaxStaleHours(env.PLAN_MAX_STALE_HOURS);
+    const key = `${url}|${token}|${String(maxStaleHours)}|${env.PLAN_KV === undefined ? "no-kv" : "kv"}`;
     const current = configured;
 
-    if (current?.url === url && current.token === token) {
+    if (current?.key === key) {
         return current;
     }
 
@@ -243,8 +256,18 @@ const controlPlaneFor = (env: DispatcherEnv): ControlPlaneState => {
 
     configured = {
         customDomainResolver: createCustomDomainResolver(options),
+        key,
         kind: "configured",
-        planResolver: createPlanResolver(options),
+        // The metrics closure captures this env. The cache key covers every input the resolver takes, so a
+        // changed binding rebuilds it, and the Analytics Engine binding is fixed per isolate.
+        planResolver: createPlanResolver({
+            ...options,
+            maxStaleHours,
+            onStore: (outcome) => {
+                recordPlanStore(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default", outcome });
+            },
+            ...(env.PLAN_KV === undefined ? {} : { planStore: createKvPlanReader(env.PLAN_KV) }),
+        }),
         token,
         url,
     };
