@@ -16,6 +16,8 @@ import { privacyFor, privacyWorkflows } from "../lunora/privacy";
 import { cancelRequest, downloadUrl, myRequests, privacyPort, requestErasure } from "../lunora/requests";
 import schema from "../lunora/schema";
 import { addTask, myTasks } from "../lunora/tasks";
+import type { RunHooks } from "./workflow-context";
+import { tombstoneNamespace, workflowContext } from "./workflow-context";
 
 type Harness = ReturnType<typeof lunoraTest>;
 type Context = WorkflowRunContext<{ requestId: string }>;
@@ -29,49 +31,19 @@ const appCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
 const DOWNLOAD_PATH = /\/privacy\/files\//u;
 const NO_WORKFLOWS = /ctx\.workflows/u;
 
-/** An in-memory stand-in for the `PRIVACY_TOMBSTONES` Durable Object. The workerd suite runs the real one. */
-const tombstoneNamespace = () => {
-    const keys = new Map<string, number>();
-    const stub = {
-        add: async (key: string, erasedAt: number) => {
-            keys.set(key, erasedAt);
-        },
-        keys: async () => [...keys.keys()],
-    };
-
-    return { get: () => stub, idFromName: (name: string) => name, keys };
-};
-
-/** What a test can observe of, and do during, a workflow run. */
-interface RunHooks {
-    /** Runs while the workflow sleeps through the grace window, as a subject's cancel would. */
-    readonly duringSleep?: () => Promise<void>;
-    /** Every step the run reached, in order; a durable sleep reads as `sleep:<name>`. */
-    readonly steps?: string[];
-}
-
 /**
  * A workflow context over the harness. `run` calls the app's internal `privacyPort` mutation,
- * as a deployed workflow does through `ctx.run`. `step.do` runs its callback at once, since the test has no durable replay.
+ * as a deployed workflow does through `ctx.run`.
  */
-const workflowContext = (t: Harness, requestId: string, tombstones: ReturnType<typeof tombstoneNamespace>, hooks: RunHooks = {}): Context => {
-    const run = async (_reference: unknown, args: { method: string; payload: string }) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args));
-
-    const step = {
-        do: async (name: string, callback: () => Promise<unknown>) => {
-            hooks.steps?.push(name);
-
-            return callback();
+const contextFor = (t: Harness, requestId: string, tombstones: ReturnType<typeof tombstoneNamespace>, hooks: RunHooks = {}): Context =>
+    workflowContext(
+        {
+            env: { PRIVACY_TOMBSTONES: tombstones },
+            params: { requestId },
+            run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
         },
-        sleepUntil: async (name: string) => {
-            hooks.steps?.push(`sleep:${name}`);
-            await hooks.duringSleep?.();
-        },
-    };
-
-    // The harness has no durable runner, so these doubles stand in for the platform's context.
-    return { env: { PRIVACY_TOMBSTONES: tombstones }, params: { requestId }, run, step } as unknown as Context;
-};
+        hooks,
+    );
 
 /**
  * Opens an erasure the way `requestErasure` does, from a sign-in made just now. The mutation
@@ -108,7 +80,7 @@ describe("privacy example", () => {
 
         const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
-        await privacyWorkflows.exportHandler(workflowContext(t, request.id, tombstones));
+        await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
         const part = await t.run(async (ctx) =>
             appCtx(ctx)
@@ -145,7 +117,7 @@ describe("privacy example", () => {
 
         const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
-        await privacyWorkflows.exportHandler(workflowContext(t, request.id, tombstones));
+        await privacyWorkflows.exportHandler(contextFor(t, request.id, tombstones));
 
         await expect(t.withIdentity(SUBJECT).query(downloadUrl, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
         await expect(t.withIdentity(OTHER).query(downloadUrl, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -158,7 +130,7 @@ describe("privacy example", () => {
 
         await expect(t.withIdentity(SUBJECT).query(myTasks, {})).resolves.toHaveLength(2);
 
-        await privacyWorkflows.erasureHandler(workflowContext(t, request.id, tombstones));
+        await privacyWorkflows.erasureHandler(contextFor(t, request.id, tombstones));
 
         await expect(t.withIdentity(SUBJECT).query(myTasks, {})).resolves.toStrictEqual([]);
         await expect(t.withIdentity(OTHER).query(myTasks, {})).resolves.toHaveLength(1);
@@ -184,7 +156,7 @@ describe("privacy example", () => {
         // The workflow loads the request in its grace, and the subject cancels while it sleeps, so the
         // run sleeps the grace out and its start step finds the cancel.
         await privacyWorkflows.erasureHandler(
-            workflowContext(t, request.id, tombstones, {
+            contextFor(t, request.id, tombstones, {
                 duringSleep: async () => {
                     await t.withIdentity(SUBJECT).mutation(cancelRequest, { requestId: request.id });
                 },
@@ -195,6 +167,29 @@ describe("privacy example", () => {
         expect(steps).toStrictEqual(["load", "sleep:grace", "start"]);
         await expect(t.withIdentity(SUBJECT).query(myTasks, {})).resolves.toHaveLength(2);
         await expect(t.withIdentity(OTHER).mutation(cancelRequest, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("erases a restored subject again through the restore workflow, and leaves the others", async () => {
+        expect.assertions(3);
+
+        const request = await openErasure(t, SUBJECT.userId);
+
+        await privacyWorkflows.erasureHandler(contextFor(t, request.id, tombstones));
+
+        // A point-in-time restore brings the subject's rows back; the tombstone store keeps its keys.
+        await t.withIdentity(SUBJECT).mutation(addTask, { title: "book flights" });
+
+        const reerased = await privacyWorkflows.restoreHandler(
+            workflowContext({
+                env: { PRIVACY_TOMBSTONES: tombstones },
+                params: { restoredSubjectIds: [SUBJECT.userId, OTHER.userId] },
+                run: async (_reference, args) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args)),
+            }),
+        );
+
+        expect(reerased).toStrictEqual([SUBJECT.userId]);
+        await expect(t.withIdentity(SUBJECT).query(myTasks, {})).resolves.toStrictEqual([]);
+        await expect(t.withIdentity(OTHER).query(myTasks, {})).resolves.toHaveLength(1);
     });
 
     it("refuses an erasure from a session with no issued-at claim", async () => {

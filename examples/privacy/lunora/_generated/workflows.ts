@@ -10,7 +10,7 @@
  */
 import LunoraWorkflow from "@lunora/workflow/do";
 
-import { privacyErasure, privacyExport } from "../workflows.js";
+import { privacyErasure, privacyExport, privacyRestore } from "../workflows.js";
 
 /** Params type carried by a `defineWorkflow` definition (its phantom `__params`), so each entrypoint keeps the authored `ctx.params` type. */
 type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params }
@@ -33,5 +33,12 @@ export class PrivacyErasureWorkflow extends LunoraWorkflow<WorkflowParamsOf<type
 export class PrivacyExportWorkflow extends LunoraWorkflow<WorkflowParamsOf<typeof privacyExport>, WorkflowOutputOf<typeof privacyExport>> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
         super(ctx, env, privacyExport, "privacyExport");
+    }
+}
+
+/** WorkflowEntrypoint for the `privacyRestore` definition, reached as `ctx.exports.PrivacyRestoreWorkflow`. */
+export class PrivacyRestoreWorkflow extends LunoraWorkflow<WorkflowParamsOf<typeof privacyRestore>, WorkflowOutputOf<typeof privacyRestore>> {
+    public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
+        super(ctx, env, privacyRestore, "privacyRestore");
     }
 }

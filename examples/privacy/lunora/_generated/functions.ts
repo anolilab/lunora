@@ -62,11 +62,13 @@ export interface RegisteredLunoraFunction {
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "admin:listOpenPrivacyRequests": lunora_admin_0.listOpenPrivacyRequests as unknown as RegisteredLunoraFunction,
+    "admin:restorePrivacyErasures": lunora_admin_0.restorePrivacyErasures as unknown as RegisteredLunoraFunction,
     "admin:retryPrivacyRequest": lunora_admin_0.retryPrivacyRequest as unknown as RegisteredLunoraFunction,
     "requests:cancelRequest": lunora_requests_1.cancelRequest as unknown as RegisteredLunoraFunction,
     "requests:downloadUrl": lunora_requests_1.downloadUrl as unknown as RegisteredLunoraFunction,
     "requests:myRequests": lunora_requests_1.myRequests as unknown as RegisteredLunoraFunction,
     "requests:privacyPort": lunora_requests_1.privacyPort as unknown as RegisteredLunoraFunction,
+    "requests:privacySweep": lunora_requests_1.privacySweep as unknown as RegisteredLunoraFunction,
     "requests:privacyTick": lunora_requests_1.privacyTick as unknown as RegisteredLunoraFunction,
     "requests:requestErasure": lunora_requests_1.requestErasure as unknown as RegisteredLunoraFunction,
     "requests:requestExport": lunora_requests_1.requestExport as unknown as RegisteredLunoraFunction,
@@ -169,17 +171,19 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     admin: {
-        listOpenPrivacyRequests: (args?: {}) => Promise<{ dueAt: number; extendedDueAt: number | null; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; subjectId: string; type: import("@lunora/privacy").RequestType }[]>;
-        retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
+        listOpenPrivacyRequests: (args?: {}) => Promise<import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
+        restorePrivacyErasures: (args?: {}) => Promise<{ id: string; subjects: number; }>;
+        retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; } | { requestId: string; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; }>;
     };
     requests: {
-        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
+        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
         downloadUrl: (args: { requestId: string }) => Promise<string>;
-        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }[]>;
+        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }[]>;
         privacyPort: (args: { method: string; payload: string }) => Promise<string>;
+        privacySweep: (args?: {}) => Promise<{ expired: string[]; purged: number; }>;
         privacyTick: (args?: {}) => Promise<{ approaching: string[]; overdue: string[]; }>;
-        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
-        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
+        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
+        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
     };
     tasks: {
         addTask: (args: { title: string }) => Promise<Id<"tasks">>;
@@ -226,6 +230,7 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 export const createCaller = (context: CallerCtx): Caller => ({
     admin: {
         listOpenPrivacyRequests: (args) => callRegistered(context, "admin:listOpenPrivacyRequests", args),
+        restorePrivacyErasures: (args) => callRegistered(context, "admin:restorePrivacyErasures", args),
         retryPrivacyRequest: (args) => callRegistered(context, "admin:retryPrivacyRequest", args),
     },
     requests: {
@@ -233,6 +238,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         downloadUrl: (args) => callRegistered(context, "requests:downloadUrl", args),
         myRequests: (args) => callRegistered(context, "requests:myRequests", args),
         privacyPort: (args) => callRegistered(context, "requests:privacyPort", args),
+        privacySweep: (args) => callRegistered(context, "requests:privacySweep", args),
         privacyTick: (args) => callRegistered(context, "requests:privacyTick", args),
         requestErasure: (args) => callRegistered(context, "requests:requestErasure", args),
         requestExport: (args) => callRegistered(context, "requests:requestExport", args),

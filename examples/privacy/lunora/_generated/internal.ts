@@ -6,11 +6,13 @@ import type { FunctionReference } from "lunorash/client";
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
     admin: {
-        listOpenPrivacyRequests: FunctionReference<"query", {}, { dueAt: number; extendedDueAt: number | null; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; subjectId: string; type: import("@lunora/privacy").RequestType }[]>;
-        retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
+        listOpenPrivacyRequests: FunctionReference<"query", {}, import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
+        restorePrivacyErasures: FunctionReference<"action", {}, { id: string; subjects: number; }>;
+        retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; }>;
     };
     requests: {
         privacyPort: FunctionReference<"mutation", { method: string; payload: string }, string>;
+        privacySweep: FunctionReference<"mutation", {}, { expired: string[]; purged: number; }>;
         privacyTick: FunctionReference<"mutation", {}, { approaching: string[]; overdue: string[]; }>;
     };
 }
@@ -18,10 +20,12 @@ export interface InternalApiTypes {
 export const internal: InternalApiTypes = {
     admin: {
         listOpenPrivacyRequests: { __lunoraRef: "admin:listOpenPrivacyRequests" },
+        restorePrivacyErasures: { __lunoraRef: "admin:restorePrivacyErasures" },
         retryPrivacyRequest: { __lunoraRef: "admin:retryPrivacyRequest" },
     },
     requests: {
         privacyPort: { __lunoraRef: "requests:privacyPort" },
+        privacySweep: { __lunoraRef: "requests:privacySweep" },
         privacyTick: { __lunoraRef: "requests:privacyTick" },
     },
 };
