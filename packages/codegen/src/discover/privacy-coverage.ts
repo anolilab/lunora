@@ -2,8 +2,8 @@
  * The privacy coverage lint (plan 468, WS H). A table that holds a user's data, meaning it has a
  * `userId` column, must be exported and erased by a dataset, or excluded with a reason. Codegen reads
  * the `defineDataset`, built-in dataset and `definePrivacy({ exclude })` literals and fails the build on
- * any table left over. It also fails on a `defineDataset` that no `definePrivacy` passes, when the
- * `datasets` literal is statically resolvable.
+ * any table left over. It also fails on a `defineDataset` that no `definePrivacy` passes. A config spread
+ * into `definePrivacy` is followed to its object literal; when the `datasets` cannot be resolved, it warns.
  *
  * It reads literals only. It runs only when the app declares `@lunora/privacy`, so an app without the
  * package never has its files parsed for this lint.
@@ -129,17 +129,104 @@ const coverNamedTable = (call: CallExpression, state: CoverageState, fallback: s
     state.datasets.set(stringValue(call.getArguments()[0]) ?? fallback, fallback);
 };
 
-/** `definePrivacy(config)`: reads its `exclude` literal. */
-const readPrivacyConfig = (call: CallExpression, state: CoverageState): void => {
-    const config = call.getArguments()[0];
-    const exclude = config !== undefined && Node.isObjectLiteralExpression(config) ? literalProperty(config, "exclude") : undefined;
+/** How many identifiers or spreads the config reader follows before it gives up, so a cycle cannot loop. */
+const MAX_RESOLVE_DEPTH = 8;
 
-    for (const property of exclude === undefined ? [] : assignmentsOf(exclude)) {
+/**
+ * The expression a node stands for: `as`, `satisfies` and parentheses are unwrapped, and an identifier is
+ * followed (through an import alias too) to its variable's initializer. Returns the node itself when it is
+ * neither, and `undefined` when an identifier has no variable initializer to follow.
+ */
+const resolveExpression = (node: Node, depth = 0): Node | undefined => {
+    if (depth > MAX_RESOLVE_DEPTH) {
+        return undefined;
+    }
+
+    if (Node.isAsExpression(node) || Node.isSatisfiesExpression(node) || Node.isParenthesizedExpression(node)) {
+        return resolveExpression(node.getExpression(), depth + 1);
+    }
+
+    if (!Node.isIdentifier(node)) {
+        return node;
+    }
+
+    const symbol = node.getSymbol();
+    const declaration = (symbol?.isAlias() === true ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
+    const initializer = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+
+    return initializer === undefined ? undefined : resolveExpression(initializer, depth + 1);
+};
+
+/** The name and value expression of one plain or shorthand property, or `undefined` for any other member. */
+const propertyEntry = (property: Node): [string, Node] | undefined => {
+    if (Node.isPropertyAssignment(property)) {
+        const value = property.getInitializer();
+
+        return value === undefined ? undefined : [keyOf(property), value];
+    }
+
+    if (Node.isShorthandPropertyAssignment(property)) {
+        // `{ datasets }`: the name node's symbol is the property's, so follow the value symbol to the variable.
+        const declaration = property.getValueSymbol()?.getValueDeclaration();
+        const value = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+
+        // Kept even when it cannot be followed, so a `datasets` read from it is unresolvable rather than absent.
+        return [property.getName(), value ?? property.getNameNode()];
+    }
+
+    return undefined;
+};
+
+/**
+ * The properties a `definePrivacy` config object ends up with, by name, as the expression each one is set to.
+ * A spread of an identifier is followed to its object literal, in the same file or an imported one, and a later
+ * property overrides an earlier one, as at runtime. Returns `undefined` when a spread cannot be followed to an
+ * object literal: it could carry `datasets` or `exclude`.
+ */
+const configProperties = (config: Node, depth = 0): Map<string, Node> | undefined => {
+    const object = resolveExpression(config, depth);
+
+    if (object === undefined || !Node.isObjectLiteralExpression(object) || depth > MAX_RESOLVE_DEPTH) {
+        return undefined;
+    }
+
+    const properties = new Map<string, Node>();
+
+    for (const property of object.getProperties()) {
+        const entries = Node.isSpreadAssignment(property) ? configProperties(property.getExpression(), depth + 1) : [propertyEntry(property)];
+
+        if (entries === undefined) {
+            return undefined;
+        }
+
+        for (const entry of entries) {
+            if (entry !== undefined) {
+                properties.set(entry[0], entry[1]);
+            }
+        }
+    }
+
+    return properties;
+};
+
+/** The resolved properties of a `definePrivacy(config)` call, or `undefined` when the config cannot be read statically. */
+const privacyConfigOf = (call: CallExpression): Map<string, Node> | undefined => {
+    const config = call.getArguments()[0];
+
+    return config === undefined ? undefined : configProperties(config);
+};
+
+/** `definePrivacy(config)`: reads its `exclude` literal, through a spread or an identifier when it can be followed. */
+const readPrivacyConfig = (config: ReadonlyMap<string, Node> | undefined, state: CoverageState): void => {
+    const value = config?.get("exclude");
+    const exclude = value === undefined ? undefined : resolveExpression(value);
+
+    for (const property of exclude !== undefined && Node.isObjectLiteralExpression(exclude) ? assignmentsOf(exclude) : []) {
         state.excluded.set(keyOf(property), Node.isPropertyAssignment(property) ? (stringValue(property.getInitializer()) ?? "") : "");
     }
 };
 
-/** Route one call expression to the handler for its callee. */
+/** Route one call expression to the handler for its callee. `definePrivacy` is read by {@link scanFile}. */
 const visitCall = (call: CallExpression, state: CoverageState): void => {
     switch (calleeName(call)) {
         case "actionCacheDataset": {
@@ -152,10 +239,6 @@ const visitCall = (call: CallExpression, state: CoverageState): void => {
         }
         case "defineDataset": {
             coverDataset(call, state);
-            break;
-        }
-        case "definePrivacy": {
-            readPrivacyConfig(call, state);
             break;
         }
         case "documentHistoryDataset": {
@@ -191,66 +274,76 @@ const datasetDeclarationOf = (identifier: Node): VariableDeclaration | undefined
 };
 
 /**
- * The `defineDataset` declarations one `definePrivacy` call passes. Returns `undefined` when any element
- * cannot be resolved statically (a spread, a non-literal `datasets`, an identifier that is not a dataset), or
- * when `datasets` is absent beside a spread of the config, which may carry it. An opaque element could be the dataset that looks unused, so the caller must then report nothing.
+ * Add the dataset declarations an array expression lists to `passed`. A spread element is followed to its
+ * array literal. Returns `false` when any element cannot be resolved statically: an opaque element could be the
+ * dataset that looks unused.
  */
-const passedDatasetsOf = (call: CallExpression): Set<VariableDeclaration> | undefined => {
-    const config = call.getArguments()[0];
+const collectPassed = (list: Node, passed: Set<VariableDeclaration>, depth = 0): boolean => {
+    const array = resolveExpression(list, depth);
 
-    if (config === undefined || !Node.isObjectLiteralExpression(config)) {
-        return undefined;
+    if (array === undefined || !Node.isArrayLiteralExpression(array) || depth > MAX_RESOLVE_DEPTH) {
+        return false;
     }
 
-    const property = config.getProperty("datasets");
+    for (const element of array.getElements()) {
+        if (Node.isSpreadElement(element)) {
+            if (!collectPassed(element.getExpression(), passed, depth + 1)) {
+                return false;
+            }
+        } else if (!isDefineDatasetCall(element) && !isBuiltinDatasetCall(element)) {
+            // An inline dataset is passed by construction, so only a named one needs matching.
+            const declaration = Node.isIdentifier(element) ? datasetDeclarationOf(element) : undefined;
 
-    if (property === undefined) {
-        // A spread (`definePrivacy({ ...config })`) may carry the datasets, so nothing can be called unused.
-        return config.getProperties().some((candidate) => Node.isSpreadAssignment(candidate)) ? undefined : new Set();
-    }
+            if (declaration === undefined) {
+                return false;
+            }
 
-    const value = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-
-    if (value === undefined || !Node.isArrayLiteralExpression(value)) {
-        return undefined;
-    }
-
-    const passed = new Set<VariableDeclaration>();
-
-    for (const element of value.getElements()) {
-        if (isDefineDatasetCall(element) || isBuiltinDatasetCall(element)) {
-            // An inline dataset is passed by construction, so nothing can be unused here.
-            continue;
+            passed.add(declaration);
         }
-
-        const declaration = Node.isIdentifier(element) ? datasetDeclarationOf(element) : undefined;
-
-        if (declaration === undefined) {
-            return undefined;
-        }
-
-        passed.add(declaration);
     }
 
-    return passed;
+    return true;
 };
 
-/** What one file contributes: its named `defineDataset` variables, and the `datasets` literal of each `definePrivacy`. */
+/**
+ * The `defineDataset` declarations one `definePrivacy` call passes, read from its resolved config. Returns
+ * `undefined` when the config or its `datasets` cannot be resolved statically.
+ */
+const passedDatasetsOf = (config: ReadonlyMap<string, Node> | undefined): Set<VariableDeclaration> | undefined => {
+    if (config === undefined) {
+        return undefined;
+    }
+
+    const value = config.get("datasets");
+    const passed = new Set<VariableDeclaration>();
+
+    return value === undefined || collectPassed(value, passed) ? passed : undefined;
+};
+
+/** One `definePrivacy` call: where it is, and the datasets it passes (`undefined` when they cannot be resolved). */
+interface PrivacyCall {
+    readonly location: string;
+    readonly passed: Set<VariableDeclaration> | undefined;
+}
+
+/** What one file contributes: its named `defineDataset` variables, and each `definePrivacy` call's datasets. */
 interface FileFacts {
     readonly declared: ReadonlyArray<DatasetDeclaration>;
-    /** One entry per `definePrivacy` call: the datasets it passes, or `undefined` when they cannot be resolved. */
-    readonly privacyCalls: ReadonlyArray<Set<VariableDeclaration> | undefined>;
+    readonly privacyCalls: ReadonlyArray<PrivacyCall>;
 }
 
 /** Read one file: every call feeds the classifier, and every named `defineDataset` variable is returned. */
 const scanFile = (file: SourceFile, state: CoverageState): FileFacts => {
-    const privacyCalls: (Set<VariableDeclaration> | undefined)[] = [];
+    const privacyCalls: PrivacyCall[] = [];
 
     for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         visitCall(call, state);
 
         if (calleeName(call) === "definePrivacy") {
-            privacyCalls.push(passedDatasetsOf(call));
+            const config = privacyConfigOf(call);
+
+            readPrivacyConfig(config, state);
+            privacyCalls.push({ location: `${file.getFilePath()}:${String(call.getStartLineNumber())}`, passed: passedDatasetsOf(config) });
         }
     }
 
@@ -297,7 +390,7 @@ const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, decl
 
     const state: CoverageState = { datasets: new Map<string, string>(), excluded: new Map<string, string>() };
     const declared: DatasetDeclaration[] = [];
-    const privacyCalls: (Set<VariableDeclaration> | undefined)[] = [];
+    const privacyCalls: PrivacyCall[] = [];
 
     for (const file of coverageFiles(project, lunoraDirectory)) {
         const facts = scanFile(file, state);
@@ -309,15 +402,23 @@ const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, decl
     const passed = new Set<VariableDeclaration>();
 
     for (const call of privacyCalls) {
-        for (const declaration of call ?? []) {
+        for (const declaration of call.passed ?? []) {
             passed.add(declaration);
+        }
+
+        if (call.passed === undefined) {
+            // eslint-disable-next-line no-console -- matches the other skip warnings in this package; there is no diagnostic sink here.
+            console.warn(
+                `@lunora/codegen: privacy_datasets_unresolved: the definePrivacy call at ${call.location} passes datasets codegen cannot read, so a defineDataset it leaves out is not reported. Pass an array of dataset constants, directly or through a spread of a config object literal.`,
+            );
         }
     }
 
     // A `defineDataset` that is not bound to a variable (passed inline, or stored elsewhere) is never reported:
     // only a named constant can be matched to a `datasets` entry. Nothing is reported while any `datasets`
-    // literal is unresolvable, because its opaque element could be the dataset that looks unused.
-    const resolvable = privacyCalls.every((call) => call !== undefined);
+    // value is unresolvable, because its opaque element could be the dataset that looks unused; the warning
+    // above says so instead of staying silent.
+    const resolvable = privacyCalls.every((call) => call.passed !== undefined);
     const unusedDatasets = resolvable ? declared.filter((entry) => !passed.has(entry.declaration)).map((entry) => entry.name) : [];
 
     // An exclusion overwrites a dataset, as it does in `definePrivacy().coverage`.

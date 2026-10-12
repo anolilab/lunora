@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Project } from "ts-morph";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { checkCoverage, classifyTables } from "../../../shared/privacy-coverage";
 import readPackageDependencies from "../src/discover/package-dependencies";
@@ -242,18 +242,79 @@ describe("the privacy coverage lint", () => {
         }).toThrow(/privacy_dataset_unused: "orphanData"/u);
     });
 
-    it("reports nothing as unused when definePrivacy spreads a config that may carry the datasets", () => {
+    it("reports a dataset left out of a config that definePrivacy spreads", () => {
+        expect.assertions(1);
+
+        // The config carries only notesData, so billingData is erased by nothing.
+        writeApp({
+            files: {
+                "privacy.ts": `import { defineDataset, definePrivacy } from "@lunora/privacy";\n\n${COVERED_DATASET_BODY}\nexport const billingData = defineDataset("billing", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Invoices",\n    tables: {},\n});\n\nexport const privacyConfig = { datasets: [notesData] };\n\nexport const privacy = definePrivacy({ ...privacyConfig, ports: () => undefined });\n`,
+            },
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_dataset_unused: "billingData"/u);
+    });
+
+    it("follows a shorthand datasets property to its array", () => {
         expect.assertions(1);
 
         writeApp({
             files: {
-                "privacy.ts": `import { defineDataset, definePrivacy } from "@lunora/privacy";\n\n${COVERED_DATASET_BODY}\nexport const privacyConfig = { datasets: [notesData] };\n\nexport const privacy = definePrivacy({ ...privacyConfig, ports: () => undefined });\n`,
+                "privacy.ts": `import { defineDataset, definePrivacy } from "@lunora/privacy";\n\n${COVERED_DATASET_BODY}\nexport const billingData = defineDataset("billing", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Invoices",\n    tables: {},\n});\n\nconst datasets = [notesData];\n\nexport const privacy = definePrivacy({ datasets, ports: () => undefined });\n`,
+            },
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_dataset_unused: "billingData"/u);
+    });
+
+    it("passes when a spread config, declared in another lunora file, carries every dataset and the exclusions", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        writeApp({
+            files: {
+                "config.ts": `import { defineDataset } from "@lunora/privacy";\n\n${COVERED_DATASET_BODY}\nexport const privacyConfig = { datasets: [notesData], exclude: { audit: "Kept for the legal hold" } } as const;\n`,
+                "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nimport { privacyConfig } from "./config";\n\nexport const privacy = definePrivacy({ ...privacyConfig, ports: () => undefined });\n`,
+            },
+            schema: `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport default defineSchema({\n    audit: defineTable({ userId: v.string() }),\n    notes: defineTable({ body: v.string(), userId: v.string() }),\n});\n`,
+        });
+
+        expect(() => {
+            generate();
+        }).not.toThrow();
+
+        const warnings = warn.mock.calls.map((call) => String(call[0]));
+
+        warn.mockRestore();
+
+        expect(warnings.filter((message) => message.includes("privacy_datasets_unresolved"))).toStrictEqual([]);
+    });
+
+    it("warns instead of staying silent when definePrivacy spreads a config codegen cannot read", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        writeApp({
+            files: {
+                "privacy.ts": `import { defineDataset, definePrivacy } from "@lunora/privacy";\n\n${COVERED_DATASET_BODY}\nconst makeConfig = () => { return { datasets: [notesData] }; };\n\nexport const privacy = definePrivacy({ ...makeConfig(), exclude: {}, ports: () => undefined });\n`,
             },
         });
 
         expect(() => {
             generate();
         }).not.toThrow();
+
+        const warnings = warn.mock.calls.map((call) => String(call[0]));
+
+        warn.mockRestore();
+
+        expect(warnings.filter((message) => message.includes("privacy_datasets_unresolved: the definePrivacy call at"))).toHaveLength(1);
     });
 
     it("resolves a dataset passed by an import from another lunora file", () => {
@@ -303,19 +364,27 @@ describe("the privacy coverage lint", () => {
         }).toThrow(/privacy_dataset_unused: "orphanData"/u);
     });
 
-    it("does not report an unused dataset when the datasets literal cannot be resolved", () => {
-        expect.assertions(1);
+    it("does not report an unused dataset when the datasets literal cannot be resolved, and warns", () => {
+        expect.assertions(2);
 
-        // A spread element could carry the dataset that looks unused, so the lint must stay silent.
+        // An opaque spread element could carry the dataset that looks unused, so the lint reports nothing and warns.
         writeApp({
             files: {
-                "privacy.ts": `${COVERED_PRIVACY}\nexport const orphanData = defineDataset("orphan", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Possibly passed through a spread",\n    tables: {},\n});\n\nexport const extra = [orphanData];\nexport const more = definePrivacy({ datasets: [notesData, ...extra] });\n`,
+                "privacy.ts": `${COVERED_PRIVACY}\nexport const orphanData = defineDataset("orphan", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Possibly passed through a spread",\n    tables: {},\n});\n\nconst extra = () => [orphanData];\nexport const more = definePrivacy({ datasets: [notesData, ...extra()] });\n`,
             },
         });
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
         expect(() => {
             generate();
         }).not.toThrow();
+
+        const warnings = warn.mock.calls.map((call) => String(call[0]));
+
+        warn.mockRestore();
+
+        expect(warnings.some((message) => message.includes("privacy_datasets_unresolved"))).toBe(true);
     });
 });
 
