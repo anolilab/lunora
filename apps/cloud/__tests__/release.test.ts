@@ -4,7 +4,7 @@ import { handleDeployRequest } from "../src/deploy/handler";
 import { runDeployment } from "../src/deploy/orchestrator";
 import { createDeployPacer } from "../src/deploy/pacing";
 import type { ReleaseTarget } from "../src/deploy/release";
-import { rollbackRelease } from "../src/deploy/release";
+import { droppedStatefulClasses, rollbackRelease } from "../src/deploy/release";
 import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
 import type { StoredRelease } from "../src/deploy/release-store";
 import { ConvergeScheduler } from "../src/deploy/scheduler";
@@ -496,6 +496,31 @@ describe("rollback boundary", () => {
         expect(reads).toContain("releaseTarget");
         // `resolveTelemetrySafely` swallows errors, so a disallowed read inside it is visible only here, not in the rejection.
         expect(violations).toStrictEqual([]);
+    });
+});
+
+describe("rollback guard covers Workflow classes", () => {
+    const manifest = (...bindings: DeployManifest["bindings"]): DeployManifest => {
+        return { bindings };
+    };
+
+    it("refuses a rollback that drops a live Workflow class", () => {
+        const live = manifest({ binding: "FLOW", className: "OrderFlow", type: "workflow" });
+
+        expect(droppedStatefulClasses(live, manifest())).toStrictEqual(["OrderFlow"]);
+    });
+
+    it("allows a rollback that keeps the Workflow class", () => {
+        const live = manifest({ binding: "FLOW", className: "OrderFlow", type: "workflow" });
+        const target = manifest({ binding: "FLOW", className: "OrderFlow", type: "workflow" });
+
+        expect(droppedStatefulClasses(live, target)).toStrictEqual([]);
+    });
+
+    it("still reports a dropped Durable Object class", () => {
+        const live = manifest({ binding: "SHARD", className: "ShardDO", type: "durable_object" });
+
+        expect(droppedStatefulClasses(live, manifest())).toStrictEqual(["ShardDO"]);
     });
 });
 

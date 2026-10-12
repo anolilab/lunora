@@ -407,7 +407,7 @@ describe("deploy manifest validation", () => {
         expect(error).toContain("hyperdrive (PG): Hyperdrive points at your own database");
         expect(error).toContain("pipeline (STREAM): a pipeline needs its stream and sink configured");
         expect(error).toContain("vectorize (INDEX): an index needs its dimensions and metric");
-        expect(error).toContain("workflow (FLOW): Workflows register per account script");
+        expect(error).toContain("workflow (FLOW): a Workflow registers against an account-level script");
     });
 
     it("refuses an assets binding not named ASSETS", async () => {

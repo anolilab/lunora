@@ -224,10 +224,10 @@ describe("provision plan: deploy", () => {
 });
 
 describe("provision plan: refusals", () => {
-    it("refuses workflows, which Alchemy cannot register for a dispatch-namespace script", () => {
+    it("refuses workflows on a dispatch namespace, which has no account-level Workflow registration", () => {
         expect.assertions(2);
 
-        refuse(deployJob([{ binding: "FLOW", className: "Flow", type: "workflow" }]), /Workflows cannot be registered/u);
+        refuse(deployJob([{ binding: "FLOW", className: "Flow", type: "workflow" }]), /dispatch-namespace Worker cannot register a Workflow/u);
     });
 
     it.each(["container", "hyperdrive", "pipeline", "vectorize"] as const)("refuses the unsupported %s type", (type) => {
@@ -237,7 +237,7 @@ describe("provision plan: refusals", () => {
     });
 
     const contractTypes = Object.keys(BINDING_SUPPORT) as BindingRequirement["type"][];
-    // Workflows are `bound` in the contract but Alchemy cannot register them (see plan.mjs).
+    // Workflows are `bound` on cloudflare-workers only, and the cell's dispatch-namespace plan refuses them (see plan.mjs).
     const plannable = contractTypes.filter((type) => BINDING_SUPPORT[type] !== "unsupported" && type !== "workflow");
     const refusable = contractTypes.filter((type) => !plannable.includes(type));
     const jobFor = (type: BindingRequirement["type"]) =>
@@ -389,6 +389,28 @@ describe("provision plan: a customer's own account (cloudflare-workers)", () => 
         expect(credentials).toStrictEqual({ apiToken: "tok", stateStore: STATE });
         expect(result.worker).not.toHaveProperty("namespace");
         expect(result.worker?.crons).toStrictEqual(["*/5 * * * *", "0 3 * * 1"]);
+    });
+
+    it("binds a workflow as the Worker's own class, in the Worker stack, so teardown removes it with the Worker", () => {
+        expect.assertions(3);
+
+        const { plan: result } = planJob(accountJob([{ binding: "FLOW", className: "OrderFlow", type: "workflow" }]), { controlPlaneScript: undefined });
+
+        expect(result.worker?.bindings).toStrictEqual([{ binding: "FLOW", className: "OrderFlow", kind: "workflow" }]);
+        expect(result.steps).toContainEqual({ kind: "worker", op: "deploy", stackName: "lunora-worker-acme" });
+        expect(result.project?.resources ?? []).toStrictEqual([]);
+    });
+
+    it("refuses a job that binds one Workflow class twice, since the box keys a workflow by its class", () => {
+        expect.assertions(2);
+
+        refuse(
+            accountJob([
+                { binding: "FLOW", className: "OrderFlow", type: "workflow" },
+                { binding: "FLOW_COPY", className: "OrderFlow", type: "workflow" },
+            ]),
+            /workflow class OrderFlow is bound more than once/u,
+        );
     });
 
     it("carries no credentials for a job in the cell's own namespace", () => {

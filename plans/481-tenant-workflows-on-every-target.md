@@ -1,7 +1,7 @@
 # Plan 481 — Tenant Workflows on the targets that can run them, and an honest refusal everywhere else
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** PARTIAL — BYO workflows verified positive on the Lunora account; workstream A (BYO native) is unblocked. WfP is blocked on account access; celld Q3 not run.
+**Status:** PARTIAL — BYO workflows verified positive on the Lunora account. Workstream A shipped: `workflow` is `bound` on `cloudflare-workers`, the provision box binds the Worker's own exported class as a props-only Workflow in the Worker stack, and the fake-driver and plan tests cover it. Not run end to end against a live box; teardown is asserted at plan level only. Workstream B shipped: the WfP refusal names the constraint and the one action. Workstream C shipped in part: the halt record lists the workflow classes it stubs and says their running instances fail on their next wake. D and E not started. WfP is still blocked on account access (Q1); celld Q3 not run.
 
 ## 0. Headline finding
 
@@ -68,10 +68,10 @@ Size: **M** for the BYO path, **L or blocked** for WfP.
 - Q2 (BYO): can a plain Worker in a customer account declare a `workflows` binding, and does the provision box create the Workflow on deploy?
 - Q3 (celld): does a workflow run to completion with `step.do`, `step.sleep` and `waitForEvent` on the box?
 
-**A. BYO workflows (M, if Q2 yes).** Flip `workflow` to `native` for `cloudflare-workers` in `BINDING_SUPPORT`, with the provision-box job carrying the workflow. Test: the matrix
+**A. BYO workflows (M, if Q2 yes).** _Shipped; see Status._ Flip `workflow` to `native` for `cloudflare-workers` in `BINDING_SUPPORT`, with the provision-box job carrying the workflow. Test: the matrix
 matches; a fake driver receives the workflow resource; teardown removes it with the Worker.
 
-**B. Refusal wording and UX (S).** Replace the WfP reason with the actual constraint once Q1 is answered (§4.5 shape), and link the docs.
+**B. Refusal wording and UX (S).** _Shipped: the WfP reason states the constraint and the action; the docs link is not added._ Replace the WfP reason with the actual constraint once Q1 is answered (§4.5 shape), and link the docs.
 
 **C. Halt behaviour (S).** On targets that drop workflow classes, the halt response lists the workflow classes it could not stop.
 
@@ -109,3 +109,15 @@ This plan touches a provider binding, so the table is mandatory. The framework's
 
 1. Does a running Workflow instance count against the spend cap, and does a halt stop it? Needs a product answer; the meter is in the cloud's billing usage code.
 2. If WfP cannot do workflows, is a customer-box or BYO-only feature acceptable for the managed tier? Product call; the matrix is the honest answer either way.
+
+## 10. Review points closed on PR #1126 (2026-10-12)
+
+- **Workflow name ignored by the box.** Platform limitation, documented in the `BINDING_SUPPORT` comment and in `cloud/your-own-cloudflare-account.mdx` beside the capability table. Not changed.
+- **Duplicate class refused (known false positive).** A binding with `script_name` names a class in another Worker. The manifest drops `script_name`, so two same-named classes from different Workers are refused too. Carrying `script_name` in `BindingRequirement` is the follow-up.
+- **Duplicate class refused.** A manifest that binds one Workflow class under two bindings, or one class as both a Workflow and a Durable Object, is refused at deploy with the names of both bindings (`manifest-parse.ts`, tests in `manifest-parse.test.ts`). A Durable Object class may be bound under two names. Renaming a workflow binding that keeps its class does not touch the workflow, because the box keys the workflow by class (`containers/provision/program.mjs`). Removing or renaming the class is a dropped class, which the keep check refuses unless the deletion is allowed.
+- **Emergency stop on workflows (workstream C, part).** The stub's `HaltedWorkflow.run` still throws; its failure semantics are unchanged. A running instance fails on its next wake and does not resume after a resume. The `emergencyStop` limitation text says so, and the halt audit entry and alert list the workflow classes stubbed (`halt.ts`, test in `halt.test.ts`). The synchronous `POST /v1/halts` response cannot list them, because the sweep converges the stub later. The studio's emergency-stop card shows the list (`halts.status`, `stubbedWorkflows`).
+- **Stateful-class helper.** `droppedStatefulClasses` (was `droppedDurableObjectClasses`) reads the shared `statefulClassesOf`, so the rollback guard and the stub agree on the class set.
+
+## 11. Unverified
+
+- **Workflows API token permission.** The Workflows API may need a token permission missing from `CLOUDFLARE_TOKEN_PERMISSIONS`. Not confirmed from here; the table is deliberately unchanged.

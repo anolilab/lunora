@@ -21,7 +21,7 @@
 import { readFileSync } from "node:fs";
 
 import { Stack } from "alchemy";
-import { AnalyticsEngine, D1, Images, KV, providers, Queues, R2, state, Workers } from "alchemy/Cloudflare";
+import { AnalyticsEngine, D1, Images, KV, providers, Queues, R2, state, Workers, Workflow } from "alchemy/Cloudflare";
 import { makeHttpStateStore } from "alchemy/State/HttpStateStore";
 import { State } from "alchemy/State/State";
 import { Effect, Layer, Option, Redacted } from "effect";
@@ -195,6 +195,13 @@ const envBinding = (binding, projectStackName) => {
             }
 
             break;
+        }
+        case "workflow": {
+            // Props-only reference: no `scriptName`, so Alchemy hosts it on this Worker
+            // and registers it in this stack, and destroying the Worker removes it.
+            // Keyed by class, not by binding: Alchemy's physical workflow name is built from
+            // script and class, so a binding rename under a class key is not a delete of the live workflow.
+            return Effect.succeed(Workflow(binding.className, { className: binding.className }));
         }
         default: {
             break;

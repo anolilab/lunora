@@ -207,7 +207,7 @@ describe("the deploy handler validates against the project's target", () => {
 
     it("refuses on cloudflare-wfp what celld-vps runs", async () => {
         await expect(startOn("cloudflare-wfp", [{ binding: "FLOW", className: "OrderFlow", type: "workflow" }])).resolves.toMatchObject({
-            error: expect.stringContaining("on the cloudflare-wfp target — workflow (FLOW): Workflows register per account script") as string,
+            error: expect.stringContaining("on the cloudflare-wfp target — workflow (FLOW): a Workflow registers against an account-level script") as string,
             status: 400,
         });
     });
@@ -227,9 +227,9 @@ describe("the deploy handler validates against the project's target", () => {
         expect(started).toStrictEqual({ error: expect.stringContaining("names no box") as string, status: 409 });
     });
 
-    it("refuses on cloudflare-workers what the provision box cannot bind, with its own reason", async () => {
-        await expect(startOn("cloudflare-workers", [{ binding: "FLOW", className: "OrderFlow", type: "workflow" }])).resolves.toMatchObject({
-            error: expect.stringContaining("on the cloudflare-workers target — workflow (FLOW): a plain Worker can run Workflows") as string,
+    it("accepts a workflow on cloudflare-workers, which the provision box registers for the Worker's own class", async () => {
+        expect(BINDING_SUPPORT["cloudflare-workers"].workflow).toBe("bound");
+        await expect(startOn("cloudflare-workers", [{ binding: "FLOW", className: "OrderFlow", type: "workflow" }])).resolves.not.toMatchObject({
             status: 400,
         });
     });

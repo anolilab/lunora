@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { aliasOfResourceName, tenantResourceName } from "../src/provision-contract";
+import { aliasOfResourceName, statefulClassesOf, tenantResourceName } from "../src/provision-contract";
+
+describe(statefulClassesOf, () => {
+    it("returns the Durable Object and Workflow bindings, in manifest order, and nothing else", () => {
+        const flow = { binding: "FLOW", className: "OrderFlow", type: "workflow" } as const;
+        const room = { binding: "ROOMS", className: "Room", sqlite: true, type: "durable_object" } as const;
+
+        expect(statefulClassesOf({ bindings: [{ binding: "CACHE", type: "kv" }, room, flow] })).toStrictEqual([room, flow]);
+    });
+
+    it("throws, rather than skipping, a stateful binding that names no class", () => {
+        expect(() => statefulClassesOf({ bindings: [{ binding: "FLOW", type: "workflow" }] })).toThrow("binding FLOW (workflow) names no class");
+    });
+});
 
 describe(tenantResourceName, () => {
     it("names a resource <alias>--<binding>, folding case and underscores", () => {

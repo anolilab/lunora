@@ -368,7 +368,7 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
       so the studio links there and never claims to create or check one.
 - **Not yet:** custom domains on the customer's zone, platform runtime logs
   (the tail consumer lives in the platform's account), per-plan runtime limits
-  (no dispatcher in front), and Workflows, containers, Hyperdrive, Vectorize,
+  (no dispatcher in front), and containers, Hyperdrive, Vectorize,
   Pipelines, Stream, Media and VPC bindings — each refused with its reason.
 
 ### Customer boxes (`celld-vps`, plan 458)
@@ -805,7 +805,7 @@ consumers keep firing in the customer's account. A halt stops that code:
   free (`HALTED_CLASS_<n>` otherwise), limited to the types the target
   provisions. `assertStubKeepsClasses` refuses any other stub before anything
   converges, and runs the rollback's own drop guard
-  (`droppedDurableObjectClasses`). The `sqlite` flag is never compared: the
+  (`droppedStatefulClasses`). The `sqlite` flag is never compared: the
   provision box never sends it, and a class keeps its storage. An alias
   deployed before the record falls back to its live release and the newer
   releases that may have reached its Worker. A release that converged

@@ -241,9 +241,9 @@ describe("pOST /v1/deploy with runtime worker", () => {
         await deploy({ allowDeleteClasses: ["Room"], manifest: { bindings: [DO_COUNTER] }, runtime: "worker" }, deps(backend, provisioner));
         await deploy({ manifest: { bindings: [] } }, deps(backend, provisioner));
 
-        expect(created[0]).toMatchObject({ allowDeleteClasses: ["Room"], durableObjectClasses: ["Counter"] });
+        expect(created[0]).toMatchObject({ allowDeleteClasses: ["Room"], statefulClasses: ["Counter"] });
         // A Lunora app's floor is a class it binds.
-        expect(created[1]?.durableObjectClasses).toStrictEqual(["ShardDO"]);
+        expect(created[1]?.statefulClasses).toStrictEqual(["ShardDO"]);
         await expect(deploy({ allowDeleteClasses: "Room", manifest: { bindings: [] } }, deps(backend, provisioner))).resolves.toStrictEqual({
             status: 400,
             text: JSON.stringify({ error: "allowDeleteClasses must be at most 25 Durable Object class names" }),

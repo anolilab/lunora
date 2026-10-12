@@ -13,6 +13,7 @@ import {
     requestOrganizationResume,
     SUPPORT_ACTOR,
 } from "../src/deploy/halt";
+import { stubbedWorkflowsOf } from "../src/deploy/halt-stub";
 import { beginConverge as beginConvergeOnStore, endConverge as endConvergeOnStore } from "../src/deploy/worker-classes";
 import { storedTarget } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
@@ -102,6 +103,8 @@ export interface HaltView {
     requestedAt: number;
     source: "manual" | "support" | "suspension";
     state: "halted" | "halting" | "resuming";
+    /** The Workflow classes the stub replaced: their running instances fail on their next wake. Absent when none. */
+    stubbedWorkflows?: string[];
 }
 
 /** What the studio's emergency-stop card shows. */
@@ -121,6 +124,8 @@ export interface HaltStatus {
 }
 
 const toView = (row: HaltRow): HaltView => {
+    const workflows = stubbedWorkflowsOf(row.stubClasses);
+
     return {
         alias: row.alias,
         attempts: row.attempts ?? 0,
@@ -132,6 +137,7 @@ const toView = (row: HaltRow): HaltView => {
         reason: row.reason,
         requestedAt: row.createdAt,
         source: row.source,
+        ...(workflows.length === 0 ? {} : { stubbedWorkflows: workflows }),
         state: row.state,
     };
 };

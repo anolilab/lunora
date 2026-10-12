@@ -182,7 +182,7 @@ describe("provision box", { timeout: 20_000 }, () => {
         job.spec.manifest.bindings = [{ binding: "FLOW", resourceName: "x", type: "workflow" }];
 
         await expect(events(await post(job))).resolves.toStrictEqual([
-            { message: "workflow binding FLOW: Workflows cannot be registered for a prebuilt Worker yet", type: "error" },
+            { message: "workflow binding FLOW: a dispatch-namespace Worker cannot register a Workflow", type: "error" },
         ]);
     });
 

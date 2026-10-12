@@ -5,7 +5,7 @@ import type { ProvisionJob } from "../containers/provision/plan.mjs";
 import { planJob } from "../containers/provision/plan.mjs";
 import type { HaltStub } from "../src/deploy/halt-stub";
 import { assertStubKeepsClasses, buildHaltStub, classesOf, haltedBody, mergeClasses, PARK_ALARM_MS, provisionableClasses } from "../src/deploy/halt-stub";
-import { droppedDurableObjectClasses } from "../src/deploy/release";
+import { droppedStatefulClasses } from "../src/deploy/release";
 import type { BindingRequirement, DeployManifest, TenantDeploymentSpec } from "../src/provision-contract";
 import { BINDING_SUPPORT } from "../src/provision-contract";
 import { deployJobSpec } from "../src/targets/provision-box/client";
@@ -195,7 +195,7 @@ describe(provisionableClasses, () => {
 describe(assertStubKeepsClasses, () => {
     it("passes the generated stub", () => {
         expect(() => {
-            assertStubKeepsClasses(stubOf([LIVE], "manual").manifest, classesOf(LIVE), droppedDurableObjectClasses);
+            assertStubKeepsClasses(stubOf([LIVE], "manual").manifest, classesOf(LIVE), droppedStatefulClasses);
         }).not.toThrow();
     });
 
@@ -204,10 +204,10 @@ describe(assertStubKeepsClasses, () => {
         const missing: DeployManifest = { ...stub, bindings: stub.bindings.filter((binding) => binding.className !== "LegacyRoom") };
 
         expect(() => {
-            assertStubKeepsClasses(missing, classesOf(LIVE), droppedDurableObjectClasses);
+            assertStubKeepsClasses(missing, classesOf(LIVE), droppedStatefulClasses);
         }).toThrow(/missing durable_object:LegacyRoom/u);
         expect(() => {
-            assertStubKeepsClasses(missing, classesOf(LIVE), droppedDurableObjectClasses);
+            assertStubKeepsClasses(missing, classesOf(LIVE), droppedStatefulClasses);
         }).toThrow(/would delete the data of LegacyRoom/u);
     });
 
@@ -224,18 +224,18 @@ describe(assertStubKeepsClasses, () => {
         const extra: DeployManifest = { ...stub, bindings: [...stub.bindings, { binding: "NEW", className: "New", sqlite: true, type: "durable_object" }] };
 
         expect(() => {
-            assertStubKeepsClasses(flipped, classesOf(LIVE), droppedDurableObjectClasses);
+            assertStubKeepsClasses(flipped, classesOf(LIVE), droppedStatefulClasses);
         }).not.toThrow();
         expect(() => {
-            assertStubKeepsClasses(renamed, classesOf(LIVE), droppedDurableObjectClasses);
+            assertStubKeepsClasses(renamed, classesOf(LIVE), droppedStatefulClasses);
         }).not.toThrow();
         expect(() => {
-            assertStubKeepsClasses(extra, classesOf(LIVE), droppedDurableObjectClasses);
+            assertStubKeepsClasses(extra, classesOf(LIVE), droppedStatefulClasses);
         }).toThrow(/unexpected durable_object:New/u);
     });
 
     it("runs the rollback's own drop guard over the classes that may be on the Worker", () => {
-        const dropped = vi.fn<typeof droppedDurableObjectClasses>(droppedDurableObjectClasses);
+        const dropped = vi.fn<typeof droppedStatefulClasses>(droppedStatefulClasses);
         const newer: DeployManifest = { bindings: [...LIVE.bindings, { binding: "PRESENCE", className: "Presence", sqlite: true, type: "durable_object" }] };
         const expected = mergeClasses([classesOf(newer), classesOf(LIVE)]);
 
@@ -243,7 +243,7 @@ describe(assertStubKeepsClasses, () => {
 
         expect(dropped).toHaveBeenCalledTimes(1);
         expect(() => {
-            assertStubKeepsClasses(stubOf([LIVE], "manual").manifest, expected, droppedDurableObjectClasses);
+            assertStubKeepsClasses(stubOf([LIVE], "manual").manifest, expected, droppedStatefulClasses);
         }).toThrow(/would delete the data of Presence/u);
     });
 });

@@ -14,6 +14,7 @@ import { isLunoraError } from "@lunora/errors";
 
 import type { ProjectRuntime } from "../project-runtime";
 import type { AssetsUpload, DeployKind, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
+import { statefulClassesOf } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import type { Placement } from "../targets/placement";
 import type { ProvisionStep } from "../telemetry/platform-metrics";
@@ -48,8 +49,7 @@ export interface DeployBackend extends ReleaseBackend {
         branch?: string;
         /** The tenant's compiled cron expressions for the WfP cron fan-out (§2.4). */
         cronSpecs?: string[];
-        /** The Durable Object classes this release binds, which the next release of its alias must keep. */
-        durableObjectClasses: string[];
+
         key: string;
         kind: DeployKind;
         organizationId: string;
@@ -57,6 +57,13 @@ export interface DeployBackend extends ReleaseBackend {
         /** What the release is, recorded on the row (`src/project-runtime.ts`). */
         runtime: ProjectRuntime;
         scriptName: string;
+
+        /**
+         * The stateful classes (Durable Object and Workflow) this release binds, which the
+         * next release of its alias must keep. The insert in `lunora/deployments.ts` maps this to the
+         * stored `durableObjectClasses` column; renaming that column needs a migration.
+         */
+        statefulClasses: string[];
     }) => Promise<{ deploymentId: string; previousDeploymentId?: string; version?: number }>;
     updateStatus: (input: {
         bundleHash?: string;
@@ -472,6 +479,9 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
     // admin proxy) and set as the worker's LUNORA_ADMIN_TOKEN secret.
     const adminToken = randomSecret();
 
+    // Computed before the write: a stateful binding with no class throws here rather than being recorded as keepable.
+    const statefulClasses = statefulClassesOf(manifest).map((bound) => bound.className);
+
     let created: { deploymentId: string; previousDeploymentId?: string };
 
     try {
@@ -480,7 +490,9 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
             ...(request.allowDeleteClasses === undefined ? {} : { allowDeleteClasses: request.allowDeleteClasses }),
             branch,
             ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
-            durableObjectClasses: manifest.bindings.flatMap((binding) => (binding.type === "durable_object" && binding.className ? [binding.className] : [])),
+            // Stateful classes: Durable Object storage and Workflow instances. A deploy
+            // that drops one of these deletes its data, so the keep-check needs both.
+            statefulClasses,
             key: caller.key,
             kind,
             organizationId: caller.organizationId,

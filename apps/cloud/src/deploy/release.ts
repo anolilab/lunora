@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import type { ProjectRuntime } from "../project-runtime";
 import { WORKER_RUNTIME_TAG } from "../project-runtime";
 import type { AssetsUpload, DeployKind, DeployManifest, TargetId, TenantDeploymentSpec } from "../provision-contract";
-import { TARGETS } from "../provision-contract";
+import { classesMissingFrom, statefulClassesOf, TARGETS } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import type { Placement } from "../targets/placement";
 import type { DeployPacer } from "./pacing";
@@ -223,35 +223,32 @@ export const resolveReleaseSpec = async (input: ReleaseSpecInput, deps: ReleaseD
     });
 };
 
-/** Durable Object classes the Worker binds, by class name. */
-const durableObjectClasses = (manifest: DeployManifest): Set<string> =>
-    new Set(manifest.bindings.flatMap((requirement) => (requirement.type === "durable_object" && requirement.className ? [requirement.className] : [])));
-
 /**
- * The Durable Object classes `previous` binds that `next` does not — the ones a
+ * The stateful classes `previous` binds that `next` does not — the ones a
  * converge from `previous` onto `next` deletes the data of, on a target that
  * drops unbound classes (`TARGETS[target].dropsUnboundClasses`). The guard of
  * both a rollback ({@link reprovision}) and an emergency stop's stub (`./halt-stub.ts`).
+ * The class set is {@link statefulClassesOf}'s, so this guard and the stub agree.
  */
-export const droppedDurableObjectClasses = (previous: DeployManifest, next: DeployManifest): string[] => {
-    const kept = durableObjectClasses(next);
-
-    return [...durableObjectClasses(previous)].filter((className) => !kept.has(className));
-};
+export const droppedStatefulClasses = (previous: DeployManifest, next: DeployManifest): string[] =>
+    classesMissingFrom(
+        statefulClassesOf(previous).map((bound) => bound.className),
+        statefulClassesOf(next).map((bound) => bound.className),
+    );
 
 /**
  * Put a stored release back on the project's stable Worker, with its spec
  * resolved by {@link resolveReleaseSpec}. The admin token is the target
  * deployment's own, so its row's sealed token keeps working with the studio proxy.
- * @throws {LunoraError} `CONFLICT` when the release was pruned, or — with `keepClasses`, on a target that drops unbound classes — when it drops a Durable Object class the live release binds.
+ * @throws {LunoraError} `CONFLICT` when the release was pruned, or — with `keepClasses`, on a target that drops unbound classes — when it drops a stateful class (a Durable Object or a Workflow) the live release binds.
  */
 export const reprovision = async (
     input: { deploymentId: string; key?: string; organizationId: string },
     deps: ReleaseDeps,
     options: {
         /**
-         * Refuse a release that stops binding a Durable Object class the live
-         * release binds, on a target whose converge would delete that class's
+         * Refuse a release that stops binding a stateful class (a Durable Object or a
+         * Workflow) the live release binds, on a target whose converge would delete that class's
          * data (`TARGETS[target].dropsUnboundClasses`).
          */
         keepClasses?: boolean;
@@ -287,12 +284,12 @@ export const reprovision = async (
             : null;
 
     if (live) {
-        const dropped = droppedDurableObjectClasses(live.manifest, release.manifest);
+        const dropped = droppedStatefulClasses(live.manifest, release.manifest);
 
         if (dropped.length > 0) {
             throw new LunoraError(
                 "CONFLICT",
-                `rolling back would delete the data of Durable Object class(es) ${dropped.join(", ")}, which the target release does not bind; deploy a fix forward instead`,
+                `rolling back would delete the data of class(es) ${dropped.join(", ")} (Durable Object storage or Workflow instances), which the target release does not bind; deploy a fix forward instead`,
             );
         }
     }
