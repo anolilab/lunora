@@ -193,8 +193,6 @@ export const ERROR_CATALOG = {
 
     /** `@lunora/privacy`: a request's coverage check found a table that no dataset or exclusion declares. Build- and test-time; the message names the table. */
     PRIVACY_COVERAGE: { status: 500, title: "Privacy coverage check failed" },
-    /** `@lunora/privacy`: the subject's export is over the single-archive limit, so the request is refused before any work starts. */
-    PRIVACY_EXPORT_TOO_LARGE: { status: 422, title: "Export too large" },
     /** `@lunora/privacy`: the subject already has an open request of this type. */
     PRIVACY_REQUEST_OPEN: { status: 409, title: "A privacy request is already open" },
     /** `@lunora/privacy`: an erasure needs a recent sign-in, the same window account deletion uses. */
