@@ -17,19 +17,30 @@ interface RequestDeadlines {
 }
 
 /**
- * The transitions the package allows, one entry per status in `REQUEST_STATUSES`. `failed` is not terminal: an operator can
- * retry the work, and the Art. 12(3) clock keeps running throughout. A run can fail before it
- * starts processing (a missing secret), so `received` and `grace` may move to `failed` too.
+ * Where a subject may cancel, by request type, and the only statuses that move to `cancelled`. An export
+ * is cancelled only before its run starts: a processing export is not cancelled, because the run would
+ * otherwise write over the cancellation. An erasure is cancelled only during its grace window; after
+ * it, rows are being erased and cancelling cannot restore them.
+ */
+const CANCEL_WINDOW: Readonly<Record<RequestType, RequestStatus>> = { erasure: "grace", export: "received" };
+
+const CANCELLABLE: ReadonlySet<RequestStatus> = new Set(Object.values(CANCEL_WINDOW));
+
+/**
+ * Every other transition the package makes, one entry per status in `REQUEST_STATUSES`. `failed` is
+ * not terminal: an operator retries it into `processing`, and the Art. 12(3) clock keeps running. A
+ * run can fail before it starts processing (a missing secret), so `received` and `grace` may move to
+ * `failed` too. A `ready` export only expires: nothing runs it again or cancels it.
  */
 const TRANSITIONS: Readonly<Record<RequestStatus, ReadonlyArray<RequestStatus>>> = {
     cancelled: [],
     completed: [],
     expired: [],
     failed: ["processing"],
-    grace: ["cancelled", "failed", "processing"],
+    grace: ["failed", "processing"],
     processing: ["completed", "failed", "ready"],
-    ready: ["cancelled", "expired", "processing"],
-    received: ["cancelled", "failed", "grace", "processing"],
+    ready: ["expired"],
+    received: ["failed", "processing"],
 };
 
 /** Thrown when a transition is not in {@link TRANSITIONS}. An `UNPROCESSABLE` error, like every refused request change. */
@@ -56,8 +67,8 @@ const isRequestStatus = (value: string): value is RequestStatus => (REQUEST_STAT
 /** Every status that is not terminal, for a `listOpen` that reads a status index once per status. */
 const OPEN_STATUSES: ReadonlyArray<RequestStatus> = REQUEST_STATUSES.filter((status) => !isTerminal(status));
 
-/** Whether {@link TRANSITIONS} allows the move. */
-const canTransition = (from: RequestStatus, to: RequestStatus): boolean => TRANSITIONS[from].includes(to);
+/** Whether the move is allowed: a cancel from a {@link CANCEL_WINDOW} status, or an edge in {@link TRANSITIONS}. */
+const canTransition = (from: RequestStatus, to: RequestStatus): boolean => (to === "cancelled" ? CANCELLABLE.has(from) : TRANSITIONS[from].includes(to));
 
 /** Check a transition and return the new status, or throw {@link InvalidTransitionError}. */
 const transition = (from: RequestStatus, to: RequestStatus): RequestStatus => {
@@ -68,20 +79,8 @@ const transition = (from: RequestStatus, to: RequestStatus): RequestStatus => {
     return to;
 };
 
-/**
- * A subject may cancel while the work has not yet been handed over: an export up
- * to the point it is ready, an erasure only during its grace window. After that,
- * the rows are being erased and cancelling cannot restore them.
- */
-const canCancel = (type: RequestType, status: RequestStatus): boolean => {
-    if (type === "erasure") {
-        return status === "grace";
-    }
-
-    // Only before the run starts: a processing or ready export is not cancelled, because the run
-    // would otherwise write over the cancellation. Plan §4.5 says "before ready".
-    return status === "received";
-};
+/** Whether a subject may cancel a request of this type in this status. See {@link CANCEL_WINDOW}. */
+const canCancel = (type: RequestType, status: RequestStatus): boolean => CANCEL_WINDOW[type] === status;
 
 /**
  * Art. 12(3) sentence 2: the controller may extend once, and only while the

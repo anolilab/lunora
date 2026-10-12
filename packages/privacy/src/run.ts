@@ -15,12 +15,12 @@ import type { ManifestDataset } from "./archive";
 import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
-import { erasureOrder } from "./dataset";
+import { erasureOrder, retainedTables } from "./dataset";
 import { DAY_MS } from "./deadlines";
 import type { RowDisposition, VerifyResult } from "./erasure";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
 import type { RequestStatus } from "./lifecycle";
-import { canTransition, isTerminal, transition } from "./lifecycle";
+import { canTransition, transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
 import { fromStepRecord, requireRequest, toStepRecord } from "./requests";
 import type { TombstonePort } from "./tombstones";
@@ -206,7 +206,9 @@ const allowedRows = async (
 ): Promise<Record<string, number>> => {
     const present = dataset.tableNames.filter((table) => (counts[table] ?? 0) > 0);
     const anonymised = present.filter((table) => dataset.tables[table]?.erase === "anonymise");
-    const retained = present.filter((table) => typeof dataset.tables[table]?.erase === "object");
+    const retained = retainedTables(dataset)
+        .map(({ table }) => table)
+        .filter((table) => present.includes(table));
     const allowed: Record<string, number> = Object.fromEntries(anonymised.map((table) => [table, counts[table] ?? 0]));
 
     if (retained.length === 0) {
@@ -261,17 +263,10 @@ const verifySubjectErased = async (
 const EXPORT_EXPIRY_MS: number = 7 * DAY_MS;
 
 /** A dataset is restricted (Art. 18) when a retention rule may keep any of its tables after erasure. */
-const isRestricted = (dataset: Dataset): boolean => dataset.tableNames.some((table) => typeof dataset.tables[table]?.erase === "object");
+const isRestricted = (dataset: Dataset): boolean => retainedTables(dataset).length > 0;
 
 const retentionText = (dataset: Dataset): string => {
-    const names = [
-        ...new Set(
-            dataset.tableNames
-                .map((table) => dataset.tables[table]?.erase)
-                .filter((erase): erase is { kind: "retain"; rule: string } => typeof erase === "object")
-                .map((erase) => erase.rule),
-        ),
-    ];
+    const names = [...new Set(retainedTables(dataset).map(({ directive }) => directive.rule))];
 
     return names.length === 0 ? "until erasure" : `kept under ${names.join(", ")}`;
 };
@@ -384,7 +379,7 @@ const startStep = async (scope: RunScope, steps: StepRunner, requestId: string):
     steps.do("start", async () => {
         const { status } = await requireRequest(scope.ports.store, requestId);
 
-        if (status === "processing" || !canTransition(status, "processing") || status === "ready") {
+        if (!canTransition(status, "processing")) {
             return status;
         }
 
@@ -419,7 +414,7 @@ const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, d
     steps.do("fail", async () => {
         const { status } = await requireRequest(scope.ports.store, requestId);
 
-        if (isTerminal(status) || !canTransition(status, "failed")) {
+        if (!canTransition(status, "failed")) {
             return status;
         }
 

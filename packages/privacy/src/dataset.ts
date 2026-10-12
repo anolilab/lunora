@@ -94,4 +94,32 @@ const defineDataset = (id: string, spec: DatasetSpec): Dataset => {
  */
 const erasureOrder = (datasets: ReadonlyArray<Dataset>): ReadonlyArray<Dataset> => [...datasets].toSorted((a, b) => PHASE_RANK[a.phase] - PHASE_RANK[b.phase]);
 
-export { type Dataset, type DatasetPhase, type DatasetPlacement, type DatasetSpec, defineDataset, erasureOrder, type TableErasure, type TableSpec };
+/** One table a retention rule may keep rows of after erasure, and the rule's directive. */
+interface RetainedTable {
+    readonly directive: RetainDirective;
+    readonly table: string;
+}
+
+/**
+ * The tables of a dataset whose erasure is a `retain` directive, in declared order. A rule may keep
+ * their rows past erasure, so the dataset is restricted (Art. 18) and erasure archives what it keeps.
+ */
+const retainedTables = (dataset: Dataset): ReadonlyArray<RetainedTable> =>
+    dataset.tableNames.flatMap((table) => {
+        const erase = dataset.tables[table]?.erase;
+
+        return typeof erase === "object" ? [{ directive: erase, table }] : [];
+    });
+
+export {
+    type Dataset,
+    type DatasetPhase,
+    type DatasetPlacement,
+    type DatasetSpec,
+    defineDataset,
+    erasureOrder,
+    type RetainedTable,
+    retainedTables,
+    type TableErasure,
+    type TableSpec,
+};

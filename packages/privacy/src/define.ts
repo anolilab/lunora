@@ -9,7 +9,7 @@ import { LunoraError } from "@lunora/errors";
 import type { CoverageProblem } from "../../../shared/privacy-coverage";
 import { checkCoverage, classifyTables } from "../../../shared/privacy-coverage";
 import type { Dataset } from "./dataset";
-import { erasureOrder } from "./dataset";
+import { erasureOrder, retainedTables } from "./dataset";
 import type { DeadlinePolicy } from "./deadlines";
 import { DAY_MS, DEFAULT_DEADLINES } from "./deadlines";
 import { dispositionFor, drainUntilEmpty } from "./erasure";
@@ -207,8 +207,7 @@ const expireExports = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>
 };
 
 /** Whether any dataset keeps rows under a retention rule, so erasure moves rows into the archive. */
-const keepsArchivedRows = (datasets: ReadonlyArray<Dataset>): boolean =>
-    datasets.some((dataset) => dataset.tableNames.some((table) => typeof dataset.tables[table]?.erase === "object"));
+const keepsArchivedRows = (datasets: ReadonlyArray<Dataset>): boolean => datasets.some((dataset) => retainedTables(dataset).length > 0);
 
 /**
  * Delete every archived row whose retention period has ended, one batch at a time. An app with a

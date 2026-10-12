@@ -1,8 +1,20 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
+import { REQUEST_STATUSES } from "../../../shared/privacy-request-status";
 import { dueAt as dueAtOf } from "../src/deadlines";
-import { canCancel, canExtend, effectiveDueAt, erasureGraceUntil, InvalidTransitionError, isOverdue, isTerminal, transition } from "../src/lifecycle";
+import type { RequestType } from "../src/lifecycle";
+import {
+    canCancel,
+    canExtend,
+    canTransition,
+    effectiveDueAt,
+    erasureGraceUntil,
+    InvalidTransitionError,
+    isOverdue,
+    isTerminal,
+    transition,
+} from "../src/lifecycle";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const at = (iso: string): Date => new Date(iso);
@@ -122,5 +134,28 @@ describe(erasureGraceUntil, () => {
         expect(erasureGraceUntil(at("2027-02-01T00:00:00.000Z"), dueAtOf(at("2027-02-01T00:00:00.000Z")), 14, 3).toISOString()).toBe(
             "2027-02-15T00:00:00.000Z",
         );
+    });
+});
+
+describe("the cancel rule and the transition table", () => {
+    const types: ReadonlyArray<RequestType> = ["erasure", "export"];
+
+    it("allows a move to cancelled exactly from the statuses some request type may cancel in", () => {
+        for (const status of REQUEST_STATUSES) {
+            expect(canTransition(status, "cancelled")).toBe(types.some((type) => canCancel(type, status)));
+        }
+    });
+
+    it("has no edge the package never takes: a ready export is not run again or cancelled, and grace is opened directly", () => {
+        expect(canTransition("ready", "processing")).toBe(false);
+        expect(canTransition("ready", "cancelled")).toBe(false);
+        expect(canTransition("received", "grace")).toBe(false);
+        expect(canTransition("ready", "expired")).toBe(true);
+    });
+
+    it("moves nothing out of a terminal status, failed included as a target", () => {
+        for (const from of REQUEST_STATUSES.filter((status) => isTerminal(status))) {
+            expect(REQUEST_STATUSES.filter((to) => canTransition(from, to))).toStrictEqual([]);
+        }
     });
 });

@@ -1,7 +1,8 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { defineDataset, erasureOrder } from "../src/dataset";
+import { defineDataset, erasureOrder, retainedTables } from "../src/dataset";
+import { retain } from "../src/rules";
 
 const base = {
     legalBasis: "contract" as const,
@@ -51,5 +52,29 @@ describe(erasureOrder, () => {
         ]).map((dataset) => dataset.id);
 
         expect(order).toStrictEqual(["scheduler", "billing", "notes", "restore"]);
+    });
+});
+
+describe(retainedTables, () => {
+    it("lists only the tables a retention rule may keep, with their directive, in declared order", () => {
+        const dataset = defineDataset("billing", {
+            legalBasis: "legal_obligation",
+            origin: "provided",
+            purpose: "Invoices",
+            tables: { carts: {}, invoices: { erase: retain("hgb", { from: "issuedAt" }) }, notes: { erase: "anonymise" }, payouts: { erase: retain("ao") } },
+        });
+
+        expect(retainedTables(dataset)).toStrictEqual([
+            { directive: retain("hgb", { from: "issuedAt" }), table: "invoices" },
+            { directive: retain("ao"), table: "payouts" },
+        ]);
+    });
+
+    it("is empty for a dataset that only deletes and anonymises", () => {
+        expect(
+            retainedTables(
+                defineDataset("tasks", { legalBasis: "contract", origin: "provided", purpose: "Tasks", tables: { a: {}, b: { erase: "anonymise" } } }),
+            ),
+        ).toStrictEqual([]);
     });
 });
