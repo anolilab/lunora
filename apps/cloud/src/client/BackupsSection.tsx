@@ -56,16 +56,16 @@ const download = async (organizationId: OrgId, backupId: string): Promise<void> 
 /** The size of a snapshot, or what a restore wrote. */
 const describeRow = (row: BackupRow): string => {
     if (row.operation === "backup") {
-        return row.bytes === undefined ? "—" : formatBytes(row.bytes);
+        return row.bytes == null ? "—" : formatBytes(row.bytes);
     }
 
-    if (row.restoreInserted === undefined) {
+    if (row.restoreInserted == null) {
         return "—";
     }
 
     const restored = `${formatNumber(row.restoreInserted)} rows restored`;
 
-    if (row.restoreDeleted === undefined) {
+    if (row.restoreDeleted == null) {
         return restored;
     }
 
@@ -74,7 +74,7 @@ const describeRow = (row: BackupRow): string => {
 
 /** What a restore removed, per table (`$kv` / `$storage` / `$auth` for the sections), for the cell's tooltip. */
 const deletedByTable = (row: BackupRow): string | undefined =>
-    row.restoreDeleted === undefined
+    row.restoreDeleted == null
         ? undefined
         : Object.entries(row.restoreDeleted)
               .filter(([, count]) => count > 0)
@@ -207,11 +207,11 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
                                     <TableCell>{row.operation === "restore" ? "Restore" : TRIGGER_LABEL[row.trigger]}</TableCell>
                                     <TableCell title={deletedByTable(row)}>{describeRow(row)}</TableCell>
                                     <TableCell>
-                                        <span title={row.error}>
+                                        <span title={row.error ?? undefined}>
                                             <StatusBadge tone={STATUS_TONE[row.status]}>{row.status}</StatusBadge>
                                         </span>
                                         {row.offsiteStatus === "failed" ? (
-                                            <span className="ml-2 text-xs text-warning" title={row.offsiteError}>
+                                            <span className="ml-2 text-xs text-warning" title={row.offsiteError ?? undefined}>
                                                 off-site copy failed
                                             </span>
                                         ) : null}

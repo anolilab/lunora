@@ -11,7 +11,7 @@ import type { BoxVersions, FleetSummary } from "../src/hostd/protocol";
 import { isVersion } from "../src/hostd/protocol";
 import { storedTarget } from "../src/provision-contract";
 import { placedOnOf } from "../src/targets/placement";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
@@ -37,26 +37,7 @@ import { boundedString, LIMITS } from "./validators";
 type BoxStatus = "offline" | "online" | "pending" | "revoked";
 
 /** A `boxes` row as the store returns it. `.global()` rows answer SQL NULL for an unset column. */
-interface BoxRow {
-    _id: Id<"boxes">;
-    createdAt: number;
-    desiredReleaseId?: null | string;
-    dnsError?: null | string;
-    enrolledAt?: null | number;
-    fleets?: FleetSummary[] | null;
-    ipv4?: null | string;
-    ipv6?: null | string;
-    lastSeenAt?: null | number;
-    name: string;
-    organizationId: Id<"organizations">;
-    publicKey: string;
-    resources?: null | { diskFreeMb: number; memMb: number };
-    revokedAt?: null | number;
-    singleTrust: boolean;
-    slug: string;
-    status: BoxStatus;
-    versions?: BoxVersions | null;
-}
+type BoxRow = Document_<"boxes">;
 
 /** An org's boxes that count against its `boxes` limit: every one not revoked. */
 const activeBoxCount = async (context: QueryContext, organizationId: Id<"organizations">): Promise<number> => {
@@ -217,7 +198,7 @@ export const get = query
     .query(async ({ ctx: context, args: { id, organizationId } }): Promise<BoxView | null> => {
         await assertMember(context, organizationId);
 
-        const row = (await context.db.get(id)) as BoxRow | null;
+        const row = await context.db.get(id);
 
         return row?.organizationId === organizationId ? toBoxView(row, await latestStableVersions(context)) : null;
     });
@@ -392,7 +373,7 @@ export const enrol = internalMutation
         }
 
         if (enrolment.usedAt != null) {
-            const existing = enrolment.boxId == null ? null : ((await context.db.get(enrolment.boxId)) as BoxRow | null);
+            const existing = enrolment.boxId == null ? null : await context.db.get(enrolment.boxId);
 
             if (existing?.publicKey === args.publicKey && existing.status !== "revoked") {
                 return {
@@ -474,7 +455,7 @@ export const identity = internalQuery
             ctx: context,
             args: { boxId },
         }): Promise<null | { organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string }> => {
-            const row = (await context.db.get(boxId)) as BoxRow | null;
+            const row = await context.db.get(boxId);
 
             return row ? { organizationId: row.organizationId, publicKey: row.publicKey, revoked: row.status === "revoked", slug: row.slug } : null;
         },
@@ -496,7 +477,7 @@ export const ownsDeployment = internalQuery
         }
 
         const [box, project] = await Promise.all([
-            context.db.get(boxId) as Promise<BoxRow | null>,
+            context.db.get(boxId),
             context.db.get(deployment.projectId) as Promise<null | { organizationId: string; placementRef?: null | string }>,
         ]);
 
@@ -537,10 +518,8 @@ export const setDesiredRelease = internalMutation
         }
 
         const everyBox = boxIds === undefined ? await context.db.boxes.findMany({}) : undefined;
-        const rows =
-            everyBox === undefined
-                ? ((await Promise.all((boxIds ?? []).map((id) => context.db.get(id)))) as (BoxRow | null)[]).filter((row): row is BoxRow => row !== null)
-                : (everyBox.page as BoxRow[]);
+        const fetched = everyBox === undefined ? await Promise.all((boxIds ?? []).map((id) => context.db.get(id))) : [];
+        const rows = everyBox === undefined ? fetched.filter((row): row is BoxRow => row !== null) : (everyBox.page as BoxRow[]);
         const targets = rows.filter((row) => row.status !== "revoked");
 
         for (const row of targets) {

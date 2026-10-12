@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
@@ -13,16 +13,7 @@ import { rateLimit } from "./guards";
  * only trusts bound installations (`builds.recordPush` checks the pair).
  */
 
-interface InstallationRow {
-    _id: Id<"githubInstallations">;
-    accountLogin: string;
-    claimedAt?: number;
-    createdAt: number;
-    installationId: number;
-    installedByGithubId?: number;
-    installedByLogin?: string;
-    organizationId?: Id<"organizations">;
-}
+type InstallationRow = Document_<"githubInstallations">;
 
 /**
  * Stage an installation (webhook `installation created`). Upserts by

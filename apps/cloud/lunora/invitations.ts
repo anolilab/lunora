@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, assertSignedIn } from "./authz";
 import { rateLimit } from "./guards";
@@ -18,17 +18,7 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const role = v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer"));
 
-interface InvitationRow {
-    _id: Id<"invitations">;
-    createdAt: number;
-    email: string;
-    expiresAt: number;
-    invitedBy: string;
-    organizationId: Id<"organizations">;
-    role: "admin" | "member" | "owner" | "viewer";
-    status: "accepted" | "pending" | "revoked";
-    tokenHash: string;
-}
+type InvitationRow = Document_<"invitations">;
 
 /** Public view of an invitation — never exposes the token hash. */
 type InvitationView = Omit<InvitationRow, "tokenHash">;

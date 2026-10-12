@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import type { PeriodUsage, SpendAccrual, SpendCapDecision, SpendLevel, SpendLimits, SpendLine, UsageMeter } from "../src/billing/spend";
+import type { PeriodUsage, SpendAccrual, SpendCapDecision, SpendLevel, SpendLimits, SpendLine } from "../src/billing/spend";
 import {
     accruedSpend,
     estimatedSpendMinor,
@@ -16,7 +16,7 @@ import { aggregateUsage, isBillableUsage, unmeasuredMeters } from "../src/billin
 import type { SourceStatusRow } from "../src/metering/status";
 import { meteringNotices } from "../src/metering/status";
 import type { UsageFamily } from "../src/targets/driver";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { fireSpendAlerts } from "./alerts";
@@ -183,17 +183,7 @@ export const ingest = mutation
         return id;
     });
 
-interface PlatformUsageRow {
-    _id: Id<"platformUsage">;
-    /** `false` on a row that is displayed and never billed (`isBillableUsage`). */
-    billable?: boolean | null;
-    createdAt: number;
-    kind: UsageMeter;
-    organizationId: Id<"organizations">;
-    periodStart: number;
-    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
-    quantity: number;
-}
+type PlatformUsageRow = Document_<"platformUsage">;
 
 /** Rows one roll-up tick compacts. Bounds a single mutation; a backlog drains over ticks. */
 const ROLLUP_BATCH = 1000;

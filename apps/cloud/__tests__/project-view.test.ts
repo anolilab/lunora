@@ -16,6 +16,7 @@ import { toProjectView } from "../lunora/projects";
  */
 describe(toProjectView, () => {
     const row = {
+        _creationTime: 1_700_000_000_000,
         _id: "prj_1" as never,
         createdAt: 1_700_000_000_000,
         name: "Web",
@@ -36,7 +37,7 @@ describe(toProjectView, () => {
 
     it("reports protection as a boolean the dashboard can render", () => {
         expect(toProjectView(row).previewProtected).toBe(true);
-        expect(toProjectView({ ...row, previewPasswordHash: undefined, previewPasswordSalt: undefined }).previewProtected).toBe(false);
+        expect(toProjectView({ ...row, previewPasswordHash: null, previewPasswordSalt: null }).previewProtected).toBe(false);
     });
 
     it("keeps the fields the dashboard actually needs", () => {

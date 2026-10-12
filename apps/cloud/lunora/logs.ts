@@ -2,9 +2,10 @@ import { createDbStore, RateLimiter } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { admitTailLines, TAIL_LOG_LIMITS } from "../src/tail/ingest-budget";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { assertMember, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -35,20 +36,7 @@ const logLevel = v.union(
 type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
 
 /** One persisted log row as stored (a superset of {@link TenantLogView}). */
-interface TenantLogRow {
-    _id: Id<"tenantLogs">;
-    createdAt: number;
-    fields?: Record<string, unknown>;
-    functionPath?: string;
-    level: LogLevel;
-    message: string;
-    organizationId: Id<"organizations">;
-    scriptName: string;
-    shardKey?: string;
-    spanId?: string;
-    traceId?: string;
-    userId?: string;
-}
+type TenantLogRow = Document_<"tenantLogs">;
 
 /** One log row as the dashboard consumes it (the persisted row minus internal keys). */
 interface TenantLogView {
@@ -134,7 +122,9 @@ export const insertLines = async (context: MutationContext, organizationId: Id<"
 };
 
 /** Project a stored row to the dashboard view (drop `_id`/`organizationId`/`scriptName`). */
-const toView = (row: TenantLogRow): TenantLogView => {
+const toView = (stored: TenantLogRow): TenantLogView => {
+    const row = absentForNull(stored);
+
     return {
         createdAt: row.createdAt,
         fields: row.fields,

@@ -1,5 +1,5 @@
 import { secretsForKind } from "../src/secrets/select";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
@@ -13,17 +13,7 @@ import { boundedString, LIMITS } from "./validators";
  * the edge to decrypt and inject into the tenant Worker at deploy time.
  */
 
-interface SecretRow {
-    _id: Id<"secrets">;
-    ciphertext: string;
-    createdAt: number;
-    environment: "all" | "dev" | "preview" | "production";
-    iv: string;
-    name: string;
-    organizationId: Id<"organizations">;
-    projectId: Id<"projects">;
-    updatedAt: number;
-}
+type SecretRow = Document_<"secrets">;
 
 /** Persist an already-encrypted secret (owner/admin). Upserts by project+name. */
 export const store = mutation

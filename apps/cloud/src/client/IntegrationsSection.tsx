@@ -66,7 +66,7 @@ export const IntegrationsSection = ({ organizationId, preloaded }: SectionProps<
                                     <StatusBadge tone={installation.claimedAt === undefined ? "neutral" : "success"}>
                                         {installation.claimedAt === undefined ? "unclaimed" : "connected"}
                                     </StatusBadge>
-                                    {installation.claimedAt === undefined ? null : (
+                                    {installation.claimedAt == null ? null : (
                                         <span className="text-xs text-muted-foreground">since {formatDateTime(installation.claimedAt)}</span>
                                     )}
                                     <RowActions>

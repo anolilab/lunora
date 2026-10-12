@@ -1,17 +1,10 @@
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
-interface AuditRow {
-    _id: Id<"auditLog">;
-    action: string;
-    actorUserId: string;
-    createdAt: number;
-    organizationId: Id<"organizations">;
-    target?: string;
-}
+type AuditRow = Document_<"auditLog">;
 
 /**
  * Append an audit-log entry. Members only; used by the

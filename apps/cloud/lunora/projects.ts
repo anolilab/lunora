@@ -10,8 +10,9 @@ import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
 import { constantTimeEqual } from "../src/security/constant-time-equal";
 import { assertPlacementRef, hostsOf, isCellPlaced, rowReaderOf } from "../src/targets/placement";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./deployment-aliases";
 import { queueCertificateReleases } from "./domains";
@@ -27,28 +28,7 @@ const projectRuntime = v.union(v.literal("lunora"), v.literal("worker"));
 /** Shortest preview password accepted — a gate this weak is theatre below it. */
 const MIN_PREVIEW_PASSWORD_LENGTH = 8;
 
-interface ProjectRow {
-    _id: Id<"projects">;
-    activeDeploymentId?: string;
-    activeScriptName?: null | string;
-    createdAt: number;
-    framework?: string;
-    githubRepo?: string;
-    name: string;
-    organizationId: Id<"organizations">;
-    /** `.global()` rows answer SQL NULL for an unset column. */
-    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
-    previewPasswordHash?: string;
-    previewPasswordSalt?: string;
-    productionAlias?: null | string;
-    rootDirectory?: string;
-    /** `.global()` rows answer SQL NULL for an unset column. */
-    runtime?: "worker" | null;
-    slug: string;
-    target?: null | string;
-    watchPaths?: string[];
-    workspacePackages?: null | { builtAt: number; paths: string[]; rootDirectory: string };
-}
+type ProjectRow = Document_<"projects">;
 
 /**
  * A project as the dashboard sees it.
@@ -108,7 +88,8 @@ export interface ProjectView {
 }
 
 /** Project one stored row onto the public view, dropping the protection secrets. */
-export const toProjectView = (row: ProjectRow): ProjectView => {
+export const toProjectView = (stored: ProjectRow): ProjectView => {
+    const row = absentForNull(stored);
     const productionAlias = row.activeScriptName ?? row.productionAlias;
 
     return {
@@ -190,7 +171,7 @@ interface StoredPlacement {
 export const placement = internalQuery
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
     .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<StoredPlacement> => {
-        const project = (await context.db.get(projectId)) as ProjectRow | null;
+        const project = await context.db.get(projectId);
 
         if (project?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
@@ -374,7 +355,7 @@ export const updateBuildSettings = mutation
                 throw new LunoraError("BAD_REQUEST", error instanceof Error ? error.message : "invalid build settings");
             }
 
-            const project = (await context.db.get(id)) as null | ProjectRow;
+            const project = await context.db.get(id);
             const next = runtime ?? storedRuntime(project?.runtime);
 
             await context.db.patch(id, {
@@ -561,7 +542,7 @@ export const verifyPreviewPassword = internalQuery
             return { ok: false };
         }
 
-        const project = (await context.db.get(deployment.projectId)) as null | ProjectRow;
+        const project = await context.db.get(deployment.projectId);
 
         if (!project?.previewPasswordHash || !project.previewPasswordSalt) {
             return { ok: false };

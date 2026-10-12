@@ -1,13 +1,13 @@
 import { LunoraError } from "@lunora/server";
 
 import { periodStartOf } from "../src/billing/spend";
-import type { AlertChannel, AlertFamily, AlertTarget, DeployAlertSource, EventRule, SpendAlertSource } from "../src/telemetry/alerts";
+import type { AlertChannel, AlertFamily, DeployAlertSource, EventRule, SpendAlertSource } from "../src/telemetry/alerts";
 import { alertFamily, fireDeployRules, fireSpendRules, isSafeWebhookUrl, renderTestAlert } from "../src/telemetry/alerts";
 import { MIN_ANOMALY_SAMPLES } from "../src/telemetry/anomaly";
 import { ORG_ADMINS_DESTINATION } from "../src/telemetry/recipients";
 import type { UsageAlertMeter, UsageThresholdSuggestion } from "../src/telemetry/usage-alerts";
 import { isUsageAlertMeter, previousPeriodStart, usageThresholdSuggestion, usageTotal } from "../src/telemetry/usage-alerts";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 import type { MemberRole } from "./authz";
@@ -26,36 +26,9 @@ import { boundedString, LIMITS } from "./validators";
  * hosted `AlertsSection`; reads are members-only.
  */
 
-/** Every rule target, from the one place the taxonomy is declared (`src/telemetry/alerts.ts`). */
-type RuleTarget = AlertTarget;
+type AlertRuleRow = Document_<"alertRules">;
 
-interface AlertRuleRow {
-    _id: Id<"alertRules">;
-    channel: "email" | "pagerduty" | "slack" | "webhook";
-    comparator?: "gt" | "lt";
-    createdAt: number;
-    destination: string;
-    enabled: boolean;
-    functionPath?: string;
-    meter?: UsageAlertMeter;
-    name: string;
-    organizationId: Id<"organizations">;
-    projectId?: Id<"projects">;
-    target: RuleTarget;
-    threshold: number;
-    windowMinutes?: number;
-}
-
-interface AlertRow {
-    _id: Id<"alerts">;
-    channel: "email" | "pagerduty" | "slack" | "webhook";
-    createdAt: number;
-    deliveredAt?: number;
-    destination: string;
-    status: "delivered" | "failed" | "firing";
-    subject: string;
-    target: RuleTarget;
-}
+type AlertRow = Document_<"alerts">;
 
 /**
  * Refuse a row that is missing or belongs to another organization.
@@ -431,15 +404,7 @@ const MAX_SILENCES_PER_ORG = 20;
 /** The longest one silence may run — long enough for a load-test week, short enough to never become "off". */
 const MAX_SILENCE_MS = 30 * 24 * 60 * 60 * 1000;
 
-interface AnomalySilenceRow {
-    _id: Id<"anomalySilences">;
-    createdAt: number;
-    createdBy: string;
-    endsAt: number;
-    reason: string;
-    startsAt: number;
-    target: "error_anomaly" | "storage_anomaly" | "usage_anomaly";
-}
+type AnomalySilenceRow = Document_<"anomalySilences">;
 
 /** An org's silences that have not ended yet, soonest-ending first (any member). */
 export const silences = query

@@ -12,35 +12,35 @@ export interface ApiTypes {
         createSilence: FunctionReference<"mutation", { endsAt: number; organizationId: Id<"organizations">; reason: unknown; startsAt?: number; target: "usage_anomaly" | "error_anomaly" | "storage_anomaly" }, Id<"anomalySilences">>;
         deleteRule: FunctionReference<"mutation", { id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
         deleteSilence: FunctionReference<"mutation", { id: Id<"anomalySilences">; organizationId: Id<"organizations"> }, Id<"anomalySilences">>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: import("../../src/telemetry/alerts.js").AlertTarget }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_alerts[]>;
         markDelivered: FunctionReference<"mutation", { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }, { delivered: number; }>;
         prepareTestAlert: FunctionReference<"mutation", { organizationId: Id<"organizations">; ruleId: Id<"alertRules"> }, { body: string; channel: import("../../src/telemetry/alerts.js").AlertChannel; destination: string; organizationId: string; subject: string }>;
-        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alertRules">; channel: "email" | "pagerduty" | "slack" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; meter?: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; target: import("../../src/telemetry/alerts.js").AlertTarget; threshold: number; windowMinutes?: number }[]>;
+        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_alertRules[]>;
         setRuleEnabled: FunctionReference<"mutation", { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
-        silences: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"anomalySilences">; createdAt: number; createdBy: string; endsAt: number; reason: string; startsAt: number; target: "error_anomaly" | "storage_anomaly" | "usage_anomaly" }[]>;
+        silences: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_anomalySilences[]>;
         suggestUsageThreshold: FunctionReference<"query", { meter: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten"; organizationId: Id<"organizations"> }, import("../../src/telemetry/usage-alerts.js").UsageThresholdSuggestion>;
         usageProgress: FunctionReference<"query", { organizationId: Id<"organizations"> }, { complete: boolean; monthToDate: number; ruleId: Id<"alertRules"> }[]>;
     };
     audit_log: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"auditLog">; action: string; actorUserId: string; createdAt: number; organizationId: Id<"organizations">; target?: string }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_auditLog[]>;
     };
     billing: {
         checkout: FunctionReference<"action", { cancelUrl: unknown; organizationId: Id<"organizations">; priceId: unknown; successUrl: unknown }, { url: string; }>;
         entitlements: FunctionReference<"query", { organizationId: Id<"organizations"> }, { features: string[]; limits: Record<"boxes" | "members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
         portal: FunctionReference<"action", { organizationId: Id<"organizations">; returnUrl: unknown }, { url: string; }>;
         processWebhook: FunctionReference<"action", { body: unknown; signature: unknown }, { applied: boolean; status: number; }>;
-        subscription: FunctionReference<"query", { organizationId: Id<"organizations"> }, { cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
+        subscription: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_payment_subscriptions[]>;
     };
     boxes: {
         createEnrolment: FunctionReference<"action", { name: unknown; organizationId: Id<"organizations"> }, { expiresAt: number; installCommand: string; token: string; }>;
         domain: FunctionReference<"action", { organizationId: Id<"organizations"> }, string>;
-        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("../../src/hostd/protocol.js").BoxVersions }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("../../src/hostd/protocol.js").BoxVersions }[]>;
+        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "offline" | "online" | "pending" | "revoked"; versions?: import("../../src/hostd/protocol.js").BoxVersions }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "offline" | "online" | "pending" | "revoked"; versions?: import("../../src/hostd/protocol.js").BoxVersions }[]>;
         rename: FunctionReference<"mutation", { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }, void>;
     };
     builds: {
         advisories: FunctionReference<"query", { buildId: Id<"builds">; organizationId: Id<"organizations"> }, import("../../src/builds/runner.js").BuildAdvisory[]>;
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, ({ organizationId: Id<"organizations">; createdAt: number; deploymentId?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; projectId: Id<"projects">; branch: string; commitSha: string; fromFork?: false | true; pullRequest?: number; trigger?: "push" | "pull_request"; bundleHash?: string; _id: Id<"builds">; pathFiltered?: false | true; processingBy?: string; processingStartedAt?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; runtime?: null | "worker"; skipReason?: string } & { advisoryNotes: number; advisoryWarnings: number; })[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, (Omit<import("./dataModel.js").Doc_builds, "advisories"> & { advisoryNotes: number; advisoryWarnings: number; })[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
     };
     catalog: {
@@ -56,7 +56,7 @@ export interface ApiTypes {
     };
     cloudflare_alerts: {
         apply: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; products: Array<{ id: unknown; limit: number }>; recipients: Array<unknown> }, { results: { action: "created" | "failed" | "updated"; duplicates: number; keptDestinations: number; keptRecipients: string[]; kind: "missing-scope" | "not-eligible" | "transient" | "validation" | null; message: null | string; productId: string; stored: { destinations: number; enabled: boolean; limit: null | string; policyId: string; recipients: string[]; }[]; }[] }>;
-        overview: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "no-data" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; proposedLimit: number | null }[]; productSource: "listed" | "published"; state: "unavailable" | "unconfigured" | "missing-scope" | "not-eligible" | "ready" }>;
+        overview: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "no-data" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; proposedLimit: number | null }[]; productSource: "listed" | "published"; state: "unconfigured" | "missing-scope" | "not-eligible" | "ready" | "unavailable" }>;
         remove: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { failed: { message: string; policyId: string; }[]; removed: string[] }>;
     };
     dashboards: {
@@ -76,27 +76,27 @@ export interface ApiTypes {
     deployments: {
         activate: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments"> }, void>;
         create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; allowDeleteClasses?: Array<unknown>; deployKey?: unknown; durableObjectClasses?: Array<unknown>; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtime?: "worker"; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, (Pick<import("./dataModel.js").Doc_deployments, "organizationId" | "createdAt" | "status" | "updatedAt" | "projectId" | "branch" | "bundleHash" | "_id" | "version" | "kind" | "scriptName" | "alias" | "bindings" | "createdBy" | "expiresAt" | "url"> & { cronSpecs?: null | string[]; durableObjectClasses?: null | string[]; runtime?: "worker" | null; target?: string; verifyingAt?: null | number; })[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, (Pick<import("./dataModel.js").Doc_deployments, "organizationId" | "createdAt" | "projectId" | "updatedAt" | "branch" | "bundleHash" | "_id" | "status" | "version" | "kind" | "scriptName" | "alias" | "bindings" | "createdBy" | "expiresAt" | "url"> & { cronSpecs?: null | string[]; durableObjectClasses?: null | string[]; runtime?: "worker" | null; target?: string; verifyingAt?: null | number; })[]>;
         planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; recursion?: "allow"; }>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }, void>;
     };
     domains: {
         add: FunctionReference<"mutation", { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }, { id: Id<"domains">; txtName: string; txtToken: string; }>;
         edgeBlockMode: FunctionReference<"action", { organizationId: Id<"organizations"> }, import("../../src/domains/edge-block-mode.js").EdgeBlockMode>;
-        get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, null | { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; failedChecks?: number; hostname: string; lastCheckedAt?: number; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; failedChecks?: number; hostname: string; lastCheckedAt?: number; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_domains | null>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, import("./dataModel.js").Doc_domains[]>;
         routeForHostname: FunctionReference<"query", { hostname: unknown }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; suspended?: true; } | null>;
     };
     edge: {
-        firewall: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "unavailable" | "ok" | "unconfigured"; unsupported: { name: string; reason: string; target: string; }[] }>;
+        firewall: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "ok" | "unconfigured" | "unavailable"; unsupported: { name: string; reason: string; target: string; }[] }>;
         recursionPolicy: FunctionReference<"query", { organizationId: Id<"organizations"> }, "allow" | "terminate">;
-        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { applied: boolean; armed?: false | true; engaged?: false | true; hostnames: string[]; kind: "ddos_l7" | "rate_limit"; lastError?: string; periodSeconds?: 60 | 10; requestsPerPeriod?: number; sensitivity?: "default" | "low" | "medium"; status: "pending" | "failed" | "applied" | "removed" | "unavailable"; updatedAt: number }[]>;
+        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { applied: boolean; armed?: false | true; engaged?: false | true; hostnames: string[]; kind: "ddos_l7" | "rate_limit"; lastError?: string; periodSeconds?: 60 | 10; requestsPerPeriod?: number; sensitivity?: "default" | "low" | "medium"; status: "failed" | "pending" | "unavailable" | "applied" | "removed"; updatedAt: number }[]>;
         setAnomalyRateLimit: FunctionReference<"mutation", { enabled: boolean; organizationId: Id<"organizations">; periodSeconds?: 10 | 60; requestsPerPeriod?: number }, null>;
         setDdosSensitivity: FunctionReference<"mutation", { organizationId: Id<"organizations">; sensitivity: "default" | "medium" | "low" }, null>;
         setRecursionPolicy: FunctionReference<"mutation", { organizationId: Id<"organizations">; policy: "terminate" | "allow" }, null>;
     };
     github_installations: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; installedByGithubId?: number; installedByLogin?: string; organizationId?: Id<"organizations"> }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_githubInstallations[]>;
         unclaim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
     };
     halts: {
@@ -107,18 +107,18 @@ export interface ApiTypes {
     };
     incidents: {
         investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_incidents[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"incidents">; organizationId: Id<"organizations">; status: "open" | "resolved" }, Id<"incidents">>;
         triage: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { summary: string; }>;
     };
     invitations: {
         accept: FunctionReference<"mutation", { token: unknown }, { organizationId: Id<"organizations">; }>;
         invite: FunctionReference<"mutation", { email: unknown; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, { id: Id<"invitations">; token: string; }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; email: string; createdAt: number; status: "pending" | "accepted" | "revoked"; _id: Id<"invitations">; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; email: string; createdAt: number; _id: Id<"invitations">; _creationTime: number; status: "pending" | "revoked" | "accepted"; expiresAt: number; invitedBy: string; role: "owner" | "admin" | "member" | "viewer" }[]>;
         revoke: FunctionReference<"mutation", { id: Id<"invitations">; organizationId: Id<"organizations"> }, void>;
     };
     issues: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; sampleTraceId?: string; status: "open" | "resolved"; title: string }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_issues[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"issues">; organizationId: Id<"organizations">; status: "open" | "resolved" }, Id<"issues">>;
     };
     logs: {
@@ -126,7 +126,7 @@ export interface ApiTypes {
         list: FunctionReference<"query", { afterCreatedAt?: number; from?: number; functionPath?: unknown; levels?: Array<"trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal">; limit?: number; organizationId: Id<"organizations">; scriptName: unknown; search?: unknown; to?: number; traceId?: unknown }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "log" | "trace" | "info" | "error" | "debug" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
     };
     members: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_members[]>;
         remove: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations"> }, void>;
         setRole: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, void>;
     };
@@ -136,21 +136,21 @@ export interface ApiTypes {
         series: FunctionReference<"query", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     notifications: {
-        channels: FunctionReference<"query", { organizationId: Id<"organizations"> }, { canManage: boolean; channels: { _id: Id<"notificationChannels">; createdAt: number; destination: string; enabled: boolean; events: ("deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired")[]; hasSecret: boolean; kind: "slack" | "webhook" | "discord" | "telegram"; name: string }[] }>;
+        channels: FunctionReference<"query", { organizationId: Id<"organizations"> }, { canManage: boolean; channels: { _id: Id<"notificationChannels">; createdAt: number; destination: string; enabled: boolean; events: ("deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired")[]; hasSecret: boolean; kind: "webhook" | "slack" | "discord" | "telegram"; name: string }[] }>;
         createChannel: FunctionReference<"mutation", { destination: unknown; events?: Array<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired">; kind: "discord" | "slack" | "telegram" | "webhook"; name: unknown; organizationId: Id<"organizations">; secretCiphertext?: unknown; secretIv?: unknown }, Id<"notificationChannels">>;
         deleteChannel: FunctionReference<"mutation", { id: Id<"notificationChannels">; organizationId: Id<"organizations"> }, Id<"notificationChannels">>;
-        deliveries: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"notificationDeliveries">; channelId: Id<"notificationChannels">; channelName: string; createdAt: number; deliveredAt?: number; error?: string; event: "deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired" | "test"; kind: "slack" | "webhook" | "discord" | "telegram"; status: "pending" | "failed" | "delivered"; subject: string }[]>;
+        deliveries: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"notificationDeliveries">; channelId: Id<"notificationChannels">; channelName: string; createdAt: number; deliveredAt?: number; error?: string; event: "deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired" | "test"; kind: "webhook" | "slack" | "discord" | "telegram"; status: "delivered" | "failed" | "pending"; subject: string }[]>;
         sendTest: FunctionReference<"mutation", { id: Id<"notificationChannels">; organizationId: Id<"organizations"> }, Id<"notificationDeliveries">>;
         updateChannel: FunctionReference<"mutation", { enabled?: boolean; events?: Array<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired">; id: Id<"notificationChannels">; name?: unknown; organizationId: Id<"organizations"> }, Id<"notificationChannels">>;
     };
     onboarding: {
-        checklist: FunctionReference<"query", { organizationId: Id<"organizations"> }, { complete: boolean; steps: { done: boolean; id: "deploy" | "live" | "key" | "project" }[] }>;
+        checklist: FunctionReference<"query", { organizationId: Id<"organizations"> }, { complete: boolean; steps: { done: boolean; id: "deploy" | "key" | "live" | "project" }[] }>;
     };
     organizations: {
         cancelDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
         create: FunctionReference<"mutation", { cellId?: Id<"cells">; jurisdiction?: unknown; name: unknown; slug: unknown }, Id<"organizations">>;
-        getBySlug: FunctionReference<"query", { slug: unknown }, null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; deletionRequestedAt?: null | number; name: string; plan: "enterprise" | "free" | "pro"; slug: string; suspendedAt?: null | number; suspendedReason?: null | string }>;
-        list: FunctionReference<"query", {}, { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; deletionRequestedAt?: null | number; name: string; plan: "enterprise" | "free" | "pro"; slug: string; suspendedAt?: null | number; suspendedReason?: null | string }[]>;
+        getBySlug: FunctionReference<"query", { slug: unknown }, import("./dataModel.js").Doc_organizations | null>;
+        list: FunctionReference<"query", {}, import("./dataModel.js").Doc_organizations[]>;
         rename: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations"> }, void>;
         requestDeletion: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, void>;
     };
@@ -182,7 +182,7 @@ export interface ApiTypes {
         ingest: FunctionReference<"mutation", { deployKey: unknown; deploymentId?: Id<"deployments">; events: Array<{ code?: string; container?: string; functionPath: string; instance?: string; kind: "error" | "container"; message: string; traceId?: string; ts: number }>; observations?: Array<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: Array<{ label?: string; name: string; score: number }>; functionPath?: string; input?: string; kind: "container" | "generation" | "worker"; level: "error" | "info"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; serviceName?: string; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
     };
     tenant_backups: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { bytes?: number; organizationId: Id<"organizations">; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; projectId: Id<"projects">; trigger: "manual" | "scheduled" | "pre-restore"; error?: string; _id: Id<"tenantBackups">; alias: string; completedAt?: number; offsiteError?: string; offsiteStatus?: "failed" | "succeeded"; operation: "backup" | "restore"; restoredFrom?: Id<"tenantBackups">; restoreConflicts?: number; restoreDeleted?: Record<string, number>; restoreInserted?: number; restoreRowErrors?: number }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { bytes?: null | number; organizationId: Id<"organizations">; createdAt: number; projectId: Id<"projects">; deploymentId: Id<"deployments">; trigger: "manual" | "scheduled" | "pre-restore"; error?: null | string; _id: Id<"tenantBackups">; status: "failed" | "running" | "succeeded"; alias: string; completedAt?: null | number; offsiteError?: null | string; offsiteStatus?: null | "failed" | "succeeded"; operation: "backup" | "restore"; restoredFrom?: null | Id<"tenantBackups">; restoreConflicts?: null | number; restoreDeleted?: null | Record<string, number>; restoreInserted?: null | number; restoreRowErrors?: null | number }[]>;
     };
     traces: {
         get: FunctionReference<"query", { organizationId: Id<"organizations">; traceId: unknown }, { attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "worker" | "container" | "generation"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -195,7 +195,7 @@ export interface ApiTypes {
         snapshot: FunctionReference<"action", { from?: number; hostname?: unknown; organizationId: Id<"organizations">; to?: number }, { countries: { key: string; requests: number; share: number; }[]; hostnames: { key: string; requests: number; share: number; }[]; routes: { key: string; requests: number; share: number; }[]; series: { avgDurationMs: number; bytes: number; requests: number; t: number; }[]; statuses: { class: string; codes: { code: string; requests: number; }[]; requests: number; }[]; totalRequests: number }>;
     };
     uptime: {
-        recent: FunctionReference<"query", { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, { _id: Id<"uptimeChecks">; createdAt: number; error?: string; latencyMs?: number; ok: boolean; statusCode?: number }[]>;
+        recent: FunctionReference<"query", { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_uptimeChecks[]>;
         summary: FunctionReference<"query", { organizationId: Id<"organizations"> }, { avgLatencyMs?: number; consecutiveFailures: number; deploymentId: Id<"deployments">; lastCheckedAt: number; ok: boolean; sampleCount: number; upFraction: number }[]>;
     };
     usage: {

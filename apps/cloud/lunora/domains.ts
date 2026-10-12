@@ -7,7 +7,7 @@ import { domainNotificationDetail } from "../src/domains/check";
 import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import type { TargetId } from "../src/provision-contract";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
@@ -28,33 +28,7 @@ import { boundedString, LIMITS } from "./validators";
  * releases it first, through that issuer.
  */
 
-interface DomainRow {
-    _id: Id<"domains">;
-    certificateError?: null | string;
-    certificateIssuer?: null | TargetId;
-    certificateScope?: null | string;
-    certificateStatus?: null | string;
-    createdAt: number;
-    customHostnameId?: null | string;
-    edgeBlockedAt?: null | number;
-    edgeBlockError?: null | string;
-    failedChecks?: number;
-    hostname: string;
-    lastCheckedAt?: number;
-    organizationId: Id<"organizations">;
-    projectId: Id<"projects">;
-    redirectStatusCode?: number;
-    redirectTo?: string;
-    txtToken: string;
-    updatedAt: number;
-    verifiedAt?: number;
-}
-
-interface ProjectRow {
-    _id: Id<"projects">;
-    activeScriptName?: string;
-    organizationId?: Id<"organizations">;
-}
+type DomainRow = Document_<"domains">;
 
 const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
 
@@ -218,7 +192,7 @@ export const remove = internalMutation
 
         await assertRowInOrg(context, id, organizationId, "domain");
 
-        const domain = (await context.db.get(id)) as DomainRow | null;
+        const domain = await context.db.get(id);
 
         await context.db.delete(id);
         await context.db.insert("auditLog", {
@@ -286,7 +260,7 @@ export const markVerified = internalMutation
     .mutation(async ({ ctx: context, args: { id, organizationId, verified } }): Promise<void> => {
         await assertRowInOrg(context, id, organizationId, "domain");
 
-        const existing = (await context.db.get(id)) as DomainRow | null;
+        const existing = await context.db.get(id);
 
         await context.db.patch(id, {
             lastCheckedAt: context.now,
@@ -386,7 +360,7 @@ export const routeForHostname = query
                 return { redirectStatusCode: domain.redirectStatusCode ?? 308, redirectTo: domain.redirectTo };
             }
 
-            const project = (await context.db.get(domain.projectId)) as ProjectRow | null;
+            const project = await context.db.get(domain.projectId);
 
             // The project must be the domain's organization's: a row that disagrees routes nowhere.
             return project?.activeScriptName && project.organizationId === domain.organizationId ? { scriptName: project.activeScriptName } : null;
@@ -414,7 +388,7 @@ export const get = query
     .query(async ({ ctx: context, args: { id, organizationId } }): Promise<DomainRow | null> => {
         await assertMember(context, organizationId);
 
-        const domain = (await context.db.get(id)) as DomainRow | null;
+        const domain = await context.db.get(id);
 
         return domain?.organizationId === organizationId ? domain : null;
     });

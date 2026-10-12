@@ -620,11 +620,16 @@ export const DeploymentsSection = ({
 
     return (
         <div className="flex flex-col gap-6">
-            {active ? <ProjectHero deployment={active} onBack={onBack} projectName={projectName} visitUrl={active.url} /> : header}
+            {active ? <ProjectHero deployment={active} onBack={onBack} projectName={projectName} visitUrl={active.url ?? undefined} /> : header}
             {/* Two columns, as the design has it — Domains and Source are peers. */}
             <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2">
-                <DomainsCard domains={domains ?? EMPTY} url={active?.url} />
-                <SourceCard branch={branch} commitSha={activeBuild?.commitSha} githubRepo={githubRepo} gitProvider={gitProvider} />
+                <DomainsCard domains={domains ?? EMPTY} url={active?.url ?? undefined} />
+                <SourceCard
+                    branch={branch ?? undefined}
+                    commitSha={activeBuild?.commitSha ?? undefined}
+                    githubRepo={githubRepo ?? undefined}
+                    gitProvider={gitProvider ?? undefined}
+                />
             </div>
             {active?.bindings && active.bindings.length > 0 ? (
                 <Card>

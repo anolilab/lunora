@@ -7,9 +7,10 @@ import type { BuildAdvisory } from "../src/builds/runner";
 import { isUnconfiguredInfrastructure, MAX_BUILD_ADVISORIES } from "../src/builds/runner";
 import type { ProjectRuntime } from "../src/project-runtime";
 import { runtimeColumn, storedRuntime } from "../src/project-runtime";
-import type { DataModel, Id } from "./_generated/dataModel.js";
+import type { DataModel, Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { fireDeployAlerts } from "./alerts";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
@@ -24,31 +25,7 @@ import { boundedString, LIMITS } from "./validators";
  * commit-addressed dedup).
  */
 
-type BuildStatus = "building" | "failed" | "pending" | "skipped" | "successful";
-
-interface BuildRow {
-    _id: Id<"builds">;
-    advisories?: BuildAdvisory[];
-    branch: string;
-    bundleHash?: string;
-    commitSha: string;
-    createdAt: number;
-    deploymentId?: string;
-    fromFork?: boolean;
-    organizationId: Id<"organizations">;
-    pathFiltered?: boolean;
-    processingBy?: string;
-    processingStartedAt?: number;
-    projectId: Id<"projects">;
-    pullRequest?: number;
-    reusesBuildId?: Id<"builds">;
-    rootDirectory?: string;
-    /** `.global()` rows answer SQL NULL for an unset column; absent is a Lunora app. */
-    runtime?: "worker" | null;
-    skipReason?: string;
-    status: BuildStatus;
-    trigger?: BuildTrigger;
-}
+type BuildRow = Document_<"builds">;
 
 /**
  * Deployment states in which a release is serving or about to: a push of its
@@ -99,7 +76,7 @@ const redelivered = async (context: MutationContext, projectId: Id<"projects">, 
     const { page } = await context.db.builds.findMany({ where: { commitSha, projectId } }); // secret-scanner:allow -- domain field name
     const skip = page.find((row) => row.status === "skipped" && row.pathFiltered === true && (row.trigger ?? "push") === trigger);
 
-    return skip?.skipReason === undefined ? { duplicate: true, projectId } : { duplicate: true, pathFiltered: true, projectId, skipped: skip.skipReason };
+    return skip?.skipReason == null ? { duplicate: true, projectId } : { duplicate: true, pathFiltered: true, projectId, skipped: skip.skipReason };
 };
 
 /**
@@ -249,7 +226,7 @@ const recordProjectPush = async (
 ): Promise<ProjectPushResult> => {
     const { now } = context;
     const { branch, changes, commitSha, fromFork, pullRequest, trigger } = push;
-    const { rootDirectory, watchPaths } = project;
+    const { rootDirectory, watchPaths, workspacePackages } = absentForNull(project);
     const runtime = storedRuntime(project.runtime);
     const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, runtime, trigger });
 
@@ -269,7 +246,7 @@ const recordProjectPush = async (
         rootDirectory,
         trigger,
         watchPaths,
-        workspacePackages: project.workspacePackages,
+        workspacePackages,
     });
     const common = {
         branch,
@@ -454,7 +431,7 @@ export const claimNext = internalMutation.input({ runnerId: v.string() }).mutati
         buildId: next._id,
         commitSha: next.commitSha,
         projectId: next.projectId, // secret-scanner:allow -- domain field name
-        ...(next.rootDirectory === undefined ? {} : { rootDirectory: next.rootDirectory }),
+        ...(next.rootDirectory == null ? {} : { rootDirectory: next.rootDirectory }),
         ...runtimeColumn(storedRuntime(next.runtime)),
     };
 });
@@ -629,7 +606,7 @@ export const fail = internalMutation
 export const reportTarget = internalQuery
     .input({ buildId: v.id("builds") })
     .query(async ({ ctx: context, args: { buildId } }): Promise<null | { commitSha: string; installationId: number; repository: string }> => {
-        const build = (await context.db.get(buildId)) as BuildRow | null;
+        const build = await context.db.get(buildId);
 
         if (!build) {
             return null;
@@ -662,7 +639,7 @@ export const reportTarget = internalQuery
 export const releaseTarget = internalQuery
     .input({ buildId: v.id("builds") })
     .query(async ({ ctx: context, args: { buildId } }): Promise<BuildReleaseTarget | null> => {
-        const build = (await context.db.get(buildId)) as BuildRow | null;
+        const build = await context.db.get(buildId);
 
         if (!build) {
             return null;
@@ -675,16 +652,16 @@ export const releaseTarget = internalQuery
         }
 
         return {
-            ...(project.activeScriptName === undefined ? {} : { activeScriptName: project.activeScriptName }),
+            ...(project.activeScriptName == null ? {} : { activeScriptName: project.activeScriptName }),
             ...(project.productionAlias == null ? {} : { productionAlias: project.productionAlias }),
             branch: build.branch,
             ...(build.fromFork === true ? { fromFork: true } : {}),
             organizationId: build.organizationId,
             projectId: build.projectId, // secret-scanner:allow -- domain field name
             projectSlug: project.slug,
-            ...(build.pullRequest === undefined ? {} : { pullRequest: build.pullRequest }),
+            ...(build.pullRequest == null ? {} : { pullRequest: build.pullRequest }),
             ...runtimeColumn(storedRuntime(build.runtime)),
-            ...(build.trigger === undefined ? {} : { trigger: build.trigger }),
+            ...(build.trigger == null ? {} : { trigger: build.trigger }),
         };
     });
 
@@ -707,13 +684,13 @@ export interface ReusableRelease {
 export const reusableRelease = internalQuery
     .input({ buildId: v.id("builds") })
     .query(async ({ ctx: context, args: { buildId } }): Promise<null | ReusableRelease> => {
-        const build = (await context.db.get(buildId)) as BuildRow | null;
+        const build = await context.db.get(buildId);
 
         if (build?.reusesBuildId == null) {
             return null;
         }
 
-        const earlier = (await context.db.get(build.reusesBuildId)) as BuildRow | null;
+        const earlier = await context.db.get(build.reusesBuildId);
 
         if (earlier?.projectId !== build.projectId || earlier.deploymentId == null || earlier.bundleHash == null) {
             return null;
@@ -726,7 +703,7 @@ export const reusableRelease = internalQuery
         }
 
         return {
-            ...(earlier.advisories === undefined || earlier.advisories.length === 0 ? {} : { advisories: earlier.advisories }),
+            ...(earlier.advisories == null || earlier.advisories.length === 0 ? {} : { advisories: earlier.advisories }),
             bundleHash: earlier.bundleHash,
             ...(deployment.cronSpecs == null ? {} : { cronSpecs: deployment.cronSpecs }),
             deploymentId: earlier.deploymentId,
@@ -746,11 +723,11 @@ export const listByProject = query
 
         return (page as BuildRow[])
             .toSorted((a, b) => b.createdAt - a.createdAt)
-            .map(({ advisories = [], ...build }) => {
+            .map(({ advisories, ...build }) => {
                 return {
                     ...build,
-                    advisoryNotes: advisories.filter((advisory) => advisory.level === "INFO").length,
-                    advisoryWarnings: advisories.filter((advisory) => advisory.level !== "INFO").length,
+                    advisoryNotes: (advisories ?? []).filter((advisory) => advisory.level === "INFO").length,
+                    advisoryWarnings: (advisories ?? []).filter((advisory) => advisory.level !== "INFO").length,
                 };
             });
     });
@@ -761,7 +738,7 @@ export const advisories = query
     .query(async ({ ctx: context, args: { buildId, organizationId } }): Promise<BuildAdvisory[]> => {
         await assertMember(context, organizationId);
 
-        const build = (await context.db.get(buildId)) as BuildRow | null;
+        const build = await context.db.get(buildId);
 
         if (build?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "build not found in this organization");
@@ -783,7 +760,7 @@ export const logs = query
         }): Promise<{ createdAt: number; level: "error" | "info"; line: string }[]> => {
             await assertMember(context, organizationId);
 
-            const build = (await context.db.get(buildId)) as BuildRow | null;
+            const build = await context.db.get(buildId);
 
             if (build?.organizationId !== organizationId) {
                 throw new LunoraError("NOT_FOUND", "build not found in this organization");

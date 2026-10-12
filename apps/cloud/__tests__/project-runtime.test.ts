@@ -79,7 +79,7 @@ describe("the runtime column", () => {
     it("shows every project with its runtime, a row from before the setting as a Lunora app", () => {
         expect.assertions(2);
 
-        const row = { _id: "prj_1" as never, createdAt: 1, name: "w", organizationId: ORG as never, slug: "w" };
+        const row = { _creationTime: 1, _id: "prj_1" as never, createdAt: 1, name: "w", organizationId: ORG as never, slug: "w" };
 
         expect(toProjectView(row).runtime).toBe("lunora");
         expect(toProjectView({ ...row, runtime: "worker" }).runtime).toBe("worker");

@@ -36,9 +36,9 @@ export interface BadgeInstall {
 /** The deployment fields the badge rule reads. */
 export interface BadgeDeployment {
     _id: string;
-    catalogInstalledBy?: string;
-    catalogSlug?: string;
-    catalogVersion?: string;
+    catalogInstalledBy?: null | string;
+    catalogSlug?: null | string;
+    catalogVersion?: null | string;
     organizationId: string;
     projectId: string;
 }
@@ -70,7 +70,7 @@ export const endInstallBadge = async (store: InstallBadgeStore, deployment: Pick
 export const restoreInstallBadge = async (store: InstallBadgeStore, deployment: BadgeDeployment, now: number): Promise<void> => {
     const { catalogInstalledBy: installedBy, catalogSlug: slug, catalogVersion: version } = deployment;
 
-    if (installedBy === undefined || slug === undefined || version === undefined) {
+    if (installedBy == null || slug == null || version == null) {
         return;
     }
 

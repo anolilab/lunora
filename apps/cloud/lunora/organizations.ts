@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { assertStatusMove } from "../src/deploy/status-transitions";
 import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
-import type { Id, TableName } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id, TableName } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertSignedIn } from "./authz";
 import { releaseIdleAliases } from "./deployment-aliases";
@@ -25,20 +25,7 @@ import { boundedString, LIMITS } from "./validators";
  * "is it suspended?" test false. Declared `| null` here so callers must handle the
  * value the backend really sends.
  */
-interface OrganizationRow {
-    _id: Id<"organizations">;
-    cellId: Id<"cells">;
-    createdAt: number;
-    /** Set when an owner requested erasure; the purge cron acts after the retention window. */
-    deletionRequestedAt?: null | number;
-    name: string;
-    plan: "enterprise" | "free" | "pro";
-    slug: string;
-    /** Set by the spend-cap / dunning enforcement crons (or support). */
-    suspendedAt?: null | number;
-    /** Which mechanism suspended the org — `"spend-cap"`, `"dunning"` or `"support"`. */
-    suspendedReason?: null | string;
-}
+type OrganizationRow = Document_<"organizations">;
 
 /**
  * The organizations the signed-in caller belongs to (the dashboard's org list).
@@ -55,7 +42,7 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
     // platform would silently drop any org past the first thousand from its member's
     // switcher, with nothing to say the list was truncated. The read scales with the
     // caller's memberships, which is what the answer depends on.
-    const organizations = await Promise.all(orgIds.map(async (id) => (await context.db.get(id)) as null | OrganizationRow));
+    const organizations = await Promise.all(orgIds.map(async (id) => await context.db.get(id)));
     const present = organizations.filter((organization): organization is OrganizationRow => organization !== null);
 
     // The plan shown is the one billing applies, read from the subscriptions; the stored column is only the creation default.

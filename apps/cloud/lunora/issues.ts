@@ -1,4 +1,4 @@
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
@@ -14,19 +14,7 @@ import { rateLimit } from "./guards";
 const issueStatus = v.union(v.literal("open"), v.literal("resolved"));
 
 /** A grouped-error row as the dashboard consumes it. */
-interface IssueRow {
-    _id: Id<"issues">;
-    count: number;
-    culprit: string;
-    firstSeen: number;
-    hash: string;
-    lastSeen: number;
-    organizationId: Id<"organizations">;
-    sampleMessage: string;
-    sampleTraceId?: string;
-    status: "open" | "resolved";
-    title: string;
-}
+type IssueRow = Document_<"issues">;
 
 /** An org's issues, most-recently-seen first (any member). */
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<IssueRow[]> => {

@@ -3,8 +3,9 @@ import { LunoraError } from "@lunora/server";
 import { invalidDestinationReason, maskDestination } from "../src/notifications/deliver";
 import type { NotificationEvent, NotificationKind } from "../src/notifications/events";
 import { NOTIFICATION_EVENTS, renderNotification } from "../src/notifications/events";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { queueDelivery } from "./notification-outbox";
@@ -36,31 +37,9 @@ const eventValidator = v.union(
     v.literal("preview.expired"),
 );
 
-interface ChannelRow {
-    _id: Id<"notificationChannels">;
-    createdAt: number;
-    destination: string;
-    enabled: boolean;
-    events: NotificationEvent[];
-    kind: NotificationKind;
-    name: string;
-    organizationId: Id<"organizations">;
-    secretCiphertext?: string;
-    secretIv?: string;
-    updatedAt: number;
-}
+type ChannelRow = Document_<"notificationChannels">;
 
-interface DeliveryRow {
-    _id: Id<"notificationDeliveries">;
-    channelId: Id<"notificationChannels">;
-    createdAt: number;
-    deliveredAt?: number;
-    error?: string;
-    event: NotificationEvent | "test";
-    kind: NotificationKind;
-    status: "delivered" | "failed" | "pending";
-    subject: string;
-}
+type DeliveryRow = Document_<"notificationDeliveries">;
 
 /** A channel as an owner or admin sees it: no secret, destination masked. */
 interface ChannelView {
@@ -143,7 +122,7 @@ export const deliveries = query
         });
 
         return (page as unknown as DeliveryRow[]).map((row) => {
-            return { ...row, channelName: names.get(row.channelId) ?? "removed channel" };
+            return { ...absentForNull(row), channelName: names.get(row.channelId) ?? "removed channel" };
         });
     });
 
@@ -241,7 +220,7 @@ export const sendTest = mutation
         await assertMember(context, organizationId, MANAGER_ROLES);
         await assertRowInOrg(context, id, organizationId, "notification channel");
 
-        const channel = (await context.db.get(id)) as ChannelRow | null;
+        const channel = await context.db.get(id);
 
         if (!channel) {
             throw new LunoraError("NOT_FOUND", "notification channel not found");

@@ -1,14 +1,9 @@
 import { LunoraError } from "@lunora/server";
 
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 
-interface AliasOwnershipRow {
-    _id: Id<"aliasOwnership">;
-    alias: string;
-    organizationId: Id<"organizations">;
-    projectId: Id<"projects">;
-}
+type AliasOwnershipRow = Document_<"aliasOwnership">;
 
 /**
  * Claim a deployment alias for a project through the `aliasOwnership` ledger.
