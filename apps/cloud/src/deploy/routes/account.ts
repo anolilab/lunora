@@ -47,9 +47,11 @@ export const readAccountProfile = async (adapter: AuthRecordReader, userId: stri
     }
 
     const byUser = [{ field: "userId", value: userId }];
-    const accounts = await adapter.findMany<{ providerId?: unknown }>({ model: "account", where: byUser });
     // The passkey table exists only with the plugin; a store without it answers with an error.
-    const passkeys = await adapter.findMany<unknown>({ model: "passkey", where: byUser }).catch(() => []);
+    const [accounts, passkeys] = await Promise.all([
+        adapter.findMany<{ providerId?: unknown }>({ model: "account", where: byUser }),
+        adapter.findMany<unknown>({ model: "passkey", where: byUser }).catch(() => []),
+    ]);
     const methods = new Set(accounts.flatMap((account) => (typeof account.providerId === "string" ? [account.providerId] : [])));
 
     if (passkeys.length > 0) {

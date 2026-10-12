@@ -505,19 +505,20 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     }
 
     // `.global()` rows answer SQL NULL for an unset column, so every optional is `| null`.
-    const organizations = await collectAll<{
-        _id: Id<"organizations">;
-        name: string;
-        spendCapMinor?: null | number;
-        spendNanoCents?: null | number;
-        spendPeriod?: null | number;
-        spendWarnedPeriod?: null | number;
-        spendWarnMinor?: null | number;
-        suspendedAt?: null | number;
-        suspendedReason?: null | string;
-    }>((cursor) => context.db.organizations.findMany({ cursor }));
-
-    const plans = await planByOrganization(context);
+    const [organizations, plans] = await Promise.all([
+        collectAll<{
+            _id: Id<"organizations">;
+            name: string;
+            spendCapMinor?: null | number;
+            spendNanoCents?: null | number;
+            spendPeriod?: null | number;
+            spendWarnedPeriod?: null | number;
+            spendWarnMinor?: null | number;
+            suspendedAt?: null | number;
+            suspendedReason?: null | string;
+        }>((cursor) => context.db.organizations.findMany({ cursor })),
+        planByOrganization(context),
+    ]);
     let suspended = 0;
     let unsuspended = 0;
     let warned = 0;

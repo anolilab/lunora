@@ -351,8 +351,10 @@ export const recordPush = internalMutation
             ctx: context,
             args: { before, branch, changes, commitSha, deliveryId, fromFork, installationId, pullRequest, repository, trigger },
         }): Promise<RecordPushResult> => {
-            const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
-            const { page: installationPage } = await context.db.githubInstallations.findMany({ where: { installationId } });
+            const [{ page }, { page: installationPage }] = await Promise.all([
+                context.db.projects.findMany({ where: { githubRepo: repository } }),
+                context.db.githubInstallations.findMany({ where: { installationId } }),
+            ]);
 
             // Each project is checked on its own: it builds from this installation
             // only when its own org has *claimed* it (staged-claim model,

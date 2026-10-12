@@ -57,12 +57,14 @@ const AUTHORED_COLUMNS: ReadonlyArray<readonly [TableName, string]> = [
 export const exportMine = internalQuery.query(async ({ ctx: context }): Promise<Record<string, unknown>> => {
     const userId = assertSignedIn(context.auth.userId);
 
-    const { page: memberships } = await context.db.members.findMany({ limit: EXPORT_LIMIT, where: { userId } });
-    const { page: entries } = await context.db.auditLog.findMany({
-        limit: EXPORT_LIMIT,
-        orderBy: [{ createdAt: "asc" }],
-        where: { actorUserId: userId },
-    });
+    const [{ page: memberships }, { page: entries }] = await Promise.all([
+        context.db.members.findMany({ limit: EXPORT_LIMIT, where: { userId } }),
+        context.db.auditLog.findMany({
+            limit: EXPORT_LIMIT,
+            orderBy: [{ createdAt: "asc" }],
+            where: { actorUserId: userId },
+        }),
+    ]);
 
     const authored: Record<string, unknown>[] = [];
 

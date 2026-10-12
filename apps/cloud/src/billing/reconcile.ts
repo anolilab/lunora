@@ -83,10 +83,12 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
     // because `rollup` only compacts CLOSED periods, so the truncation bit the
     // current period first. The identical bug was already fixed in
     // `lunora/usage.ts`'s spend-cap sweep; `src/` just had no way to express it.
-    const organizations = await drainTable<OrgRow>(database, "organizations");
     // The plan a period is billed on comes from the synced subscriptions, not the
     // column the caller set at creation (`src/billing/plan-of.ts`).
-    const subscriptions = await drainTable<SubscriptionRow>(database, "payment_subscriptions");
+    const [organizations, subscriptions] = await Promise.all([
+        drainTable<OrgRow>(database, "organizations"),
+        drainTable<SubscriptionRow>(database, "payment_subscriptions"),
+    ]);
     const plans = plansByReference(subscriptions.map((row) => toSubscription(row)));
 
     // The period filter belongs in the QUERY — filtering it in JS after a bounded
