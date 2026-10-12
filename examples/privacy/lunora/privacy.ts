@@ -5,6 +5,7 @@
  *
  *   await privacyFor(ctx, await identityOf(ctx)).requestExport();
  */
+import type { PrivacyConfig } from "@lunora/privacy";
 import { defineDataset, definePrivacy } from "@lunora/privacy";
 import { remotePorts } from "@lunora/privacy/workflow";
 import type { WorkflowRunContext } from "@lunora/workflow";
@@ -27,15 +28,6 @@ export const tasksData = defineDataset("tasks", {
 export type PrivacyContext = MutationCtx | QueryCtx | WorkflowRunContext<{ requestId: string }>;
 
 /**
- * What the workflow's port dispatcher reads (`dispatchPort` in `requests.ts`): the same datasets
- * and presets `definePrivacy` reads, so both sides look a dataset up and judge a row the same way.
- */
-export const privacyConfig = {
-    datasets: [tasksData],
-    presets,
-};
-
-/**
  * The HMAC secret that keys the erasure tombstones. Set `PRIVACY_TOMBSTONE_SECRET` as a Worker
  * secret (`wrangler secret put`) or in `.dev.vars`. With it unset, an erasure fails with a clear
  * message rather than writing unkeyed tombstones.
@@ -50,11 +42,19 @@ const workflowPorts = (context: WorkflowRunContext<{ requestId: string }>) => {
     };
 };
 
-export const privacyFor = definePrivacy<PrivacyContext>({
-    ...privacyConfig,
+/**
+ * The privacy configuration, written once. `definePrivacy` binds it, and the workflow's port
+ * dispatcher (`privacyPort` in `requests.ts`) reads the same object, so both sides look a dataset
+ * up and judge a row the same way.
+ */
+export const privacyConfig: PrivacyConfig<PrivacyContext> = {
+    datasets: [tasksData],
     ports: (context) => ("db" in context ? localPorts(context) : workflowPorts(context)),
+    presets,
     tombstoneSecret,
-});
+};
+
+export const privacyFor = definePrivacy(privacyConfig);
 
 /**
  * The durable handlers. Each one binds the ports from its own context, so the step
