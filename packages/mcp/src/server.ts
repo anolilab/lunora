@@ -77,6 +77,15 @@ interface LunoraMcpServerOptions {
     allowAgents?: boolean;
 
     /**
+     * Expose `lunora_find_related`, which returns raw table rows read through the
+     * admin writer, so RLS policies and column masks do not apply. Defaults to
+     * `false`, for the same reason as `allowObservability`. Only takes effect
+     * when a `token` resolved. On the OAuth-protected path the verified token must
+     * also carry the data-read scope (see `DATA_READ_SCOPE` in `./tools`).
+     */
+    allowDataReads?: boolean;
+
+    /**
      * Expose the observability tools (`lunora_get_logs`, `lunora_get_issues`,
      * `lunora_get_advisories`, `lunora_get_query_insights`,
      * `lunora_get_migration_status`). Defaults to `false`, mirroring
@@ -85,10 +94,10 @@ interface LunoraMcpServerOptions {
      * lands in the model's context and therefore at its provider. Holding the
      * admin bearer is not consent to ship that, so it is a separate opt-in;
      * without it the tools are omitted from the advertised list AND refused at
-     * dispatch. Only takes effect when a `token` resolved.
+     * dispatch. Only takes effect when a `token` resolved. On the OAuth-protected
+     * path the verified token must also carry the observability scope (see
+     * `OBSERVABILITY_SCOPE` in `./tools`); this option stays the outer gate.
      */
-    allowDataReads?: boolean;
-
     allowObservability?: boolean;
 
     /**

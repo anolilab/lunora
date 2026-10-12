@@ -122,6 +122,10 @@ interface AdvisorCallEdge {
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
     reason?: string;
+    schedule?: {
+        argKeys?: string[];
+        delayMs?: number;
+    };
     scope: AdvisorCallSiteScope;
     target?: string;
 }
@@ -570,13 +574,19 @@ interface AdvisorProcedureProtection {
 ```ts
 interface AdvisorQueryRead {
     file: string;
+    filterFields?: string[];
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
+    index?: {
+        bounds?: string[];
+        name?: string;
+    };
     line: number;
     scope: AdvisorCallSiteScope;
     table: string;
     terminal?: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -676,6 +686,18 @@ interface AdvisorRlsProcedure {
     tablesWritten: ReadonlyArray<string>;
     usesRls: boolean;
     visibility: "internal" | "public";
+}
+```
+
+### `AdvisorRowEffect` (interface)
+
+```ts
+interface AdvisorRowEffect {
+    exportName: string;
+    fields?: string[];
+    file: string;
+    method: string;
+    table: string;
 }
 ```
 
@@ -817,6 +839,7 @@ interface AdvisorTableScan {
 
 ```ts
 interface AdvisorTableWrite extends AdvisorInsertWrite {
+    fields?: string[];
     method: string;
 }
 ```
@@ -1029,6 +1052,7 @@ interface LintContext {
     containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
     containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
     containers?: ReadonlyArray<AdvisorContainer>;
+    cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
     flagReads?: ReadonlyArray<AdvisorFlagRead>;
@@ -1063,6 +1087,7 @@ interface LintContext {
     rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
     relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
     rlsProcedures?: ReadonlyArray<AdvisorRlsProcedure>;
+    rowEffects?: ReadonlyArray<AdvisorRowEffect>;
     schema: AdvisorSchema;
     secretLiterals?: ReadonlyArray<AdvisorSecretLiteral>;
     shapes?: ReadonlyArray<AdvisorShape>;
@@ -1442,6 +1467,12 @@ const externalSourceUnscoped: Lint;
 const fanOutBreadth: Lint;
 ```
 
+### `filterAfterIndexScan` (const)
+
+```ts
+const filterAfterIndexScan: Lint;
+```
+
 ### `filterOnPrimaryKey` (const)
 
 ```ts
@@ -1786,6 +1817,12 @@ const runAdvisor: (context: LintContext, options?: RunAdvisorOptions) => Finding
 const scoreAdvisor: (procedures: ReadonlyArray<AdvisorProcedureProtection>, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
 ```
 
+### `selfRescheduleWithoutProgress` (const)
+
+```ts
+const selfRescheduleWithoutProgress: Lint;
+```
+
 ### `shapeTargetsGlobalTable` (const)
 
 ```ts
@@ -1862,6 +1899,12 @@ const topicTooManySubscriptions: Lint;
 
 ```ts
 const ttlFieldNotTimestamp: Lint;
+```
+
+### `unboundedCollectOnOpenRange` (const)
+
+```ts
+const unboundedCollectOnOpenRange: Lint;
 ```
 
 ### `unboundedLoop` (const)

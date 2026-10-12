@@ -1,7 +1,9 @@
 import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, Ref } from "react";
+import { createRef, useImperativeHandle } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
@@ -25,6 +27,25 @@ const Roster = ({ roomId = "room-1" }: { roomId?: string }): ReactElement => {
             {present === undefined ? "pending" : JSON.stringify(present)}
         </div>
     );
+};
+
+type SetData = (data: Record<string, unknown> | undefined) => void;
+type SetDataHandle = { setData: SetData };
+
+// Exposes the mounted hook's `setData` through a ref so a test can call it after mount or after unmount.
+const SetDataCapture = ({ ref }: { ref: Ref<SetDataHandle> }): ReactElement => {
+    const { setData } = usePresence("room-1", {
+        heartbeat: HEARTBEAT,
+        intervalMs: 1000,
+        listPresent: LIST_PRESENT,
+        sessionId: "sess-fixed",
+    });
+
+    useImperativeHandle(ref, () => {
+        return { setData };
+    }, [setData]);
+
+    return <div />;
 };
 
 describe("usePresence", () => {
@@ -215,6 +236,86 @@ describe("usePresence", () => {
             root.unmount();
             container.remove();
         }
+    });
+
+    it("setData called during render sends no heartbeat before mount", () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        // Server rendering runs the body with no effects, the same pre-mount path a render-time call takes.
+        const Probe = (): ReactElement => {
+            const { setData } = usePresence("room-1", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 1000,
+                listPresent: LIST_PRESENT,
+                sessionId: "sess-fixed",
+            });
+
+            setData({ status: "typing" });
+
+            return <div />;
+        };
+
+        renderToString(
+            <LunoraProvider client={mock.asClient}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const captured = createRef<SetDataHandle>();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <SetDataCapture ref={captured} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.mutation).toHaveBeenCalledTimes(1);
+        });
+
+        act(() => {
+            captured.current?.setData({ status: "typing" });
+        });
+
+        expect(mock.mutation).toHaveBeenCalledTimes(2);
+        expect(mock.mutation.mock.calls[1]?.[1]).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+    });
+
+    it("setData after unmount sends no heartbeat", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const captured = createRef<SetDataHandle>();
+
+        const view = render(
+            <LunoraProvider client={mock.asClient}>
+                <SetDataCapture ref={captured} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.mutation).toHaveBeenCalledTimes(1);
+        });
+
+        // Keep the handle from before unmount: React detaches the ref, so a fresh read would be null.
+        const setData = captured.current?.setData;
+
+        view.unmount();
+
+        const callsAtUnmount = mock.mutation.mock.calls.length;
+
+        setData?.({ status: "typing" });
+
+        expect(mock.mutation).toHaveBeenCalledTimes(callsAtUnmount);
     });
 
     it("stops heart-beating after unmount and releases the subscription", async () => {

@@ -1,4 +1,4 @@
-import { defineSchema } from "@lunora/server";
+import { defineSchema, defineTable } from "@lunora/server";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { PAYMENT_TABLES } from "../src/database-store";
@@ -58,5 +58,17 @@ describe("paymentExtension", () => {
         >();
 
         expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(Object.values(PAYMENT_TABLES).toSorted((a, b) => a.localeCompare(b)));
+    });
+
+    it("declares no column a .global() table refuses, so an app can redeclare the tables global", () => {
+        expect.assertions(1);
+
+        // `defineSchema` rejects a `v.bigint()` column on a `.global()` table. An app that keeps its
+        // payment rows in D1 declares these tables itself with the package's columns.
+        const globalTables = Object.fromEntries(
+            Object.entries(paymentExtension.tables).map(([name, table]) => [`${paymentExtension.key}_${name}`, defineTable(table.shape).global()]),
+        );
+
+        expect(() => defineSchema(globalTables)).not.toThrow();
     });
 });

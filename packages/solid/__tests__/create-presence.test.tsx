@@ -122,6 +122,68 @@ describe("createPresence (Solid)", () => {
         expect(fake.mutationCalls).toHaveLength(3);
     });
 
+    it("setData called during render sends no heartbeat before mount", async () => {
+        // jsdom cannot run a real server render; a render-body call runs before
+        // `onMounted`, which is the same pre-mount path an SSR render takes.
+        const fake = createPresenceFakeClient();
+        let mutationsBeforeMount = -1;
+
+        render(
+            () => {
+                const { setData } = createPresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                });
+
+                setData({ status: "typing" });
+                mutationsBeforeMount = fake.mutationCalls.length;
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        expect(mutationsBeforeMount).toBe(0);
+
+        await flushAsync();
+
+        // The stored value is still delivered by the first mount heartbeat.
+        expect(fake.mutationCalls).toHaveLength(1);
+        expect(fake.mutationCalls[0]?.args).toMatchObject({ data: { status: "typing" }, roomId: "room-1" });
+    });
+
+    it("setData after mount sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+        let setDataFn: ((next: Record<string, unknown> | undefined) => void) | undefined;
+
+        render(
+            () => {
+                const { setData } = createPresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                });
+
+                setDataFn = setData;
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(1);
+
+        setDataFn?.({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(2);
+        expect(fake.mutationCalls[1]?.args).toMatchObject({ data: { status: "typing" }, roomId: "room-1" });
+    });
+
     it("subscribes to listPresent and returns pushed values", async () => {
         const fake = createPresenceFakeClient();
         let capturedPresent: (() => unknown) | undefined;

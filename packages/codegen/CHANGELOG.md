@@ -1,3 +1,26 @@
+## @lunora/codegen [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.291...@lunora/codegen@1.0.0-alpha.292) (2026-10-12)
+
+### Features
+
+* **advisor:** flag sweeps that re-read the same rows ([#1128](https://github.com/anolilab/lunora/issues/1128)) ([74d1afe](https://github.com/anolilab/lunora/commit/74d1afe69890497132a889d0a28f0d805c067d59))
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.207
+* **@lunora/agent:** upgraded to 1.0.0-alpha.196
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/queue:** upgraded to 1.0.0-alpha.98
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.117
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.104
+* **@lunora/do:** upgraded to 1.0.0-alpha.203
+* **@lunora/server:** upgraded to 1.0.0-alpha.191
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+
 ## @lunora/codegen [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.290...@lunora/codegen@1.0.0-alpha.291) (2026-10-10)
 
 

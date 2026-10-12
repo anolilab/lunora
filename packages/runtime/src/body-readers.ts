@@ -10,6 +10,7 @@
  * arrive, not only from the header. Each reader aborts with a 413 the moment
  * cumulative bytes exceed the budget, before the oversized payload is buffered.
  */
+import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
 import { LunoraError } from "./errors";
 
 /**
@@ -45,41 +46,11 @@ const isPlainObject = (x: unknown): x is Record<string, unknown> => typeof x ===
  * A `null` body (GET-style request with no body) decodes to `""`.
  */
 const readBodyTextWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<string> => {
-    if (!request.body) {
-        return "";
+    const text = await readBodyTextCapped(request, limit);
+
+    if (text === null) {
+        throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
     }
-
-    const reader = request.body.getReader();
-    const decoder = new TextDecoder();
-    let total = 0;
-    let text = "";
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- drain the body stream until the reader signals `done`
-    while (true) {
-        // eslint-disable-next-line no-await-in-loop -- stream reads are inherently sequential; each chunk depends on the prior read
-        const { done, value } = await reader.read();
-
-        if (done) {
-            break;
-        }
-
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- a stream read can yield `done: false` with an undefined `value`; guard before reading byteLength
-        if (value) {
-            total += value.byteLength;
-
-            if (total > limit) {
-                // Stop pulling more bytes; release the underlying stream.
-                // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
-                await reader.cancel().catch(() => {});
-
-                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
-            }
-
-            text += decoder.decode(value, { stream: true });
-        }
-    }
-
-    text += decoder.decode();
 
     return text;
 };

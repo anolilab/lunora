@@ -47,14 +47,15 @@ const calleeName = (callee: Node): string | undefined => {
  * real type-checker work on a hot path. Scanning a file's import declarations
  * is a handful of syntactic children by comparison.
  *
- * Not cached: ts-morph reuses the `SourceFile` object when a file is
+ * `accepts` decides which module specifiers count; it defaults to the server
+ * surface. Not cached: ts-morph reuses the `SourceFile` object when a file is
  * overwritten, so a cache keyed on it serves the previous content's aliases.
  */
-const importAliases = (sourceFile: SourceFile, exportedName: string): Set<string> => {
+const importAliases = (sourceFile: SourceFile, exportedName: string, accepts: (moduleSpecifier: string) => boolean = isServerSurfaceModule): Set<string> => {
     const aliases = new Set<string>();
 
     for (const declaration of sourceFile.getImportDeclarations()) {
-        if (!isServerSurfaceModule(declaration.getModuleSpecifierValue())) {
+        if (!accepts(declaration.getModuleSpecifierValue())) {
             continue;
         }
 
@@ -160,4 +161,4 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
  */
 const isServerImport = (callee: Node, exportName: string): boolean => TsNode.isIdentifier(callee) && surfaceImportNameOf(callee) === exportName;
 
-export { calleeName, isServerImport, resolveCalleeKind, resolvesToImportedName };
+export { calleeName, importAliases, isServerImport, resolveCalleeKind, resolvesToImportedName };

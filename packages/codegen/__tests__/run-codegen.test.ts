@@ -2460,6 +2460,92 @@ export const drain = internalMutation.mutation(async ({ ctx }) => {
             expect(findings.every((finding) => finding.level === "ERROR")).toBe(true);
         });
 
+        it("reports the three sweep shapes through real codegen, and not their correct forms", () => {
+            expect.assertions(2);
+
+            // The sweep rules only mean something on code that codegen attributes
+            // correctly. Each case here is a real `_generated/` project, not a
+            // hand-built IR row, so a feeder that loses the table or the visibility
+            // shows up as a missing finding instead of a passing unit test. The
+            // delete uses the table facade because this workdir has no `node_modules`,
+            // so an id's type cannot resolve; the id-typed `ctx.db.delete(row._id)`
+            // form is covered against the real examples.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    sessions: defineTable({ ownerId: v.string(), expiresAt: v.number() })
+        .index("by_owner", ["ownerId"])
+        .index("by_expiry", ["expiresAt"]),
+});
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "sweep.ts"),
+                `import { internal } from "./_generated/api.js";
+import { internalMutation, query, v } from "./_generated/server.js";
+
+export const expire = internalMutation.mutation(async ({ ctx }) => {
+    const rows = await ctx.db
+        .query("sessions")
+        .withIndex("by_expiry", (q) => q.gt("expiresAt", 0))
+        .collect();
+    if (rows.length > 0) await ctx.scheduler.runAfter(100, internal.sweep.expire, {});
+});
+
+export const mine = query.input({ ownerId: v.string() }).query(async ({ args, ctx }) =>
+    ctx.db
+        .query("sessions")
+        .withIndex("by_owner", (q) => q.eq("ownerId", args.ownerId))
+        .filter((row) => row.expiresAt < 9)
+        .collect(),
+);
+
+export const expireAndDelete = internalMutation.mutation(async ({ ctx }) => {
+    const rows = await ctx.db
+        .query("sessions")
+        .withIndex("by_expiry", (q) => q.gt("expiresAt", 0))
+        .collect();
+    await Promise.all(rows.map(async (row) => ctx.db.sessions.delete(row._id)));
+    if (rows.length > 0) await ctx.scheduler.runAfter(100, internal.sweep.expireAndDelete, {});
+});
+
+export const expireWithCursor = internalMutation.input({ cursor: v.optional(v.string()) }).mutation(async ({ ctx }) => {
+    const rows = await ctx.db
+        .query("sessions")
+        .withIndex("by_expiry", (q) => q.gt("expiresAt", 0))
+        .take(50);
+    if (rows.length > 0) await ctx.scheduler.runAfter(100, internal.sweep.expireWithCursor, { cursor: "next" });
+});
+
+export const internalReport = internalMutation.mutation(async ({ ctx }) => {
+    await ctx.db
+        .query("sessions")
+        .withIndex("by_expiry", (q) => q.gt("expiresAt", 0))
+        .collect();
+});
+`,
+            );
+
+            const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+                (advisory) =>
+                    advisory.name === "unbounded_collect_on_open_range" ||
+                    advisory.name === "filter_after_index_scan" ||
+                    advisory.name === "self_reschedule_without_progress",
+            );
+
+            // `expire` and `internalReport` are the open-range reads; `expire` also re-arms with no progress.
+            // `mine` is the uncovered filter. `expireAndDelete` (facade delete) and `expireWithCursor` (take) must stay silent.
+            expect(findings.map((finding) => finding.cacheKey).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+                "filter_after_index_scan:sweep:13:sessions",
+                "self_reschedule_without_progress:sweep:9:expire",
+                "unbounded_collect_on_open_range:sweep:38:sessions",
+                "unbounded_collect_on_open_range:sweep:5:sessions",
+            ]);
+            expect(findings.map((finding) => finding.name)).not.toContain("dispatch_cycle");
+        });
+
         it("resolves a hoisted .output() validator to the same type as the inline form (#59)", () => {
             expect.assertions(2);
 

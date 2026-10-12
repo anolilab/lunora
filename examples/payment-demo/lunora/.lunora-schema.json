@@ -99,13 +99,13 @@
       "commitOrdered": false,
       "fields": {
         "amountMinor": {
-          "kind": "bigint",
+          "kind": "number",
           "nullable": false,
           "optional": false,
           "unique": false
         },
         "capturedMinor": {
-          "kind": "bigint",
+          "kind": "number",
           "nullable": false,
           "optional": false,
           "unique": false
@@ -141,7 +141,7 @@
           "unique": false
         },
         "refundedMinor": {
-          "kind": "bigint",
+          "kind": "number",
           "nullable": false,
           "optional": false,
           "unique": false

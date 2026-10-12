@@ -24,12 +24,20 @@ export interface AdvisorCallEdge {
     conditional?: true;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+
     /** What the edge draws: a function call, a scheduled dispatch, an enqueue, a publish, or a service use. */
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call, or `0` when unknown. */
     line: number;
     /** Why the target could not be read statically — set exactly when `target` is absent. */
     reason?: string;
+
+    /**
+     * The facts of a scheduled dispatch, present on `schedule` edges only. `delayMs` is
+     * the literal `runAfter` delay. `argKeys` are the top-level property names of the
+     * args object, `[]` when there are none, and `undefined` when they cannot be read.
+     */
+    schedule?: { argKeys?: string[]; delayMs?: number };
     /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
     scope: AdvisorCallSiteScope;
     /** The `namespace:export` function key (or queue/topic/service name) the edge points at. */

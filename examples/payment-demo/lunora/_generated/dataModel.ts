@@ -44,14 +44,14 @@ export interface Doc_payment_events {
 export interface Doc_payment_sessions {
     _id: Id<"payment_sessions">;
     _creationTime: number;
-    amountMinor: bigint;
-    capturedMinor: bigint;
+    amountMinor: number;
+    capturedMinor: number;
     createdAt: number;
     currency: string;
     provider: string;
     providerSessionId: string;
     referenceId: string;
-    refundedMinor: bigint;
+    refundedMinor: number;
     state: string;
     subscriptionId?: string;
     updatedAt: number;
@@ -184,14 +184,14 @@ export interface Insert_payment_events {
 export interface Insert_payment_sessions {
     _id?: Id<"payment_sessions">;
     _creationTime?: number;
-    amountMinor: bigint;
-    capturedMinor: bigint;
+    amountMinor: number;
+    capturedMinor: number;
     createdAt: number;
     currency: string;
     provider: string;
     providerSessionId: string;
     referenceId: string;
-    refundedMinor: bigint;
+    refundedMinor: number;
     state: string;
     subscriptionId?: string;
     updatedAt: number;

@@ -1,3 +1,18 @@
+## @lunora/advisor [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.206...@lunora/advisor@1.0.0-alpha.207) (2026-10-12)
+
+### Features
+
+* **advisor:** flag sweeps that re-read the same rows ([#1128](https://github.com/anolilab/lunora/issues/1128)) ([74d1afe](https://github.com/anolilab/lunora/commit/74d1afe69890497132a889d0a28f0d805c067d59))
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.191
+
 ## @lunora/advisor [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.205...@lunora/advisor@1.0.0-alpha.206) (2026-10-10)
 
 ### Features

@@ -4225,6 +4225,9 @@ importers:
       '@lunora/queue':
         specifier: workspace:*
         version: link:../queue
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
@@ -4253,9 +4256,6 @@ importers:
       '@lunora/platform-cloudflare':
         specifier: workspace:*
         version: link:../platform-cloudflare
-      '@lunora/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine

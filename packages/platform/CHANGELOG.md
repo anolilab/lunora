@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.58...@lunora/platform@1.0.0-alpha.59) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
 ## @lunora/platform [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.57...@lunora/platform@1.0.0-alpha.58) (2026-10-08)
 
 ### Bug Fixes

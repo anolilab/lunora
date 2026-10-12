@@ -11,6 +11,39 @@ SemVer promise until the package graduates.
 
 ## `@lunora/platform-node`
 
+### `NODE_SCHEDULER_DISPATCH_PATH` (const)
+
+```ts
+const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch";
+```
+
+### `NodeDispatchInvocation` (interface)
+
+```ts
+interface NodeDispatchInvocation {
+    args: Record<string, unknown>;
+    functionPath: string;
+    id: string | undefined;
+    identity: {
+        identity?: string;
+        userId?: string;
+    } | undefined;
+    shardKey: string;
+    traceparent: string | undefined;
+}
+```
+
+### `NodeDispatchRouteOptions` (interface)
+
+```ts
+interface NodeDispatchRouteOptions {
+    adminToken?: string;
+    defaultShardKey: string;
+    invoke: (call: NodeDispatchInvocation) => Promise<Response>;
+    schedulerSecret?: string;
+}
+```
+
 ### `NodeGlobalContextDatabaseOptions` (type)
 
 ```ts
@@ -51,6 +84,7 @@ interface NodePlatform<Queues extends Record<string, {
     capabilities: PlatformCapabilities;
     close: () => void;
     directory: ShardDirectory;
+    dispatch: (request: Request) => Promise<Response>;
     drain: () => Promise<void>;
     globalTables?: NodeGlobalStore;
     kv: ShardKvStore;
@@ -63,6 +97,15 @@ interface NodePlatform<Queues extends Record<string, {
 }
 ```
 
+### `NodePlatformDispatchOptions` (interface)
+
+```ts
+interface NodePlatformDispatchOptions {
+    adminToken?: string;
+    schedulerSecret?: string;
+}
+```
+
 ### `NodePlatformOptions` (type)
 
 ```ts
@@ -71,6 +114,7 @@ type NodePlatformOptions<Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>> = {
+    dispatch?: NodePlatformDispatchOptions;
     globalTablesPath?: string;
     objectStorageDirectory?: string;
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
@@ -266,6 +310,12 @@ interface NodeWorkflowHostOptions<Workflows extends Record<string, {
     store: WorkflowStore;
     workflows: Workflows;
 }
+```
+
+### `createNodeDispatchRoute` (const)
+
+```ts
+const createNodeDispatchRoute: (options: NodeDispatchRouteOptions) => ((request: Request) => Promise<Response>);
 ```
 
 ### `createNodeGlobalStore` (const)

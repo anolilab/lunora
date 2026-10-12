@@ -5,13 +5,11 @@ import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { collectPages } from "../../../shared/collect-pages";
-import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { decodeErrorDetail, describeError, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
-import { signCanonical } from "../../../shared/hmac-url";
 import {
     decodeExpectedSubjectHeader,
     encodeIdentityHeader,
@@ -29,9 +27,11 @@ import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/re
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
+import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -1311,31 +1311,6 @@ interface WorkerOptions {
      */
     replicaReads?: boolean;
 
-    /* eslint-disable no-secrets/no-secrets -- the env-var NAME below is a config key, not a credential */
-
-    /**
-     * Enforce the ephemeral WS admin token: the worker's WS admin gate rejects
-     * the raw master admin token in the `?token=` query parameter — only a
-     * short-lived sub-token minted by `POST /_lunora/admin/ws-token` (or the
-     * master token in the `Authorization` HEADER, which never leaks via URLs)
-     * authorizes.
-     *
-     * **On by default**: a query string lands in access logs, browser history and
-     * `Referer`, so the master admin credential must not ride one. The studio
-     * mints and sends the ephemeral token already.
-     *
-     * To opt back out for a legacy client that still puts the master token in a
-     * URL, set **`env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`** to
-     * `0`/`false`/`off`/`no`/`disabled`. That is the knob to use: it is read
-     * independently by the worker AND by the shard/relay Durable Objects, so the
-     * whole deployment agrees. This code-level option only governs the WORKER's
-     * gate — a DO stamps its own socket from `env` alone, so setting `false` here
-     * without the env var yields a socket the worker admits and the DO marks
-     * non-admin (admin subscriptions then return nothing).
-     */
-    requireEphemeralWsToken?: boolean;
-    /* eslint-enable no-secrets/no-secrets */
-
     /**
      * Resolve the calling identity from the inbound RPC request. Called once
      * per RPC (and per fan-out) before the request is forwarded to the
@@ -1771,7 +1746,6 @@ const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
 };
 /** Prefix for a voice-enabled agent's real-time session upgrade — `/_lunora/voice/<agentExportName>` (dynamic, so matched by prefix not the exact-path table). */
 const VOICE_PATH_PREFIX = "/_lunora/voice/";
-const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
 const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
 
@@ -1804,12 +1778,6 @@ const STATUS_PATH = "/_lunora/status";
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
 /**
- * The reserved cross-shard relation reader's function-path prefix. Inlined as a
- * literal rather than imported so the runtime carries no `@lunora/do` dependency.
- */
-const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
-
-/**
  * Refuse a `__lunora_relation__:*` dispatch that is NOT a fan-out.
  *
  * SECURITY: the reserved relation reader answers with RAW, RLS-blind rows for
@@ -1826,7 +1794,7 @@ const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
  * path"). A surface that skips it is not a weaker check, it is no check.
  */
 const assertNotReservedRelationPath = (functionPath: string): void => {
-    if (functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
+    if (isReservedRelationFunctionPath(functionPath)) {
         throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
             code: "FORBIDDEN",
             status: 403,
@@ -1876,34 +1844,6 @@ const assertExpectedSubject = (request: Request, identity: ResolvedIdentity | nu
     if (expected.subject !== (identity?.userId ?? null)) {
         throw new LunoraError("the session changed since this write was queued", { code: "IDENTITY_MISMATCH", status: 409 });
     }
-};
-
-/**
- * Read the optional caller identity a server-initiated dispatch may forward on
- * the `x-lunora-userid` / `x-lunora-identity` headers, returning the shape
- * `dispatchToShard` threads to the shard (or `undefined` when neither is set).
- *
- * Deliberately opaque: both values are captured as raw strings and later copied
- * verbatim back onto the outbound shard request's headers (see the
- * `dispatchToShard` header block below) without being decoded here. The inbound
- * request is itself `@lunora/dispatch`'s own `fetch` to this worker, which
- * already encodes via `encodeUserIdHeader`/`encodeIdentityHeader` — so the
- * string captured here is already `ByteString`-safe and needs no
- * decode-then-re-encode round trip; it's the shard's `parseIdentityHeader` /
- * voice DO's identity parser that ultimately decode it.
- */
-const readForwardedIdentity = (request: Request): { identity?: string; userId?: string } | undefined => {
-    const forwardedUserId = request.headers.get("x-lunora-userid");
-    const forwardedIdentity = request.headers.get("x-lunora-identity");
-
-    if (forwardedUserId === null && forwardedIdentity === null) {
-        return undefined;
-    }
-
-    return {
-        ...(forwardedIdentity === null ? {} : { identity: forwardedIdentity }),
-        ...(forwardedUserId === null ? {} : { userId: forwardedUserId }),
-    };
 };
 
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
@@ -2607,49 +2547,15 @@ const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, 
  */
 
 /**
- * Verify an HMAC-SHA-256 (base64url, unpadded) signature over `body` against
- * `secret`. Mirrors `@lunora/scheduler`'s `signDispatch` via the shared
- * `signCanonical` (same envelope, one implementation). We re-derive the expected
- * signature and constant-time compare the encoded strings so a forged or absent
- * signature can never authenticate a dispatch.
- */
-const verifyHmacSignature = async (secret: string, body: string, suppliedSignature: string): Promise<boolean> => {
-    if (secret.length === 0 || suppliedSignature.length === 0) {
-        return false;
-    }
-
-    return constantTimeEqual(await signCanonical(secret, body), suppliedSignature);
-};
-
-const checkAdminAuth = (request: Request, expected: string | undefined): boolean => {
-    if (!expected || expected.length === 0) {
-        return false;
-    }
-
-    const authorization = request.headers.get("authorization");
-
-    if (!authorization) {
-        return false;
-    }
-
-    const [scheme, ...rest] = authorization.split(" ");
-
-    if (scheme?.toLowerCase() !== "bearer") {
-        return false;
-    }
-
-    return constantTimeEqual(expected, rest.join(" ").trim());
-};
-
-/**
  * Admin check for a browser WebSocket upgrade, which can't set an
  * `Authorization` header — so the token rides in the `?token=` query parameter
- * instead (the studio sends it there as the client's `wsToken`). Accepts either
- * the master admin token (backward compatible) or a short-lived sub-token
- * minted by `POST /_lunora/admin/ws-token` — the studio sends the ephemeral
- * token so the master credential never lands in URLs/logs.
+ * instead. Accepts only a short-lived sub-token minted by
+ * `POST /_lunora/admin/ws-token`. The master admin token is never accepted in
+ * the query string: it would land in access logs, browser history and `Referer`.
+ * The `Authorization` header path (`requestIsAdmin`) is the only place the
+ * master token authorizes a WS upgrade.
  */
-const checkAdminWsToken = async (request: Request, expected: string | undefined, requireEphemeral: boolean): Promise<boolean> => {
+const checkAdminWsToken = async (request: Request, expected: string | undefined): Promise<boolean> => {
     if (!expected || expected.length === 0) {
         return false;
     }
@@ -2660,20 +2566,7 @@ const checkAdminWsToken = async (request: Request, expected: string | undefined,
         return false;
     }
 
-    if (await verifyWsAdminToken(expected, supplied)) {
-        return true;
-    }
-
-    // Enforcement: with `requireEphemeralWsToken` on, a raw master token in the
-    // URL is rejected — the query string is exactly where it leaks (logs /
-    // history / Referer). The header bearer path (`requestIsAdmin`) is
-    // unaffected; browsers can't set it on a WS upgrade,
-    // so it never rides a URL.
-    if (requireEphemeral) {
-        return false;
-    }
-
-    return constantTimeEqual(expected, supplied);
+    return verifyWsAdminToken(expected, supplied);
 };
 
 /**
@@ -2930,16 +2823,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     let envAdminToken: string | undefined;
     const effectiveAdminToken = (): string | undefined => options.adminToken ?? envAdminToken;
 
-    // Ephemeral-WS-token enforcement: the explicit worker option, or — when
-    // unset — the `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` env knob (resolved once
-    // per isolate alongside the admin token, same env-is-constant reasoning).
-    // Default ON: a WS upgrade's `?token=` accepts only the 60s sub-token, since
-    // a URL query string lands in access logs, browser history and `Referer` —
-    // exactly where the master admin credential must never be. The studio already
-    // mints and sends the ephemeral token; opting out (`…=off`) restores the old
-    // master-token-in-URL behaviour.
-    let envRequireEphemeralWsToken: boolean | undefined;
-    const effectiveRequireEphemeralWsToken = (): boolean => options.requireEphemeralWsToken ?? envRequireEphemeralWsToken ?? true;
     // The env binding name holding the shard namespace, resolved once per isolate
     // from the first request's env (same env-is-constant reasoning as the admin
     // token). A replica needs it to address its owner — it is the only way a DO
@@ -2949,21 +2832,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     /**
      * Capture everything the worker derives from `env` once per isolate, on the
-     * first request (env is constant within an isolate): the admin bearer, the
-     * ephemeral-WS-token knob, and the shard namespace binding name.
+     * first request (env is constant within an isolate): the admin bearer and the
+     * shard namespace binding name.
      */
     const captureEnvDerivedConfig = (env: unknown): void => {
         const record = (env ?? {}) as Record<string, unknown>;
 
         shardBindingName ??= resolveShardBindingName(env, options.shardDO);
-
-        if (envRequireEphemeralWsToken === undefined && options.requireEphemeralWsToken === undefined) {
-            const raw = record["LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN"];
-
-            if (typeof raw === "string" && raw.length > 0) {
-                envRequireEphemeralWsToken = isEnvFlagEnabled(raw, true);
-            }
-        }
 
         if (envAdminToken !== undefined || options.adminToken !== undefined) {
             return;
@@ -2987,7 +2862,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     // The unified admin predicate every `/_lunora/admin/*` gate routes through: the
     // static bearer, OR a grant `handle` recorded from `options.adminGate`.
-    const requestIsAdmin = (request: Request): boolean => checkAdminAuth(request, effectiveAdminToken()) || accessAdminGrants.has(request);
+    const requestIsAdmin = (request: Request): boolean => checkBearerToken(request, effectiveAdminToken()) || accessAdminGrants.has(request);
 
     /**
      * Evaluate `options.adminGate` once for this request and record the grant
@@ -3243,47 +3118,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // shard's paid backstop would refuse every cron-scheduled paid procedure.
         // This path is already admin/HMAC-gated and may call any `internal`
         // function, so it is strictly more privileged than the paywall it passes.
-        const headers: Record<string, string> = {
-            "content-type": "application/json",
-            [ORIGIN_PAYWALL_HEADER]: ORIGIN_PAYWALL_APPLIED,
-            "x-lunora-system": "1",
-        };
-
-        // A trusted server dispatch may ALSO carry a verified caller identity (e.g.
-        // a voice session attributing its thread writes to the socket's user). The
-        // shard reconstructs identity from these headers independently of the system
-        // flag, so `x-lunora-system: "1"` and a userId coexist — the call runs with
-        // system privileges AND the caller's RLS/ownership context. Only reachable
-        // from the admin/HMAC-gated scheduler-dispatch endpoint, so these values
-        // already passed the runtime's own `resolveForwardContext` mint upstream.
-        if (forwardedIdentity?.userId !== undefined && forwardedIdentity.userId.length > 0) {
-            headers["x-lunora-userid"] = forwardedIdentity.userId;
-        }
-
-        if (forwardedIdentity?.identity !== undefined && forwardedIdentity.identity.length > 0) {
-            headers["x-lunora-identity"] = forwardedIdentity.identity;
-        }
-
-        // A stable per-job dedup key makes an at-least-once re-fire safe: the DO
-        // idempotency table (keyed on `(identity, mutation-id)`) collapses a repeat
-        // dispatch — e.g. a scheduler retry after the origin response was lost but
-        // the side effect already committed — so the job's effect isn't applied
-        // twice. Without it, at-least-once delivery double-applies non-idempotent
-        // handlers. Server-initiated dispatch shares the one `"system:"` namespace
-        // (it originates inside the trust boundary), but the caller passes a unique
-        // per-job id so `("system:", id)` stays unique across distinct jobs.
-        if (mutationId !== undefined && mutationId.length > 0) {
-            headers["x-lunora-mutation-id"] = mutationId;
-        }
-
-        // Join the caller's trace when there is one. Without it the shard mints a
-        // fresh trace for every server-initiated dispatch, so a cron's span was a
-        // childless root and each function it fired was an unrelated orphan trace.
-        // Only reachable from the admin/HMAC-gated paths above, so the value is
-        // already inside the trust boundary — no inbound-trust policy applies.
-        if (traceparent !== undefined && traceparent.length > 0) {
-            headers.traceparent = traceparent;
-        }
+        // The shared builder carries the trust-boundary headers; see `shared/system-dispatch-headers`.
+        const headers = buildSystemDispatchHeaders({ forwardedIdentity, mutationId, traceparent });
 
         return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, headers));
     };
@@ -3559,17 +3395,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const schedulerSecret = typeof envRecord["LUNORA_SCHEDULER_SECRET"] === "string" ? envRecord["LUNORA_SCHEDULER_SECRET"] : undefined;
         const adminBearer = options.adminToken ?? (typeof envRecord["LUNORA_ADMIN_TOKEN"] === "string" ? envRecord["LUNORA_ADMIN_TOKEN"] : undefined);
 
-        const signatureHeader = request.headers.get("x-lunora-scheduler-signature");
-
-        let authenticated = false;
-
-        if (signatureHeader && schedulerSecret) {
-            authenticated = await verifyHmacSignature(schedulerSecret, rawBody, signatureHeader);
-        } else if (adminBearer) {
-            // Fallback bearer path — the scheduler uses this only when no HMAC
-            // secret is configured on its side.
-            authenticated = checkAdminAuth(request, adminBearer);
-        }
+        // A signature wins when both sides hold the secret; otherwise the admin bearer
+        // is the credential. The rules are shared with the Node dispatch route.
+        const authenticated = await verifySchedulerDispatch(request, rawBody, { adminToken: adminBearer, schedulerSecret });
 
         if (!authenticated) {
             // `DISPATCH_UNAUTHENTICATED`, never a plain `FORBIDDEN`: this refusal
@@ -3649,7 +3477,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // attributing its `agents:*` thread writes to the socket's user). This
         // endpoint is admin-bearer/HMAC gated, so the caller is already trusted; the
         // headers pass through to the shard alongside the system flag for RLS.
-        const identity = readForwardedIdentity(request);
+        const identity = readForwardedDispatchIdentity(request);
 
         // The caller (a trigger's `ctx.run`, the scheduler DO) already opened a
         // trace and named it on the request; forward it so the dispatched function
@@ -3861,7 +3689,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken(), effectiveRequireEphemeralWsToken()),
+        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
@@ -4329,7 +4157,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // the credential per socket at upgrade AND on every write flush, so an
         // admin subscription dies with a rotated token, and the only other
         // admin-prefixed socket surface (`stream`) is refused outright there.
-        const adminUpgrade = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken(), effectiveRequireEphemeralWsToken()));
+        const adminUpgrade = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
 
         await assertShardAuthorized(identity, shardKey, adminUpgrade);
 

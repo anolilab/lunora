@@ -361,7 +361,7 @@ export const auth = createAuth({
             resource: mcpResource,
             // Declare the scopes the MCP route checks. Left out, `mcp()` falls back
             // to the OIDC defaults and no client can be granted `lunora:read`.
-            scopes: ["lunora:read", "lunora:write"],
+            scopes: ["lunora:read", "lunora:write", "lunora:data-read", "lunora:observability"],
         }),
     ],
 });
@@ -392,6 +392,25 @@ export const handleMcp = createAuthedMcpFetchHandler({
 An unauthenticated request never reaches the MCP server at all — it gets a 401
 carrying the `WWW-Authenticate` challenge that starts the client's authorization
 flow, and no `LunoraClient` holding the admin bearer is ever constructed for it.
+
+### Scopes for raw rows and logs
+
+The tools that return raw table rows (`lunora_find_related`) and the ones that
+return logs, request metadata, and grouped errors (`lunora_get_logs`,
+`lunora_get_issues`, `lunora_get_advisories`, `lunora_get_query_insights`,
+`lunora_get_migration_status`) need two more scopes on the token:
+`lunora:data-read` for the first group and `lunora:observability` for the
+second. A token without the scope does not see those tools in `tools/list`, and
+a call to one is refused. With `stepUp` set, the call is answered with
+`insufficient_scope` naming the scope, so the client can re-authorize.
+
+The scopes are a second gate, not a grant. The operator must still enable the
+family and supply an admin token. On the stdio binary, enable it with
+`LUNORA_MCP_ALLOW_DATA_READS` or `LUNORA_MCP_ALLOW_OBSERVABILITY`. On the OAuth
+path those env vars are not read: the authed server factory's options (or the
+per-claims `server` function) set `allowDataReads: true` or
+`allowObservability: true`. Lunora does not issue these scopes. Declare them in
+`mcp({ scopes })` as shown above.
 
 ### The discovery documents
 

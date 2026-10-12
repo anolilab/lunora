@@ -229,6 +229,33 @@ const adoptOrphanSession = async (
     return adopted;
 };
 
+/**
+ * Write a payment session row. A failed write releases the refund claim first: the claim is taken
+ * before the row, because a concurrent restatement of the same refund must not double-count while
+ * this write is in flight. There is no transaction across the two, so a failed write would otherwise
+ * leave the claim standing, and the provider's retry — which the caller's rethrow triggers — would
+ * zero the amount and lose the refund entirely.
+ *
+ * A value the store cannot hold (a money amount beyond 2^53 minor units) fails the same way on every
+ * retry, so retrying only keeps the event undelivered. Nothing was written: that case answers
+ * `unstorable`, so the provider stops and the observer records the reason. Any other failure rethrows.
+ */
+const writeSession = async (store: PaymentStore, session: PaymentSession, refund: RefundFold | undefined): Promise<ApplyResult | undefined> => {
+    try {
+        await store.upsertPaymentSession(session);
+
+        return undefined;
+    } catch (error) {
+        await refund?.release();
+
+        if (error instanceof LunoraPaymentError && error.code === "VALIDATION_ERROR") {
+            return { applied: false, reason: "unstorable" };
+        }
+
+        throw error;
+    }
+};
+
 const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction): Promise<ApplyResult> => {
     if (!action.sessionId) {
         return { applied: false, reason: "unhandled" };
@@ -304,23 +331,14 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         return { applied: false, reason: "invalid_refund_amount" };
     }
 
-    try {
-        await store.upsertPaymentSession({
-            ...base,
-            capturedAmount,
-            referenceId: ownerOf(base.referenceId, action.referenceId),
-            refundedAmount,
-            state: toState,
-            updatedAt: now,
-        });
-    } catch (error) {
-        // The claim is taken before the row, because a concurrent restatement of the same refund must
-        // not double-count while this write is in flight. There is no transaction across the two, so a
-        // failed write would otherwise leave the claim standing, and the provider's retry — which the
-        // caller's rethrow triggers — would zero the amount and lose the refund entirely.
-        await refund?.release();
+    const unstorable = await writeSession(
+        store,
+        { ...base, capturedAmount, referenceId: ownerOf(base.referenceId, action.referenceId), refundedAmount, state: toState, updatedAt: now },
+        refund,
+    );
 
-        throw error;
+    if (unstorable) {
+        return unstorable;
     }
 
     return { applied: true, reason: "ok" };

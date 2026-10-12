@@ -371,6 +371,66 @@ describe("presence (Svelte)", () => {
     // An RLS denial or a session expiry on the `listPresent` subscription used to be
     // dropped on the floor: `present` simply froze at its last value with nothing to
     // read and no handler to call. Matches React's `usePresence` error channel.
+    it("setData during SSR (no window) sends no heartbeat", () => {
+        const fake = createPresenceFakeClient();
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        handle.setData({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(0);
+    });
+
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(1);
+
+        handle.setData({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(2);
+        expect(fake.mutationCalls[1]?.args).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+
+        handle.teardown();
+    });
+
+    it("setData after teardown sends no heartbeat", async () => {
+        const fake = createPresenceFakeClient();
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        await flushAsync();
+        handle.teardown();
+
+        const callsAtTeardown = fake.mutationCalls.length;
+
+        handle.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(callsAtTeardown);
+    });
+
     it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
         const fake = createPresenceFakeClient();
         const seen: { code?: string; message: string }[] = [];

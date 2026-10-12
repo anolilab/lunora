@@ -440,6 +440,7 @@ interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
     flagReads?: ReadonlyArray<FlagReadIR>;
@@ -473,6 +474,7 @@ interface LintSchemaOptions {
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
     relationLoads?: ReadonlyArray<RelationLoadIR>;
     rlsProcedures?: ReadonlyArray<RlsProcedureIR>;
+    rowEffects?: ReadonlyArray<RowEffectIR>;
     schema: SchemaIR;
     secretLiterals?: ReadonlyArray<SecretLiteralIR>;
     shapes?: ReadonlyArray<ShapeIR>;
@@ -710,13 +712,19 @@ const QUEUES_FILENAME = "queues.ts";
 ```ts
 interface QueryReadIR {
     file: string;
+    filterFields?: string[];
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
+    index?: {
+        bounds?: string[];
+        name?: string;
+    };
     line: number;
     scope: CallSiteScope;
     table: string;
     terminal?: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -1320,7 +1328,7 @@ const discoverNotifyConfig: (project: Project, lunoraDirectory: string) => Advis
 ### `discoverQueries` (const)
 
 ```ts
-const discoverQueries: (project: Project, lunoraDirectory: string) => QueryReadIR[];
+const discoverQueries: (project: Project, lunoraDirectory: string, functions?: ReadonlyArray<FunctionIR>) => QueryReadIR[];
 ```
 
 ### `discoverQueues` (const)
@@ -2290,6 +2298,10 @@ interface CallEdgeIR {
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
     reason?: string;
+    schedule?: {
+        argKeys?: string[];
+        delayMs?: number;
+    };
     scope: CallSiteScope;
     target?: string;
 }
@@ -2857,6 +2869,18 @@ interface RelationLoadIR {
 }
 ```
 
+### `RowEffectIR` (interface)
+
+```ts
+interface RowEffectIR {
+    exportName: string;
+    fields?: string[];
+    file: string;
+    method: string;
+    table: string;
+}
+```
+
 ### `SchemaPath` (type)
 
 ```ts
@@ -2961,6 +2985,7 @@ interface StorageUploadIR {
 
 ```ts
 interface TableWriteIR {
+    fields?: string[];
     file: string;
     line: number;
     method: string;

@@ -1,7 +1,11 @@
+import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
+import type { AdvisorCallEdge } from "../call-edges";
 import type { AdvisorCallSiteScope, CallSiteMetadata } from "../call-site-scope";
-import { callSiteMetadata, helperRole } from "../call-site-scope";
+import { callSiteCallers, callSiteMetadata, helperRole } from "../call-site-scope";
+import type { AdvisorTableWrite } from "../inserts";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { AdvisorQueryRead } from "../queries";
+import type { AdvisorRowEffect } from "../row-effects";
 import type { AdvisorSchema, AdvisorTable } from "../schema";
 
 /** A feeder row that names a call site: its scope and where it sits. */
@@ -10,6 +14,31 @@ interface CallSiteRow {
     line: number;
     scope: AdvisorCallSiteScope;
 }
+
+/**
+ * Writes that can take a row out of, or move it within, the range a read selects.
+ * `patch` is included although only some patches move a row out of a range: the
+ * lint cannot read which field a patch sets, so a patch counts as progress. A sweep
+ * that patches a field the range does not depend on is therefore not reported.
+ */
+const ROW_CHANGING_WRITES: ReadonlySet<string> = new Set(["delete", "deleteMany", "hardDelete", "patch", "patchMany", "patchWhere", "replace"]);
+
+/**
+ * Whether one change can take a row out of the range a read selects. A delete or
+ * replace can always do that. A patch does only when it writes an index field. With
+ * no index, or fields the feeder could not read, any change counts.
+ */
+const changeTouches = (change: RowChange, indexFields: ReadonlyArray<string> | undefined): boolean => {
+    if (change.method !== "patch" && change.method !== "patchMany") {
+        return true;
+    }
+
+    if (indexFields === undefined || change.fields === undefined) {
+        return true;
+    }
+
+    return change.fields.some((field) => indexFields.includes(field));
+};
 
 /**
  * Personally-identifiable-information column names. Kept deliberately tight to
@@ -244,3 +273,96 @@ export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: str
  */
 export const shardKindsByTable = (schema: AdvisorSchema): ReadonlyMap<string, string | undefined> =>
     new Map(schema.tables.map((table) => [table.name, table.shardKind]));
+
+/** The `namespace:export` key of one export, the form call edges and cron targets carry. */
+export const functionKey = (file: string, exportName: string): string => `${sanitizeNamespace(file)}:${exportName}`;
+
+/** `namespace:export` keys of the functions a read or write runs on behalf of, one per export that reaches its site. */
+export const functionKeysOf = (file: string, scope: AdvisorCallSiteScope): string[] =>
+    callSiteCallers(scope).map((exportName) => functionKey(file, exportName));
+
+/**
+ * Every function key that runs without a request: a call edge schedules it, or a cron
+ * job fires it. A lint uses this to tell a sweep that the server drives from one a caller reaches.
+ */
+export const scheduledFunctionKeys = (
+    callEdges: ReadonlyArray<AdvisorCallEdge> | undefined,
+    cronTargets: ReadonlyArray<string> | undefined,
+): ReadonlySet<string> =>
+    new Set([...(callEdges ?? []).flatMap((edge) => (edge.kind === "schedule" && edge.target !== undefined ? [edge.target] : [])), ...(cronTargets ?? [])]);
+
+/** One row-changing write an export performs: its method, and the fields a patch writes. */
+export interface RowChange {
+    fields?: string[];
+    method: string;
+}
+
+/** Row changes keyed `file:export:table`, so a lint asks "does this export change this table" with one lookup. */
+export type RowChanges = ReadonlyMap<string, ReadonlyArray<RowChange>>;
+
+/**
+ * Every row-changing write, keyed by the export that performs it. A direct write
+ * counts under each export that reaches its function. A write reached through a
+ * helper in another file is counted by the row-effect evidence, under the export
+ * that calls it. Built once per run.
+ */
+export const rowChangesOf = (writes: ReadonlyArray<AdvisorTableWrite> | undefined, effects: ReadonlyArray<AdvisorRowEffect> | undefined): RowChanges => {
+    const changes = new Map<string, RowChange[]>();
+    const add = (key: string, change: RowChange): void => {
+        const existing = changes.get(key);
+
+        if (existing === undefined) {
+            changes.set(key, [change]);
+        } else {
+            existing.push(change);
+        }
+    };
+
+    for (const write of writes ?? []) {
+        if (ROW_CHANGING_WRITES.has(write.method)) {
+            for (const caller of callSiteCallers(write.scope)) {
+                add(`${write.file}:${caller}:${write.table}`, { fields: write.fields, method: write.method });
+            }
+        }
+    }
+
+    for (const effect of effects ?? []) {
+        if (ROW_CHANGING_WRITES.has(effect.method)) {
+            add(`${effect.file}:${effect.exportName}:${effect.table}`, { fields: effect.fields, method: effect.method });
+        }
+    }
+
+    return changes;
+};
+
+/** The declared btree index fields of each read's index, looked up by table and index name, built once per run. */
+export const indexFieldsLookup = (schema: AdvisorSchema): ((read: Pick<AdvisorQueryRead, "index" | "table">) => ReadonlyArray<string> | undefined) => {
+    const indexes = new Map(
+        schema.tables.map((table) => [table.name, new Map(table.indexes.filter((index) => index.kind === "index").map((index) => [index.name, index.fields]))]),
+    );
+
+    return (read) => {
+        const name = read.index?.name;
+
+        return name === undefined ? undefined : indexes.get(read.table)?.get(name);
+    };
+};
+
+/**
+ * True when a function that reads `read` also removes or moves a row it selects. The
+ * function is every export that reaches the read's site. Index fields narrow a patch
+ * to the writes that can change the range.
+ */
+
+/**
+ * True when the given callers remove or move a row the read selects. The callers
+ * default to every export that reaches the read's site. Index fields narrow a patch to
+ * the writes that can change the range. A caller with no write of its own is not
+ * helped by another caller's write, so pass the one caller whose progress is at issue.
+ */
+export const readRowsChanged = (
+    changes: RowChanges,
+    read: Pick<AdvisorQueryRead, "file" | "scope" | "table">,
+    indexFields?: ReadonlyArray<string>,
+    callers: ReadonlyArray<string> = callSiteCallers(read.scope),
+): boolean => callers.some((caller) => (changes.get(`${read.file}:${caller}:${read.table}`) ?? []).some((change) => changeTouches(change, indexFields)));

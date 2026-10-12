@@ -273,7 +273,7 @@ import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
     batchedTableLookup,
     readAdminAuditLog,
@@ -13705,7 +13705,7 @@ abstract class ShardDO {
      * ephemeral sub-token with WebCrypto HMAC.
      */
     private async isUpgradeAllowed(request: Request): Promise<boolean> {
-        const env = (this.env ?? {}) as { LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
         if (allowedOrigins && allowedOrigins.trim() !== "") {
@@ -13731,13 +13731,24 @@ abstract class ShardDO {
 
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
+            const adminToken = env.LUNORA_ADMIN_TOKEN;
 
-            // The admin credential (master token or minted ephemeral sub-token)
-            // is accepted as an alternate so a studio can open its socket even
-            // when `LUNORA_WS_BEARER` gates ordinary subscribers. The socket is
-            // flagged admin separately (see `isAdminSocket`); matching the
-            // bearer alone never grants it.
-            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
+            // The master token in `?token=` is refused even when it matches the bearer:
+            // the query string is where it leaks (see `isAdminSocket`).
+            const masterInQuery =
+                supplied !== undefined &&
+                adminToken !== undefined &&
+                adminToken.length > 0 &&
+                extractBearerToken(request.headers.get("authorization")) === undefined &&
+                constantTimeEqual(supplied, adminToken);
+
+            // The admin credential is accepted as an alternate so a studio can open
+            // its socket even when `LUNORA_WS_BEARER` gates ordinary subscribers: a
+            // minted ephemeral sub-token (header or `?token=`), or the master token
+            // in the `Authorization` header only. The socket is flagged admin
+            // separately (see `isAdminSocket`); matching the bearer alone never
+            // grants it.
+            if (masterInQuery || !supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
                 return false;
             }
         }
@@ -13763,31 +13774,30 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the upgrade presented an admin credential: the master
-     * `LUNORA_ADMIN_TOKEN` (constant-time compared) or a short-lived sub-token
-     * the worker minted with it (`POST /_lunora/admin/ws-token` —
-     * HMAC-verified statelessly here, since both isolates hold the master token
-     * in `env`). The ephemeral token is what the studio sends in `?token=`, so
-     * the master credential stays out of URLs/logs. Closed (resolves `false`)
+     * Whether the upgrade presented an admin credential. Two shapes are admitted:
+     * a short-lived sub-token the worker minted (`POST /_lunora/admin/ws-token`)
+     * from either the `Authorization` header or the `?token=` query parameter
+     * (HMAC-verified statelessly here, since both isolates hold the master token
+     * in `env`), and the master `LUNORA_ADMIN_TOKEN` from the `Authorization`
+     * header only (constant-time compared). Browsers can't set that header on a
+     * WS upgrade, so the master token never rides a URL.
+     *
+     * The master token in `?token=` is never admitted: the query string is exactly
+     * where it leaks (access logs / history / `Referer`). Closed (resolves `false`)
      * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
      * path so admin streaming is opt-in rather than exposed by default.
-     *
-     * Enforcement is ON by default: a raw master token in the `?token=` query
-     * parameter is rejected — the query string is exactly where it leaks (access
-     * logs / history / `Referer`). Set `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` to
-     * `0`/`false`/`off`/`no`/`disabled` to opt back out for a legacy client. The
-     * `Authorization` header path still takes the master token: browsers can't
-     * set it on a WS upgrade, so it never rides a URL.
      */
     private async isAdminSocket(request: Request): Promise<boolean> {
-        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN?: string };
-        const adminToken = env.LUNORA_ADMIN_TOKEN;
+        const adminToken = ((this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string }).LUNORA_ADMIN_TOKEN;
 
         if (!adminToken || adminToken.length === 0) {
             return false;
         }
 
-        const supplied = this.suppliedWsToken(request);
+        // Read the header once: it is the first choice for the token, and the only
+        // place the master token is admitted from.
+        const headerBearer = extractBearerToken(request.headers.get("authorization"));
+        const supplied = headerBearer ?? new URL(request.url).searchParams.get("token") ?? undefined;
 
         if (supplied === undefined) {
             return false;
@@ -13797,16 +13807,7 @@ abstract class ShardDO {
             return true;
         }
 
-        // `suppliedWsToken` prefers the header; the token came from the query
-        // string only when no bearer header was present.
-        const fromQuery = extractBearerToken(request.headers.get("authorization")) === undefined;
-        const requireEphemeral = isEnvFlagEnabled(env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN, true);
-
-        if (fromQuery && requireEphemeral) {
-            return false;
-        }
-
-        return constantTimeEqual(supplied, adminToken);
+        return headerBearer !== undefined && constantTimeEqual(headerBearer, adminToken);
     }
 
     /**

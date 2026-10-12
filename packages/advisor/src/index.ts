@@ -44,6 +44,7 @@ import exportSinkMisconfigured from "./lints/static/export-sink-misconfigured";
 import externalSourceIncrementalNoDeletePath from "./lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "./lints/static/external-source-on-global";
 import externalSourceUnscoped from "./lints/static/external-source-unscoped";
+import filterAfterIndexScan from "./lints/static/filter-after-index-scan";
 import filterOnPrimaryKey from "./lints/static/filter-on-primary-key";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
@@ -92,6 +93,7 @@ import ratelimitMiddlewareFailOpen from "./lints/static/ratelimit-middleware-fai
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
 import relationReferencesUnknownTable from "./lints/static/relation-references-unknown-table";
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
+import selfRescheduleWithoutProgress from "./lints/static/self-reschedule-without-progress";
 import shapeTargetsGlobalTable from "./lints/static/shape-targets-global-table";
 import shapeUnknownTable from "./lints/static/shape-unknown-table";
 import signupMutationWithoutDisposableGating from "./lints/static/signup-mutation-without-disposable-gating";
@@ -106,6 +108,7 @@ import tableWithoutInsert from "./lints/static/table-without-insert";
 import topicTooManySubscriptions from "./lints/static/topic-too-many-subscriptions";
 import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedCollect from "./lints/static/unbounded-collect";
+import unboundedCollectOnOpenRange from "./lints/static/unbounded-collect-on-open-range";
 import unboundedLoop from "./lints/static/unbounded-loop";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
@@ -192,6 +195,7 @@ export { default as exportSinkMisconfigured } from "./lints/static/export-sink-m
 export { default as externalSourceIncrementalNoDeletePath } from "./lints/static/external-source-incremental-no-delete-path";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
+export { default as filterAfterIndexScan } from "./lints/static/filter-after-index-scan";
 export { default as filterOnPrimaryKey } from "./lints/static/filter-on-primary-key";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
@@ -239,6 +243,7 @@ export { default as ratelimitMiddlewareFailOpen } from "./lints/static/ratelimit
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
 export { default as relationReferencesUnknownTable } from "./lints/static/relation-references-unknown-table";
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
+export { default as selfRescheduleWithoutProgress } from "./lints/static/self-reschedule-without-progress";
 export { default as shapeTargetsGlobalTable } from "./lints/static/shape-targets-global-table";
 export { default as shapeUnknownTable } from "./lints/static/shape-unknown-table";
 export { default as signupMutationWithoutDisposableGating } from "./lints/static/signup-mutation-without-disposable-gating";
@@ -252,6 +257,7 @@ export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-u
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
 export { default as topicTooManySubscriptions } from "./lints/static/topic-too-many-subscriptions";
 export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-timestamp";
+export { default as unboundedCollectOnOpenRange } from "./lints/static/unbounded-collect-on-open-range";
 export { default as unboundedLoop } from "./lints/static/unbounded-loop";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
@@ -292,6 +298,7 @@ export type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 export type { AdvisorRawRowReturn } from "./raw-row-returns";
 export type { AdvisorRelationLoad } from "./relation-loads";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
+export type { AdvisorRowEffect } from "./row-effects";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
 export { fromServerSchema } from "./schema";
 export type { AdvisorSecretLiteral } from "./secrets";
@@ -343,9 +350,12 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     topicTooManySubscriptions,
     filterOnPrimaryKey,
     filterWithoutIndex,
+    filterAfterIndexScan,
     unboundedCollect,
+    unboundedCollectOnOpenRange,
     unboundedLoop,
     dispatchCycle,
+    selfRescheduleWithoutProgress,
     shapeTargetsGlobalTable,
     mutatorFullRowReplace,
     mutatorWithoutOwnerScope,

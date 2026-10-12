@@ -105,13 +105,15 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     const present = signal<ReturnOf<L> | undefined>(undefined);
     const error = signal<SubscriptionError | undefined>(undefined);
 
-    // Latest awareness data — updated by `setData`; read at heartbeat time so
-    // changing data never resets the interval or closes the subscription.
     if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
         throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
     }
 
+    // Latest awareness data — updated by `setData`; read at heartbeat time so
+    // changing data never resets the interval or closes the subscription.
     let latestData: Record<string, unknown> | undefined = options.data;
+    // True only inside the subscription gate; `setData` must not heartbeat on the server.
+    let mounted = false;
 
     const sendHeartbeat = (): void => {
         const args: ArgsOf<H> = { roomId, sessionId } as ArgsOf<H>;
@@ -126,7 +128,10 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
     const setData = (next: Record<string, unknown> | undefined): void => {
         latestData = next;
-        sendHeartbeat();
+
+        if (mounted) {
+            sendHeartbeat();
+        }
     };
 
     // Skip every network side effect on the Angular server platform (SSR): Node
@@ -134,6 +139,8 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     // would open a real connection during the server render. `present` stays
     // `undefined`; the browser render re-runs this and connects.
     if (shouldOpenSubscription(fromInjectionContext)) {
+        mounted = true;
+
         // Register this room/session as the socket's connection context BEFORE the
         // first heartbeat so the server's presence `onDisconnect` hook can delete
         // the row instantly on socket drop.
@@ -181,6 +188,7 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
         // Teardown: clear interval, remove listener, release connection context, unsubscribe.
         destroyRef.onDestroy(() => {
+            mounted = false;
             clearInterval(intervalHandle);
 
             if (typeof document !== "undefined") {
