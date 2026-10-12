@@ -10,7 +10,7 @@ import type { CoverageProblem, TableClassification } from "./coverage";
 import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
-import { drainUntilEmpty } from "./erasure";
+import { dispositionFor, drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import type { RequestStatus } from "./lifecycle";
 import { effectiveDueAt, isOverdue, isTerminal, transition } from "./lifecycle";
@@ -161,12 +161,13 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
         graceDays: checkErasureGraceDays(config.erasure?.graceDays ?? presetGraceDays ?? DEFAULT_GRACE_DAYS),
     };
     const subjectKey = config.subjectKey ?? ((subjectId: string) => subjectId);
+    const disposition = dispositionFor(rules);
 
     const bind = (ports: PrivacyPorts): Privacy => {
         const base = { data: ports.data, files: ports.files, now: ports.now, rules, store: ports.store };
 
         const eraseDataset = async (dataset: Dataset, subjectId: string): Promise<void> => {
-            await drainUntilEmpty(() => ports.data.eraseBatch(dataset, subjectId, ports.now()));
+            await drainUntilEmpty(() => ports.data.eraseBatch(dataset, subjectId, ports.now(), disposition));
         };
 
         const contextFor = (record: RequestRecord): RunContext => {
@@ -279,7 +280,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                 await context.step.do("erase:files", async () => eraseSubjectFiles(ports, config.datasets, record.subjectId));
 
                 await context.step.do("verify", async () => {
-                    const verdict = await verifySubjectErased(ports, config.datasets, record.subjectId);
+                    const verdict = await verifySubjectErased(base, config.datasets, record.subjectId);
 
                     await setStatus(record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
 

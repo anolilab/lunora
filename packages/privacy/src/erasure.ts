@@ -5,7 +5,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { TableErasure } from "./dataset";
+import type { Dataset, TableErasure } from "./dataset";
 import type { RetainDirective, RetentionRule } from "./rules";
 import { retainUntil } from "./rules";
 
@@ -53,6 +53,15 @@ const dispositionOf = (erase: TableErasure, row: { readonly [column: string]: un
     return retainDisposition(erase, row, rules, now);
 };
 
+/** The package's verdict for one row, which the app's `eraseBatch` applies. */
+type RowDisposition = (dataset: Dataset, table: string, row: { readonly [column: string]: unknown }, now: Date) => Disposition;
+
+/** Bind the presets' retention rules into the verdict `eraseBatch` receives. A table with no `erase` is deleted. */
+const dispositionFor =
+    (rules: ReadonlyMap<string, RetentionRule>): RowDisposition =>
+    (dataset, table, row, now) =>
+        dispositionOf(dataset.tables[table]?.erase ?? "delete", row, rules, now);
+
 /**
  * Run a batched step until it reports there is nothing left. A step that never
  * finishes is an error, not a silent success: the erasure stops and an operator
@@ -78,14 +87,17 @@ interface VerifyResult {
     readonly leftover: ReadonlyArray<string>;
 }
 
-/** Check the counts read after erasure. A table with rows still in it is a leftover, and the erasure is not complete. */
-const verifyErasure = (remaining: Readonly<Record<string, number>>): VerifyResult => {
+/**
+ * Check the counts read after erasure. A table with more rows than `kept` allows (rows a
+ * retention rule still holds) is a leftover, and the erasure is not complete.
+ */
+const verifyErasure = (remaining: Readonly<Record<string, number>>, kept: Readonly<Record<string, number>> = {}): VerifyResult => {
     const leftover = Object.entries(remaining)
-        .filter(([, count]) => count > 0)
+        .filter(([table, count]) => count > (kept[table] ?? 0))
         .map(([table]) => table)
         .toSorted((a, b) => a.localeCompare(b));
 
     return { complete: leftover.length === 0, leftover };
 };
 
-export { type Disposition, dispositionOf, drainUntilEmpty, ERASE_BATCH, verifyErasure, type VerifyResult };
+export { type Disposition, dispositionFor, dispositionOf, drainUntilEmpty, ERASE_BATCH, type RowDisposition, verifyErasure, type VerifyResult };

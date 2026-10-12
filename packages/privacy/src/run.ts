@@ -14,8 +14,8 @@ import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
-import type { VerifyResult } from "./erasure";
-import { drainUntilEmpty, verifyErasure } from "./erasure";
+import type { RowDisposition, VerifyResult } from "./erasure";
+import { dispositionFor, drainUntilEmpty, verifyErasure } from "./erasure";
 import type { RequestStatus } from "./lifecycle";
 import { transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
@@ -25,9 +25,19 @@ import type { RetentionRule } from "./rules";
 interface DataPort {
     /** The subject's rows for each table of the dataset, keyed by table name. */
     readonly collect: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, ReadonlyArray<Readonly<Record<string, unknown>>>>>>;
-    /** Erase one batch of the dataset's rows for the subject. */
-    readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date) => Promise<{ readonly hasMore: boolean }>;
-    /** Rows still present per table after erasure, for the verify step. */
+
+    /**
+     * Erase one batch of the dataset's rows for the subject. The package decides and the app
+     * writes: call `disposition` for each row, then delete a `delete` row, anonymise an
+     * `anonymise` row, and move a `keep` row into the archive table. A kept row must not be
+     * selected again, or the drain never finishes.
+     */
+    readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date, disposition: RowDisposition) => Promise<{ readonly hasMore: boolean }>;
+
+    /**
+     * Rows still present per table after erasure, for the verify step. A row a retention rule
+     * still keeps may be counted: verify checks each one against `disposition` through `collect`.
+     */
     readonly remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
 }
 
@@ -118,15 +128,50 @@ const eraseSubjectFiles = async (context: Pick<RunContext, "files" | "store">, d
 };
 
 /**
+ * For each retained table that still has rows, how many of them a retention rule still keeps.
+ * Each row is judged again, so a row whose period has run out counts as a leftover.
+ */
+const keptRows = async (
+    context: Pick<RunContext, "data" | "now" | "rules">,
+    dataset: Dataset,
+    subjectId: string,
+    counts: Readonly<Record<string, number>>,
+): Promise<Record<string, number>> => {
+    const retained = dataset.tableNames.filter((table) => typeof dataset.tables[table]?.erase === "object" && (counts[table] ?? 0) > 0);
+
+    if (retained.length === 0) {
+        return {};
+    }
+
+    const disposition = dispositionFor(context.rules);
+    const rows = await context.data.collect(dataset, subjectId);
+    const now = context.now();
+
+    return Object.fromEntries(
+        retained.map((table) => [table, (rows[table] ?? []).filter((row) => disposition(dataset, table, row, now).kind === "keep").length]),
+    );
+};
+
+/**
  * Read what the erasure left: rows per table, and objects per dataset with files (keyed
  * `files:` and the dataset id). The erasure is complete only when every count is zero.
  */
-const verifySubjectErased = async (context: Pick<RunContext, "data" | "files">, datasets: ReadonlyArray<Dataset>, subjectId: string): Promise<VerifyResult> => {
+const verifySubjectErased = async (
+    context: Pick<RunContext, "data" | "files" | "now" | "rules">,
+    datasets: ReadonlyArray<Dataset>,
+    subjectId: string,
+): Promise<VerifyResult> => {
     const remaining: Record<string, number> = {};
+    const kept: Record<string, number> = {};
 
     for (const dataset of datasets) {
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
-        Object.assign(remaining, await context.data.remaining(dataset, subjectId));
+        const counts = await context.data.remaining(dataset, subjectId);
+
+        Object.assign(remaining, counts);
+
+        // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
+        Object.assign(kept, await keptRows(context, dataset, subjectId, counts));
 
         const prefix = filesPrefixOf(dataset, subjectId);
 
@@ -138,11 +183,14 @@ const verifySubjectErased = async (context: Pick<RunContext, "data" | "files">, 
         }
     }
 
-    return verifyErasure(remaining);
+    return verifyErasure(remaining, kept);
 };
 
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
 const EXPORT_EXPIRY_MS: number = 7 * 24 * 60 * 60 * 1000;
+
+/** A dataset is restricted (Art. 18) when a retention rule may keep any of its tables after erasure. */
+const isRestricted = (dataset: Dataset): boolean => dataset.tableNames.some((table) => typeof dataset.tables[table]?.erase === "object");
 
 const retentionText = (dataset: Dataset): string => {
     const names = [
@@ -206,7 +254,7 @@ const assembleExport = async (context: RunContext, datasets: ReadonlyArray<Datas
             origin: dataset.origin,
             purpose: dataset.purpose,
             recipients: dataset.recipients,
-            restricted: false,
+            restricted: isRestricted(dataset),
             retention: retentionText(dataset),
         });
     }
@@ -274,11 +322,13 @@ const runErasure = async (context: RunContext, datasets: ReadonlyArray<Dataset>,
     await context.store.update(request.id, { status });
     await context.store.addEvent(request.id, context.now(), "erasing");
 
+    const disposition = dispositionFor(context.rules);
+
     try {
         for (const dataset of erasureOrder(datasets)) {
             // Datasets erase in order, and each drain finishes before the next starts.
             // eslint-disable-next-line no-await-in-loop -- sequential by design, see the comment above
-            await drainUntilEmpty(() => context.data.eraseBatch(dataset, request.subjectId, context.now()));
+            await drainUntilEmpty(() => context.data.eraseBatch(dataset, request.subjectId, context.now(), disposition));
         }
 
         await eraseSubjectFiles(context, datasets, request.subjectId);

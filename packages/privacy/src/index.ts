@@ -17,8 +17,8 @@ export { defineDataset, erasureOrder } from "./dataset";
 export { addCalendarMonths, dueAt, extendedDueAt } from "./deadlines";
 export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyPorts, PrivacyWorkflowContext } from "./define";
 export { definePrivacy } from "./define";
-export type { Disposition, VerifyResult } from "./erasure";
-export { dispositionOf, drainUntilEmpty, ERASE_BATCH, verifyErasure } from "./erasure";
+export type { Disposition, RowDisposition, VerifyResult } from "./erasure";
+export { dispositionFor, dispositionOf, drainUntilEmpty, ERASE_BATCH, verifyErasure } from "./erasure";
 export type { RequestStatus, RequestType } from "./lifecycle";
 export {
     canCancel,
