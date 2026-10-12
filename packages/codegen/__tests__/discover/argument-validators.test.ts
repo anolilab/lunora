@@ -167,6 +167,22 @@ const NESTED_DESTRUCTURE = `
     });
 `;
 
+/** A same-file helper whose local `v` shadows the validator namespace; its `v.any()` is not a validator call. */
+const SHADOWED_V_IN_HELPER = `
+    import { mutation } from "@lunora/server";
+
+    const label = () => {
+        const v = { any: () => "text" };
+
+        return v.any();
+    };
+
+    export const update = mutation({
+        args: { name: label() },
+        handler: async () => null,
+    });
+`;
+
 /** A local function named `any` that is not the validator namespace. */
 const UNRELATED_ANY = `
     import { mutation } from "@lunora/server";
@@ -308,6 +324,14 @@ describe("discoverArgumentValidators", () => {
 
         expect(found).toHaveLength(1);
         expect(found[0]?.unboundedStringArgs).toStrictEqual(["tags"]);
+    });
+
+    it("does NOT flag a v.any() on a local v that shadows the validator namespace in a helper", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "update.ts"), SHADOWED_V_IN_HELPER, "utf8");
+
+        expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
     it("does NOT flag a non-validator call named any", () => {

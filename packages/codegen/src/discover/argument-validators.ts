@@ -1,4 +1,4 @@
-import type { CallExpression, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Identifier, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { ArgumentValidatorIR } from "../ir";
@@ -124,6 +124,22 @@ const destructuredFactoriesOf = (sourceFile: SourceFile, namespaces: ReadonlySet
     return destructured;
 };
 
+/**
+ * Whether a receiver identifier is bound by a local declaration (a `const v`, a
+ * parameter, a function) rather than the validator namespace. The bare `v` is
+ * accepted without an import, so an unbound name and an ambient declaration from
+ * a `.d.ts` both count as the namespace; only a same-file binding that is not an
+ * import shadows it.
+ */
+const isShadowed = (identifier: Identifier): boolean =>
+    (identifier.getSymbol()?.getDeclarations() ?? []).some(
+        (declaration) =>
+            !declaration.getSourceFile().isDeclarationFile() &&
+            !Node.isImportSpecifier(declaration) &&
+            !Node.isNamespaceImport(declaration) &&
+            !Node.isImportClause(declaration),
+    );
+
 /** The `v.<name>(…)` factory a call expression invokes, or `undefined` when it is not one. */
 const vFactoryName = (node: Node, scope: ValidatorScope): string | undefined => {
     if (!Node.isCallExpression(node)) {
@@ -133,7 +149,13 @@ const vFactoryName = (node: Node, scope: ValidatorScope): string | undefined => 
     const expression = node.getExpression();
 
     if (Node.isPropertyAccessExpression(expression)) {
-        return scope.namespaces.has(expression.getExpression().getText()) ? expression.getName() : undefined;
+        const receiver = expression.getExpression();
+
+        if (!scope.namespaces.has(receiver.getText())) {
+            return undefined;
+        }
+
+        return Node.isIdentifier(receiver) && isShadowed(receiver) ? undefined : expression.getName();
     }
 
     if (Node.isIdentifier(expression)) {
