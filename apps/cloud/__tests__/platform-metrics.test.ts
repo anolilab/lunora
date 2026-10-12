@@ -12,6 +12,7 @@ import {
     readQueueDepth,
     recordDispatch,
     recordMisconfiguration,
+    recordPlanStore,
     recordProvisionFailure,
     recordQueueDepth,
 } from "../src/telemetry/platform-metrics";
@@ -35,12 +36,14 @@ describe("platform metric data points", () => {
         recordQueueDepth(sink, { buildsPending: 3, buildsRunning: 2, cell: "eu-1", deploysInFlight: 1 });
         recordProvisionFailure(sink, { cell: "eu-1", reason: "TimeoutError", step: "converge" });
         recordMisconfiguration(sink, { cell: "eu-1", setting: "lineage_secret" });
+        recordPlanStore(sink, { cell: "eu-1", outcome: "stale" });
 
         expect(sink.writeDataPoint.mock.calls.map(([point]) => point)).toStrictEqual([
             { blobs: ["dispatch", "eu-1", "2xx"], doubles: [42], indexes: ["dispatch"] },
             { blobs: ["queue", "eu-1"], doubles: [3, 2, 1], indexes: ["queue"] },
             { blobs: ["provision_failure", "eu-1", "converge", "TimeoutError"], doubles: [1], indexes: ["provision_failure"] },
             { blobs: ["misconfigured", "eu-1", "lineage_secret"], doubles: [1], indexes: ["misconfigured"] },
+            { blobs: ["plan_store", "eu-1", "stale"], doubles: [1], indexes: ["plan_store"] },
         ]);
     });
 

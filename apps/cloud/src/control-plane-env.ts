@@ -11,6 +11,7 @@ import type { BackupBucket } from "./backup/sweep";
 import type { TenantBackupBucket } from "./backup/tenant-transport";
 import type { BuildRunnerNamespace } from "./builds/runner-job";
 import type { ReleaseBucket } from "./deploy/release-store";
+import type { KvNamespaceLike } from "./plans/plan-store-kv";
 import type { TargetEnvironment } from "./targets/registry";
 
 // Must stay a `type`: an `interface` gets no implicit index signature, so it will
@@ -79,6 +80,8 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         LUNORA_RATE_LIMIT_RULE_BUDGET?: string;
         /** Sender address for auth (verification / reset) email; captured in dev. */
         MAIL_FROM?: string;
+        /** Stored tenant plan records the hourly sweep keeps current (plan 476). Type only: no wrangler binding until a namespace exists. */
+        PLAN_KV?: KvNamespaceLike;
         /** Platform self-metrics dataset (GAPS.md E1); absent → the queue-depth sample no-ops. */
         PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
         /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
