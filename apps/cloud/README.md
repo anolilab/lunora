@@ -1143,13 +1143,12 @@ lineage header is refused with 503 `lineage_unverifiable`. Requests without one 
 only in `development`.
 Without it on the Outbound Worker, nothing is stamped. Deploy the Outbound
 Worker before the dispatcher, because the dispatcher's namespace binding names
-it (`.github/workflows/deploy-cloud.yml` does this), and put the same secret on
-both:
+it (`.github/workflows/deploy-cloud.yml` does this). The same secret goes to both
+Workers, from the GitHub Environment's `LUNORA_LINEAGE_SECRET`, which the deploy
+writes to each one. Nothing is set by hand:
 
 ```bash
 wrangler deploy -c outbound.wrangler.jsonc --env <cell>
-wrangler secret put LUNORA_LINEAGE_SECRET -c outbound.wrangler.jsonc --env <cell>
-wrangler secret put LUNORA_LINEAGE_SECRET -c dispatcher.wrangler.jsonc --env <cell>
 ```
 
 | Target                     | Recursion protection | Why                                                                               |

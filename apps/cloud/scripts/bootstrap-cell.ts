@@ -57,6 +57,9 @@ const run = (command: string, args: ReadonlyArray<string>, input?: string): Run 
 
 const wrangler = (args: ReadonlyArray<string>): Run => run("pnpm", ["exec", "wrangler", ...args]);
 
+/** Splits a wrangler listing into tokens, so a stream name matches exactly and never as a substring. */
+const WHITESPACE = /\s+/u;
+
 /** Cloudflare error codes the account answers with when a feature is not on its plan. */
 const PLAN_BLOCKED_CODES = ["code: 1021", "code: 10121"];
 /** The R2 error for a bucket that does not exist. */
@@ -94,26 +97,43 @@ const say = (line: string): void => {
 
 // --- Cloudflare resources ---------------------------------------------------
 
+/** The uuid of the D1 database named `name` on the account, or `undefined`. */
+const d1IdFor = (name: string): { found: true; uuid: string } | { error?: string; found: false } => {
+    const list = wrangler(["d1", "list", "--json"]);
+
+    if (list.code !== 0) {
+        return { error: firstLine(list.stderr), found: false };
+    }
+
+    const existing = (JSON.parse(list.stdout) as { name: string; uuid: string }[]).find((entry) => entry.name === name);
+
+    return existing === undefined ? { found: false } : { found: true, uuid: existing.uuid };
+};
+
+/** A stale id in the config is the "green deploy, first query fails" case the deploy gate exists for. */
+const reportExistingD1 = (name: string, configured: string | undefined, uuid: string): string =>
+    configured === uuid
+        ? `  d1 ${name}: exists (${uuid})`
+        : `  d1 ${name}: exists as ${uuid}, but env.${environment}.d1_databases has ${configured ?? "no id"} — fix wrangler.jsonc`;
+
 const bootstrapD1 = (): void => {
     for (const database of cell.d1_databases ?? []) {
-        const name = database.database_name;
+        const { database_id: configured, database_name: name } = database;
 
         if (name === undefined) {
             say(`  d1: a binding has no database_name — nothing to check`);
             continue;
         }
 
-        const list = wrangler(["d1", "list", "--json"]);
+        const found = d1IdFor(name);
 
-        if (list.code !== 0) {
-            say(`  d1 ${name}: blocked — ${firstLine(list.stderr)}`);
+        if (found.found) {
+            say(reportExistingD1(name, configured, found.uuid));
             continue;
         }
 
-        const existing = (JSON.parse(list.stdout) as { name: string; uuid: string }[]).find((entry) => entry.name === name);
-
-        if (existing !== undefined) {
-            say(`  d1 ${name}: exists (${existing.uuid})`);
+        if (found.error !== undefined) {
+            say(`  d1 ${name}: blocked — ${found.error}`);
             continue;
         }
 
@@ -124,10 +144,18 @@ const bootstrapD1 = (): void => {
 
         const created = wrangler(["d1", "create", name]);
 
+        if (created.code !== 0) {
+            say(`  d1 ${name}: blocked — ${firstLine(created.stderr)}`);
+            continue;
+        }
+
+        // Read the id back from the account: the create output is prose.
+        const readBack = d1IdFor(name);
+
         say(
-            created.code === 0
-                ? `  d1 ${name}: created — paste its id into env.${environment}.d1_databases`
-                : `  d1 ${name}: blocked — ${firstLine(created.stderr)}`,
+            readBack.found
+                ? `  d1 ${name}: created — set env.${environment}.d1_databases database_id to ${readBack.uuid}`
+                : `  d1 ${name}: created, but its id could not be read back — look it up with \`wrangler d1 list\``,
         );
     }
 };
@@ -213,7 +241,7 @@ const bootstrapPipelines = (): void => {
         // `pipelines setup` is interactive and has no non-interactive form here, so
         // a missing pipeline is named, not created.
         say(
-            list.code === 0 && list.stdout.includes(stream)
+            list.code === 0 && list.stdout.split(WHITESPACE).includes(stream)
                 ? `  pipeline ${stream}: exists`
                 : `  pipeline ${stream}: create by hand with \`pnpm exec wrangler pipelines setup\`, then check its stream name`,
         );
