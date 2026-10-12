@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember, assertRowInOrg } from "./authz";
+import { assertMember, assertRowInOrg, assertSignedIn } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -100,11 +100,7 @@ export const accept = mutation
     .use(rateLimit("sensitive"))
     .input({ token: boundedString(LIMITS.token) })
     .mutation(async ({ ctx: context, args: { token } }): Promise<{ organizationId: Id<"organizations"> }> => {
-        const { userId } = context.auth;
-
-        if (!userId) {
-            throw new LunoraError("UNAUTHORIZED", "not signed in");
-        }
+        const userId = assertSignedIn(context.auth.userId);
 
         const tokenHash = await sha256Hex(token);
         const { page } = await context.db.invitations.findMany({ where: { tokenHash } });

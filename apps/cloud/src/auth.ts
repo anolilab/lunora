@@ -187,12 +187,11 @@ let authReady: Promise<LunoraAuth> | null = null;
  * Build (once per isolate) and return the auth instance, schema already
  * migrated. Every concurrent caller awaits the same promise.
  *
- * The previous form assigned the instance and then awaited the migration, so on
- * a cold isolate every request that arrived during that await saw a non-null
- * instance, skipped the block, and queried tables the migration had not finished
- * creating — surfacing as a raw database error rather than an auth one. Holding
- * the promise rather than the instance is what makes "ready" and "assigned" the
- * same moment.
+ * The promise is held, not the instance. Assigning the instance before the migration
+ * finishes would let a request that arrives during the await see a non-null instance,
+ * skip the block, and query tables the migration has not created yet, surfacing as a
+ * raw database error rather than an auth one. Holding the promise makes "ready" and
+ * "assigned" the same moment.
  */
 export const ensureAuth = async (env: AuthEnv, requestOrigin: string): Promise<LunoraAuth> => {
     authReady ??= (async (): Promise<LunoraAuth> => {

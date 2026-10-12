@@ -59,6 +59,15 @@ export const assertRoleForUser = async (
     return { organizationId: member.organizationId, role: member.role, userId };
 };
 
+/** The signed-in user's id, or `UNAUTHORIZED`: the one sign-in check the control-plane functions share. */
+export const assertSignedIn = (userId: null | string | undefined): string => {
+    if (!userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    return userId;
+};
+
 /**
  * Resolve and authorize the caller's membership in an organization. Throws
  * `UNAUTHORIZED` if not signed in, `FORBIDDEN` if not a member (or, when
@@ -70,11 +79,7 @@ export const assertMember = async (
     organizationId: Id<"organizations">,
     allowedRoles?: ReadonlyArray<MemberRole>,
 ): Promise<{ organizationId: Id<"organizations">; role: MemberRole; userId: string }> => {
-    const { userId } = context.auth;
-
-    if (!userId) {
-        throw new LunoraError("UNAUTHORIZED", "not signed in");
-    }
+    const userId = assertSignedIn(context.auth.userId);
 
     return assertRoleForUser(context, organizationId, userId, allowedRoles);
 };

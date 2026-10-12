@@ -1,7 +1,6 @@
-import { LunoraError } from "@lunora/server";
-
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
+import { assertSignedIn } from "./authz";
 import { deployTarget } from "./tables/shared";
 
 /**
@@ -27,9 +26,7 @@ export const list = query.query(async ({ ctx: context }): Promise<CellSummary[]>
     // gated — but it returns only the picker-safe projection (no Cloudflare account
     // ids / dispatch prefixes). A dedicated platform-operator role remains the
     // proper gate for the full fleet view (follow-up — no operator role exists yet).
-    if (!context.auth.userId) {
-        throw new LunoraError("UNAUTHORIZED", "not signed in");
-    }
+    assertSignedIn(context.auth.userId);
 
     const { page } = await context.db.cells.findMany();
 

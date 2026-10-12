@@ -65,12 +65,9 @@ export type AlertTarget = AnomalyTarget | CountTarget | EventAlertTarget | Metri
 /**
  * Which family a target belongs to, and the membership tests that decide it.
  *
- * Exported from here, with the type they classify, because they were previously
- * re-declared in `lunora/alerts.ts`, `src/client/AlertsSection.tsx` and
- * `src/telemetry/sweep.ts` — four copies of one taxonomy, with nothing enforcing
- * that they agree. Adding `deploy` meant editing all of them, and a target missed
- * in one copy falls into the wrong validation family or renders as a raw string
- * with no type error anywhere.
+ * Exported from here, with the type they classify, so `lunora/alerts.ts`,
+ * `src/client/AlertsSection.tsx` and `src/telemetry/sweep.ts` share one taxonomy.
+ * Adding a family is one edit, here.
  */
 export const METRIC_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_rate", "latency_p95", "llm_cost"]);
 

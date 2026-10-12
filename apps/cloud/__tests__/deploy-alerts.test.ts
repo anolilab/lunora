@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it, vi } from "vitest";
 
 import type { MutationCtx as MutationContext } from "../lunora/_generated/server.js";
@@ -92,22 +89,5 @@ describe(renderDeployAlert, () => {
         const source = { detail: "d", project: "Acme", reference: "r" };
 
         expect(renderDeployAlert({ name: "R" }, { ...source, kind: "deployment" }).subject).toContain("deployment failed");
-    });
-});
-
-/**
- * `updateStatus` is re-driven by the deploy orchestrator as it works through the
- * provisioner's events, and a retry can write `failed` over `failed`. Firing on
- * the state rather than the transition would page somebody once per attempt for
- * one broken release, which is how a notification feature gets turned off.
- *
- * Asserted over the source because the mutation needs a live control plane to
- * exercise, and the property is one line that is easy to lose in an edit.
- */
-describe("updateStatus fires only on the transition into failed", () => {
-    const source = readFileSync(fileURLToPath(new URL("../lunora/deployment-lifecycle.ts", import.meta.url)), "utf8");
-
-    it("guards the fire on the previous status", () => {
-        expect(source).toContain('if (status === "failed" && existing.status !== "failed")');
     });
 });

@@ -1,8 +1,7 @@
-import { LunoraError } from "@lunora/server";
-
 import type { Id, TableName } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, v } from "./_generated/server.js";
+import { assertSignedIn } from "./authz";
 import { legacySetRoleTargetRole } from "./members";
 import { collectAll } from "./paginate";
 import { anonymiseScopedRows, purgeScopedRows } from "./purge";
@@ -56,11 +55,7 @@ const AUTHORED_COLUMNS: ReadonlyArray<readonly [TableName, string]> = [
  * sign-in, so it takes no write-side rate limit. SYSTEM only (router).
  */
 export const exportMine = internalQuery.query(async ({ ctx: context }): Promise<Record<string, unknown>> => {
-    const { userId } = context.auth;
-
-    if (!userId) {
-        throw new LunoraError("UNAUTHORIZED", "not signed in");
-    }
+    const userId = assertSignedIn(context.auth.userId);
 
     const { page: memberships } = await context.db.members.findMany({ limit: EXPORT_LIMIT, where: { userId } });
     const { page: entries } = await context.db.auditLog.findMany({

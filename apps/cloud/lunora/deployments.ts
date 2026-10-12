@@ -847,15 +847,14 @@ export const updateStatus = mutation
  * session-authorized for the hosted studio's browser proxy, while eject arrives
  * over a deploy key from a terminal.
  *
- * **The key is authorized HERE, not at the edge.** An earlier cut resolved the
- * org from the key with `orgForDeployKey` — the helper the OTLP endpoints use,
- * which deliberately accepts ANY non-revoked key and checks neither capability
- * nor project scope. That made a full tenant data export reachable from a
- * telemetry `ingest` token: the lowest-privilege credential on the platform, and
- * one the platform itself injects into every tenant Worker as an env secret. So
- * `authorizeDeployKey` runs inside this query, against the deployment's own org
- * and project, exactly as {@link rollback} does — a route cannot forget to do
- * what it does not perform.
+ * **The key is authorized HERE, not at the edge.** The org is not resolved from the key
+ * with `orgForDeployKey`, the helper the OTLP endpoints use: that one accepts ANY
+ * non-revoked key and checks neither capability nor project scope, so a full tenant data
+ * export would be reachable from a telemetry `ingest` token, the lowest-privilege
+ * credential on the platform, which the platform injects into every tenant Worker as an
+ * env secret. `authorizeDeployKey` runs inside this query instead, against the
+ * deployment's own org and project, exactly as {@link rollback} does — a route cannot
+ * forget to do what it does not perform.
  *
  * The admin token is returned sealed. The edge decrypts it with
  * `SECRET_ENCRYPTION_KEY` exactly as the studio proxy does, so the plaintext
