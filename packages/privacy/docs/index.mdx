@@ -61,6 +61,10 @@ Call it from a mutation with that mutation's context: `await privacyFor(ctx).req
 
 Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically.
 
+:::caution[Not yet verified]
+Codegen has been checked only with a handler that is a property of a module-level object. The handlers here sit on the per-call `privacyFor(ctx)` result, which codegen has not been checked against yet. Plan §4.2 tracks this. Do not ship the registration on the strength of this page alone.
+:::
+
 ```ts
 // lunora/workflows.ts
 import { defineWorkflow } from "@lunora/workflow";
@@ -84,6 +88,10 @@ Declare the functions in their own file as builder calls, so codegen registers t
 
 A table with a `userId` column must be covered by a dataset, or excluded with a reason, once the app uses `definePrivacy`. Otherwise the build fails with `privacy_table_unclassified`, which names the table.
 
-## What is not yet included
+## What is not finished
 
-The package does not yet include a Studio page for these requests, and the workerd suite for its storage paths is still to come. The legal and tax review of the defaults is also still open.
+- The runnable example app (`examples/privacy`) is not merged, so there is no end-to-end example yet.
+- The workerd suite for the storage paths is not written.
+- The workflow registration above is not yet verified against codegen (see the caution above).
+- The Studio's Privacy requests tab appears only when the app declares `@lunora/privacy`.
+- The legal and tax review of the defaults is still open. See the [legal basis page](/docs/packages/privacy/legal).
