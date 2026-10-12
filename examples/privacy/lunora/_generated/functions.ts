@@ -173,13 +173,13 @@ export interface Caller {
         retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
     };
     requests: {
-        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
+        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; type: import("@lunora/privacy").RequestType }>;
         downloadUrl: (args: { requestId: string }) => Promise<string>;
-        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }[]>;
+        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; type: import("@lunora/privacy").RequestType }[]>;
         privacyPort: (args: { method: string; payload: string }) => Promise<string>;
         privacyTick: (args?: {}) => Promise<{ approaching: string[]; overdue: string[]; }>;
-        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
-        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
+        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; type: import("@lunora/privacy").RequestType }>;
+        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; type: import("@lunora/privacy").RequestType }>;
     };
     tasks: {
         addTask: (args: { title: string }) => Promise<Id<"tasks">>;

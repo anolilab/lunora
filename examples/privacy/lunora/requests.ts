@@ -3,37 +3,37 @@
  * The package supplies the logic; these wrappers choose the subject from the caller's
  * session, so a caller cannot open a request for someone else.
  */
-import type { RequestRecord } from "@lunora/privacy";
+import type { RequestRecord, RequestStatus, RequestType } from "@lunora/privacy";
 import { dispatchPort } from "@lunora/privacy/workflow";
 import { rateLimit } from "lunorash/ratelimit";
 import { v } from "lunorash/values";
 
-import type { Doc as Document_ } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query } from "./_generated/server.js";
 import { byCaller, limiter } from "./limits";
 import { privacyConfig, privacyFor } from "./privacy";
 import { localPorts } from "./privacy-ports";
 import { identityOf } from "./subject";
 
-/** A request as the caller's own list shows it. Dates are epoch milliseconds. */
+/**
+ * A request as the caller's own list shows it. Dates are epoch milliseconds. It is narrower than the
+ * operator's row (`shared/privacy-request-row`): a subject sees no subject id, and no storage key.
+ */
 export interface RequestSummary {
     dueAt: number;
     expiresAt: number | undefined;
     id: string;
     receivedAt: number;
-    status: Document_<"privacy_requests">["status"];
-    type: Document_<"privacy_requests">["type"];
+    status: RequestStatus;
+    type: RequestType;
 }
-
-const millis = (date: Date | undefined): number | undefined => date?.getTime();
 
 /** What a client sees of a request. */
 const view = (request: RequestRecord): RequestSummary => {
     return {
-        dueAt: millis(request.dueAt) ?? 0,
-        expiresAt: millis(request.expiresAt),
+        dueAt: request.dueAt.getTime(),
+        expiresAt: request.expiresAt?.getTime(),
         id: request.id,
-        receivedAt: millis(request.receivedAt) ?? 0,
+        receivedAt: request.receivedAt.getTime(),
         status: request.status,
         type: request.type,
     };

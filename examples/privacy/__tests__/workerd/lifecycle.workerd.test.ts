@@ -20,6 +20,8 @@ import type { MutationCtx } from "../../lunora/_generated/server.js";
 import { privacyConfig, privacyFor, privacyWorkflows } from "../../lunora/privacy";
 import { localPorts } from "../../lunora/privacy-ports";
 import schema from "../../lunora/schema";
+import type { RunHooks } from "../workflow-context";
+import { workflowContext } from "../workflow-context";
 
 type Context = WorkflowRunContext<{ requestId: string }>;
 type Runtime = ReturnType<typeof createInProcessRuntime>;
@@ -39,36 +41,19 @@ const identity = (subjectId: string): PrivacyIdentity => {
  */
 const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx;
 
-/** What a test can observe of, and do during, a workflow run. */
-interface RunHooks {
-    /** Runs while the workflow sleeps through the grace window, as a subject's cancel would. */
-    readonly duringSleep?: () => Promise<void>;
-    /** Every step the run reached, in order; a durable sleep reads as `sleep:<name>`. */
-    readonly steps?: string[];
-}
-
 /**
  * A workflow context over the shard. `run` does what the internal `privacyPort` mutation does:
- * the package's dispatcher over the app's local ports. `step.do` runs its callback at once, since the test has no durable replay.
+ * the package's dispatcher over the app's local ports.
  */
-const workflowContext = (db: Database, requestId: string, hooks: RunHooks = {}): Context => {
-    const run = async (_reference: unknown, args: { method: string; payload: string }) =>
-        dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload);
-
-    const step = {
-        do: async (name: string, callback: () => Promise<unknown>) => {
-            hooks.steps?.push(name);
-
-            return callback();
+const contextFor = (db: Database, requestId: string, hooks: RunHooks = {}): Context =>
+    workflowContext(
+        {
+            env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+            params: { requestId },
+            run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
         },
-        sleepUntil: async (name: string) => {
-            hooks.steps?.push(`sleep:${name}`);
-            await hooks.duringSleep?.();
-        },
-    };
-
-    return { env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES }, params: { requestId }, run, step } as unknown as Context;
-};
+        hooks,
+    );
 
 /** Runs `body` inside a fresh Durable Object, with the app's runtime built over its SQLite. */
 const withShard = async <T>(body: (db: Database) => Promise<T>): Promise<T> => {
@@ -115,7 +100,7 @@ describe("privacy example lifecycle (workerd)", () => {
 
             const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
 
-            await privacyWorkflows.exportHandler(workflowContext(db, request.id));
+            await privacyWorkflows.exportHandler(contextFor(db, request.id));
 
             const rows = await db.query("exportFiles").collect();
             const part = rows.find((row) => row.requestId === request.id && row.name === "parts/tasks.json");
@@ -149,7 +134,7 @@ describe("privacy example lifecycle (workerd)", () => {
 
             await expect(tasksOf(db, SUBJECT)).resolves.toHaveLength(2);
 
-            await privacyWorkflows.erasureHandler(workflowContext(db, request.id));
+            await privacyWorkflows.erasureHandler(contextFor(db, request.id));
 
             await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
             await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
@@ -176,7 +161,7 @@ describe("privacy example lifecycle (workerd)", () => {
             const steps: string[] = [];
 
             await privacyWorkflows.erasureHandler(
-                workflowContext(db, request.id, {
+                contextFor(db, request.id, {
                     duringSleep: async () => {
                         await privacyFor(appCtx(db), identity(SUBJECT)).cancelRequest({ requestId: request.id });
                     },
@@ -203,7 +188,7 @@ describe("privacy example lifecycle (workerd)", () => {
 
             const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
 
-            await privacyWorkflows.erasureHandler(workflowContext(db, request.id));
+            await privacyWorkflows.erasureHandler(contextFor(db, request.id));
 
             await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
         });
@@ -213,7 +198,7 @@ describe("privacy example lifecycle (workerd)", () => {
         await withShard(async (db) => {
             await seed(db);
 
-            const reerased = await privacyFor(workflowContext(db, "restore")).restore({ restoredSubjectIds: [SUBJECT, OTHER] });
+            const reerased = await privacyFor(contextFor(db, "restore")).restore({ restoredSubjectIds: [SUBJECT, OTHER] });
 
             expect(reerased).toStrictEqual([SUBJECT]);
             await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
