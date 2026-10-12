@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { eu } from "../src/eu";
 import type { DataPort } from "../src/run";
-import { durableStep, inlineStep, memoryData, NOW, recordingStep, setup, throughJson } from "./harness";
+import { durableStep, memoryData, NOW, setup, throughJson } from "./harness";
 
 const failingCollect = (): DataPort => {
     return {
@@ -58,7 +58,7 @@ describe("erasureHandler", () => {
     it("waits out the grace, then erases every table and completes", async () => {
         const { privacy, rows, runErasureWorkflow, store } = setup({ presets: [eu()], rows: { goals: 150, tasks: 40 } });
         const opened = await privacy.requestErasure();
-        const { names, step } = recordingStep();
+        const { names, step } = durableStep();
 
         await runErasureWorkflow(opened.id, step);
 
@@ -70,9 +70,11 @@ describe("erasureHandler", () => {
     it("stops without erasing when the subject cancels during the grace", async () => {
         const { privacy, rows, runErasureWorkflow, store } = setup({ presets: [eu()], rows: { goals: 150, tasks: 40 } });
         const opened = await privacy.requestErasure();
-        const { step } = recordingStep(() => {
-            // The subject cancels while the workflow sleeps.
-            store.rows.set(opened.id, { ...store.rows.get(opened.id)!, status: "cancelled" });
+        const { step } = durableStep({
+            onSleep: () => {
+                // The subject cancels while the workflow sleeps.
+                store.rows.set(opened.id, { ...store.rows.get(opened.id)!, status: "cancelled" });
+            },
         });
 
         await runErasureWorkflow(opened.id, step);
@@ -103,7 +105,7 @@ describe("step results survive a JSON round trip", () => {
         const results: unknown[] = [];
 
         await runErasureWorkflow(opened.id, {
-            ...inlineStep,
+            ...durableStep().step,
             do: async (_name, run) => {
                 const result = await run();
 

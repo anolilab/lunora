@@ -1,54 +1,16 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import type { RequestRecord, RequestStore } from "../src/requests";
+import type { RequestRecord } from "../src/requests";
 import { cancelRequest, extendRequest, fromStepRecord, openRequest, toStepRecord } from "../src/requests";
-
-/** An in-memory store for the port. Each call is recorded, so a test can check what was written. */
-const memoryStore = (): RequestStore & { events: string[]; rows: Map<string, RequestRecord> } => {
-    const rows = new Map<string, RequestRecord>();
-    const events: string[] = [];
-
-    return {
-        addEvent: async (requestId, _at, kind) => {
-            events.push(`${requestId}:${kind}`);
-        },
-        events,
-        findOpen: async (subjectId, type) =>
-            [...rows.values()].find((row) => row.subjectId === subjectId && row.type === type && row.status !== "completed" && row.status !== "cancelled"),
-        get: async (id) => rows.get(id),
-        listForSubject: async (subjectId) => [...rows.values()].filter((row) => row.subjectId === subjectId),
-        listOpen: async () => [...rows.values()],
-        insert: async (record) => {
-            rows.set(record.id, record);
-        },
-        rows,
-        update: async (id, patch) => {
-            const existing = rows.get(id);
-
-            if (existing !== undefined) {
-                rows.set(id, { ...existing, ...patch });
-            }
-        },
-    };
-};
+import { codeOf, memoryRequests } from "./harness";
 
 const now = new Date("2026-04-10T09:00:00.000Z");
 const erasure = { drainBudgetDays: 3, freshAgeMs: 24 * 60 * 60 * 1000, graceDays: 14 };
 
-const codeOf = async (promise: Promise<unknown>): Promise<string> => {
-    try {
-        await promise;
-    } catch (error) {
-        return error instanceof LunoraError ? error.code : "not-lunora";
-    }
-
-    return "no-error";
-};
-
 describe(openRequest, () => {
     it("opens an export straight into received, with a one-month deadline", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
         const record = await openRequest(store, { id: "r1", now, subjectId: "u1", type: "export" });
 
         expect(record).toMatchObject({ dueAt: new Date("2026-05-10T09:00:00.000Z"), status: "received" });
@@ -56,8 +18,9 @@ describe(openRequest, () => {
     });
 
     it("opens an export when the subject's earlier one expired, even if the store still finds it", async () => {
-        // This store's findOpen predates `expired` and excludes only completed and cancelled.
-        const store = memoryStore();
+        // An app's findOpen may still return a request that has since expired; the service judges it again.
+        const harnessStore = memoryRequests();
+        const store = { ...harnessStore, findOpen: async (subjectId: string) => [...harnessStore.rows.values()].find((row) => row.subjectId === subjectId) };
 
         await openRequest(store, { id: "r1", now, subjectId: "u1", type: "export" });
         store.rows.set("r1", { ...store.rows.get("r1")!, status: "expired" });
@@ -66,7 +29,7 @@ describe(openRequest, () => {
     });
 
     it("opens an erasure into the grace window when a grace is configured", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
         const record = await openRequest(store, { erasure, id: "r2", now, sessionAgeMs: 1000, subjectId: "u1", type: "erasure" });
 
         expect(record.status).toBe("grace");
@@ -74,7 +37,7 @@ describe(openRequest, () => {
     });
 
     it("refuses an erasure from a session older than the fresh window", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await expect(
             codeOf(openRequest(store, { erasure, id: "r3", now, sessionAgeMs: erasure.freshAgeMs + 1, subjectId: "u1", type: "erasure" })),
@@ -82,7 +45,7 @@ describe(openRequest, () => {
     });
 
     it("refuses a second open request of the same type for the same subject", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await openRequest(store, { id: "r4", now, subjectId: "u1", type: "export" });
 
@@ -90,7 +53,7 @@ describe(openRequest, () => {
     });
 
     it("allows an export and an erasure to be open at once for the same subject", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await openRequest(store, { id: "r6", now, subjectId: "u1", type: "export" });
 
@@ -100,7 +63,7 @@ describe(openRequest, () => {
 
 describe(cancelRequest, () => {
     it("cancels an erasure during its grace window", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await openRequest(store, { erasure, id: "r8", now, sessionAgeMs: 1000, subjectId: "u1", type: "erasure" });
 
@@ -108,7 +71,7 @@ describe(cancelRequest, () => {
     });
 
     it("refuses to cancel an erasure once it is processing", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await openRequest(store, { erasure, id: "r9", now, sessionAgeMs: 1000, subjectId: "u1", type: "erasure" });
         store.rows.set("r9", { ...store.rows.get("r9")!, status: "processing" });
@@ -117,13 +80,13 @@ describe(cancelRequest, () => {
     });
 
     it("reports a missing request as not found", async () => {
-        await expect(codeOf(cancelRequest(memoryStore(), { id: "missing", now }))).resolves.toBe("NOT_FOUND");
+        await expect(codeOf(cancelRequest(memoryRequests(), { id: "missing", now }))).resolves.toBe("NOT_FOUND");
     });
 });
 
 describe(extendRequest, () => {
     it("extends once to three months and records the reason", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await openRequest(store, { id: "r10", now, subjectId: "u1", type: "export" });
         const extended = await extendRequest(store, { id: "r10", now: new Date("2026-04-20T00:00:00.000Z"), reason: "Complex request" });
@@ -133,7 +96,7 @@ describe(extendRequest, () => {
     });
 
     it("refuses a second extension", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await openRequest(store, { id: "r11", now, subjectId: "u1", type: "export" });
         await extendRequest(store, { id: "r11", now, reason: "first" });
@@ -142,7 +105,7 @@ describe(extendRequest, () => {
     });
 
     it("refuses an extension once the first month has passed", async () => {
-        const store = memoryStore();
+        const store = memoryRequests();
 
         await openRequest(store, { id: "r12", now, subjectId: "u1", type: "export" });
 

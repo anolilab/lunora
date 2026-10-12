@@ -128,32 +128,6 @@ export const codeOf = async (promise: Promise<unknown>): Promise<string> => {
     return "no-error";
 };
 
-/** A step runner that runs each step inline, once. The grace sleep returns at once. */
-export const inlineStep: PrivacyWorkflowContext["step"] = {
-    do: async (_name, run) => run(),
-    sleepUntil: async () => undefined,
-};
-
-/** A step runner that runs each step once, in order, and records the step names it saw. */
-export const recordingStep = (onSleep?: () => void): { names: string[]; step: PrivacyWorkflowContext["step"] } => {
-    const names: string[] = [];
-
-    return {
-        names,
-        step: {
-            do: async (name, run) => {
-                names.push(name);
-
-                return run();
-            },
-            sleepUntil: async (name) => {
-                names.push(`sleep:${name}`);
-                onSleep?.();
-            },
-        },
-    };
-};
-
 /** A value after a JSON round trip. `structuredClone` would keep a `Date`, which is the point. */
 export const throughJson = (value: unknown): unknown => {
     const text = JSON.stringify(value) as string | undefined;
@@ -164,11 +138,16 @@ export const throughJson = (value: unknown): unknown => {
 /**
  * A step runner that behaves like a durable host: each named step's result is stored as JSON, so a
  * replay hands back the parsed copy instead of running the step again, and a step that throws is
- * retried, as the host's step retry does. `failOnce` makes the named step throw on its first run.
+ * retried, as the host's step retry does. `names` lists every step and sleep in the order they were
+ * asked for. `failOnce` makes the named step throw on its first run; `onSleep` runs during the grace
+ * sleep, so a test can change the request while the workflow waits.
  */
-export const durableStep = (options: { failOnce?: string } = {}): { runs: Map<string, number>; sleeps: Date[]; step: PrivacyWorkflowContext["step"] } => {
+export const durableStep = (
+    options: { failOnce?: string; onSleep?: () => void } = {},
+): { names: string[]; runs: Map<string, number>; sleeps: Date[]; step: PrivacyWorkflowContext["step"] } => {
     const results = new Map<string, unknown>();
     const runs = new Map<string, number>();
+    const names: string[] = [];
     const sleeps: Date[] = [];
     let { failOnce } = options;
 
@@ -185,10 +164,13 @@ export const durableStep = (options: { failOnce?: string } = {}): { runs: Map<st
     };
 
     return {
+        names,
         runs,
         sleeps,
         step: {
             do: async <T>(name: string, run: () => Promise<T>): Promise<T> => {
+                names.push(name);
+
                 if (!results.has(name)) {
                     let value: T;
 
@@ -203,8 +185,10 @@ export const durableStep = (options: { failOnce?: string } = {}): { runs: Map<st
 
                 return results.get(name) as T;
             },
-            sleepUntil: async (_name, when) => {
+            sleepUntil: async (name, when) => {
+                names.push(`sleep:${name}`);
                 sleeps.push(when);
+                options.onSleep?.();
             },
         },
     };
@@ -287,9 +271,9 @@ export const setup = (options: HarnessOptions = {}): Harness => {
         privacy: privacyFor(undefined, SUBJECT),
         rows: memory.rows,
         /** Run the erasure workflow to its end. The grace sleep returns at once. */
-        runErasureWorkflow: async (requestId, step = inlineStep) => privacyFor(undefined).workflows.erasureHandler({ params: { requestId }, step }),
+        runErasureWorkflow: async (requestId, step = durableStep().step) => privacyFor(undefined).workflows.erasureHandler({ params: { requestId }, step }),
         /** Run the export workflow to its end. */
-        runExportWorkflow: async (requestId, step = inlineStep) => privacyFor(undefined).workflows.exportHandler({ params: { requestId }, step }),
+        runExportWorkflow: async (requestId, step = durableStep().step) => privacyFor(undefined).workflows.exportHandler({ params: { requestId }, step }),
         setClock: (at) => {
             clock = at;
         },
