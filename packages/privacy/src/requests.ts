@@ -97,7 +97,8 @@ const openRequest = async (
 
     const open = await store.findOpen(input.subjectId, input.type);
 
-    if (open !== undefined) {
+    // A terminal request the app's store still returns (an expired export) does not block a new one.
+    if (open !== undefined && !isTerminal(open.status)) {
         throw new LunoraError("PRIVACY_REQUEST_OPEN", `This subject already has an open ${input.type} request.`);
     }
 

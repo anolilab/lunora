@@ -55,6 +55,16 @@ describe(openRequest, () => {
         expect(store.events).toStrictEqual(["r1:received"]);
     });
 
+    it("opens an export when the subject's earlier one expired, even if the store still finds it", async () => {
+        // This store's findOpen predates `expired` and excludes only completed and cancelled.
+        const store = memoryStore();
+
+        await openRequest(store, { id: "r1", now, subjectId: "u1", type: "export" });
+        store.rows.set("r1", { ...store.rows.get("r1")!, status: "expired" });
+
+        await expect(openRequest(store, { id: "r2", now, subjectId: "u1", type: "export" })).resolves.toMatchObject({ status: "received" });
+    });
+
     it("opens an erasure into the grace window when a grace is configured", async () => {
         const store = memoryStore();
         const record = await openRequest(store, { erasure, id: "r2", now, sessionAgeMs: 1000, subjectId: "u1", type: "erasure" });
