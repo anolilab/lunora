@@ -11,6 +11,17 @@ SemVer promise until the package graduates.
 
 ## `@lunora/privacy`
 
+### `ArchivePort` (interface)
+
+```ts
+interface ArchivePort {
+    readonly purgeBatch: (before: Date) => Promise<{
+        readonly hasMore: boolean;
+        readonly purged: number;
+    }>;
+}
+```
+
 ### `AuthTableNames` (interface)
 
 ```ts
@@ -143,14 +154,21 @@ interface ExportOutcome {
 type LegalBasis = "consent" | "contract" | "legal_obligation" | "legitimate_interest";
 ```
 
+### `OPEN_STATUSES` (const)
+
+```ts
+const OPEN_STATUSES: ReadonlyArray<RequestStatus>;
+```
+
 ### `Privacy` (interface)
 
 ```ts
 interface Privacy {
     readonly admin: {
+        readonly extend: (requestId: string, reason: string) => Promise<RequestRecord>;
         readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
         readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
-        readonly sweep: () => Promise<ReadonlyArray<RequestRecord>>;
+        readonly sweep: () => Promise<SweepResult>;
     };
     readonly cancelRequest: (input: {
         requestId: string;
@@ -159,10 +177,6 @@ interface Privacy {
     readonly downloadUrl: (input: {
         requestId: string;
     }) => Promise<string>;
-    readonly extendRequest: (input: {
-        reason: string;
-        requestId: string;
-    }) => Promise<RequestRecord>;
     readonly myRequests: () => Promise<ReadonlyArray<RequestRecord>>;
     readonly requestErasure: () => Promise<RequestRecord>;
     readonly requestExport: () => Promise<RequestRecord>;
@@ -199,7 +213,16 @@ interface PrivacyConfig<C> {
 ### `PrivacyFor` (type)
 
 ```ts
-type PrivacyFor<C> = (context: C) => Privacy;
+type PrivacyFor<C> = (context: C, identity?: PrivacyIdentity) => Privacy;
+```
+
+### `PrivacyIdentity` (interface)
+
+```ts
+interface PrivacyIdentity {
+    readonly sessionAgeMs: number;
+    readonly subjectId: string;
+}
 ```
 
 ### `PrivacyPolicy` (interface)
@@ -217,9 +240,9 @@ interface PrivacyPolicy {
 
 ```ts
 interface PrivacyPorts {
+    readonly archive?: ArchivePort;
     readonly data: DataPort;
     readonly files: StorePort;
-    readonly identity: () => PrivacyIdentity;
     readonly newId: () => string;
     readonly now: () => Date;
     readonly store: RequestStore;
@@ -240,7 +263,7 @@ interface PrivacyPreset {
 ### `PrivacyTableName` (type)
 
 ```ts
-type PrivacyTableName = "archive" | "events" | "holds" | "requests" | "tombstones";
+type PrivacyTableName = "archive" | "events" | "requests";
 ```
 
 ### `PrivacyWorkflowContext` (interface)
@@ -250,10 +273,7 @@ interface PrivacyWorkflowContext {
     readonly params: {
         readonly requestId: string;
     };
-    readonly step: {
-        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
-        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
-    };
+    readonly step: Required<StepRunner>;
 }
 ```
 
@@ -268,6 +288,24 @@ interface RequestRecord {
     readonly id: string;
     readonly reason?: string;
     readonly receivedAt: Date;
+    readonly status: RequestStatus;
+    readonly storageKey?: string;
+    readonly subjectId: string;
+    readonly type: RequestType;
+}
+```
+
+### `RequestRow` (interface)
+
+```ts
+interface RequestRow {
+    readonly dueAt: number;
+    readonly erasureGraceUntil?: number;
+    readonly expiresAt?: number;
+    readonly extendedDueAt?: number;
+    readonly reason?: string;
+    readonly receivedAt: number;
+    readonly requestId: string;
     readonly status: RequestStatus;
     readonly storageKey?: string;
     readonly subjectId: string;
@@ -354,6 +392,15 @@ interface StorePort {
 }
 ```
 
+### `SweepResult` (interface)
+
+```ts
+interface SweepResult {
+    readonly expired: ReadonlyArray<RequestRecord>;
+    readonly purged: number;
+}
+```
+
 ### `TableErasure` (type)
 
 ```ts
@@ -406,6 +453,12 @@ const dispositionFor: (rules: ReadonlyMap<string, RetentionRule>) => RowDisposit
 const documentHistoryDataset: (table?: string) => Dataset;
 ```
 
+### `fromRequestRow` (const)
+
+```ts
+const fromRequestRow: (row: RequestRow) => RequestRecord;
+```
+
 ### `isTerminal` (const)
 
 ```ts
@@ -432,13 +485,19 @@ const retain: (rule: string, options?: {
 const storageObjectsDataset: (prefix: (subjectId: string) => string) => Dataset;
 ```
 
-## `@lunora/privacy/de`
-
-### `DEFAULT_VOUCHER_YEARS` (const)
+### `toRequestPatch` (const)
 
 ```ts
-const DEFAULT_VOUCHER_YEARS = 10;
+const toRequestPatch: (patch: Partial<Omit<RequestRecord, "id">>) => Partial<Omit<RequestRow, "requestId">>;
 ```
+
+### `toRequestRow` (const)
+
+```ts
+const toRequestRow: (record: RequestRecord) => RequestRow;
+```
+
+## `@lunora/privacy/de`
 
 ### `GermanyOptions` (interface)
 
@@ -500,6 +559,70 @@ const checkErasureGraceDays: (days: number) => number;
 const eu: (options?: EuOptions) => PrivacyPreset;
 ```
 
+## `@lunora/privacy/workflow`
+
+### `DispatchConfig` (interface)
+
+```ts
+interface DispatchConfig {
+    readonly datasets: ReadonlyArray<Dataset>;
+    readonly presets?: ReadonlyArray<PrivacyPreset>;
+}
+```
+
+### `PORT_METHODS` (const)
+
+```ts
+const PORT_METHODS: PortMethodTable;
+```
+
+### `PortMethod` (type)
+
+```ts
+type PortMethod = {
+    [P in RemotePort]: `${P}.${keyof PortMethodTable[P] & string}`;
+}[RemotePort];
+```
+
+### `PortTransport` (type)
+
+```ts
+type PortTransport = (call: {
+    readonly method: string;
+    readonly payload: string;
+}) => Promise<unknown>;
+```
+
+### `decodeWire` (const)
+
+```ts
+const decodeWire: (text: string) => unknown;
+```
+
+### `dispatchPort` (const)
+
+```ts
+const dispatchPort: (config: DispatchConfig, ports: PrivacyPorts, method: string, payload: string) => Promise<string>;
+```
+
+### `encodeWire` (const)
+
+```ts
+const encodeWire: (value: unknown) => string;
+```
+
+### `portMethods` (const)
+
+```ts
+const portMethods: () => ReadonlyArray<PortMethod>;
+```
+
+### `remotePorts` (const)
+
+```ts
+const remotePorts: (send: PortTransport) => Required<PrivacyPorts>;
+```
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
@@ -516,12 +639,28 @@ interface ErasureSettings {
 }
 ```
 
-### `PrivacyIdentity` (interface)
+### `PortMethodTable` (type)
 
 ```ts
-interface PrivacyIdentity {
-    readonly sessionAgeMs: number;
-    readonly subjectId: string;
+type PortMethodTable = {
+    readonly [P in RemotePort]-?: {
+        readonly [M in keyof NonNullable<PrivacyPorts[P]>]-?: true;
+    };
+};
+```
+
+### `RemotePort` (type)
+
+```ts
+type RemotePort = Exclude<keyof PrivacyPorts, "newId" | "now">;
+```
+
+### `StepRunner` (interface)
+
+```ts
+interface StepRunner {
+    readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+    readonly sleepUntil?: (name: string, when: Date) => Promise<void>;
 }
 ```
 
