@@ -35,6 +35,8 @@ interface RateLimiterOptions<Names extends string> {
 const storageKeyFor = (name: string, key: string | undefined): string =>
     key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
 
+const isThenable = <T>(value: PromiseLike<T> | T): value is PromiseLike<T> => typeof (value as PromiseLike<T> | undefined)?.then === "function";
+
 // The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
 const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
     normalize ? (key: string): string => ipRateLimitKey(normalize(key)) : ipRateLimitKey;
@@ -199,7 +201,13 @@ class RateLimiter<Names extends string = string> {
         }
 
         const storageKey = storageKeyFor(name, normalizedKey);
-        const prior = await this.store.get(storageKey);
+        // Await the read only when the store is asynchronous. An `await` on a plain
+        // value still yields, and every consume started in the same tick would then
+        // read the same prior before any of them wrote: a synchronous store (memory,
+        // SQL) admitted all of them. Without the yield, read, decide and write run as
+        // one step. An asynchronous store yields at its own I/O regardless.
+        const read = this.store.get(storageKey);
+        const prior = isThenable(read) ? await read : read;
         const { status, value } = evaluate(config, prior, {
             consume,
             count,

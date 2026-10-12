@@ -47,15 +47,12 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * SQLite-backed store for durable, per-DO rate-limit state. Persists each
  * `(name, key)` pair as one row so limits survive hibernation and eviction.
  *
- * **Atomicity:** the store does not wrap individual operations in an explicit
- * SQL transaction. Inside a Durable Object the DO's input gate serializes
- * every RPC call against the storage, so the limiter's read-modify-write
- * sequence runs to completion without interleaving — this is the same
- * guarantee the surrounding `evaluate()` step depends on. **Outside a DO**
- * (e.g. driving `createSqlStore` from a long-lived `node:sqlite` connection in
- * tests or a custom host) the caller is responsible for serialization; the
- * SQL surface used here (`exec`) is not a substitute for transactional
- * isolation across concurrent invocations.
+ * **Atomicity:** `exec` is synchronous and the limiter does not yield between a
+ * synchronous store's read and its write, so one consume's read, decision and
+ * write run as a single JavaScript step. No other call on the same isolate can
+ * interleave, which is what makes concurrent consumes admit exactly the
+ * configured rate. Two isolates sharing one SQLite file (not a Durable Object
+ * case) are not covered; serialize those yourself.
  */
 const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;
@@ -178,8 +175,16 @@ interface ReadOnlyDatabaseStoreOptions extends DatabaseStoreLocation {
  * }).index("by_key", ["key"])
  * ```
  *
- * Each operation is a read-then-write; inside a mutation/action that pair runs
- * under the DO's input gate, so it is atomic against concurrent calls.
+ * **Not atomic against concurrent consumes.** A consume is an awaited read
+ * followed by an awaited write, and nothing holds the pair together: two
+ * consumes for the same key can both read the same prior row and both be
+ * admitted. On a shard-local table each await is a DO storage operation, which
+ * holds the input gate, so separate requests on one DO do not interleave (two
+ * `limit()` calls started together inside one request still can). On a `.global()`
+ * table the read and write are D1 calls, which do not hold the gate, and a
+ * limit of 1 can admit several concurrent calls. `ctx.db` has no conditional
+ * write, so this store cannot close that gap; use `createSqlStore` where the
+ * limit must hold under concurrency.
  *
  * **Consumption commits with the procedure.** A mutation's `ctx.db` writes ride
  * its storage transaction, so a handler that throws after `limit()` rolls the
@@ -194,8 +199,8 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const index = options.index ?? "by_key";
     const keyField = options.keyField ?? "key";
 
-    // The limiter's hot path is get() immediately followed by set() under the
-    // DO input gate (read-modify-write). Caching the row id (or its absence)
+    // The limiter's hot path is get() immediately followed by set()
+    // (read-modify-write, not atomic: see the doc comment above). Caching the row id (or its absence)
     // resolved by the get()'s find() lets the following set()/delete() patch or
     // insert directly, halving the index lookups per consuming limit() (was
     // find-in-get + find-in-set; now one find total). The cache is invalidated

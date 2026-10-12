@@ -252,8 +252,10 @@ export const rateLimits = defineTable({
 ```
 
 <Callout type="info">
-    Inside a Durable Object the input gate serializes the limiter's read-modify-write against storage, so both SQL- and ORM-backed stores are atomic against
-    concurrent calls without an explicit transaction. Driving `createSqlStore` outside a DO, you own serialization yourself.
+    `createMemoryStore` and `createSqlStore` are synchronous, and the limiter reads, decides and writes through them in one step, so concurrent consumes admit
+    exactly the configured rate. `createDbStore` is not atomic: a consume is an awaited read then an awaited write. On a shard-local table the DO's storage
+    operations keep separate requests from interleaving (two `limit()` calls started together in one request still can), but on a `.global()` table (D1)
+    concurrent consumes for one key can all be admitted. Use `createSqlStore` where a limit must hold under concurrency.
 </Callout>
 
 ## Token budgets

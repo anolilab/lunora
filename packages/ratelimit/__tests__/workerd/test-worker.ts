@@ -205,9 +205,7 @@ class RateLimitDO extends DurableObject<Env> {
      * concurrent consumes.
      */
     public async consume(kind: StoreKind, key: string): Promise<RateLimitStatus> {
-        // Only the D1 path awaits the schema. Concurrent consumes woken by one shared
-        // promise resume in the same microtask drain and interleave at every `await`,
-        // which would put a lost update on the SQL control that production never adds.
+        // Only the D1 path needs the schema.
         if (kind === "d1") {
             await this.#ensureSchema();
         }

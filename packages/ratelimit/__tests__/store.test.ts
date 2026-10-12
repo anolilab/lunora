@@ -99,3 +99,29 @@ describe("sql store (real node:sqlite)", () => {
         await expect(reopened.limit("send", { key: "u1" })).resolves.toMatchObject({ ok: true });
     });
 });
+
+// Calls started in the same tick all run up to their first `await` before any of
+// them resumes. A synchronous store must therefore read and write a consume in one
+// step: an `await` between the read and the write lets every call read the same
+// empty prior, and a limit of 1 admits all of them.
+describe("concurrent consumes through a synchronous store", () => {
+    it.each(["memory", "sql"] as const)("%s store admits exactly one of ten for a limit of 1", async (kind) => {
+        expect.assertions(1);
+
+        const harness = createSqliteSql();
+
+        try {
+            const limiter = new RateLimiter({
+                config: { login: { kind: "fixed window", period: 60_000, rate: 1 } },
+                now: () => 0,
+                store: kind === "memory" ? createMemoryStore() : createSqlStore({ sql: harness.sql }),
+            });
+
+            const statuses = await Promise.all(Array.from({ length: 10 }, async () => limiter.limit("login", { key: "u1" })));
+
+            expect(statuses.filter((status) => status.ok)).toHaveLength(1);
+        } finally {
+            harness.close();
+        }
+    });
+});

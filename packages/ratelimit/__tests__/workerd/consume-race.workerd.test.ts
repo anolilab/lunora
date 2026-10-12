@@ -10,13 +10,14 @@
  *
  * - `kv` (shard-local table): every await is a DO storage operation, which holds the
  * input gate, so B cannot start until A has written. Admits 1.
- * - `sql` (control): `exec` is synchronous, so a consume never yields. Admits 1.
+ * - `sql`: `exec` is synchronous and the limiter does not await a synchronous read,
+ * so a consume's read, decision and write run without yielding. Admits 1.
  * - `d1` (`.global()` table): the read and the write are D1 calls, network I/O that
  * does not hold the input gate. B runs inside A's read-to-write window.
  *
- * EXPECTED RED until plan 482's fix lands: the `d1` case double-admits. This is the
- * reproduction of the lost update in `createDbStore`, kept as a plain `it` so the
- * failure stays visible.
+ * The `d1` case double-admits: `ctx.db` exposes no conditional write, so
+ * `createDbStore` cannot make the pair atomic on D1. It is kept as a plain `it` so
+ * the failure stays visible.
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
