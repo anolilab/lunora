@@ -962,6 +962,13 @@ interface DatabaseReader {
      * the row exists.
      */
     asId: <T extends string>(tableName: T, id: string) => Id<T>;
+
+    /**
+     * The first row of `tableName` matching `args.where`, or `null`. Routed like
+     * every table-addressed read: a `.global()` table is read from its global
+     * backend, where `query(table).withIndex(...)` is not available.
+     */
+    findFirst: (tableName: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
 
     /**
@@ -1294,6 +1301,12 @@ interface InsertManyOptions extends BatchWriteOptions {
     skipDuplicates?: boolean;
 }
 
+/** What {@link DatabaseWriter.patchIf} resolves: whether the patch applied, and the row as it now stands (`null` when there is no such row). */
+interface PatchIfResult {
+    applied: boolean;
+    doc: Record<string, unknown> | null;
+}
+
 interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
 
@@ -1388,6 +1401,35 @@ interface DatabaseWriter extends DatabaseReader {
         options?: BatchWriteOptions & { allowExplicitId?: boolean },
     ) => Promise<Id<T>[]>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * Conditional patch: apply `args.patch` to row `id` of `tableName` only while
+     * the row as currently stored matches `args.where`, decided atomically with
+     * the write. Use it for compare-and-set and admission checks, where reading
+     * the row, deciding, and then calling `patch` lets two concurrent callers
+     * both act on the same stale read.
+     *
+     * ```ts
+     * const { applied } = await ctx.db.patchIf("seats", seatId, { where: { holder: null }, patch: { holder: userId } });
+     * ```
+     *
+     * Resolves `{ applied: true, doc }` with the row as written, or
+     * `{ applied: false, doc }` with the row left untouched (`doc` is `null` when
+     * there is no such row). `where` takes the same flat column filters as
+     * `findMany`; relation filters are not supported. Triggers, validators,
+     * companions, CDC and live queries see an applied patch exactly as they see
+     * `patch`.
+     *
+     * Platform mapping (`conditionalWrites` in `PlatformCapabilities`):
+     * - shard-local tables: Cloudflare `storage.sql`, Node `better-sqlite3` and
+     *   celld's SQLite decide in one synchronous step; native everywhere.
+     * - `.global()` tables: one conditional `UPDATE` through `@lunora/sql-store`
+     *   on D1 (Cloudflare, celld), the Node host's SQLite file, or Postgres/MySQL
+     *   over Hyperdrive.
+     * - A backend without a conditional write refuses with `INTERNAL` instead of
+     *   reading and then writing.
+     */
+    patchIf: <T extends string>(tableName: T, id: Id<T>, args: { patch: Record<string, unknown>; where: Record<string, unknown> }) => Promise<PatchIfResult>;
 
     /**
      * Patch many rows by id in one call. Each `{ id, patch }` is applied like a
@@ -2632,6 +2674,7 @@ export type {
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,
+    PatchIfResult,
     QueryCtx,
     RankIndexDefinition,
     RankSortKey,

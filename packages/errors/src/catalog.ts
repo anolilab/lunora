@@ -193,6 +193,13 @@ export const ERROR_CATALOG = {
     /** Runtime-reachable (auth/middleware.ts): message carries auth-wiring guidance — redact on the wire. */
     AUTH_HEADERS_MISSING: { internal: true, status: 500, title: "Auth headers missing" },
 
+    /** `@lunora/privacy`: a request's coverage check found a table that no dataset or exclusion declares. Build- and test-time; the message names the table. */
+    PRIVACY_COVERAGE: { status: 500, title: "Privacy coverage check failed" },
+    /** `@lunora/privacy`: the subject already has an open request of this type. */
+    PRIVACY_REQUEST_OPEN: { status: 409, title: "A privacy request is already open" },
+    /** `@lunora/privacy`: an erasure needs a recent sign-in, the same window account deletion uses. */
+    PRIVACY_SESSION_NOT_FRESH: { status: 403, title: "Recent sign-in required" },
+
     /**
      * Signup rejected by `@lunora/auth`'s email-domain gate — a disposable/throwaway
      * provider (or a caller deny-list hit). Client-safe: the message names only the

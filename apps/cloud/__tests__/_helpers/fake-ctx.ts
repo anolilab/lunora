@@ -126,6 +126,7 @@ const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?
 
             return Promise.resolve();
         },
+        findFirst: () => Promise.resolve(null),
         get: (id: string) => Promise.resolve(byId.get(id) ?? null),
         insert: (table: string, document: Row) => {
             ops.push({ document, kind: "insert", table });

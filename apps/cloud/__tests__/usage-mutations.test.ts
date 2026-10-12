@@ -60,6 +60,7 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId:
         auth: { getIdentity: () => Promise.resolve(null), userId },
         db: {
             alertRules: facade("alertRules"),
+            findFirst: () => Promise.resolve(null),
             get: (id: string) =>
                 Promise.resolve(
                     Object.values(tables)

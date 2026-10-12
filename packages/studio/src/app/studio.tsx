@@ -46,6 +46,7 @@ import type { AnalyticsPanelProps } from "../features/analytics/analytics-panel"
 import { HomePanel } from "../features/home/home-panel";
 import OperationConsole from "../features/logs/operation-console";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
+import type { PrivacyRequestsSource } from "../features/privacy/privacy-requests-source";
 import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
@@ -116,6 +117,7 @@ const SEARCH_VALIDATORS: Partial<Record<StudioTab, (search: Record<string, unkno
     migrations: validateSchemaVersionSearch,
 };
 const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "PitrPanel");
+const PrivacyRequestsPanel = lazyNamed(() => import("../features/privacy/privacy-requests-panel"), "PrivacyRequestsPanel");
 const FlagsPanel = lazy(() => import("../features/flags/flags-panel"));
 const ReactorsPanel = lazy(() => import("../features/reactors/reactors-panel"));
 const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
@@ -250,6 +252,14 @@ interface StudioProps {
     readonly openRpcSpec?: unknown;
 
     /**
+     * The app's data-subject request source for the Privacy requests page, built
+     * from the app's own admin functions (`listOpenPrivacyRequests`,
+     * `retryPrivacyRequest`). Without one the page renders a "not configured" state
+     * and issues no request. Pass a STABLE reference, as for `analyticsSqlQuery`.
+     */
+    readonly privacyRequests?: PrivacyRequestsSource;
+
+    /**
      * Allow the function runner to execute a function AS a chosen authenticated
      * identity (the "Run as identity" tool), so an operator can test auth + RLS
      * behavior. Security-sensitive: it forges identity on an admin-gated RPC, so
@@ -366,6 +376,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
     permissions: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2.2 2.2L15 9.5M8.5 16h7" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
+    privacyRequests: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8h6m-6 3h4" />,
     queues: <path d="M4 6h16M4 10h16M4 14h10M4 18h10m4-2 3 2-3 2v-4Z" />,
     reactors: <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14.7-3M4 15a8 8 0 0 0 14.7 3" />,
     realtime: <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />,
@@ -419,7 +430,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
         ],
     },
     { key: "advisors", tabs: ["advisorHealth", "security", "rls", "permissions", "insights"] },
-    { key: "operations", tabs: ["schedule", "mail", "drains", "notifications", "payments", "flags"] },
+    { key: "operations", tabs: ["schedule", "mail", "drains", "notifications", "payments", "flags", "privacyRequests"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -498,6 +509,7 @@ const TABS = exhaustiveRouteTabs([
     "schedule",
     "drains",
     "flags",
+    "privacyRequests",
     "settings",
 ]);
 
@@ -1054,6 +1066,7 @@ const NotFoundRedirect = (): null => {
 const buildRouter = ({
     analyticsSqlQuery,
     basePath,
+    privacyRequests,
     dataEditable = false,
     functions,
     initialShardKey,
@@ -1111,6 +1124,7 @@ const buildRouter = ({
         organizations: <OrganizationsPanel />,
         permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} schemaEditable={schemaEditable} />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
+        privacyRequests: <PrivacyRequestsPanel source={privacyRequests} />,
         mail: <MailPanel />,
         payments: <PaymentsPanel />,
         queues: <QueuesPanel />,
@@ -1190,6 +1204,7 @@ const StudioShell = ({
     initialShardKey,
     openApiSpec,
     openRpcSpec,
+    privacyRequests,
     runAsIdentity,
     schemaEditable,
     scheduledCancel,
@@ -1202,6 +1217,7 @@ const StudioShell = ({
     const router = buildRouter({
         analyticsSqlQuery,
         basePath,
+        privacyRequests,
         dataEditable,
         functions,
         initialShardKey,

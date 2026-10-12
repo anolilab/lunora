@@ -40,11 +40,15 @@
  * `plans/234-node-host-findings.md`.
  */
 
+export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-dispatch-route";
+export { createNodeDispatchRoute, NODE_SCHEDULER_DISPATCH_PATH } from "./node-dispatch-route";
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";
 export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export { createNodeShardKvStore } from "./node-kv-store";
-export type { NodePlatform, NodePlatformOptions } from "./node-platform";
+export type { NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
+export type { NodeProfileHandler, NodeProfileHandlerOptions } from "./node-profile-handler";
+export { createNodeProfileHandler } from "./node-profile-handler";
 export type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 export { createNodeQueueHost } from "./node-queue-host";
 export type { NodeR2BucketOptions } from "./node-r2-bucket";

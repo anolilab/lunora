@@ -124,6 +124,9 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // interval or re-subscribes.
     const dataRef = useRef<Record<string, unknown> | undefined>(options.data);
 
+    // True only between mount and unmount; `setData` must not heartbeat during render or SSR.
+    const mountedRef = useRef(false);
+
     // Stash the live inputs so the heartbeat callback stays stable (its identity
     // doesn't churn the interval effect) while still seeing the latest values.
     const inputsRef = useRef({ client, heartbeat, roomId, sessionId: generatedSessionId, shardKey });
@@ -149,10 +152,21 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     const setData = useCallback(
         (next: Record<string, unknown> | undefined): void => {
             dataRef.current = next;
-            sendHeartbeat();
+
+            if (mountedRef.current) {
+                sendHeartbeat();
+            }
         },
         [sendHeartbeat],
     );
+
+    useEffect(() => {
+        mountedRef.current = true;
+
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
 
     // Heartbeat: immediately, on an interval, and whenever the tab regains
     // visibility. Cleared on unmount so no timer leaks.

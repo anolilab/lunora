@@ -15,14 +15,11 @@
  * immediately even when the cached token looks fresh (e.g. the master token
  * was rotated, which invalidates every outstanding sub-token).
  *
- * Compatibility: a worker predating the mint endpoint answers 404 (or 405);
- * the provider then falls back to the master token — the pre-095 behavior —
- * and remembers the miss so it doesn't re-probe on every reconnect. Any other
- * mint failure (network error, 403, 5xx) throws, which the client surfaces as
- * a failed connect attempt and retries with its reconnect backoff. `invalidate()`
- * clears that memory along with the cache — a 404 from a proxy or a BYO dev
- * server is not proof the endpoint is gone forever, and the rotation-recovery
- * path is exactly where re-probing is worth one request.
+ * The master token is never a WS credential. A mint failure of any kind,
+ * including a 404 or 405 from a worker without the mint route, throws, which
+ * the client surfaces as a failed connect attempt and retries with its
+ * reconnect backoff. A worker without the mint endpoint cannot be used with
+ * the studio.
  */
 
 /** Path of the worker's admin WS-token mint endpoint. */
@@ -37,7 +34,7 @@ interface MintedWsToken {
 }
 
 interface AdminWsTokenProviderOptions {
-    /** The master admin token — authenticates the mint request (header bearer) and is the 404 fallback credential. */
+    /** The master admin token — authenticates the mint request (header bearer). It is never sent as a WS credential. */
     readonly adminToken: string;
     /** Origin of the Lunora worker (no trailing slash needed). */
     readonly baseUrl: string;
@@ -46,9 +43,9 @@ interface AdminWsTokenProviderOptions {
 }
 
 interface AdminWsTokenProvider {
-    /** Resolve the WS credential: a cached-or-fresh ephemeral token, or the master token on an old worker. Pass as the client's `wsToken`. */
+    /** Resolve the WS credential: a cached-or-fresh ephemeral sub-token. Pass as the client's `wsToken`. */
     readonly getToken: () => Promise<string>;
-    /** Drop the cached token — and the "endpoint is missing" memory — so the next `getToken` re-mints. Wire to `client.onTokenExpired`. */
+    /** Drop the cached token so the next `getToken` re-mints. Wire to `client.onTokenExpired`. */
     readonly invalidate: () => void;
 }
 
@@ -72,7 +69,6 @@ export const createAdminWsTokenProvider = (options: AdminWsTokenProviderOptions)
     const mintUrl = `${origin}${WS_TOKEN_MINT_PATH}`;
 
     let cached: MintedWsToken | undefined;
-    let endpointMissing = false;
     let inFlight: Promise<string> | undefined;
 
     const mint = async (): Promise<string> => {
@@ -81,14 +77,9 @@ export const createAdminWsTokenProvider = (options: AdminWsTokenProviderOptions)
             method: "POST",
         });
 
-        // A pre-095 worker has no mint route: fall back to the master token
-        // (the old behavior) and remember the miss so reconnects don't re-probe.
-        if (response.status === 404 || response.status === 405) {
-            endpointMissing = true;
-
-            return adminToken;
-        }
-
+        // Any failure leaves no sub-token to hand out, and the master token must never
+        // stand in for one: it would ride the `?token=` query string into access logs
+        // and browser history.
         if (!response.ok) {
             throw new Error(`ws-token mint failed: ${String(response.status)}`);
         }
@@ -106,10 +97,6 @@ export const createAdminWsTokenProvider = (options: AdminWsTokenProviderOptions)
 
     return {
         getToken: async (): Promise<string> => {
-            if (endpointMissing) {
-                return adminToken;
-            }
-
             if (cached !== undefined && cached.expiresAtMs - REFRESH_MARGIN_MS > Date.now()) {
                 return cached.token;
             }
@@ -124,17 +111,6 @@ export const createAdminWsTokenProvider = (options: AdminWsTokenProviderOptions)
         },
         invalidate: (): void => {
             cached = undefined;
-
-            // Clear the 404 latch too. It is a "don't re-probe on every reconnect"
-            // optimisation, not a permanent verdict: one 404 is reachable without a
-            // legacy worker (a proxy/CDN answering an unknown POST, a BYO dev setup
-            // where Vite serves the mint path), and this is the rotation-recovery
-            // path (`client.onTokenExpired`) — the one moment we already know the
-            // credential picture changed. Leaving it set pinned the WS credential to
-            // the MASTER admin token for the provider's whole life, putting it in
-            // the `?token=` query string — access logs, browser history — that this
-            // module exists to keep it out of.
-            endpointMissing = false;
         },
     };
 };

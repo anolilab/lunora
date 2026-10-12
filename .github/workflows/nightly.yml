@@ -69,7 +69,6 @@
                 # (`@lunora/cloud`), and a path selects it for pnpm and vis alike.
                 "workspace":
                     [
-                        "apps/cloud",
                         "packages/auth",
                         "packages/browser",
                         "packages/client",
@@ -78,6 +77,7 @@
                         "packages/do",
                         "packages/payment",
                         "packages/queue",
+                        "packages/ratelimit",
                         "packages/runtime",
                         "packages/scheduler",
                         "packages/server",
@@ -85,6 +85,8 @@
                         "packages/storage",
                         "packages/workflow",
                         "packages/x402",
+                        "examples/privacy",
+                        "apps/cloud",
                     ]
         "steps":
             - "name": "Harden Runner"
@@ -106,23 +108,20 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 16 workspaces, duplicated verbatim in
-            # test.yml and nightly.yml, with nothing tying either copy to the workspaces
-            # that actually declare a `workerd` vitest project. Drop one from either and
-            # its workerd suites stop running with every check green. Each leg asserts
-            # its own workspace still declares the project, and that the leg count
-            # equals the number of workspaces that do — together that makes the matrix
-            # and the filesystem the same set, not merely the same size. Packages and
-            # apps both: `apps/cloud` holds the `BoxSessionDO` suite.
+            # The matrix is a hand-typed list of directories (16 packages, one example),
+            # duplicated verbatim in test.yml and nightly.yml, with nothing tying either
+            # copy to the packages/* and examples/* that actually declare a `workerd`
+            # vitest project. Drop one from either copy and its workerd suites stop
+            # running with every check green. Each leg asserts its own directory still
+            # declares the project, and that the leg count equals the number of
+            # directories that do — together that makes the matrix and the filesystem
+            # the same set, not merely the same size.
             - "name": "Assert the matrix matches the workspaces declaring a workerd project"
-              "env":
-                  "WORKSPACE": "${{ matrix.workspace }}"
-                  "LEGS": "${{ strategy.job-total }}"
               "run": |
-                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts apps/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts apps/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
-                  if ! printf '%s\n' "$declared" | grep -qx "$WORKSPACE"; then
-                    echo "$WORKSPACE/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.workspace }}"; then
+                    echo "${{ matrix.workspace }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
                     echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     exit 1
                   fi
@@ -142,23 +141,29 @@
               "env":
                   "WORKSPACE": "${{ matrix.workspace }}"
               "run": |
-                  case "$WORKSPACE" in
-                    apps/*) pnpm exec vis run build --filter "./$WORKSPACE^..." ;;
-                    *) pnpm exec vis run build --filter "./$WORKSPACE..." ;;
+                  project="$(node -p "require('./${{ matrix.workspace }}/project.json').name")"
+                  case "${{ matrix.workspace }}" in
+                    apps/*|examples/*) pnpm exec vis run build --filter "${project}^..." ;;
+                    *) pnpm exec vis run build --query "project=${project}" ;;
                   esac
 
-            - "name": "Generate workspace code"
+            # An app's generated code (`lunora/_generated`) is gitignored and only codegen
+            # writes it, and its suites import it. The build above builds the app's
+            # dependencies, not the app, so generate it here.
+            - "name": "Generate app code"
               "env":
                   "WORKSPACE": "${{ matrix.workspace }}"
               "run": |
-                  pnpm --filter "./$WORKSPACE" run --if-present codegen
+                  case "$WORKSPACE" in
+                    apps/*) pnpm --filter "./$WORKSPACE" run --if-present codegen ;;
+                  esac
 
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
                   "WORKSPACE": "${{ matrix.workspace }}"
               "run": |
-                  pnpm --filter "./$WORKSPACE" run test --project workerd
+                  pnpm --filter "$(node -p "require('./${{ matrix.workspace }}/package.json').name")" run test --project workerd
 
     # test.yml's `e2e` without the paths-filter gate.
     "e2e":

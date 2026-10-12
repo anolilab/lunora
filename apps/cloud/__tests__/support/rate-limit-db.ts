@@ -95,6 +95,18 @@ const withRateLimitStore = (database: Record<string, unknown>): Record<string, u
             return Promise.resolve();
         },
 
+        // The store reads by equality through `findFirst` (`packages/ratelimit/src/store.ts`),
+        // so a bucket is served by its key, and every other table goes to the double.
+        findFirst: (table: string, args?: { where?: Record<string, unknown> }) => {
+            if (table !== RATE_LIMIT_TABLE) {
+                const original = database.findFirst as ((table: string, args?: unknown) => Promise<unknown>) | undefined;
+
+                return original?.(table, args) ?? Promise.resolve(null);
+            }
+
+            return Promise.resolve(byKey.get(String(args?.where?.key)) ?? null);
+        },
+
         query: (table: string) => {
             return {
                 withIndex: (_index: string, build: (range: IndexRange) => IndexRange) => {

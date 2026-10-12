@@ -97,6 +97,25 @@ describe("ctx-db .dropStalePatches()", () => {
         expect(dropped[0]).toEqual({ fields: ["title"], id, table: "documents" });
     });
 
+    it("reports a stale conditional patch as not applied and leaves the row alone", async () => {
+        expect.assertions(3);
+
+        const { cursor, dropped, setBaseline, writer } = setup();
+        const id = await writer.insert("documents", { body: "b", title: "original", views: 0 });
+        const baseline = cursor();
+
+        await writer.patch(id, { title: "theirs" });
+
+        setBaseline(baseline);
+
+        await expect(writer.patchIf?.("documents", id, { patch: { title: "mine" }, where: { body: "b" } })).resolves.toStrictEqual({
+            applied: false,
+            doc: expect.objectContaining({ title: "theirs" }),
+        });
+        await expect(writer.get(id)).resolves.toMatchObject({ title: "theirs" });
+        expect(dropped).toHaveLength(1);
+    });
+
     it("applies a patch to a field nobody else touched — the point of the feature", async () => {
         expect.assertions(3);
 

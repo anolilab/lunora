@@ -1,3 +1,38 @@
+## @lunora/payment [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.195...@lunora/payment@1.0.0-alpha.196) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/server:** upgraded to 1.0.0-alpha.193
+* **@lunora/values:** upgraded to 1.0.0-alpha.63
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+
+## @lunora/payment [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.194...@lunora/payment@1.0.0-alpha.195) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.192
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+
+## @lunora/payment [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.193...@lunora/payment@1.0.0-alpha.194) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+* **payment:** store money minor units as number columns ([#1119](https://github.com/anolilab/lunora/issues/1119)) ([d496ff9](https://github.com/anolilab/lunora/commit/d496ff9398625320f2d68b1e8241346e9e3f0fcc))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.191
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+
 ## @lunora/payment [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.192...@lunora/payment@1.0.0-alpha.193) (2026-10-10)
 
 

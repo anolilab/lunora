@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.52...@lunora/errors@1.0.0-alpha.53) (2026-10-12)
+
+### Features
+
+* **privacy:** add the @lunora/privacy data-rights package ([#1127](https://github.com/anolilab/lunora/issues/1127)) ([01ad496](https://github.com/anolilab/lunora/commit/01ad496fad562fbeddf3052e71ac6a3abeb38d0a))
+
 ## @lunora/errors [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.51...@lunora/errors@1.0.0-alpha.52) (2026-10-08)
 
 ### Bug Fixes

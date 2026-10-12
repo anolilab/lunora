@@ -310,6 +310,85 @@ describe("usePresence (Vue)", () => {
     // An RLS denial or a session expiry on the `listPresent` subscription used to be
     // dropped on the floor: `present` simply froze at its last value with nothing to
     // read and no handler to call. Matches React's `usePresence` error channel.
+    it("setData during SSR (no window) sends no heartbeat", async () => {
+        const fake = createPresenceFakeClient();
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        result.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationSpy).not.toHaveBeenCalled();
+
+        scope.stop();
+    });
+
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(1);
+
+        result.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(2);
+        expect(fake.mutationSpy.mock.calls[1]?.[1]).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+
+        scope.stop();
+    });
+
+    it("setData after the scope stops sends no heartbeat", async () => {
+        const fake = createPresenceFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+        scope.stop();
+
+        const callsAtStop = fake.mutationSpy.mock.calls.length;
+
+        result.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(callsAtStop);
+    });
+
     it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
         const fake = createPresenceFakeClient();
         const seen: { code?: string; message: string }[] = [];

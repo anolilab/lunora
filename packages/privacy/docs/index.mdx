@@ -1,0 +1,143 @@
+---
+title: Privacy
+description: Export, erasure and retention for a user's data, built for GDPR Art. 15, 17 and 20 and the German statutory periods.
+---
+
+`@lunora/privacy` handles a user's data-subject requests: an export of everything the app holds about them, an erasure of it, and the retention periods the law requires you to keep certain records for.
+
+:::caution[Not reviewed by a lawyer]
+The legal and tax values are **not** checked by a lawyer or tax adviser. Every one is marked as pending review, and the research behind them is on the [legal basis page](/docs/packages/privacy/legal). Do not rely on a default until a qualified lawyer and a tax adviser have reviewed it against your own processing.
+:::
+
+> **Experimental.** The package is under development and is not released.
+
+## Integrate it
+
+Declare each module's personal data as a dataset, next to the tables it describes.
+
+```ts
+// lunora/tasks/privacy.ts
+import { defineDataset } from "@lunora/privacy";
+
+export const tasksData = defineDataset("tasks", {
+    legalBasis: "contract",
+    origin: "provided",
+    purpose: "Tasks and goals the user schedules",
+    tables: {
+        goals: {},
+        tasks: { omit: ["activeCycle"] },
+    },
+});
+```
+
+Then bind the datasets, the presets and the ports into one object. The app supplies the data, storage and request ports, the tombstone store, and the clock. The storage port must key a request's files under `<requestId>/`, and lists and deletes them as well as writing them. Keep the config in a const of its own: the workflow dispatcher reads the same object.
+
+```ts
+// lunora/privacy.ts
+import { definePrivacy } from "@lunora/privacy";
+import { eu } from "@lunora/privacy/eu";
+import { germany } from "@lunora/privacy/de";
+
+import { tasksData } from "./tasks/privacy";
+
+// The settings are fixed; the ports depend on the call, because `ctx.db` exists only inside one.
+export const privacyConfig = {
+    datasets: [tasksData],
+    presets: [eu(), germany()],
+    // Tables that hold a user's data but are not exported, each with the reason a reviewer reads.
+    exclude: { featureFlags: "Operator configuration; contains no personal data" },
+    // Derives the tombstone keys. Every erasure needs it; keep it in a secret binding.
+    tombstoneSecret: process.env.PRIVACY_TOMBSTONE_SECRET,
+    ports: (ctx) =>
+        "db" in ctx
+            ? {
+                  // Your ports: the data, the files, the request store, the archive, the tombstones, and the clock.
+                  data: dataPortOver(ctx),
+                  files: filePortOver(ctx),
+                  store: requestStoreOver(ctx),
+                  archive: archivePortOver(ctx),
+                  tombstones: tombstonePortOutsideTheDatabase(ctx),
+                  now: () => new Date(),
+                  newId: () => crypto.randomUUID(),
+              }
+            : // A workflow step has no `ctx.db`: every port call goes through the internal `privacyPort` mutation.
+              remotePorts((call) => ctx.run(internal.privacy.privacyPort, call)),
+};
+
+export const privacyFor = definePrivacy(privacyConfig);
+```
+
+Call it with the caller's context, and with the caller's identity when the caller is the data subject: `await privacyFor(ctx, identity).requestExport()`. Resolve `identity` (`{ subjectId, sessionAgeMs }`) from the session, never from an argument, so a caller cannot act on another subject's data. An operator call, a cron or a workflow passes no identity, and the subject methods (`requestExport`, `requestErasure`, `cancelRequest`, `downloadUrl`, `myRequests`) refuse such a call with `UNAUTHENTICATED`.
+
+The request store implements the package's own `privacy_requests` table. `fromRequestRow`, `toRequestRow`, `toRequestPatch` and `OPEN_STATUSES` map its rows, so the column layout is not written again in the app. The patch includes `subjectId`, which a completed erasure rewrites.
+
+### The workflow port
+
+A workflow step reaches the ports through one internal mutation. `@lunora/privacy/workflow` holds both ends of that hop, so the app writes neither a method table nor a codec:
+
+```ts
+// lunora/privacy.ts
+import { dispatchPort, remotePorts } from "@lunora/privacy/workflow";
+
+/** The port the durable workflows call through `ctx.run`. Internal: never reachable from a client. */
+export const privacyPort = internalMutation
+    .input({ method: v.string(), payload: v.string() })
+    .mutation(async ({ args, ctx }) => dispatchPort(privacyConfig, localPorts(ctx), args.method, args.payload));
+```
+
+`dispatchPort(config, ports, method, payload)` refuses a method that no port declares. Each port method has one codec, typed against its signature, that both ends read: a dataset crosses the wire by id, and the erasure disposition never crosses it, because the dispatcher rebuilds both from `config`. `remotePorts(send)` returns plain ports, so an app may spread it and replace one it reaches another way (a tombstone store in its own Durable Object, say). Values cross through the Lunora wire codec, so a `Date`, a `Set`, a `bigint`, bytes and `undefined` arrive as they were sent.
+
+Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically. Each handler binds the ports from its own context.
+
+:::caution[Not yet verified]
+Codegen has been checked only with a handler that is a property of a module-level object. The handlers here sit on the per-call `privacyFor(ctx)` result, which codegen has not been checked against yet. Plan §4.2 tracks this. Do not ship the registration on the strength of this page alone.
+:::
+
+```ts
+// lunora/privacy.ts (add next to privacyFor)
+export const privacyWorkflows = {
+    erasureHandler: async (context: WorkflowRunContext<{ requestId: string }>) => privacyFor(context).workflows.erasureHandler(context),
+    exportHandler: async (context: WorkflowRunContext<{ requestId: string }>) => privacyFor(context).workflows.exportHandler(context),
+};
+
+// lunora/workflows.ts
+import { defineWorkflow } from "@lunora/workflow";
+
+import { privacyWorkflows } from "./privacy";
+
+export const privacyExport = defineWorkflow<{ requestId: string }>({
+    handler: privacyWorkflows.exportHandler,
+    limits: { steps: 25_000 },
+    name: "privacy-export",
+});
+export const privacyErasure = defineWorkflow<{ requestId: string }>({
+    handler: privacyWorkflows.erasureHandler,
+    limits: { steps: 25_000 },
+    name: "privacy-erasure",
+});
+```
+
+A mutation opens the request with `privacyFor(ctx, identity).requestExport()` and then starts the workflow with `ctx.workflows.get("privacyExport").create(...)`. The worked example is `examples/privacy`.
+
+## What it does
+
+- **One run, two paths.** Export and erasure are each written once, as named steps. The workflow memoises each step, so a retry resumes at the step that failed; `runExport` and `runErasure` run the same steps at once. `admin.retry` refuses anything but a `failed` request. A failed export runs again in the call and returns `{ kind: "ran", outcome }`; a failed erasure moves to `processing` and returns `{ kind: "restart", requestId }`, and the app starts its erasure workflow for that id in the same mutation. The move out of `failed` is what stops a second retry from starting a second run. Before each step the request is read again, so a status change during a run stops it in both paths, and each phase writes one event named after its status.
+- **Export (Art. 15 and 20).** Every dataset is collected, then written to a ZIP with a manifest and a readable PDF copy. The manifest says which article each dataset falls under. Each table is a JSON file written through the Lunora wire codec, so a value JSON cannot hold is a tagged leaf rather than lost: a `bigint` keeps its decimal digits and a bytes column its base64. The download link lasts fifteen minutes, and the export expires after seven days.
+- **Erasure (Art. 17).** A request enters a 14-day grace window, during which the subject can cancel. Erasure then runs one dataset at a time and deletes the subject's stored files: every file their requests wrote, and everything under each dataset's `files.prefix(subjectId)`. The tombstone is written first, before any row goes, so a tombstone store that is missing or failing stops the erasure with nothing deleted. A verify step must then find every table empty and every files prefix listing nothing, apart from rows a retention rule still keeps and the rows of an `anonymise` table, which stay in place once anonymised. Only then is the request marked `completed`.
+- **The request log after an erasure.** When an erasure completes, every request of the subject, the erasure included, has its `subjectId` replaced by the tombstone key. The log keeps the link the tombstone keeps and no raw id, and the subject's own lookups by their id stop finding those requests. A failed erasure keeps the raw id, so an operator can retry it.
+- **Retention.** The package decides and the app writes. `eraseBatch` receives a `disposition(dataset, table, row, now)` function bound to the presets' rules. Delete a `delete` row, anonymise an `anonymise` row, and move a `keep` row into your archive table with the `until` the verdict carries as `retainUntil`, so the next batch does not select it again. A `retain(rule, { from })` column must hold a `Date` or epoch milliseconds; anything else is refused rather than starting the period at the erasure date. A dataset with a retained table is marked `restricted` in the export manifest.
+- **The sweep.** Run `admin.sweep()` from a cron. It deletes each expired export's files and marks the request `expired`, then purges every archived row whose `retainUntil` has passed through the `archive` port (`purgeBatch(before)`, one batch per call). Once a dataset uses `retain`, the sweep refuses to run without that port. It returns `{ expired, purged }`.
+- **Deadlines (Art. 12(3)).** The response is due `responseMonths` calendar months after receipt (one by default), and an operator may extend it once, within that first period, by `extensionMonths` (two by default) with `admin.extend(requestId, reason)`. Extension is the controller's decision, so the subject has no way to extend. `tick` lists requests within seven days of their deadline and those already overdue; a `ready` export has had its response and is listed as neither.
+- **Restores.** Every erasure records a tombstone keyed by an HMAC of the subject id under `tombstoneSecret`, and refuses to run without the `tombstones` port and the secret. `TombstonePort.add` must be an idempotent upsert, because a retried step writes the same key again. Keep the tombstones outside the database a point-in-time restore rolls back, or the restore takes them too. If a backup taken before the erasure is restored, `restore` erases those subjects again.
+
+## Coverage
+
+A table with a `userId` column must be covered by a dataset, or excluded with a reason, once the app uses `definePrivacy`. Otherwise the build fails with `privacy_table_unclassified`, which names the table.
+
+## What is not finished
+
+- The runnable example app (`examples/privacy`) is not merged, so there is no end-to-end example yet.
+- The workerd suite for the storage paths is not written.
+- The workflow registration above is not yet verified against codegen (see the caution above).
+- The Studio's Privacy requests tab appears only when the app declares `@lunora/privacy`.
+- The legal and tax review of the defaults is still open. See the [legal basis page](/docs/packages/privacy/legal).

@@ -80,6 +80,8 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     const sessionId = options.sessionId ?? randomSessionId();
 
     let latestData: Record<string, unknown> | undefined = options.data;
+    // True only between the client-side mount and teardown; `setData` must not heartbeat before then.
+    let mounted = false;
 
     const sendHeartbeat = (): void => {
         const args = {
@@ -93,7 +95,10 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
 
     const setData = (next: Record<string, unknown> | undefined): void => {
         latestData = next;
-        sendHeartbeat();
+
+        if (mounted) {
+            sendHeartbeat();
+        }
     };
 
     const onVisible = (): void => {
@@ -116,6 +121,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     // `@lunora/vue`'s `use-presence.ts` guard; the returned store stays inert
     // until the component hydrates.
     if (isBrowser()) {
+        mounted = true;
         sendHeartbeat();
         intervalHandle = setInterval(sendHeartbeat, intervalMs);
 
@@ -170,6 +176,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         }
 
         torndown = true;
+        mounted = false;
 
         if (intervalHandle !== undefined) {
             clearInterval(intervalHandle);

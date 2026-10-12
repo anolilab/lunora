@@ -402,6 +402,12 @@ the status does not survive the `runAction` hop on its own. Malformed deliveries
 (a missing provider event id) likewise surface as a `5xx` rather than a `400`,
 so every provider retries them instead of some treating a `400` as "stop".
 
+A money amount the store cannot hold — one beyond 2^53 minor units — is the other
+event that is acknowledged with `200` although nothing was written. A retry would
+fail the same way, so the result is `unstorable`, and the observer receives a
+`webhook.applied` with `reason: "unstorable"`. The amount is not in the ledger:
+recover it from the provider, and alert on that observer event.
+
 The orphan retry is **bounded to exactly one**. The row may never appear at all —
 a subscription created before the integration existed, a store reset, a
 completed-but-unpaid checkout whose create event never arrives — and an event
@@ -435,8 +441,10 @@ installed package, so a new column or index reaches your app when you upgrade
 | `payment_events`        | the append-only webhook log — inbound idempotency, audit, debugging                     |
 | `payment_usageEvents`   | the append-only metered-usage ledger `check` folds over                                 |
 
-Money is stored as `(amountMinor: bigint, currency: string)` columns; every row
-carries a `provider` discriminator so multiple providers can coexist during a
+Money is stored as `(amountMinor: number, currency: string)` columns. A number
+holds every integer up to 2^53 exactly (about 90 trillion dollars in cents), and
+the store refuses to write an amount outside that range rather than round it.
+Every row carries a `provider` discriminator so multiple providers can coexist during a
 migration. A **capture or refund is not its own table**: both fold into the
 payment's `payment_sessions` row as `capturedMinor` / `refundedMinor` plus a
 state (`refunded` / `partially_refunded`). Products, prices, checkouts and
@@ -451,42 +459,6 @@ available, so the per-table D1 opt-in an inline table had does not carry over.
   the provider. A retry that spans the deploy reaches the provider under a new
   key, so it is not deduplicated against the attempt made before it — avoid
   retrying a payment operation across the deploy.
-
-### Upgrading from inline tables
-
-Earlier versions had you declare `customers`, `events`, `paymentSessions`,
-`subscriptions` and `usageEvents` inline in `lunora/schema.ts`. The store now
-reads the `payment_*` tables only, so existing rows have to move:
-
-1. Keep the inline tables declared, add `.extend(paymentExtension)`, and deploy.
-   New writes go to the `payment_*` tables from here on.
-2. Call `migrateLegacyPaymentTables` from an `internalMutation` until it reports
-   `remaining: false`. Each call moves up to `batchSize` rows (default 100),
-   copying each one and deleting the original. A row whose natural key the
-   target already holds (the store wrote it after the deploy) is not copied
-   again, so it is safe to re-run.
-
-    ```ts
-    // lunora/payment-upgrade.ts
-    import type { LunoraDatabaseLike } from "@lunora/payment";
-    import { migrateLegacyPaymentTables } from "@lunora/payment";
-    import { internalMutation } from "./_generated/server";
-
-    // The table-name-keyed `ctx.db` view, as codegen hands it to `ctx.payments`.
-    export const movePaymentRows = internalMutation.mutation(async ({ ctx }) => migrateLegacyPaymentTables(ctx.db as unknown as LunoraDatabaseLike));
-    ```
-
-    Run it once per shard that holds payment rows, repeating until `remaining` is `false`.
-
-3. Delete the inline tables from `lunora/schema.ts` and deploy. The schema-drift
-   gate reports the removed tables as breaking; with the move done, accept it
-   with `--update-schema-baseline`.
-
-The move reads the legacy tables, so it only works while step 1's inline
-declarations are still in place. Rows it copies are written in the current
-storage form, which also heals any money column left unqueryable by the
-pre-fix `v.bigint()` storage (see
-[the re-projection backfill](/docs/concepts/migrations#the-built-in-re-projection-backfill)).
 
 ## Studio
 

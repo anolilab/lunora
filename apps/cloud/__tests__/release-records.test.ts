@@ -56,6 +56,7 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
             deployments: { findMany: findMany("deployments") },
             halts: { findMany: findMany("halts") },
             query: () => emptyQuery,
+            findFirst: () => Promise.resolve(null),
             get: (id: string) => Promise.resolve(byId.get(id) ?? { _id: id, organizationId: ORG, slug: "web" }),
             insert: () => Promise.resolve("row_1"),
             members: { findMany: findMany("members") },

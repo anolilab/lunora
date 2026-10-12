@@ -1,0 +1,100 @@
+---
+title: Legal basis and research
+description: The EU and German law behind @lunora/privacy's defaults, the sources they come from, and what is still unresolved.
+---
+
+:::caution[Not reviewed by a lawyer]
+This page is research, not legal advice. It has **not** been checked by a qualified lawyer or tax adviser. The package's defaults are engineering choices that reflect this research, and they are not a statement that they comply with the law. Before you rely on any default, have a German data protection lawyer and a tax adviser review it against your own processing and your own records. Until then, treat every legal value in the package as unverified.
+:::
+
+## How the research was done
+
+Each source below was read either from its official text or from a secondary summary, as marked. Official texts were fetched directly where possible. Where a fetch returned only a summary, the point is marked as secondary and needs checking.
+
+| Source                                                                                                                                                                                                                                             | Used for                                                                         | How it was read                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [HGB §257](https://www.gesetze-im-internet.de/hgb/__257.html)                                                                                                                                                                                      | Retention periods for commercial records                                         | Official text, fetched. The page shows no "Stand" date.                                                              |
+| [AO §147](https://www.gesetze-im-internet.de/ao_1977/__147.html)                                                                                                                                                                                   | Retention periods for tax records, and the extension while an assessment is open | Official text, fetched. No "Stand" date shown.                                                                       |
+| [BDSG §35](https://www.gesetze-im-internet.de/bdsg_2018/__35.html)                                                                                                                                                                                 | Restriction instead of erasure                                                   | Official text, fetched in part.                                                                                      |
+| [BDSG §34](https://www.gesetze-im-internet.de/bdsg_2018/__34.html)                                                                                                                                                                                 | Limits on the right of access                                                    | Official text, read via a mirror.                                                                                    |
+| [GDPR Art. 12](https://gdpr-info.eu/art-12-gdpr/)                                                                                                                                                                                                  | The one-month response period and extension                                      | Article text, read in part.                                                                                          |
+| [GDPR Art. 17](https://gdpr-text.com/de/read/article-17)                                                                                                                                                                                           | Erasure and its exceptions                                                       | Secondary summary.                                                                                                   |
+| [EDPB Guidelines 01/2022, right of access](https://www.edpb.europa.eu/our-work-tools/our-documents/guidelines/guidelines-012022-data-subject-rights-right-access_en)                                                                               | Identity verification, suspension of the clock, extensions                       | Secondary summaries. The search reported the final version as dated 17 April 2023, but the primary PDF was not read. |
+| [WP242 rev.01 on data portability](https://www.twobirds.com/en/insights/2017/global/article-29-working-party-issues-final-guidelines-on-the-right-to-data-portability)                                                                             | Whether observed data counts as "provided"                                       | Secondary summary.                                                                                                   |
+| [BEG IV (BGBl. I Nr. 323, 2024)](https://blogs.pwc.de/de/steuern-und-recht/article/249841/bmf-aenderungen-durch-das-wachstumschancengesetz-das-vierte-buerokratieentlastungsgesetz-beg-iv-und-das-jahressteuergesetz-2024-jstg-2024/)              | The shorter voucher periods and their transitional rules                         | Secondary summary of the BMF letter of 8 July 2025.                                                                  |
+| [GoBD (BMF, 28 November 2019)](https://www.otto-schmidt.de/news/steuerrecht/grundsatze-zur-ordnungsmassigen-fuhrung-und-aufbewahrung-von-buchern-aufzeichnungen-und-unterlagen-in-elektronischer-form-sowie-zum-datenzugriff-gobd-2019-11-29.html) | Electronic records, immutability, migration                                      | Secondary summary. The paragraph numbers were not confirmed.                                                         |
+
+## Findings
+
+### Response deadline (GDPR Art. 12(3))
+
+- The period is one calendar month from receipt. Extension by up to two further months is allowed only for complex or numerous requests, and the subject must be told of it, with reasons, within the first month.
+- The EDPB guidance (secondary) says the clock may be suspended while the controller asks for information needed to verify identity, provided the request is made without undue delay. The package does **not** pause the clock. That is the stricter reading, so it is the safer default, but it is a choice.
+- The package's extension is available once, and only before the first month ends.
+
+### Erasure (GDPR Art. 17) and the erasure grace
+
+- Erasure must happen "without undue delay". Art. 17(3) lists five exceptions, including legal obligations and legal claims (secondary summary).
+- **No statutory basis for the 14-day grace was found.** It is a design choice, which protects against an accidental or hurried request. A lawyer should confirm that a grace this long is "without undue delay". The alternative is to erase immediately and keep a shorter cancel path that does not hold data.
+
+### Retention periods (HGB §257, AO §147)
+
+Read from the official text:
+
+| Records                                                                   | Statute                           | Period      |
+| ------------------------------------------------------------------------- | --------------------------------- | ----------- |
+| Books, annual accounts, inventories (HGB §257(1) Nr. 1; AO §147(1) Nr. 1) | HGB §257(4) S. 1; AO §147(3) S. 1 | 10 years    |
+| Buchungsbelege, that is vouchers (HGB §257(1) Nr. 4; AO §147(1) Nr. 4)    | HGB §257(4) S. 1; AO §147(3) S. 1 | **8 years** |
+| Buchungsbelege of credit, insurance and securities institutions           | HGB §257(4) S. 2                  | 10 years    |
+| Received and sent commercial letters (HGB §257(1) Nr. 2, 3)               | HGB §257(4) S. 1                  | 6 years     |
+
+- The period runs from the end of the calendar year in which the record was created or received (secondary; verify against HGB §257(5)).
+- The AO extension applies: the period does not end while the record matters for a tax assessment that has not yet become final (AO §147(3), secondary reading).
+
+### BEG IV, the 2024 change
+
+- The Viertes Bürokratieentlastungsgesetz (BGBl. I Nr. 323, 23 October 2024) cut the voucher period from 10 to 8 years. Invoices under UStG §14b(1) S. 1 follow the same change (secondary).
+- The transitional rule is UStG §27(40) (secondary): the shorter period also applies to records already issued or received, if the period had not expired by 31 December 2024.
+- The secondary sources report a one-year delay for records of certain regulated institutions, linked to the Cum-Ex investigations. That is not confirmed from the statute text.
+
+### What this means for the package's defaults
+
+- **The default of 10 years for every voucher is longer than the law requires** for a business that is not a regulated institution. Keeping data longer than necessary conflicts with GDPR Art. 5(1)(e) (storage limitation). This is the most important open question. The package keeps 10 years because that was decided on 2026-10-11 as the conservative value, but the statute does not support that as a general rule. **Options:** both decisions are now options, and both keep the current values as their defaults.
+
+- `germany({ voucherYears: 8 | 10 })` sets the voucher period. The default is 10. Use 8 for a non-regulated business, as the statute sets it. Regulated institutions keep 10 either way.
+- `eu({ erasureGraceDays })` sets the erasure grace. The default is 14 days, and the range is 0 to 14 whole days.
+
+The defaults stay as decided until a maintainer or a lawyer changes them.
+
+- The package follows the BEG IV transitional rule only as far as its note says. A lawyer or tax adviser must confirm it.
+
+### Restriction instead of erasure (BDSG §35)
+
+- BDSG §35(1) applies only to **non-automated** processing. An application database is automated, so §35(1) does not apply to it.
+- BDSG §35(3) applies where contractual or statutory retention periods block erasure: processing is restricted instead. The package's archive table is the place to apply that restriction.
+
+### Limits on the right of access (BDSG §34)
+
+- The exception is cumulative. Retention duty alone is not enough: the access must also require disproportionate effort, and processing for other purposes must be excluded by technical and organisational measures (BDSG §34(1) Nr. 2, read via a mirror).
+- The exception does not reach contractual retention agreements, only statutory or statutory-body rules.
+- The package does not implement BDSG §34. Whether its exceptions are compatible with the GDPR at all is debated; get an opinion before relying on them.
+
+### Observed data is "provided" (Art. 20)
+
+- The package counts observed data as provided, so it falls under Art. 20 when it was processed on consent or contract. The secondary summaries of WP242 rev.01 support this reading, and inferred data is excluded.
+
+### Electronic records and migration (GoBD)
+
+- The GoBD (2019) requires immutability, logging of changes (AO §146(4)), and machine readability. The package's archive table moves retained rows out of the live tables. Whether that is compatible with the GoBD must be checked, because a move could be treated as a change to the record.
+- The paragraph numbers and the 2024 amendment were not confirmed.
+
+## Open questions for a lawyer or tax adviser
+
+1. The voucher period: 8 years for non-regulated businesses, or 10 as decided? (Art. 5(1)(e), HGB §257(4), AO §147(3), BEG IV.)
+2. Is a 14-day erasure grace "without undue delay" under Art. 17(1)? It is set by `eu({ erasureGraceDays })`. Is there a better design?
+3. Does the strict one-month clock (no pause for identity verification) match what the controller wants, given the EDPB's secondary reading?
+4. Is moving retained rows into an archive table compatible with the GoBD, and what logging does it need?
+5. Are backups and point-in-time restores a problem for the erasure promise, and how long may they keep erased data?
+6. Does the Art. 20 "provided" reading match the processing the app actually does?
+7. Which app records count as vouchers, correspondence, or other tax records? The package never decides that; the app must bind each table.
+8. Does the BEG IV transitional rule and its Cum-Ex delay for regulated institutions apply to this business?

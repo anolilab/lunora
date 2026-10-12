@@ -157,6 +157,7 @@ export type {
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,
+    PatchIfResult,
     QueryCtx,
     RankIndexDefinition,
     RankSortKey,

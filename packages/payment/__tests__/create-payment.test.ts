@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PaymentAdapter } from "../src/adapter";
-import type { WebhookOutcome } from "../src/create-payment";
+import type { CreatePaymentOptions, WebhookOutcome } from "../src/create-payment";
 import { createPayment, webhookResponse } from "../src/create-payment";
+import { LunoraPaymentError } from "../src/errors";
 import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
@@ -81,7 +82,7 @@ describe("createPayment", () => {
     it("derives an outbound idempotency key for checkout", async () => {
         expect.assertions(1);
 
-        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store: new MemoryPaymentStore() });
 
         const result = await payment.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -108,7 +109,7 @@ describe("createPayment", () => {
                     return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
                 },
             });
-            const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+            const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
 
             await payment.createCheckout({ cancelUrl, mode: "payment", priceId: "price_1", referenceId: "user_1", successUrl });
 
@@ -151,7 +152,7 @@ describe("createPayment", () => {
                     return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
                 },
             });
-            const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+            const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
 
             await payment.createCheckout({ ...base, ...overrides });
 
@@ -216,6 +217,108 @@ describe("createPayment", () => {
                 successUrl: "https://x/ok",
             }),
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("denies checkout for a foreign reference and never reaches the provider", async () => {
+        expect.assertions(2);
+
+        let providerCalls = 0;
+        const adapter = fakeAdapter({
+            createCheckout: async () => {
+                providerCalls += 1;
+
+                return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: new MemoryPaymentStore() });
+
+        await expect(
+            payment.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "payment",
+                priceId: "price_1",
+                referenceId: "user_2",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+        expect(providerCalls).toBe(0);
+    });
+
+    it("denies capture and refund of a session owned by another reference, without reaching the provider", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({ ...paymentSession("user_2"), capturedAmount: money(1000, "USD"), state: "captured" });
+
+        let providerCalls = 0;
+        const adapter = fakeAdapter({
+            capturePayment: async () => {
+                providerCalls += 1;
+
+                return paymentSession("user_2");
+            },
+            refundPayment: async () => {
+                providerCalls += 1;
+
+                return paymentSession("user_2");
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        // A foreign session collapses to NOT_FOUND, the same as a missing one (no existence oracle).
+        await expect(payment.capturePayment({ sessionId: "pi_1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(payment.refundPayment({ sessionId: "pi_1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        expect(providerCalls).toBe(0);
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ referenceId: "user_2", refundedAmount: money(0, "USD") });
+    });
+
+    it("denies checkout when the authorizer throws", async () => {
+        expect.assertions(2);
+
+        let providerCalls = 0;
+        const adapter = fakeAdapter({
+            createCheckout: async () => {
+                providerCalls += 1;
+
+                return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
+            },
+        });
+        const payment = createPayment({
+            adapter,
+            authorize: () => {
+                throw new Error("session lookup failed");
+            },
+            store: new MemoryPaymentStore(),
+        });
+
+        await expect(
+            payment.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "payment",
+                priceId: "price_1",
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+        expect(providerCalls).toBe(0);
+    });
+
+    it("rejects an untyped caller that omits authorize at construction, so the factory cannot default open", () => {
+        expect.assertions(2);
+
+        // Untyped JavaScript reaches the factory without the required option. Construction fails with a
+        // configuration error, so no facade exists to reach the provider.
+        let caught: unknown;
+
+        try {
+            createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() } as unknown as CreatePaymentOptions);
+        } catch (error) {
+            caught = error;
+        }
+
+        expect(caught).toBeInstanceOf(LunoraPaymentError);
+        expect(caught).toMatchObject({ code: "CONFIG_INVALID" });
     });
 
     it("ignores a caller-supplied customerId, forwarding the store's customer for the reference", async () => {
@@ -349,7 +452,7 @@ describe("createPayment", () => {
             },
             identifier: "creem",
         });
-        const payment = createPayment({ adapter, store });
+        const payment = createPayment({ adapter, authorize: () => true, store });
 
         const updated = await payment.cancelSubscription("sub_1");
 
@@ -891,7 +994,7 @@ describe("createPayment", () => {
     it("rejects a refund on a session neither the store nor the provider knows", async () => {
         expect.assertions(1);
 
-        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store: new MemoryPaymentStore() });
 
         await expect(payment.refundPayment({ sessionId: "pi_absent" })).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
@@ -1033,7 +1136,7 @@ describe("createPayment", () => {
             type: "payment.captured",
         };
         // The real body is opaque provider JSON; the adapter normalizes it into the action.
-        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), store });
+        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), authorize: () => true, store });
 
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
@@ -1056,7 +1159,7 @@ describe("createPayment", () => {
             subscriptionId: "sub_absent",
             type: "subscription.updated",
         };
-        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), authorize: () => true, store: new MemoryPaymentStore() });
 
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
@@ -1085,7 +1188,11 @@ describe("createPayment", () => {
 
         /** `processWebhook`, exactly as docs / registry / example declare it. */
         const processWebhook = async (action: WebhookAction): Promise<WebhookOutcome> => {
-            const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), store: new MemoryPaymentStore() });
+            const payment = createPayment({
+                adapter: fakeAdapter({ parseWebhook: async () => action }),
+                authorize: () => true,
+                store: new MemoryPaymentStore(),
+            });
             const response = await payment.handleWebhook(new Request("https://internal/payment/webhook", { body: "{}", method: "POST" }));
             const result: { applied?: boolean } = await response.json();
 
@@ -1107,7 +1214,7 @@ describe("createPayment", () => {
         expect.assertions(2);
 
         const action: WebhookAction = { eventId: "evt_noop", provider: "stripe", type: "unhandled" };
-        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter({ parseWebhook: async () => action }), authorize: () => true, store: new MemoryPaymentStore() });
 
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
@@ -1120,12 +1227,10 @@ describe("createPayment", () => {
 
         const adapter = fakeAdapter({
             parseWebhook: async () => {
-                const { LunoraPaymentError } = await import("../src/errors");
-
                 throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "bad signature");
             },
         });
-        const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
 
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
@@ -1142,12 +1247,10 @@ describe("createPayment", () => {
 
         const adapter = fakeAdapter({
             parseWebhook: async () => {
-                const { LunoraPaymentError } = await import("../src/errors");
-
                 throw new LunoraPaymentError("PROVIDER_ERROR", "upstream provider timed out");
             },
         });
-        const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
 
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
@@ -1171,12 +1274,10 @@ describe("createPayment", () => {
         // still travels and the message does not.
         const adapter = fakeAdapter({
             parseWebhook: async () => {
-                const { LunoraPaymentError } = await import("../src/errors");
-
                 throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
             },
         });
-        const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
 
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
@@ -1192,7 +1293,7 @@ describe("createPayment", () => {
                 throw new Error("driver error: connection reset");
             },
         });
-        const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
 
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
@@ -1211,7 +1312,7 @@ describe("createPayment — attach / check / track", () => {
     it("attach defaults mode to subscription", async () => {
         expect.assertions(1);
 
-        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store: new MemoryPaymentStore() });
 
         const result = await payment.attach({ cancelUrl: "https://x/cancel", priceId: "price_1", referenceId: "user_1", successUrl: "https://x/ok" });
 
@@ -1221,7 +1322,7 @@ describe("createPayment — attach / check / track", () => {
     it("attach honors an explicit one-time payment mode", async () => {
         expect.assertions(1);
 
-        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store: new MemoryPaymentStore() });
 
         const result = await payment.attach({
             cancelUrl: "https://x/cancel",
@@ -1237,7 +1338,7 @@ describe("createPayment — attach / check / track", () => {
     it("check throws when entitlements are not configured", async () => {
         expect.assertions(1);
 
-        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store: new MemoryPaymentStore() });
 
         await expect(payment.check({ featureId: "export", referenceId: "user_1" })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     });
@@ -1249,7 +1350,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements, store });
 
         await expect(payment.check({ featureId: "export", referenceId: "user_1" })).resolves.toEqual({ allowed: true, unlimited: true });
     });
@@ -1257,7 +1358,7 @@ describe("createPayment — attach / check / track", () => {
     it("check denies a feature no active plan grants", async () => {
         expect.assertions(1);
 
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements, store: new MemoryPaymentStore() });
 
         await expect(payment.check({ featureId: "export", referenceId: "user_1" })).resolves.toEqual({ allowed: false, unlimited: false });
     });
@@ -1269,7 +1370,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements, store });
 
         await payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 30, referenceId: "user_1" });
 
@@ -1290,7 +1391,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements, store });
 
         // A negative delta lands in the append-only ledger, drives the summed
         // period usage below zero, and `balance = limit - used` then hands the
@@ -1319,7 +1420,7 @@ describe("createPayment — attach / check / track", () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
-        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: async () => undefined }), store });
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: async () => undefined }), authorize: () => true, store });
 
         await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
             recorded: true,
@@ -1343,6 +1444,7 @@ describe("createPayment — attach / check / track", () => {
                     throw new Error("provider down");
                 },
             }),
+            authorize: () => true,
             observability: (event) => events.push(event.type),
             store,
         });
@@ -1359,7 +1461,7 @@ describe("createPayment — attach / check / track", () => {
         expect.assertions(1);
 
         const store = new MemoryPaymentStore();
-        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), store });
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), authorize: () => true, store });
 
         await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
             recorded: true,
@@ -1374,7 +1476,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), authorize: () => true, entitlements, store });
 
         await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
         await payment.track({ featureId: "api_calls", mode: "set", quantity: 50, referenceId: "user_1" });
@@ -1402,7 +1504,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), authorize: () => true, entitlements, store });
 
         await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
 
@@ -1435,7 +1537,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), authorize: () => true, entitlements, store });
 
         await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
         await payment.track({ featureId: "api_calls", mode: "set", quantity: 5, referenceId: "user_1" });
@@ -1467,6 +1569,7 @@ describe("createPayment — attach / check / track", () => {
                     forwarded.push(input.quantity);
                 },
             }),
+            authorize: () => true,
             entitlements,
             store,
         });
@@ -1496,6 +1599,7 @@ describe("createPayment — attach / check / track", () => {
                     reported.push(input.quantity);
                 },
             }),
+            authorize: () => true,
             store,
         });
 
@@ -1514,7 +1618,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter(), store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store });
 
         await expect(payment.check({ priceId: "price_1", referenceId: "user_1" })).resolves.toEqual({ allowed: true, unlimited: false });
         await expect(payment.check({ priceId: "price_absent", referenceId: "user_1" })).resolves.toEqual({ allowed: false, unlimited: false });
@@ -1523,7 +1627,7 @@ describe("createPayment — attach / check / track", () => {
     it("check throws when given neither a featureId nor a priceId", async () => {
         expect.assertions(1);
 
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store: new MemoryPaymentStore() });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements, store: new MemoryPaymentStore() });
 
         await expect(payment.check({ referenceId: "user_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
@@ -1535,7 +1639,7 @@ describe("createPayment — attach / check / track", () => {
 
         await store.upsertSubscription(activeSubscription("user_1"));
 
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements, store });
 
         await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
 
@@ -1555,7 +1659,7 @@ describe("createPayment — attach / check / track", () => {
 
         const sumUsage = vi.spyOn(store, "sumUsage");
         const sumUsageByFeature = vi.spyOn(store, "sumUsageByFeature");
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements: manyMetered, store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements: manyMetered, store });
 
         const balances = await payment.listBalances("user_1");
 
@@ -1578,7 +1682,7 @@ describe("createPayment — bug-hunt regressions", () => {
 
         await store.upsertSubscription({ ...subscription("user_1", "active"), currentPeriodStart: 1000 });
 
-        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), authorize: () => true, entitlements, store });
 
         await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
         // An add-on bought later — it grants nothing metered, and its period starts after the usage.
@@ -1600,7 +1704,7 @@ describe("createPayment — bug-hunt regressions", () => {
 
         await store.upsertSubscription({ ...subscription("user_1", "active"), currentPeriodStart: 1000 });
 
-        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, entitlements, store });
 
         await payment.track({ featureId: "api_calls", quantity: 150, referenceId: "user_1" });
 
@@ -1613,7 +1717,7 @@ describe("createPayment — bug-hunt regressions", () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
-        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), store });
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), authorize: () => true, store });
 
         await expect(payment.track({ featureId: "api_calls", idempotencyKey: "k1", quantity: 5, referenceId: "user_a" })).resolves.toMatchObject({
             recorded: true,
@@ -1636,6 +1740,7 @@ describe("createPayment — bug-hunt regressions", () => {
                     return { id: "cs_1", provider: "stripe", url: "https://pay.test" };
                 },
             }),
+            authorize: () => true,
             store: new MemoryPaymentStore(),
         });
         const checkout = { idempotencyKey: "k1", mode: "payment", priceId: "price_1", successUrl: "https://x/ok" } as const;
@@ -1756,7 +1861,7 @@ describe("createPayment — bug-hunt regressions", () => {
         expect.assertions(2);
 
         const store = new MemoryPaymentStore();
-        const payment = createPayment({ adapter: fakeAdapter(), store });
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => true, store });
         const deliver = async (action: Partial<WebhookAction>): Promise<Response> =>
             payment.handleWebhook(
                 new Request("https://x/webhook", {

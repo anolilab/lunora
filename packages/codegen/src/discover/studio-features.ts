@@ -112,6 +112,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
         notifications: usage.notify || signals.dependencies.has("@lunora/notify"),
         payments: usage.payments || signals.hasPaymentTables,
+        privacy: signals.dependencies.has("@lunora/privacy"),
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@lunora/storage"),

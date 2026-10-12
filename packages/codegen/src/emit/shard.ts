@@ -228,6 +228,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         mail: false,
         notifications: false,
         payments: false,
+        privacy: false,
         queues: false,
         scheduler: false,
         storage: false,

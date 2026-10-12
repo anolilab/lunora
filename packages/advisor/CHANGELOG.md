@@ -1,3 +1,38 @@
+## @lunora/advisor [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.208...@lunora/advisor@1.0.0-alpha.209) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/server:** upgraded to 1.0.0-alpha.193
+* **@lunora/values:** upgraded to 1.0.0-alpha.63
+
+## @lunora/advisor [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.207...@lunora/advisor@1.0.0-alpha.208) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.192
+
+## @lunora/advisor [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.206...@lunora/advisor@1.0.0-alpha.207) (2026-10-12)
+
+### Features
+
+* **advisor:** flag sweeps that re-read the same rows ([#1128](https://github.com/anolilab/lunora/issues/1128)) ([74d1afe](https://github.com/anolilab/lunora/commit/74d1afe69890497132a889d0a28f0d805c067d59))
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.191
+
 ## @lunora/advisor [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.205...@lunora/advisor@1.0.0-alpha.206) (2026-10-10)
 
 ### Features

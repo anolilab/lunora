@@ -112,6 +112,17 @@ describe("ssr platform gating", () => {
         expect(sessionId).toBe("sess-1");
     });
 
+    it("presence setData sends no heartbeat on the server platform", () => {
+        const fake = createFakeClient();
+
+        const options = { heartbeat: heartbeatRef, listPresent: listPresentRef, sessionId: "sess-1" };
+        const { setData } = runInInjectionContext(makeInjector(fake, "server"), () => presence("room:1", options));
+
+        setData({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(0);
+    });
+
     it("flag/flags open no subscription on the server platform and hold their defaults", () => {
         const fake = createFakeClient();
 

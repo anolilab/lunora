@@ -494,6 +494,13 @@ catalogs:
     stripe:
       specifier: 23.0.0
       version: 23.0.0
+  privacy:
+    '@cantoo/pdf-lib':
+      specifier: 2.11.1
+      version: 2.11.1
+    fflate:
+      specifier: 0.8.3
+      version: 0.8.3
   prod:
     '@anolilab/commitlint-config':
       specifier: 10.1.3
@@ -621,6 +628,9 @@ catalogs:
     jiti:
       specifier: ^2.7.0
       version: 2.7.0
+    pprof-format:
+      specifier: 2.3.1
+      version: 2.3.1
     quicktype-core:
       specifier: ^26.0.0
       version: 26.0.0
@@ -2377,6 +2387,67 @@ importers:
       vite:
         specifier: catalog:vite
         version: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
+
+  examples/privacy:
+    dependencies:
+      '@lunora/privacy':
+        specifier: workspace:*
+        version: link:../../packages/privacy
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
+      '@lunora/vite':
+        specifier: workspace:*
+        version: link:../../packages/vite
+      '@lunora/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
+      lunorash:
+        specifier: workspace:*
+        version: link:../../packages/lunora
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
+    devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: catalog:cloudflare
+        version: 1.4.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@types/react':
+        specifier: catalog:frontend
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.3.0(@types/react@19.3.0)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: catalog:vite
+        version: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
@@ -4368,6 +4439,9 @@ importers:
       '@lunora/queue':
         specifier: workspace:*
         version: link:../queue
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
@@ -4383,6 +4457,9 @@ importers:
       cron-parser:
         specifier: catalog:tooling
         version: 5.10.1
+      pprof-format:
+        specifier: catalog:tooling
+        version: 2.3.1
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -4393,9 +4470,6 @@ importers:
       '@lunora/platform-cloudflare':
         specifier: workspace:*
         version: link:../platform-cloudflare
-      '@lunora/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -4426,6 +4500,40 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+
+  packages/privacy:
+    dependencies:
+      '@cantoo/pdf-lib':
+        specifier: catalog:privacy
+        version: 2.11.1(html-entities@2.6.0)
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../server
+      fflate:
+        specifier: catalog:privacy
+        version: 0.8.3
+    devDependencies:
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.1.0(362c6d1d7e7728cf868e47db0f47e4d6)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/queue:
     dependencies:
@@ -4479,12 +4587,24 @@ importers:
         specifier: workspace:*
         version: link:../errors
     devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: catalog:cloudflare
+        version: 1.4.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(vitest@4.1.11)
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@lunora/values':
         specifier: workspace:*
         version: link:../values
@@ -4509,6 +4629,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
 
   packages/react:
     dependencies:
@@ -6997,6 +7120,11 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
+
+  '@cantoo/pdf-lib@2.11.1':
+    resolution: {integrity: sha512-lYuRJFfXgoP8WVE8HYSeoLfDcnSXmjMLmdZS7YvmYHngbcZfiqDOruHrZBqjYizkrNa4ad1yW4WCrPYyb26T3Q==}
+    peerDependencies:
+      html-entities: '>=2.3.2'
 
   '@capsizecss/unpack@4.0.0':
     resolution: {integrity: sha512-VERIM64vtTP1C4mxQ5thVT9fK0apjPFobqybMtA1UdUujWka24ERHbRHFGmpbbhp73MhV+KSsHQH9C6uOTdEQA==}
@@ -17176,6 +17304,10 @@ packages:
   csv-parse@7.0.3:
     resolution: {integrity: sha512-YFd3QM/yo17vH91L1IOZuvl09zM0zEEtdfTcOCKWcMdM++MNaQSyp09slXyFCLaPXvHstQFx/xC8myiFHSMUvw==}
 
+  culori@4.0.2:
+    resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
   cz-conventional-changelog@3.3.0:
     resolution: {integrity: sha512-U466fIzU5U22eES5lTNiNbZ+d8dfcHcssH4o7QsdWaCcRs/feIPCxKYSWkYBNs5mny7MvEfwpTLWjvbm94hecw==}
     engines: {node: '>= 10'}
@@ -21256,6 +21388,9 @@ packages:
     resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
     hasBin: true
 
+  node-html-better-parser@1.5.9:
+    resolution: {integrity: sha512-z1I5UINMezJXYL9cH3h0a9KBth2G978gSLlfkpQ+CQzzVHVQy9gpARgm9eDsz1O4gn1HtgUqjdAIYxKFZm6uHQ==}
+
   node-int64@0.4.0:
     resolution: {integrity: sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw==}
 
@@ -22224,6 +22359,9 @@ packages:
   powershell-utils@0.1.0:
     resolution: {integrity: sha512-dM0jVuXJPsDN6DvRpea484tCUaMiXWjuCn++HGTqUWzGDjv5tZkEZldAJ/UMlqRYGFrD/etByo4/xOuC/snX2A==}
     engines: {node: '>=20'}
+
+  pprof-format@2.3.1:
+    resolution: {integrity: sha512-y51Z83qG2vEQBACPu6lkGFREVkHwQaCaNDdSFEMLIqSo3bmpADsbP6J3F2SSk7tYB741oTQ9Kt5YAdQsmiCRkA==}
 
   preact@10.29.7:
     resolution: {integrity: sha512-DCHYrK/B10yUD3ZjLfhZ3WIE/9Vf9VFUODcRE2dRomTYDpJk6z6L9wecSfhfE6M9ZTHUdyQkoC46arIDhEV84Q==}
@@ -26809,6 +26947,14 @@ snapshots:
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
+
+  '@cantoo/pdf-lib@2.11.1(html-entities@2.6.0)':
+    dependencies:
+      culori: 4.0.2
+      fflate: 0.8.3
+      html-entities: 2.6.0
+      node-html-better-parser: 1.5.9
+      tslib: 2.8.1
 
   '@capsizecss/unpack@4.0.0':
     dependencies:
@@ -38798,6 +38944,8 @@ snapshots:
 
   csv-parse@7.0.3: {}
 
+  culori@4.0.2: {}
+
   cz-conventional-changelog@3.3.0(@types/node@26.6.4)(typescript@6.0.3):
     dependencies:
       chalk: 2.4.2
@@ -43653,6 +43801,10 @@ snapshots:
 
   node-gyp-build@4.8.4: {}
 
+  node-html-better-parser@1.5.9:
+    dependencies:
+      html-entities: 2.6.0
+
   node-int64@0.4.0: {}
 
   node-mock-http@1.0.4: {}
@@ -44741,6 +44893,8 @@ snapshots:
       - preact-render-to-string
 
   powershell-utils@0.1.0: {}
+
+  pprof-format@2.3.1: {}
 
   preact@10.29.7: {}
 

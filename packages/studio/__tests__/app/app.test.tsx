@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StudioApp } from "../../src/app/app";
+import type { PrivacyRequestsSource } from "../../src/features/privacy/privacy-requests-source";
 import { createMockClient } from "../mock-client";
 
 const TOKEN_KEY = "lunora-studio-admin-token";
@@ -137,6 +138,25 @@ describe("studioApp — studio prop forwarding", () => {
         // …and the client's default endpoint is never consulted once a host
         // supplied its own loader.
         expect(mock.getCronJobs).not.toHaveBeenCalled();
+    });
+
+    it("forwards privacyRequests to the Privacy requests page", async () => {
+        expect.assertions(2);
+
+        const listOpenPrivacyRequests = vi.fn<PrivacyRequestsSource["listOpenPrivacyRequests"]>(async () => []);
+        const retryPrivacyRequest = vi.fn<PrivacyRequestsSource["retryPrivacyRequest"]>(async () => undefined);
+        const mock = createMockClient({
+            query: (): unknown => {
+                return { columns: [], rows: [], total: 0 };
+            },
+        });
+
+        render(<StudioApp adminToken={DEV_TOKEN} client={mock.asClient} studio={{ privacyRequests: { listOpenPrivacyRequests, retryPrivacyRequest } }} />);
+
+        fireEvent.click(await screen.findByTestId("dash-tab-privacyRequests"));
+
+        await expect(screen.findByTestId("privacy-requests-empty")).resolves.toBeDefined();
+        expect(listOpenPrivacyRequests).toHaveBeenCalledWith();
     });
 });
 

@@ -201,22 +201,27 @@ export default defineSchema({
 }).extend(paymentExtension);
 ```
 
-If the old tables hold data, keep them declared and move the rows with
-`migrateLegacyPaymentTables` from an internal mutation. It moves up to
-`batchSize` rows (default 100) per call; call it until `remaining` is `false`,
-then delete the old tables from the schema:
+The store does not read the old tables, and nothing moves their rows for you.
+Copy any rows you need into the `payment_*` tables, then delete the old tables
+from the schema.
 
-```ts
-// lunora/payments.ts
-import { migrateLegacyPaymentTables } from "@lunora/payment";
+### `@lunora/payment`: money columns are numbers
 
-import { internalMutation } from "./_generated/server";
+`amountMinor`, `capturedMinor` and `refundedMinor` on `payment_sessions` are
+`v.number()` instead of `v.bigint()`, so the tables can also be declared
+`.global()`. `Money.minorUnits` is still a `bigint`; the store converts at the
+row and throws a `VALIDATION_ERROR` for an amount outside ±(2^53 − 1) instead of
+rounding it.
 
-export const movePaymentTables = internalMutation({
-    args: {},
-    handler: async (ctx) => migrateLegacyPaymentTables(ctx.db),
-});
-```
+**Migration:** a deploy that changes these columns from `bigint` to `number` is
+blocked by the schema-drift check until one of two things is true: a
+`payment_sessions` migration covers the change, or the schema baseline is
+re-blessed with `--update-schema-baseline`. Rows written before the upgrade still
+hold `bigint` values. The store reads them, but code that reads the columns
+directly gets a `number` for new rows and a `bigint` for old ones, so arithmetic
+that mixes the two throws. `where` filters on these columns do not match the old
+rows either. Convert or backfill those rows before you rely on the columns outside
+the store.
 
 ### `@lunora/codegen`: `api.*` nests by folder
 

@@ -77,6 +77,7 @@ const storeWith = (tables: Record<string, Row[]>, auth: { userId: string }): Sto
 
             return Promise.resolve();
         },
+        findFirst: () => Promise.resolve(null),
         get: (id: string) => Promise.resolve(locate(id)?.row ? { ...locate(id)?.row } : null),
         insert: (table: string, row: Record<string, unknown>) => {
             counter += 1;

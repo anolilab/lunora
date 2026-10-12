@@ -46,6 +46,7 @@ const makeCtx = (tables: Record<string, Row[]>): { ctx: MutationCtx; deleted: st
             deployments: facade("deployments"),
             domains: facade("domains"),
             halts: facade("halts"),
+            findFirst: () => Promise.resolve(null),
             get: (id: string) => Promise.resolve({ _id: id, organizationId: ORG }),
             insert: () => Promise.resolve("row_1"),
             members: facade("members"),

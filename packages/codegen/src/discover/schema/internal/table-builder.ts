@@ -60,6 +60,7 @@ const RESERVED_TABLE_NAMES = new Set([
     "lookupById",
     "normalizeId",
     "patch",
+    "patchIf",
     "patchMany",
     "patchWhere",
     "query",

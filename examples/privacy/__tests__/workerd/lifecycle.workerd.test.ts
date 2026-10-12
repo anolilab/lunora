@@ -1,0 +1,215 @@
+/**
+ * The request lifecycle over a real Durable Object's SQLite.
+ *
+ * The node suite (`__tests__/privacy.test.ts`) runs these ports on `node:sqlite`, which does not
+ * model workerd's SQLite. This suite runs the same lifecycle — open an export, run it, download it;
+ * open an erasure, run it, check the subject's rows are gone and the other subject's remain; cancel
+ * during the grace — with the app's own functions and workflow handlers, over the Durable Object's
+ * storage.
+ *
+ * Each test gets a fresh Durable Object, so its SQLite starts empty.
+ */
+import type { PrivacyIdentity } from "@lunora/privacy";
+import { dispatchPort } from "@lunora/privacy/workflow";
+import { createInProcessRuntime, resolveInProcessIdentity } from "@lunora/server/in-process";
+import type { WorkflowRunContext } from "@lunora/workflow";
+import { env, runInDurableObject } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+
+import type { MutationCtx } from "../../lunora/_generated/server.js";
+import { privacyConfig, privacyFor, privacyWorkflows } from "../../lunora/privacy";
+import { localPorts } from "../../lunora/privacy-ports";
+import schema from "../../lunora/schema";
+import type { RunHooks } from "../workflow-context";
+import { workflowContext } from "../workflow-context";
+
+type Context = WorkflowRunContext<{ requestId: string }>;
+type Runtime = ReturnType<typeof createInProcessRuntime>;
+type Database = ReturnType<Runtime["createWriters"]>["database"];
+
+const DOWNLOAD_PATH = /\/privacy\/files\//u;
+const SUBJECT = "u1";
+const OTHER = "u2";
+
+const identity = (subjectId: string): PrivacyIdentity => {
+    return { sessionAgeMs: 60_000, subjectId };
+};
+
+/**
+ * The app's mutation context over the shard's writer. The ports read `ctx.db` only; the
+ * workflows are started by the test, as the node suite does.
+ */
+const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx;
+
+/**
+ * A workflow context over the shard. `run` does what the internal `privacyPort` mutation does:
+ * the package's dispatcher over the app's local ports.
+ */
+const contextFor = (db: Database, requestId: string, hooks: RunHooks = {}): Context =>
+    workflowContext(
+        {
+            env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+            params: { requestId },
+            run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
+        },
+        hooks,
+    );
+
+/** Runs `body` inside a fresh Durable Object, with the app's runtime built over its SQLite. */
+const withShard = async <T>(body: (db: Database) => Promise<T>): Promise<T> => {
+    const stub = env.PRIVACY.get(env.PRIVACY.newUniqueId());
+
+    return runInDurableObject(stub, async (_instance, state) => {
+        // `createInProcessRuntime` runs the schema's migrations, as the shard does when it starts.
+        const runtime = createInProcessRuntime(schema, {
+            sql: state.storage.sql as unknown as Parameters<typeof createInProcessRuntime>[1]["sql"],
+        });
+
+        return body(runtime.createWriters(resolveInProcessIdentity(null)).database);
+    });
+};
+
+const seed = async (db: Database): Promise<void> => {
+    await db.insert("tasks", { createdAt: 1, done: false, title: "book flights", userId: SUBJECT });
+    await db.insert("tasks", { createdAt: 2, done: false, title: "renew passport", userId: SUBJECT });
+    await db.insert("tasks", { createdAt: 3, done: false, title: "not yours", userId: OTHER });
+};
+
+/** The task titles the shard holds for one user, sorted. */
+const tasksOf = async (db: Database, userId: string): Promise<string[]> => {
+    const rows = await db.query("tasks").collect();
+
+    return rows
+        .filter((row) => row.userId === userId)
+        .map((row) => String(row.title))
+        .toSorted((a, b) => a.localeCompare(b));
+};
+
+const requestRow = async (db: Database, requestId: string): Promise<undefined | { status: string }> => {
+    const rows = await db.query("privacy_requests").collect();
+
+    return rows.find((row) => row.requestId === requestId) as undefined | { status: string };
+};
+
+describe("privacy example lifecycle (workerd)", () => {
+    it("exports the subject's rows, stores the archive, and links a download", async () => {
+        expect.assertions(6);
+
+        await withShard(async (db) => {
+            await seed(db);
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
+
+            await privacyWorkflows.exportHandler(contextFor(db, request.id));
+
+            const rows = await db.query("exportFiles").collect();
+            const part = rows.find((row) => row.requestId === request.id && row.name === "parts/tasks.json");
+            const stored = JSON.parse((part?.body as string | undefined) ?? "{}") as { tables: { tasks: { title: string }[] } };
+
+            expect(stored.tables.tasks.map((row) => row.title).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["book flights", "renew passport"]);
+
+            const archive = rows.find((row) => row.requestId === request.id && row.name === "export.zip");
+
+            expect(archive?.encoding).toBe("base64");
+
+            const ready = await requestRow(db, request.id);
+
+            expect(ready?.status).toBe("ready");
+
+            await expect(privacyFor(appCtx(db), identity(SUBJECT)).downloadUrl({ requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+            await expect(privacyFor(appCtx(db), identity(OTHER)).downloadUrl({ requestId: request.id })).rejects.toMatchObject({
+                code: "NOT_FOUND",
+            });
+            await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
+        });
+    });
+
+    it("erases the subject's rows through the erasure workflow, and only theirs", async () => {
+        expect.assertions(4);
+
+        await withShard(async (db) => {
+            await seed(db);
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
+
+            await expect(tasksOf(db, SUBJECT)).resolves.toHaveLength(2);
+
+            await privacyWorkflows.erasureHandler(contextFor(db, request.id));
+
+            await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
+            await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
+
+            const completed = await requestRow(db, request.id);
+
+            expect(completed?.status).toBe("completed");
+        });
+    });
+
+    it("leaves the rows alone when the subject cancels during the grace", async () => {
+        expect.assertions(5);
+
+        await withShard(async (db) => {
+            await seed(db);
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
+            const opened = await requestRow(db, request.id);
+
+            expect(opened?.status).toBe("grace");
+
+            // The workflow loads the request while it is still in its grace, and the subject cancels
+            // while it sleeps, so the run sleeps the grace out and its start step finds the cancel.
+            const steps: string[] = [];
+
+            await privacyWorkflows.erasureHandler(
+                contextFor(db, request.id, {
+                    duringSleep: async () => {
+                        await privacyFor(appCtx(db), identity(SUBJECT)).cancelRequest({ requestId: request.id });
+                    },
+                    steps,
+                }),
+            );
+
+            expect(steps).toStrictEqual(["load", "sleep:grace", "start"]);
+            await expect(tasksOf(db, SUBJECT)).resolves.toHaveLength(2);
+            await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
+
+            const cancelled = await requestRow(db, request.id);
+
+            expect(cancelled?.status).toBe("cancelled");
+        });
+    });
+
+    it("erases a restored subject again, because the tombstones live outside the shard", async () => {
+        expect.assertions(4);
+
+        // Erase the subject in the live shard. The workflow writes the tombstone to its own Durable Object.
+        await withShard(async (db) => {
+            await seed(db);
+
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
+
+            await privacyWorkflows.erasureHandler(contextFor(db, request.id));
+
+            await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
+        });
+
+        // A point-in-time restore brings back the shard as it was before the erasure: a fresh
+        // shard with the subject's rows, and none of the live shard's tables. The tombstone store is untouched.
+        await withShard(async (db) => {
+            await seed(db);
+
+            // The restore workflow the operator's `restorePrivacyErasures` starts, with the ids the restored shard holds.
+            const reerased = await privacyWorkflows.restoreHandler(
+                workflowContext({
+                    env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES },
+                    params: { restoredSubjectIds: [SUBJECT, OTHER] },
+                    run: async (_reference, args) => dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload),
+                }),
+            );
+
+            expect(reerased).toStrictEqual([SUBJECT]);
+            await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
+            await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
+        });
+    });
+});

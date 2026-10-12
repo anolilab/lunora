@@ -1,3 +1,63 @@
+## @lunora/platform-node [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.131...@lunora/platform-node@1.0.0-alpha.132) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.172
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/queue:** upgraded to 1.0.0-alpha.100
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.192
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.173
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.75
+* **@lunora/do:** upgraded to 1.0.0-alpha.205
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.82
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+* **@lunora/storage:** upgraded to 1.0.0-alpha.127
+
+## @lunora/platform-node [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.130...@lunora/platform-node@1.0.0-alpha.131) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.171
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/queue:** upgraded to 1.0.0-alpha.99
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.191
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.172
+* **@lunora/do:** upgraded to 1.0.0-alpha.204
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.81
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+* **@lunora/storage:** upgraded to 1.0.0-alpha.126
+
+## @lunora/platform-node [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.129...@lunora/platform-node@1.0.0-alpha.130) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/queue:** upgraded to 1.0.0-alpha.98
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.190
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.171
+* **@lunora/do:** upgraded to 1.0.0-alpha.203
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.80
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+* **@lunora/storage:** upgraded to 1.0.0-alpha.125
+
+## @lunora/platform-node [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.128...@lunora/platform-node@1.0.0-alpha.129) (2026-10-11)
+
+### Features
+
+* **platform-node:** add on-demand node profiler ([#1095](https://github.com/anolilab/lunora/issues/1095)) ([b8f2cdd](https://github.com/anolilab/lunora/commit/b8f2cdd84476bb9dfa99b52bfb9cd4851f0825cb))
+
 ## @lunora/platform-node [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.127...@lunora/platform-node@1.0.0-alpha.128) (2026-10-10)
 
 

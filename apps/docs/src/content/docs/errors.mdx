@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 188 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 191 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -640,6 +640,18 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 ### `PITR_UNAVAILABLE`
 
 `409` — Point-in-time recovery unavailable
+
+### `PRIVACY_COVERAGE`
+
+`500` — Privacy coverage check failed
+
+### `PRIVACY_REQUEST_OPEN`
+
+`409` — A privacy request is already open
+
+### `PRIVACY_SESSION_NOT_FRESH`
+
+`403` — Recent sign-in required
 
 ### `PROVIDER_ERROR`
 

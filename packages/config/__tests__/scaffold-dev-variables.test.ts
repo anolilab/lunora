@@ -1,5 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain placeholder secret-like strings */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,12 +23,38 @@ import {
  */
 let onStatSync: (() => void) | undefined;
 
+/**
+ * Fired right before the final publish step (`renameSync` or `linkSync`) runs,
+ * after the pre-write existence re-check — lets a test land a peer's file in
+ * that exact window.
+ */
+let onBeforePublish: (() => void) | undefined;
+
+/**
+ * When set, `linkSync` throws this instead of linking — simulates a filesystem
+ * without hard links (`EPERM` / `ENOTSUP`) or any other link failure.
+ */
+let linkError: NodeJS.ErrnoException | undefined;
+
 // eslint-disable-next-line vitest/prefer-import-in-mock -- `vi.mock(import("node:fs"), ...)` type-checks the mock's shape too strictly against `statSync`'s (Stats | BigIntStats | undefined) overloads
 vi.mock("node:fs", async (importOriginal) => {
     const actual = await importOriginal<typeof import("node:fs")>();
 
     return {
         ...actual,
+        linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+            onBeforePublish?.();
+
+            if (linkError) {
+                throw linkError;
+            }
+
+            actual.linkSync(...args);
+        },
+        renameSync: (...args: Parameters<typeof actual.renameSync>): void => {
+            onBeforePublish?.();
+            actual.renameSync(...args);
+        },
         statSync: (...args: Parameters<typeof actual.statSync>) => {
             onStatSync?.();
 
@@ -515,6 +541,129 @@ describe("ensureDevVariables", () => {
         // The peer's file is left untouched.
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="peer-secret"\n');
     });
+
+    it("never overwrites a peer's .dev.vars that lands after the re-check, before the final write", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        // The peer lands in the window between the existence re-check and the
+        // final publish step — the one the temp-file `wx` flag does not cover.
+        onBeforePublish = () => {
+            writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="peer-secret"\n', "utf8");
+        };
+
+        try {
+            const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+
+            expect(result.status).toBe("skipped-exists");
+            expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="peer-secret"\n');
+            expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+        } finally {
+            onBeforePublish = undefined;
+        }
+    });
+
+    it("rethrows a non-EEXIST publish failure, leaving no temp file and no .dev.vars", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        onBeforePublish = () => {
+            throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
+        };
+
+        try {
+            await expect(ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex })).rejects.toThrow(/EIO/u);
+            expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+            expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+        } finally {
+            onBeforePublish = undefined;
+        }
+    });
+
+    it.skipIf(process.platform === "win32")("falls back to an exclusive owner-only write when hard links are unsupported (EPERM)", async () => {
+        expect.assertions(4);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        linkError = Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" });
+
+        let result: Awaited<ReturnType<typeof ensureDevVariables>>;
+
+        try {
+            result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+        } finally {
+            linkError = undefined;
+        }
+
+        const written = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+        expect(result.status).toBe("generated");
+        expect(written).toContain(`STORAGE_SIGNING_SECRET="${"a".repeat(64)}"`);
+        expect(statSync(join(dir, ".dev.vars")).mode.toString(8).slice(-3)).toBe("600");
+        expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+    });
+
+    it("returns skipped-exists without overwriting when a peer's file exists and hard links are unsupported", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        // Peer lands before our publish; the link fails (no hard links), so the
+        // fallback's exclusive open must hit EEXIST and leave the peer's file alone.
+        onBeforePublish = () => {
+            writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="peer-secret"\n', "utf8");
+        };
+        linkError = Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" });
+
+        let result: Awaited<ReturnType<typeof ensureDevVariables>>;
+
+        try {
+            result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+        } finally {
+            onBeforePublish = undefined;
+            linkError = undefined;
+        }
+
+        expect(result.status).toBe("skipped-exists");
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="peer-secret"\n');
+        expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+    });
+
+    it("rethrows an unrelated link error without falling back, leaving no .dev.vars and no temp file", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        linkError = Object.assign(new Error("EIO: i/o error, link"), { code: "EIO" });
+
+        let caught: unknown;
+
+        try {
+            await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+        } catch (error) {
+            caught = error;
+        } finally {
+            linkError = undefined;
+        }
+
+        expect((caught as NodeJS.ErrnoException).code).toBe("EIO");
+        expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+        expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+    });
+
+    it.skipIf(process.platform === "win32")("creates .dev.vars owner-only and leaves no temp file behind", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+
+        expect(result.status).toBe("generated");
+        expect(statSync(join(dir, ".dev.vars")).mode.toString(8).slice(-3)).toBe("600");
+        expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+    });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -593,6 +742,27 @@ describe("fillDevSecrets", () => {
         expect(result.status).toBe("created");
         expect(result.addedKeys).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${"b".repeat(64)}"`);
+    });
+
+    it("never replaces a peer's .dev.vars that lands after the read, on the create path", () => {
+        expect.assertions(3);
+
+        // The peer lands in the window between the read and the publish. The hook
+        // fires once, so the publish step's own check is the only one that sees it.
+        onBeforePublish = () => {
+            onBeforePublish = undefined;
+            writeFileSync(join(dir, ".dev.vars"), 'BETTER_AUTH_SECRET="peer-secret"\n', "utf8");
+        };
+
+        try {
+            const result = fillDevSecrets({ cwd: dir, randomHex: fixedHex });
+
+            expect(result.status).toBe("unchanged");
+            expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('BETTER_AUTH_SECRET="peer-secret"\n');
+            expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toStrictEqual([]);
+        } finally {
+            onBeforePublish = undefined;
+        }
     });
 
     it("is idempotent — a second run with everything filled changes nothing", () => {

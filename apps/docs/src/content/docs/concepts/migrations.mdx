@@ -102,6 +102,22 @@ index). Unsupported deltas (column rename, column type change, dropping a
 column or index) are surfaced as a commented `unsupported` block in the
 generated file with a warning; write that SQL by hand.
 
+### A deploy with no migration step
+
+Most deploys need no migration command at all. Each kind of table provisions
+itself from the schema the worker is running:
+
+- **Root and `.shardBy()` tables** are provisioned by each Durable Object on its
+  next cold start. A field added to the schema is added as a column then
+  (`ALTER TABLE … ADD COLUMN`), so rows written before the deploy stay readable
+  and read the new field as absent.
+- **`.global()` tables** are provisioned on the first request that touches them,
+  with the same additive rules.
+
+So a deploy that only adds tables, optional fields or non-unique indexes needs
+nothing beyond the deploy itself. Two things still need a person before it:
+the hand-written SQL described below, and a data migration that backfills rows.
+
 ### Nothing applies the generated file
 
 The `.sql` file is a record of the diff, not a step in any pipeline. What

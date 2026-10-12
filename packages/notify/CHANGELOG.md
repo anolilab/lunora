@@ -1,3 +1,14 @@
+## @lunora/notify [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.77...@lunora/notify@1.0.0-alpha.78) (2026-10-12)
+
+### Code Refactoring
+
+* **notify:** use native per-message push ttl and urgency ([#1048](https://github.com/anolilab/lunora/issues/1048)) ([f53026c](https://github.com/anolilab/lunora/commit/f53026c0ed6ec19080f846c6295ad287d46d1181))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+
 ## @lunora/notify [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.76...@lunora/notify@1.0.0-alpha.77) (2026-10-08)
 
 ### Bug Fixes

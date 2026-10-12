@@ -55,13 +55,16 @@ studio.
 
 ### Performance
 
-| Lint                    | Level | Detects                                                                                                                                     |
-| ----------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unindexed_foreign_key` | info  | A foreign-key column with no index leading with it: reads on it full-scan. (Honours SQLite's leftmost-prefix rule; exempts FKs onto `_id`.) |
-| `filter_without_index`  | warn  | A `query(...).filter(...)` with no `.withIndex()` first: loads every row and filters in memory.                                             |
-| `duplicate_index`       | info  | An index whose columns are a leading prefix of another: pure write/storage overhead. (Unique indexes exempt.)                               |
-| `unbounded_loop`        | error | A `while (true)` / `for (;;)` with no `break`, `return` or `throw`: it never ends, billing every turn.                                      |
-| `dispatch_cycle`        | error | Functions schedule or call each other (or themselves) with no guard on any hop: an endless chain.                                           |
+| Lint                               | Level | Detects                                                                                                                                     |
+| ---------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unindexed_foreign_key`            | info  | A foreign-key column with no index leading with it: reads on it full-scan. (Honours SQLite's leftmost-prefix rule; exempts FKs onto `_id`.) |
+| `filter_without_index`             | warn  | A `query(...).filter(...)` with no `.withIndex()` first: loads every row and filters in memory.                                             |
+| `duplicate_index`                  | info  | An index whose columns are a leading prefix of another: pure write/storage overhead. (Unique indexes exempt.)                               |
+| `unbounded_loop`                   | error | A `while (true)` / `for (;;)` with no `break`, `return` or `throw`: it never ends, billing every turn.                                      |
+| `dispatch_cycle`                   | error | Functions schedule or call each other (or themselves) with no guard on any hop: an endless chain.                                           |
+| `self_reschedule_without_progress` | warn  | A guarded `runAfter` re-arms the same function under one second, with no cursor and no row removed: the same work every run.                |
+| `unbounded_collect_on_open_range`  | warn  | A server-driven `.collect()` on a `withIndex` range with no upper bound, and nothing in the function removes the rows it reads.             |
+| `filter_after_index_scan`          | info  | A `.filter()` after `.withIndex()` on a field the index does not cover: extend the index so the read seeks instead of scanning.             |
 
 ### Security
 

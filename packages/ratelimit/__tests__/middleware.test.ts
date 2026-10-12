@@ -9,7 +9,6 @@ import { describe, expect, it, vi } from "vitest";
 import dbRateLimit from "../src/database-middleware";
 import { rateLimit } from "../src/middleware";
 import { RateLimiter } from "../src/rate-limiter";
-import type { RateLimitDbQuery } from "../src/store";
 import { createReadOnlyDbStore } from "../src/store";
 
 interface Context {
@@ -191,11 +190,10 @@ describe("rateLimit middleware", () => {
         // A limiter wired to a query-context `ctx.db` appears to consume budget
         // but cannot write. That is deterministic misuse, not a store outage —
         // failOpen must surface it, not admit every request forever.
-        const query: RateLimitDbQuery = { first: async () => null, withIndex: () => query };
         const limiter = new RateLimiter({
             config: { api: { kind: "token bucket", period: 1000, rate: 1 } },
             now: () => 0,
-            store: createReadOnlyDbStore({ db: { query: () => query } }),
+            store: createReadOnlyDbStore({ db: { findFirst: async () => null } }),
         });
         const middleware = rateLimit<Context>(limiter, "api", { failOpen: true });
 

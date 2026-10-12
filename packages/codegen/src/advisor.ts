@@ -54,6 +54,7 @@ import type {
     RawRowReturnIR,
     RelationLoadIR,
     RlsProcedureIR,
+    RowEffectIR,
     SchemaIR,
     SecretLiteralIR,
     ShapeIR,
@@ -206,6 +207,7 @@ interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
     flagReads?: ReadonlyArray<FlagReadIR>;
@@ -239,6 +241,7 @@ interface LintSchemaOptions {
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
     relationLoads?: ReadonlyArray<RelationLoadIR>;
     rlsProcedures?: ReadonlyArray<RlsProcedureIR>;
+    rowEffects?: ReadonlyArray<RowEffectIR>;
     schema: SchemaIR;
     secretLiterals?: ReadonlyArray<SecretLiteralIR>;
     shapes?: ReadonlyArray<ShapeIR>;

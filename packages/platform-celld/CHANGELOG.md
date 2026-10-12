@@ -1,3 +1,46 @@
+## @lunora/platform-celld [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.5...@lunora/platform-celld@1.0.0-alpha.6) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.82
+* **@lunora/agent:** upgraded to 1.0.0-alpha.198
+* **@lunora/ai:** upgraded to 1.0.0-alpha.123
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.106
+* **@lunora/container:** upgraded to 1.0.0-alpha.73
+* **@lunora/d1:** upgraded to 1.0.0-alpha.172
+* **@lunora/queue:** upgraded to 1.0.0-alpha.100
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+* **@lunora/storage:** upgraded to 1.0.0-alpha.127
+
+## @lunora/platform-celld [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.4...@lunora/platform-celld@1.0.0-alpha.5) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.81
+* **@lunora/agent:** upgraded to 1.0.0-alpha.197
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.105
+* **@lunora/d1:** upgraded to 1.0.0-alpha.171
+* **@lunora/queue:** upgraded to 1.0.0-alpha.99
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+* **@lunora/storage:** upgraded to 1.0.0-alpha.126
+
+## @lunora/platform-celld [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.3...@lunora/platform-celld@1.0.0-alpha.4) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.80
+* **@lunora/agent:** upgraded to 1.0.0-alpha.196
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.104
+* **@lunora/d1:** upgraded to 1.0.0-alpha.170
+* **@lunora/queue:** upgraded to 1.0.0-alpha.98
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+* **@lunora/storage:** upgraded to 1.0.0-alpha.125
+
 ## @lunora/platform-celld [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.2...@lunora/platform-celld@1.0.0-alpha.3) (2026-10-08)
 
 

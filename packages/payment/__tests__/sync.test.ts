@@ -981,3 +981,30 @@ describe("applyWebhookAction — bug-hunt regressions", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 3000, state: "active" });
     });
 });
+
+describe("applyWebhookAction on a value the store cannot hold", () => {
+    it("acknowledges an amount the store refuses as unstorable, instead of throwing", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        store.upsertPaymentSession = (): Promise<void> => Promise.reject(new LunoraPaymentError("VALIDATION_ERROR", "amount is not a safe integer"));
+
+        const result = await applyWebhookAction(store, { ...captureEvent("e1"), provider: "creem", referenceId: "org_1", sessionId: "ch_huge" });
+
+        expect(result).toStrictEqual({ applied: false, reason: "unstorable" });
+        await expect(store.getPaymentSession("creem", "ch_huge")).resolves.toBeUndefined();
+    });
+
+    it("still throws on a store failure that is not a validation error, so the provider retries it", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        store.upsertPaymentSession = (): Promise<void> => Promise.reject(new Error("database unavailable"));
+
+        await expect(applyWebhookAction(store, { ...captureEvent("e2"), provider: "creem", referenceId: "org_1", sessionId: "ch_down" })).rejects.toThrow(
+            "database unavailable",
+        );
+    });
+});

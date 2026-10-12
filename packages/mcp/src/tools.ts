@@ -350,6 +350,15 @@ const callWriteTool = async (client: LunoraClient, name: string, input: Record<s
 type ToolGate = "allowDataReads" | "allowObservability" | "allowWrites";
 
 /**
+ * The scopes a verified token must carry before the authed path opens the raw-row
+ * and observability families. Declared once here: the authed path reads them to
+ * derive the flags per request, and the challenge names them. Lunora does not
+ * issue these scopes. The OAuth server must list them in its `mcp({ scopes })`.
+ */
+const DATA_READ_SCOPE = "lunora:data-read";
+const OBSERVABILITY_SCOPE = "lunora:observability";
+
+/**
  * The opt-in flags as the caller actually passed them.
  *
  * Deliberately `unknown` rather than `boolean`: both consumers are exported and
@@ -358,7 +367,7 @@ type ToolGate = "allowDataReads" | "allowObservability" | "allowWrites";
  * decides, and an `unknown` bag is what keeps that comparison honest instead of
  * one the compiler (and the lint rule) believes is redundant.
  */
-type ToolGates = Record<ToolGate, unknown>;
+type ToolGates = Partial<Record<ToolGate, unknown>>;
 
 /** Fail closed: only the boolean `true` opts in, whatever a caller actually passed. */
 const isOptedIn = (value: unknown): boolean => value === true;
@@ -367,6 +376,8 @@ const isOptedIn = (value: unknown): boolean => value === true;
 interface ToolGateSpec {
     flag: ToolGate;
     refuse: (name: string) => string;
+    /** The token scope that also opens this family on the authed path. Absent for families gated by no scope. */
+    scope?: string;
 }
 
 /**
@@ -406,7 +417,8 @@ const TOOL_FAMILIES: ReadonlyArray<ToolFamily> = [
         gate: {
             flag: "allowDataReads",
             refuse: (name) =>
-                `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply. Enable it with the LUNORA_MCP_ALLOW_DATA_READS env var.`,
+                `tool "${name}" is disabled: it returns raw table rows read through the deployment's ADMIN writer, so RLS policies and column masks do not apply. Enable it with the LUNORA_MCP_ALLOW_DATA_READS env var or the allowDataReads option; on the authed path the token also needs the ${DATA_READ_SCOPE} scope.`,
+            scope: DATA_READ_SCOPE,
         },
         names: ROW_READ_TOOL_NAMES,
     },
@@ -416,7 +428,8 @@ const TOOL_FAMILIES: ReadonlyArray<ToolFamily> = [
         gate: {
             flag: "allowObservability",
             refuse: (name) =>
-                `tool "${name}" is disabled: it reads the deployment's logs, request metadata and grouped errors — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var.`,
+                `tool "${name}" is disabled: it reads the deployment's logs, request metadata and grouped errors — user data that would land at the model provider. Enable it with the LUNORA_MCP_ALLOW_OBSERVABILITY env var or the allowObservability option; on the authed path the token also needs the ${OBSERVABILITY_SCOPE} scope.`,
+            scope: OBSERVABILITY_SCOPE,
         },
         names: OBSERVABILITY_TOOL_NAMES,
     },
@@ -489,7 +502,43 @@ const callTool = async (
     }
 };
 
-export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS, WRITE_TOOL_NAMES };
+/**
+ * The scope a tool needs on the authed path, or `undefined` when none is needed:
+ * no scope gates it, or its family is closed under `gates`. A closed family is
+ * refused at dispatch regardless of the token, so demanding a scope for it would
+ * only send the client to re-authorize for nothing.
+ */
+const scopeForTool = (name: string, gates: ToolGates): string | undefined => {
+    const family = TOOL_FAMILIES.find((candidate) => candidate.names.has(name));
+
+    if (family?.gate?.scope === undefined || closedGate(family, gates) !== undefined) {
+        return undefined;
+    }
+
+    return family.gate.scope;
+};
+
+/**
+ * Each family a token scope can open, as the opt-in flag it sets and the scope
+ * that pairs with it. Derived from {@link TOOL_FAMILIES}, so a new scoped family
+ * is declared once.
+ */
+const SCOPED_GATES: ReadonlyArray<{ flag: ToolGate; scope: string }> = TOOL_FAMILIES.flatMap((family) =>
+    family.gate?.scope === undefined ? [] : [{ flag: family.gate.flag, scope: family.gate.scope }],
+);
+
+export {
+    callTool,
+    DATA_READ_SCOPE,
+    OBSERVABILITY_SCOPE,
+    READ_ONLY_TOOL_DEFINITIONS,
+    SCOPED_GATES,
+    scopeForTool,
+    toolDefinitions,
+    WRITE_TOOL_DEFINITIONS,
+    WRITE_TOOL_NAMES,
+};
+export type { ToolGate, ToolGates };
 
 export { OBSERVABILITY_TOOL_DEFINITIONS } from "./observability-tools";
 export { ROW_READ_TOOL_DEFINITIONS } from "./row-read-tools";

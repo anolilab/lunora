@@ -61,7 +61,7 @@ const LUNORA_MASK_METADATA = JSON.parse("{\"columns\":[]}") as MaskPoliciesResul
 const LUNORA_STORAGE_RULES = JSON.parse("{\"rules\":[]}") as StorageRulesResult;
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES = JSON.parse("{\"platform\":{\"id\":\"cloudflare\",\"name\":\"Cloudflare\",\"unsupported\":[]},\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult;
+const LUNORA_STUDIO_FEATURES = JSON.parse("{\"platform\":{\"id\":\"cloudflare\",\"name\":\"Cloudflare\",\"unsupported\":[]},\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"privacy\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult;
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "d081a0b5a40f39c3", json: "{\n  \"migrationIds\": [],\n  \"tables\": {},\n  \"version\": 1\n}\n" };

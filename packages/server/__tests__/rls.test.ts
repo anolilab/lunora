@@ -46,7 +46,7 @@ interface FakeDatabase {
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         get: (id: string) => Promise<Record<string, unknown> | null>;
         groupBy: (tableName: string, options: unknown) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
-        insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+        insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
         insertMany: (
             tableName: string,
             documents: ReadonlyArray<Record<string, unknown>>,
@@ -59,6 +59,11 @@ interface FakeDatabase {
         ) => Promise<string[]>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+        patchIf: (
+            tableName: string,
+            id: string,
+            args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
         patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
         patchWhere: (
             tableName: string,
@@ -159,10 +164,10 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return [{ key: {}, value: rowsOfTable(tableName).length }];
             },
-            async insert(tableName, document) {
-                calls.push({ args: document, method: "insert", tableOrId: tableName });
+            async insert(tableName, document, options) {
+                calls.push({ args: options === undefined ? document : { document, options }, method: "insert", tableOrId: tableName });
 
-                return (document["_id"] as string | undefined) ?? "new-id";
+                return options?.clientId ?? (document["_id"] as string | undefined) ?? "new-id";
             },
             async insertMany(tableName, documents, options) {
                 calls.push({ args: documents, method: "insertMany", tableOrId: tableName });
@@ -182,6 +187,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             async patch(id, patchValue) {
                 calls.push({ args: patchValue, method: "patch", tableOrId: id });
+            },
+            async patchIf(tableName, id, args) {
+                calls.push({ args, method: "patchIf", tableOrId: id });
+
+                return { applied: true, doc: { _id: id, table: tableName, ...args.patch } };
             },
             async patchMany(patches) {
                 calls.push({ args: patches, method: "patchMany", tableOrId: "" });
@@ -886,6 +896,97 @@ describe("rls — write path", () => {
         });
 
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it.each([
+        ["a policy table", "documents"],
+        ["a table without policies", "notes"],
+    ])("forwards a pinned clientId on insert into %s", async (_label, table) => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({ on: "insert", table: "documents", when: () => true });
+        const database = createFakeDatabase([]);
+        const clientId = "8d3f2a52-6a59-8c4e-9f1e-0b7c2d4e6f80";
+
+        const id = await lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.insert(table, { title: "t" }, { clientId }))
+            .handler(makeContext(database, "u1"), {});
+
+        expect(id).toBe(clientId);
+        expect(database.calls.find((call) => call.method === "insert")?.args).toStrictEqual({ document: { title: "t" }, options: { clientId } });
+    });
+
+    it("update policy denies a conditional patch with FORBIDDEN before it reaches the writer", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch: { title: "new" }, where: { title: "old" } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+
+        expect(database.calls.some((call) => call.method === "patchIf")).toBe(false);
+    });
+
+    it("update policy checks a conditional patch's post-image and forwards it when allowed", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const run = async (patch: Record<string, unknown>) =>
+            lunora.mutation
+                .use(rlsForTest<TestContext>([policy]))
+                .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch, where: { ownerId: "u1" } }))
+                .handler(makeContext(database, "u1"), {});
+
+        await expect(run({ ownerId: "u2" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(run({ title: "new" })).resolves.toMatchObject({ applied: true });
+    });
+
+    it("withholds a conditional patch's row from a caller the read policy hides it from", async () => {
+        expect.assertions(2);
+
+        const policies = definePolicies([
+            definePolicy<TestContext>({ on: "update", table: "documents", when: () => true }),
+            definePolicy<TestContext>({
+                on: "read",
+                table: "documents",
+                when: ({ auth }) => {
+                    return { ownerId: auth.userId };
+                },
+            }),
+        ]);
+        const fake = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+        const wrappedFindFirst = fake.writer.findFirst;
+
+        // The fake ignores `baseWhere`; honour the owner scope so the read policy bites.
+        fake.writer.findFirst = async (tableName, args) => {
+            const candidate = await wrappedFindFirst(tableName, args);
+            const baseWhere = (args as { baseWhere?: { ownerId?: unknown } } | undefined)?.baseWhere;
+
+            return candidate && baseWhere && "ownerId" in baseWhere && candidate["ownerId"] !== baseWhere.ownerId ? null : candidate;
+        };
+
+        const run = async (userId: string) =>
+            lunora.mutation
+                .use(rlsForTest<TestContext>(policies))
+                .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch: { title: "new" }, where: {} }))
+                .handler(makeContext(fake, userId), {});
+
+        await expect(run("u1")).resolves.toStrictEqual({ applied: true, doc: null });
+        await expect(run("u2")).resolves.toStrictEqual({ applied: true, doc: expect.objectContaining({ _id: "d1" }) });
     });
 
     it("update policy allows patch when the row matches", async () => {

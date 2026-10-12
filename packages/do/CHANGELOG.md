@@ -1,3 +1,49 @@
+## @lunora/do [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.204...@lunora/do@1.0.0-alpha.205) (2026-10-12)
+
+### Features
+
+* **privacy:** add the @lunora/privacy data-rights package ([#1127](https://github.com/anolilab/lunora/issues/1127)) ([01ad496](https://github.com/anolilab/lunora/commit/01ad496fad562fbeddf3052e71ac6a3abeb38d0a))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/observability:** upgraded to 1.0.0-alpha.131
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.82
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+* **@lunora/values:** upgraded to 1.0.0-alpha.63
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.106
+
+## @lunora/do [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.203...@lunora/do@1.0.0-alpha.204) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.130
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.81
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.105
+
+## @lunora/do [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.202...@lunora/do@1.0.0-alpha.203) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+### Code Refactoring
+
+* **client:** move poke buffering and commit out of the class ([#1106](https://github.com/anolilab/lunora/issues/1106)) ([0029b52](https://github.com/anolilab/lunora/commit/0029b521b34ddeae95a9672203bcac93b86fbe8a)), closes [#1107](https://github.com/anolilab/lunora/issues/1107) [#1108](https://github.com/anolilab/lunora/issues/1108) [#1109](https://github.com/anolilab/lunora/issues/1109) [#1110](https://github.com/anolilab/lunora/issues/1110)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.129
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.80
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.104
+
 ## @lunora/do [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.201...@lunora/do@1.0.0-alpha.202) (2026-10-10)
 
 ### Features

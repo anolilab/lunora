@@ -100,6 +100,9 @@
 "package: platform-node":
     - changed-files:
           - any-glob-to-any-file: "packages/platform-node/**/*"
+"package: privacy":
+    - changed-files:
+          - any-glob-to-any-file: "packages/privacy/**/*"
 "package: queue":
     - changed-files:
           - any-glob-to-any-file: "packages/queue/**/*"

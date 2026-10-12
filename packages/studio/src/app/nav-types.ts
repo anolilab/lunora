@@ -40,6 +40,7 @@ type StudioTab =
     | "payments"
     | "permissions"
     | "pitr"
+    | "privacyRequests"
     | "queues"
     | "reactors"
     | "realtime"

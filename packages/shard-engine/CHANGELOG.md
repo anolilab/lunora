@@ -1,3 +1,47 @@
+## @lunora/shard-engine [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.121...@lunora/shard-engine@1.0.0-alpha.122) (2026-10-12)
+
+### Features
+
+* **privacy:** add the @lunora/privacy data-rights package ([#1127](https://github.com/anolilab/lunora/issues/1127)) ([01ad496](https://github.com/anolilab/lunora/commit/01ad496fad562fbeddf3052e71ac6a3abeb38d0a))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.106
+
+## @lunora/shard-engine [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.120...@lunora/shard-engine@1.0.0-alpha.121) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.105
+
+## @lunora/shard-engine [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.119...@lunora/shard-engine@1.0.0-alpha.120) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+### Documentation
+
+* **migrations:** a deploy with no migration step, and a test for an added field on a shard ([#1121](https://github.com/anolilab/lunora/issues/1121)) ([67ff0b5](https://github.com/anolilab/lunora/commit/67ff0b5e6f9d72ed9a4fdbdf123115fdfb4f2cf1))
+
+### Code Refactoring
+
+* **client:** move poke buffering and commit out of the class ([#1106](https://github.com/anolilab/lunora/issues/1106)) ([0029b52](https://github.com/anolilab/lunora/commit/0029b521b34ddeae95a9672203bcac93b86fbe8a)), closes [#1107](https://github.com/anolilab/lunora/issues/1107) [#1108](https://github.com/anolilab/lunora/issues/1108) [#1109](https://github.com/anolilab/lunora/issues/1109) [#1110](https://github.com/anolilab/lunora/issues/1110)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.104
+
 ## @lunora/shard-engine [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.118...@lunora/shard-engine@1.0.0-alpha.119) (2026-10-08)
 
 

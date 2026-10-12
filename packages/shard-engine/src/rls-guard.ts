@@ -203,6 +203,8 @@ const WRITER_METHOD_GATING = {
     /** Pure id validator/parser — returns the id or `null`, reads no row. */
     normalizeId: "ungated",
     patch: "id-gated",
+    /** Table-name-first (`patchIf(table, id, …)`), so the loop's table gate covers it; the writer scopes the id to that table. */
+    patchIf: "loop-gated",
     patchMany: "id-gated",
     patchWhere: "inline-table-gated",
     query: "loop-gated",

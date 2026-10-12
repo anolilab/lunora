@@ -20,6 +20,7 @@ secret listed in `.dev.vars.example`, and deploys.
 | [notify-demo](./notify-demo)               | Web Push notifications                               | `@lunora/notify`, subscription stores, `ctx.push.broadcast` device fan-out                 | —                                                                                                                                                                           |
 | [offline-rejections](./offline-rejections) | What an offline queue does when the server says no   | Durable offline outbox, rejection replay                                                   | —                                                                                                                                                                           |
 | [expo](./expo)                             | React Native client                                  | `@lunora/react-native`, the Expo auth bridge                                               | —                                                                                                                                                                           |
+| [privacy](./privacy)                       | Data-subject requests: export, erasure, cancel       | `@lunora/privacy`, durable workflows, per-call ports                                       | —                                                                                                                                                                           |
 
 ## Which examples are safe to deploy
 

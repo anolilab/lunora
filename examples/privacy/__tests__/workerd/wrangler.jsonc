@@ -1,0 +1,20 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot the test
+// Worker in a real workerd runtime. It is not deployed. It gives the pool a Durable
+// Object with SQLite storage, so the example's ports run over workerd's SQLite, and the
+// app's own tombstone Durable Object.
+// `PRIVACY_TOMBSTONE_SECRET` is the value `lunora/privacy.ts` reads from `process.env`.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-privacy-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "PRIVACY", "class_name": "PrivacyTestDO" },
+            { "name": "PRIVACY_TOMBSTONES", "class_name": "PrivacyTombstonesDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PrivacyTestDO", "PrivacyTombstonesDO"] }],
+    "vars": { "PRIVACY_TOMBSTONE_SECRET": "workerd-test-secret" },
+}

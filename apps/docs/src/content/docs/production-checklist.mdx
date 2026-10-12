@@ -64,10 +64,9 @@ data export/import, migrations, the Studio, scheduled-job admin.
       admin gate (worker and Durable Objects both) rejects the raw master
       token in `?token=`; only minted sub-tokens (or the master token in the
       `Authorization` header, which never leaks via URLs) authorize. The Studio
-      mints sub-tokens itself. Only a legacy client that still puts the master
-      token in the URL needs the opt-out (`requireEphemeralWsToken: false`, or
-      `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set to `0` / `false` / `off` / `no` /
-      `disabled`). Verify it is _not_ set in your deployment.
+      mints sub-tokens itself and never falls back to the master token. There
+      is no opt-out. The sub-token itself still rides the URL for up to 60
+      seconds, so proxy and access logs can record it.
 
 ## Rate limiting and abuse
 

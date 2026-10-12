@@ -56,7 +56,7 @@ deliberate, and mostly a set of go/no-go decisions:
       `fingerprint`, `dispatch`, `payment`, `x402`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
       `agent`, `replica`, `react-native`, `angular`, `ai`, `browser`, `container`,
-      `platform-celld`, `platform-node`, `rspack`.
+      `platform-celld`, `platform-node`, `privacy`, `rspack`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
 - **Bake and dogfood.** Run a real application (the playground plus at least one

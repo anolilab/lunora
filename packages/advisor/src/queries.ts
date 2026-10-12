@@ -12,6 +12,12 @@ export interface AdvisorQueryRead {
     file: string;
 
     /**
+     * The fields the `.filter(...)` predicate reads off its row parameter. `undefined`
+     * when there is no filter or the predicate is not a function literal.
+     */
+    filterFields?: string[];
+
+    /**
      * True when the chain's `.filter()` predicate compares `_id`
      * (`(d) => d._id === args.id`) — a full scan for a row that `ctx.db.get`
      * addresses directly. Optional so a feeder predating this field still
@@ -23,6 +29,14 @@ export interface AdvisorQueryRead {
     hasFilter: boolean;
     /** True when the chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */
     hasIndex: boolean;
+
+    /**
+     * The chain's `.withIndex(...)`, present exactly when the chain has one. `name` is
+     * the literal index name, or `undefined` when it is not a string literal. `bounds`
+     * are the comparators its range callback calls: `[]` for a bare `.withIndex(name)`
+     * (an open range), `undefined` when the callback cannot be read.
+     */
+    index?: { bounds?: string[]; name?: string };
     /** 1-based line of the `query(...)` call, or `0` when unknown. */
     line: number;
     /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
@@ -42,4 +56,11 @@ export interface AdvisorQueryRead {
      * rather than guessing a terminal.
      */
     terminal?: string;
+
+    /**
+     * Visibility of the procedure the read runs on behalf of: `internal` when every
+     * caller is internal, `public` when any caller is public. `undefined` when the
+     * feeder could not read the registered functions.
+     */
+    visibility?: "internal" | "public";
 }

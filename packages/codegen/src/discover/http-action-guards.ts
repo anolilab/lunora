@@ -17,7 +17,7 @@ const TERMINAL_STEPS = new Set(["handler", "stream"]);
 const RUN_SIDE_EFFECTS = new Set(["runAction", "runMutation"]);
 
 /** `ctx.db.<method>` mutating writes. (`insertManyUnsafe` bypasses per-row validation.) */
-const DB_WRITE_METHODS = new Set(["delete", "insert", "insertManyUnsafe", "patch", "replace"]);
+const DB_WRITE_METHODS = new Set(["delete", "insert", "insertManyUnsafe", "patch", "patchIf", "replace"]);
 
 /** True when `node` is a plain identifier whose text is exactly `name`. */
 const isIdentifierNamed = (node: TsNode | undefined, name: string): boolean => node !== undefined && Node.isIdentifier(node) && node.getText() === name;

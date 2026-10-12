@@ -34,6 +34,7 @@ const createFakeWriter = () => {
             Promise.resolve({ row: { _id: id }, tableName: "sentinel" }),
         ),
         patch: vi.fn<(id: string) => Promise<string>>((id: string) => Promise.resolve(`patch:${id}`)),
+        patchIf: vi.fn<(tableName: string) => Promise<string>>((tableName: string) => Promise.resolve(`patchIf:${tableName}`)),
         patchMany: vi.fn<(patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>) => Promise<string>>(
             (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>) =>
                 Promise.resolve(`patchMany:${patches.map((entry) => entry.id).join(",")}`),
@@ -98,6 +99,7 @@ describe("guardWriter — table-named methods under .rls('required')", () => {
         "insert",
         "insertMany",
         "insertManyUnsafe",
+        "patchIf",
         "query",
         "rank",
         "rankBefore",

@@ -1,20 +1,20 @@
 import type { Id } from "@lunora/values";
 import { beforeAll, bench, describe } from "vitest";
 
-import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, RateLimitStore } from "../src/index";
+import type { RateLimitDb, RateLimitStore } from "../src/index";
 import { createDbStore } from "../src/index";
 
 /**
  * The DB-backed store's consuming hot path is get() → set() under the DO input
  * gate: the limiter reads the prior value, runs the algorithm, then writes back.
  *
- * The **legacy** adapter ran an index lookup (`withIndex(...).first()`) inside
+ * The **legacy** adapter ran an index lookup (`findFirst`) inside
  * both* get() and set() — two scans per consuming call for one read-modify-
  * write. The **current** adapter caches the row id resolved by get()'s lookup so
  * set() patches directly, collapsing it to a single scan.
  *
  * To make the saved lookup measurable rather than lost in fixture noise, the
- * fake db's `first()` is a real linear scan over the table; the table is seeded
+ * fake db's `findFirst()` is a real linear scan over the table; the table is seeded
  * with many sibling rows so each scan costs something proportional to table
  * size — the same shape the index walk has when many `(name, key)` pairs share
  * a store. The win is "1 scan vs 2 scans per consuming write".
@@ -25,56 +25,38 @@ const TABLE_ROWS = 512;
 const createFakeDatabase = (): RateLimitDb => {
     const rows = new Map<string, Record<string, unknown>>();
     let counter = 0;
-
-    const query = (): RateLimitDbQuery => {
-        const constraints: [string, unknown][] = [];
-        const matches = (document: Record<string, unknown>): boolean => constraints.every(([field, value]) => document[field] === value);
-        const handle: RateLimitDbQuery = {
-            first: async () =>
-                // Linear scan — stands in for the cost of walking the index range.
-                [...rows.values()].find((document) => matches(document)) ?? null,
-            withIndex: (_indexName, range) => {
-                const recorder: RateLimitDbIndexRange = {
-                    eq: (field, value) => {
-                        constraints.push([field, value]);
-
-                        return recorder;
-                    },
-                    gt: () => recorder,
-                    gte: () => recorder,
-                    lt: () => recorder,
-                    lte: () => recorder,
-                };
-
-                range(recorder);
-
-                return handle;
-            },
-        };
-
-        return handle;
-    };
+    const matches = (document: Record<string, unknown>, where: Record<string, unknown> = {}): boolean =>
+        Object.entries(where).every(([field, value]) =>
+            value === null ? document[field] === undefined || document[field] === null : document[field] === value,
+        );
 
     return {
         delete: async <T extends string>(id: Id<T>): Promise<void> => {
             rows.delete(id);
         },
-        insert: async <T extends string>(table: T, document: Record<string, unknown>): Promise<Id<T>> => {
+        // Linear scan — stands in for the cost of walking the index range.
+        findFirst: async (_table, args) => [...rows.values()].find((document) => matches(document, args?.where)) ?? null,
+        insert: async <T extends string>(table: T, document: Record<string, unknown>, options?: { clientId?: string }): Promise<Id<T>> => {
             counter += 1;
-            const id = `${table}-${String(counter)}` as Id<T>;
+            const id = (options?.clientId ?? `${table}-${String(counter)}`) as Id<T>;
 
             rows.set(id, { _id: id, ...document });
 
             return id;
         },
-        patch: async <T extends string>(id: Id<T>, fields: Record<string, unknown>): Promise<void> => {
+        patchIf: async <T extends string>(_table: T, id: Id<T>, args: { patch: Record<string, unknown>; where: Record<string, unknown> }) => {
             const existing = rows.get(id);
 
-            if (existing) {
-                rows.set(id, { ...existing, ...fields });
+            if (!existing || !matches(existing, args.where)) {
+                return { applied: false, doc: existing ?? null };
             }
+
+            const next = { ...existing, ...args.patch };
+
+            rows.set(id, next);
+
+            return { applied: true, doc: next };
         },
-        query,
     };
 };
 
@@ -85,11 +67,7 @@ const createFakeDatabase = (): RateLimitDb => {
  */
 const createLegacyDatabaseStore = (db: RateLimitDb): RateLimitStore => {
     const table = "rateLimits";
-    const find = async (storageKey: string): Promise<Record<string, unknown> | null> =>
-        db
-            .query(table)
-            .withIndex("by_key", (q) => q.eq("key", storageKey))
-            .first();
+    const find = async (storageKey: string): Promise<Record<string, unknown> | null> => db.findFirst(table, { where: { key: storageKey } });
 
     return {
         delete: async (storageKey) => {
@@ -114,7 +92,7 @@ const createLegacyDatabaseStore = (db: RateLimitDb): RateLimitStore => {
             const row = await find(storageKey);
             const document: Record<string, unknown> = { key: storageKey, ts: value.ts, value: value.value };
 
-            await (row ? db.patch(row._id as Id<string>, document) : db.insert(table, document));
+            await (row ? db.patchIf(table, row._id as Id<string>, { patch: document, where: {} }) : db.insert(table, document));
         },
     };
 };
@@ -137,7 +115,10 @@ const currentStore = createDbStore({ db: createFakeDatabase() });
 const readModifyWrite = async (store: RateLimitStore, ts: number): Promise<void> => {
     const prior = await store.get("hot");
 
-    await store.set("hot", { ts, value: (prior?.value ?? 0) + 1 });
+    const next = { ts, value: (prior?.value ?? 0) + 1 };
+
+    // The limiter writes through `setIf` when the store has one, as the current store does.
+    await (store.setIf ? store.setIf("hot", next, prior) : store.set("hot", next));
 };
 
 let clock = 0;

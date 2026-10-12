@@ -251,6 +251,18 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Auth headers missing";
     };
+    readonly PRIVACY_COVERAGE: {
+        readonly status: 500;
+        readonly title: "Privacy coverage check failed";
+    };
+    readonly PRIVACY_REQUEST_OPEN: {
+        readonly status: 409;
+        readonly title: "A privacy request is already open";
+    };
+    readonly PRIVACY_SESSION_NOT_FRESH: {
+        readonly status: 403;
+        readonly title: "Recent sign-in required";
+    };
     readonly EMAIL_DOMAIN_BLOCKED: {
         readonly hint: readonly [
             "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",

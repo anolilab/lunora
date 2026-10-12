@@ -62,6 +62,9 @@ const payment = createPayment({
         client: new Stripe(env.STRIPE_SECRET_KEY),
         webhookSecret: env.STRIPE_WEBHOOK_SECRET,
     }),
+    // Required. Return `true` only when the current caller owns `referenceId`; anything else
+    // (including a throw) denies. Replace `callerOwns` with your ownership check.
+    authorize: async (referenceId) => callerOwns(referenceId),
     store: new MemoryPaymentStore(),
 });
 
