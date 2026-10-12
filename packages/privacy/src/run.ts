@@ -40,8 +40,11 @@ interface DataPort {
     readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date, disposition: RowDisposition) => Promise<{ readonly hasMore: boolean }>;
 
     /**
-     * Rows still present per table after erasure, for the verify step. A row a retention rule
-     * still keeps may be counted: verify checks each one against `disposition` through `collect`.
+     * Rows still present per table after erasure, for the verify step. Two kinds of row may be
+     * counted and are excluded from the verdict by the package: a row a retention rule still keeps
+     * (verify judges each one again through `collect`), and every row of an `anonymise` table, which
+     * stays in place once anonymised. Prefer not to count anonymised rows at all; the package cannot
+     * tell an anonymised row from one `eraseBatch` missed, so it does not hold them against the erasure.
      */
     readonly remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
 }
@@ -175,27 +178,34 @@ const eraseSubjectFiles = async (ports: PrivacyPorts, datasets: ReadonlyArray<Da
 };
 
 /**
- * For each retained table that still has rows, how many of them a retention rule still keeps.
- * Each row is judged again, so a row whose period has run out counts as a leftover.
+ * For each table that may keep rows after erasure, how many of its remaining rows are allowed.
+ * An `anonymise` table keeps every row, since an anonymised row stays in place and the package
+ * cannot tell it from the original. A retained table keeps only the rows a rule still holds: each
+ * row is judged again, so a row whose period has run out counts as a leftover.
  */
-const keptRows = async (
+const allowedRows = async (
     scope: Pick<RunScope, "disposition" | "ports">,
     dataset: Dataset,
     subjectId: string,
     counts: Readonly<Record<string, number>>,
 ): Promise<Record<string, number>> => {
-    const retained = dataset.tableNames.filter((table) => typeof dataset.tables[table]?.erase === "object" && (counts[table] ?? 0) > 0);
+    const present = dataset.tableNames.filter((table) => (counts[table] ?? 0) > 0);
+    const anonymised = present.filter((table) => dataset.tables[table]?.erase === "anonymise");
+    const retained = present.filter((table) => typeof dataset.tables[table]?.erase === "object");
+    const allowed: Record<string, number> = Object.fromEntries(anonymised.map((table) => [table, counts[table] ?? 0]));
 
     if (retained.length === 0) {
-        return {};
+        return allowed;
     }
 
     const rows = await scope.ports.data.collect(dataset, subjectId);
     const now = scope.ports.now();
 
-    return Object.fromEntries(
-        retained.map((table) => [table, (rows[table] ?? []).filter((row) => scope.disposition(dataset, table, row, now).kind === "keep").length]),
-    );
+    for (const table of retained) {
+        allowed[table] = (rows[table] ?? []).filter((row) => scope.disposition(dataset, table, row, now).kind === "keep").length;
+    }
+
+    return allowed;
 };
 
 /**
@@ -217,7 +227,7 @@ const verifySubjectErased = async (
         Object.assign(remaining, counts);
 
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
-        Object.assign(kept, await keptRows(scope, dataset, subjectId, counts));
+        Object.assign(kept, await allowedRows(scope, dataset, subjectId, counts));
 
         const prefix = filesPrefixOf(dataset, subjectId);
 

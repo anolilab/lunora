@@ -120,4 +120,46 @@ describe("retention during erasure", () => {
             ["tasks", false],
         ]);
     });
+
+    it("completes a full erasure that anonymises a table, though the anonymised rows are still counted", async () => {
+        const comments = defineDataset("comments", {
+            legalBasis: "legitimate_interest",
+            origin: "provided",
+            purpose: "Comments the user wrote on shared tasks",
+            tables: { comments: { erase: "anonymise" }, reactions: {} },
+        });
+        const rows: Record<string, Row[]> = {
+            comments: [
+                { author: "Ada", body: "looks good", id: "c1" },
+                { author: "Ada", body: "done", id: "c2" },
+            ],
+            reactions: [{ id: "x1" }],
+        };
+        const data: DataPort = {
+            collect: async (dataset) => Object.fromEntries(dataset.tableNames.map((table) => [table, [...(rows[table] ?? [])]])),
+            eraseBatch: async (dataset, _subjectId, at, disposition) => {
+                for (const table of dataset.tableNames) {
+                    rows[table] = (rows[table] ?? []).flatMap((row) => {
+                        const verdict = disposition(dataset, table, row, at);
+
+                        // An anonymised row stays, without the fields that identify the subject.
+                        return verdict.kind === "anonymise" ? [{ ...row, author: undefined, anonymised: true }] : [];
+                    });
+                }
+
+                return { hasMore: false };
+            },
+            // This port still counts the anonymised rows under the subject, as a port that keeps the owner column would.
+            remaining: async (dataset) => Object.fromEntries(dataset.tableNames.map((table) => [table, (rows[table] ?? []).length])),
+        };
+        const { privacy, runErasureWorkflow, store } = setup({ data, datasets: [comments] });
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(store.rows.get(erasure.id)?.status).toBe("completed");
+        expect(rows.comments).toHaveLength(2);
+        expect(rows.comments?.every((row) => row.author === undefined)).toBe(true);
+        expect(rows.reactions).toStrictEqual([]);
+    });
 });
