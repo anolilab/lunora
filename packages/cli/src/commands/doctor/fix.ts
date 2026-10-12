@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -13,6 +14,7 @@ import {
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
+import { resolveAdminBearer } from "../../util/admin-token";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { defaultSpawner } from "../../util/spawn";
@@ -238,26 +240,39 @@ const fixD1Placeholders = async (options: DoctorFixOptions, result: DoctorFixRes
 
 /**
  * `.dev.vars` holds plaintext secrets, so it is written only when git already
- * ignores it. A `.dev.vars` that could be committed is the one way this fix can do
- * harm, so the check refuses rather than warns.
+ * ignores it. Git answers that for any ignore file in the tree (a root `.gitignore`
+ * of a monorepo, a `/.dev.vars` pattern); outside a repository, the project's own
+ * `.gitignore` must carry the exact line. Unknown is a refusal, never a write.
  */
 const devVariablesIsIgnored = (cwd: string): boolean => {
-    const gitignore = join(cwd, ".gitignore");
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
+    const check = spawnSync("git", ["check-ignore", "-q", DEV_VARS_FILE], { cwd, stdio: "ignore" });
 
-    if (!existsSync(gitignore)) {
+    if (check.status === 0) {
+        return true;
+    }
+
+    if (check.status === 1) {
         return false;
     }
 
-    return readFileSync(gitignore, "utf8")
-        .split(LINE_BREAK)
-        .some((line) => line.trim() === DEV_VARS_FILE);
+    const gitignore = join(cwd, ".gitignore");
+
+    return (
+        existsSync(gitignore) &&
+        readFileSync(gitignore, "utf8")
+            .split(LINE_BREAK)
+            .some((line) => line.trim() === DEV_VARS_FILE)
+    );
 };
 
 /** The keys `.dev.vars` needs minted: the admin token when absent, and mintable secrets still at a placeholder. */
-const keysToMint = (entries: ReadonlyArray<{ key: string; value: string }>, result: DoctorFixResult): string[] => {
+const keysToMint = (cwd: string, entries: ReadonlyArray<{ key: string; value: string }>, result: DoctorFixResult): string[] => {
     const minted: string[] = [];
 
-    if (!entries.some((entry) => entry.key === "LUNORA_ADMIN_TOKEN" && entry.value !== "")) {
+    // The same resolver doctor uses for `admin-token-missing`, so an admin token
+    // already exported in the environment is not shadowed by a second one in .dev.vars.
+    if (resolveAdminBearer({ cwd }).source === undefined) {
         minted.push("LUNORA_ADMIN_TOKEN");
     }
 
@@ -284,7 +299,7 @@ const keysToMint = (entries: ReadonlyArray<{ key: string; value: string }>, resu
 const fixDevVariables = (options: DoctorFixOptions, result: DoctorFixResult): void => {
     const path = join(options.cwd, DEV_VARS_FILE);
     const content = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const minted = keysToMint(parseDevVariableEntries(content), result);
+    const minted = keysToMint(options.cwd, parseDevVariableEntries(content), result);
 
     if (minted.length === 0) {
         return;

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,14 +73,22 @@ const silentLogger: Logger = {
 
 describe("lunora doctor --fix", () => {
     let workdir: string;
+    const savedAdminToken = process.env.LUNORA_ADMIN_TOKEN;
 
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "doctor-fix-"));
         writeFileSync(join(workdir, ".gitignore"), ".dev.vars\n");
+        delete process.env.LUNORA_ADMIN_TOKEN;
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+
+        if (savedAdminToken === undefined) {
+            delete process.env.LUNORA_ADMIN_TOKEN;
+        } else {
+            process.env.LUNORA_ADMIN_TOKEN = savedAdminToken;
+        }
     });
 
     it("points a placeholder D1 id at the existing database and keeps the config's comments", async () => {
@@ -160,5 +169,27 @@ describe("lunora doctor --fix", () => {
 
         expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
         expect(result.skipped.some((line) => line.includes("not in .gitignore"))).toBe(true);
+    });
+
+    it("does not mint a second admin token when one is already exported", async () => {
+        expect.hasAssertions();
+
+        process.env.LUNORA_ADMIN_TOKEN = "from-the-shell";
+
+        await applyDoctorFixes({ configPath: undefined, cwd: workdir, dryRun: false, logger: silentLogger });
+
+        expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
+    });
+
+    it("accepts a /.dev.vars rule inside a git repository, which the exact-line check would refuse", async () => {
+        expect.hasAssertions();
+
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        spawnSync("git", ["init", "-q"], { cwd: workdir });
+        writeFileSync(join(workdir, ".gitignore"), "/.dev.vars\n");
+
+        await applyDoctorFixes({ configPath: undefined, cwd: workdir, dryRun: false, logger: silentLogger });
+
+        expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toMatch(/^LUNORA_ADMIN_TOKEN="[0-9a-f]{64}"$/mu);
     });
 });
