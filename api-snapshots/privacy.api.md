@@ -22,26 +22,19 @@ interface ArchivePort {
 }
 ```
 
-### `AuthTableNames` (interface)
+### `AuthTableNames` (type)
 
 ```ts
-interface AuthTableNames {
-    readonly account?: string;
-    readonly apikey?: string;
-    readonly member?: string;
-    readonly passkey?: string;
-    readonly session?: string;
-    readonly teamMember?: string;
-    readonly twoFactor?: string;
-    readonly user?: string;
-}
+type AuthTableNames = {
+    readonly [T in AuthTable]?: string;
+};
 ```
 
 ### `CoverageProblem` (interface)
 
 ```ts
 interface CoverageProblem {
-    readonly code: "unclassified" | "excluded_without_reason";
+    readonly code: "excluded_without_reason" | "unclassified";
     readonly table: string;
 }
 ```
@@ -167,7 +160,7 @@ interface Privacy {
     readonly admin: {
         readonly extend: (requestId: string, reason: string) => Promise<RequestRecord>;
         readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
-        readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
+        readonly retry: (requestId: string) => Promise<RetryResult>;
         readonly sweep: () => Promise<SweepResult>;
     };
     readonly cancelRequest: (input: {
@@ -260,12 +253,6 @@ interface PrivacyPreset {
 }
 ```
 
-### `PrivacyTableName` (type)
-
-```ts
-type PrivacyTableName = "archive" | "events" | "requests";
-```
-
 ### `PrivacyWorkflowContext` (interface)
 
 ```ts
@@ -316,7 +303,7 @@ interface RequestRow {
 ### `RequestStatus` (type)
 
 ```ts
-type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired";
+type RequestStatus = (typeof REQUEST_STATUSES)[number];
 ```
 
 ### `RequestStore` (interface)
@@ -336,7 +323,7 @@ interface RequestStore {
 ### `RequestType` (type)
 
 ```ts
-type RequestType = "export" | "erasure";
+type RequestType = "erasure" | "export";
 ```
 
 ### `RetainDirective` (interface)
@@ -367,6 +354,18 @@ interface RetentionRule {
 
 ```ts
 type RetentionStart = "endOfCalendarYear" | "from";
+```
+
+### `RetryResult` (type)
+
+```ts
+type RetryResult = {
+    readonly kind: "ran";
+    readonly outcome: ExportOutcome;
+} | {
+    readonly kind: "restart";
+    readonly requestId: string;
+};
 ```
 
 ### `RowDisposition` (type)
@@ -414,6 +413,15 @@ interface TableSpec {
     readonly erase?: TableErasure;
     readonly omit?: ReadonlyArray<string>;
     readonly origin?: DataOrigin;
+}
+```
+
+### `TombstonePort` (interface)
+
+```ts
+interface TombstonePort {
+    readonly add: (key: string, erasedAt: Date) => Promise<void>;
+    readonly keys: () => Promise<ReadonlySet<string>>;
 }
 ```
 
@@ -468,7 +476,7 @@ const isTerminal: (status: RequestStatus) => boolean;
 ### `privacyExtension` (const)
 
 ```ts
-const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDefinition>, "privacy">;
+const privacyExtension: SchemaExtension<Record<"archive" | "events" | "requests", TableDefinition>, "privacy">;
 ```
 
 ### `retain` (const)
@@ -561,29 +569,6 @@ const eu: (options?: EuOptions) => PrivacyPreset;
 
 ## `@lunora/privacy/workflow`
 
-### `DispatchConfig` (interface)
-
-```ts
-interface DispatchConfig {
-    readonly datasets: ReadonlyArray<Dataset>;
-    readonly presets?: ReadonlyArray<PrivacyPreset>;
-}
-```
-
-### `PORT_METHODS` (const)
-
-```ts
-const PORT_METHODS: PortMethodTable;
-```
-
-### `PortMethod` (type)
-
-```ts
-type PortMethod = {
-    [P in RemotePort]: `${P}.${keyof PortMethodTable[P] & string}`;
-}[RemotePort];
-```
-
 ### `PortTransport` (type)
 
 ```ts
@@ -593,28 +578,10 @@ type PortTransport = (call: {
 }) => Promise<unknown>;
 ```
 
-### `decodeWire` (const)
-
-```ts
-const decodeWire: (text: string) => unknown;
-```
-
 ### `dispatchPort` (const)
 
 ```ts
-const dispatchPort: (config: DispatchConfig, ports: PrivacyPorts, method: string, payload: string) => Promise<string>;
-```
-
-### `encodeWire` (const)
-
-```ts
-const encodeWire: (value: unknown) => string;
-```
-
-### `portMethods` (const)
-
-```ts
-const portMethods: () => ReadonlyArray<PortMethod>;
+const dispatchPort: (config: Pick<PrivacyConfig<never>, "datasets" | "presets">, ports: PrivacyPorts, method: string, payload: string) => Promise<string>;
 ```
 
 ### `remotePorts` (const)
@@ -629,6 +596,27 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AUTH_DEFAULT_TABLES` (const)
+
+```ts
+const AUTH_DEFAULT_TABLES: readonly [
+    "account",
+    "apikey",
+    "member",
+    "passkey",
+    "session",
+    "teamMember",
+    "twoFactor",
+    "user"
+];
+```
+
+### `AuthTable` (type)
+
+```ts
+type AuthTable = (typeof AUTH_DEFAULT_TABLES)[number];
+```
+
 ### `ErasureSettings` (interface)
 
 ```ts
@@ -639,20 +627,19 @@ interface ErasureSettings {
 }
 ```
 
-### `PortMethodTable` (type)
+### `REQUEST_STATUSES` (const)
 
 ```ts
-type PortMethodTable = {
-    readonly [P in RemotePort]-?: {
-        readonly [M in keyof NonNullable<PrivacyPorts[P]>]-?: true;
-    };
-};
-```
-
-### `RemotePort` (type)
-
-```ts
-type RemotePort = Exclude<keyof PrivacyPorts, "newId" | "now">;
+const REQUEST_STATUSES: readonly [
+    "received",
+    "grace",
+    "processing",
+    "ready",
+    "completed",
+    "failed",
+    "cancelled",
+    "expired"
+];
 ```
 
 ### `StepRunner` (interface)
@@ -661,14 +648,5 @@ type RemotePort = Exclude<keyof PrivacyPorts, "newId" | "now">;
 interface StepRunner {
     readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
     readonly sleepUntil?: (name: string, when: Date) => Promise<void>;
-}
-```
-
-### `TombstonePort` (interface)
-
-```ts
-interface TombstonePort {
-    readonly add: (key: string, erasedAt: Date) => Promise<void>;
-    readonly keys: () => Promise<ReadonlySet<string>>;
 }
 ```
