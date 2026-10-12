@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CreditsLedgerPort } from "../src/billing/overage";
 import { buildOverageReconcileData, overageFleetPorts } from "../src/billing/reconcile";
 import type { ControlPlaneDatabase } from "../src/store";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 const noopLedger: CreditsLedgerPort = { balance: () => Promise.resolve(0), debit: () => Promise.resolve() };
 

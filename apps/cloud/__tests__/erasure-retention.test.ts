@@ -7,7 +7,7 @@ import { prune } from "../lunora/retention";
 import type { OffsiteBucket } from "../src/backup/offsite";
 import { runTenantBackupSweep } from "../src/backup/tenant-sweep";
 import type { TenantBackupBucket } from "../src/backup/tenant-transport";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 /**

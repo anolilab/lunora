@@ -7,7 +7,7 @@ import type { ControlPlaneDatabase } from "../src/store";
 import type { AnomalyBaseline } from "../src/telemetry/anomaly";
 import { advanceBaseline, ANOMALY_BUCKET_MS, anomalyScore, isSilenced, MIN_ANOMALY_SAMPLES, MIN_ANOMALY_VOLUME, scoreBucket } from "../src/telemetry/anomaly";
 import { runAnomalySweep } from "../src/telemetry/anomaly-sweep";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 import { memoryStore } from "./support/memory-store";
 

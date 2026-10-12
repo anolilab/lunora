@@ -17,7 +17,7 @@ import {
     readFirewallEvents,
 } from "../src/targets/cloudflare-wfp/edge";
 import { cloudflareWorkersFleetFromEnv } from "../src/targets/cloudflare-workers/driver";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 const ZONE = "zone123";

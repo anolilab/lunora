@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ControlPlaneDatabase } from "../src/store";
 import { drainTable } from "../src/store";
-import fakeControlPlaneDb, { FAKE_PAGE_SIZE } from "./_helpers/fake-control-plane-db";
+import { FAKE_PAGE_SIZE, fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 /**
  * Whole-table draining for the control-plane sweeps.

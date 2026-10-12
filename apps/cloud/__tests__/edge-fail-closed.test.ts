@@ -4,7 +4,7 @@ import type { EdgeRuleRow } from "../src/edge/rules";
 import { runEdgeRuleSweep } from "../src/edge/rules";
 import type { ControlPlaneDatabase } from "../src/store";
 import { applyEdgeRule, buildEdgeRule, createEdgeProtection, EDGE_CALL_TIMEOUT_MS, edgeRuleRef } from "../src/targets/cloudflare-wfp/edge";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 /**
  * The `cloudflare-wfp` edge driver and the reconciler must fail CLOSED: a

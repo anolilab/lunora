@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ControlPlaneDatabase } from "../src/store";
 import { ALERT_DRAIN_GRACE_MS, ALERT_DRAIN_MAX, runAlertDrain } from "../src/telemetry/alert-drain";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 const now = 10_000_000;
 

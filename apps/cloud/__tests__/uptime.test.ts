@@ -4,7 +4,7 @@ import type { ControlPlaneDatabase } from "../src/store";
 import type { UptimeProbe } from "../src/uptime/probe";
 import { nextConsecutiveFailures, probeDeployment, summarizeUptime } from "../src/uptime/probe";
 import { runUptimeSweep } from "../src/uptime/sweep";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 /** A clock that advances 5ms per read, so probe latency is a deterministic 5. */
 const stepClock = (): (() => number) => {

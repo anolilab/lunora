@@ -6,7 +6,7 @@ import type { CloudflareApi, DnsRecord } from "../src/cloudflare/api";
 import { createHttpCloudflareApi, MAX_DNS_LIST_PAGES } from "../src/cloudflare/api";
 import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
 import { boxSlugOfRecord, reconcileBoxDns } from "../src/targets/celld-vps/dns";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 const DOMAIN = "boxes.test";
 const NOW = 1_800_000_000_000;

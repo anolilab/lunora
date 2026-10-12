@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { BOX_CREDITS_PER_MONTH, overageCreditsOwed, planOverageDebit } from "../src/billing/overage";
 import { LUNORA_CLOUD_PLANS } from "../src/billing/plans";
 import { billedBoxesByOrg, buildOverageReconcileData } from "../src/billing/reconcile";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 const PERIOD = Date.UTC(2026, 9, 1);
 

@@ -5,7 +5,7 @@ import { buildOverageReconcileData } from "../src/billing/reconcile";
 import { isBillableUsage, isBilledTarget } from "../src/billing/usage";
 import { MAX_PENDING_REPORTS, MAX_REPORTS_PER_MINUTE } from "../src/boxes/session-do";
 import { MAX_REPORT_AGE_MS, periodStartOf, recordBoxReport } from "../src/boxes/usage";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 import { boxKey, boxRow, fakeState, handshake, TestBoxSession } from "./support/box-session-fakes";
 import type { MemoryStore } from "./support/memory-store";

@@ -13,7 +13,7 @@ import { createDeployRouter } from "../src/deploy/router";
 import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import type { DispatchNamespaceLike } from "../src/targets/cloudflare-wfp/dispatch";
 import { dispatchTenantSender } from "../src/targets/cloudflare-wfp/dispatch";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 import type { MultipartStats, StoredObject } from "./_helpers/fake-object-store";
 import { fakeMultipart, fakeS3 } from "./_helpers/fake-object-store";

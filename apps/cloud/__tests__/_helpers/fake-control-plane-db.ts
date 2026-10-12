@@ -145,5 +145,4 @@ const fakeControlPlaneDb = (
     };
 };
 
-export { FAKE_PAGE_SIZE };
-export default fakeControlPlaneDb;
+export { FAKE_PAGE_SIZE, fakeControlPlaneDb };

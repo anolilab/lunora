@@ -14,7 +14,7 @@ import type { TargetId } from "../src/provision-contract";
 import type { ControlPlaneDatabase } from "../src/store";
 import { drainTable } from "../src/store";
 import type { UsageReadback, UsageRow, UsageSource } from "../src/targets/driver";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 import { fakeDriver } from "./support/memory-driver";
 import { memoryStore } from "./support/memory-store";
 

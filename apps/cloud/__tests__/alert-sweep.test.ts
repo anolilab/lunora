@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { MetricObservation } from "../src/telemetry/alerts";
 import { runAlertSweep } from "../src/telemetry/sweep";
-import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
 
 const now = 10 * 60_000; // 10 minutes in
 
