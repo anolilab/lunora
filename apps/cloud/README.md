@@ -1142,8 +1142,8 @@ at depth 0. Cloudflare's per-invocation subrequest limit and the per-plan CPU
 limits still apply to those.
 
 Deployment is fail-safe in both directions. Without `LUNORA_LINEAGE_SECRET` on the dispatcher, a request that carries a
-lineage header is refused with 503 `lineage_unverifiable`. Requests without one
-are unaffected (outside `development`, where the check is skipped).
+lineage header is refused with 503 `lineage_unverifiable`. Requests without one are unaffected. The check is skipped
+only in `development`.
 Without it on the Outbound Worker, nothing is stamped. Deploy the Outbound
 Worker before the dispatcher, because the dispatcher's namespace binding names
 it (`.github/workflows/deploy-cloud.yml` does this), and put the same secret on
@@ -1792,6 +1792,7 @@ to a session or as an MCP tool. It returns:
   `sampleInterval`) and counts by outcome
 - `queue[]`: per cell, the peak depth in each 15-minute bucket
 - `provisionFailures[]`: the top 50 (cell, step, reason) counts
+- `controlPlaneUnconfigured[]`: dispatcher refusals for a missing setting, by `setting` (the control-plane settings, or `lineage_secret`)
 
 It reads through the AE SQL API with `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN`, and answers 501 when either is missing.

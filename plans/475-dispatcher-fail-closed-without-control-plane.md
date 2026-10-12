@@ -14,10 +14,10 @@ as a misconfiguration rather than `forged`, and the counter read back. Still ope
   `LUNORA_LINEAGE_SECRET` outside `development` gets 503 `lineage_unverifiable`, `retry-after: 30`, counted with
   `setting` `lineage_secret` and logged once per isolate. It is not counted as `forged`, which stays for headers that
   fail verification. No header is unaffected.
-- **B shipped, and RED.** `__tests__/dispatcher-config.test.ts` enforces the rules. It fails on the two
-  `<replace-with-…-control-plane-url>` values (staging and production). No hostname was guessed. The only known
-  production candidate is `https://cloud.lunora.app` (the control plane's OTLP endpoint in `wrangler.jsonc`), which is
-  inferred, not confirmed. Substitute the real URLs before deploy.
+- **B shipped and green.** `__tests__/dispatcher-config.test.ts` enforces the rules. The unsubstituted `<replace-…>`
+  values are refused at deploy by `scripts/check-deploy-config.ts`; the unit test does not duplicate that check. No
+  hostname was guessed. The only known production candidate is `https://cloud.lunora.app` (the control plane's OTLP
+  endpoint in `wrangler.jsonc`), which is inferred, not confirmed. Substitute the real URLs before deploy.
 - **D shipped.** The 503 body names the missing setting (URL, token, or both).
 - **C not done.** It is an ops drill (staging drill, production counter check).
 - Choices made: `development` is set only at the top level (`wrangler dev`), and the top-level `CONTROL_PLANE_URL`

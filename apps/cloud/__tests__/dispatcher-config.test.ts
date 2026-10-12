@@ -13,7 +13,8 @@ import { describe, expect, it } from "vitest";
  * - every named environment declares its own `LUNORA_ENVIRONMENT` (matching the
  *   block name), `CONTROL_PLANE_URL` and `LUNORA_APP_DOMAIN`;
  * - `development` is never set in a named environment, so it cannot reach a deploy;
- * - no value is an unsubstituted template (the `replace-` prefix) or the `example.workers.dev` placeholder;
+ * - no value is the `example.workers.dev` placeholder (unsubstituted `<replace-…>` templates are refused at deploy by
+ *   `scripts/check-deploy-config.ts`);
  * - the lineage secret is a secret, never a plain `vars` entry.
  *
  * The secrets (`CONTROL_PLANE_TOKEN`) cannot be checked statically; the runtime
@@ -71,6 +72,11 @@ describe("dispatcher.wrangler.jsonc conformance", () => {
 
     it("is development at the top level, the only place a local dev run reads from", () => {
         expect(config.vars?.["LUNORA_ENVIRONMENT"]).toBe("development");
+    });
+
+    it("keeps the top level unable to deploy: an unbound sentinel namespace and no routes", () => {
+        expect(JSON.stringify(config.dispatch_namespaces)).toContain("lunora-local-dev-unbound");
+        expect(config.routes).toBeUndefined();
     });
 
     it("rejects the example.workers.dev placeholder in every environment", () => {

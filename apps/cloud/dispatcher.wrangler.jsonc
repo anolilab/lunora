@@ -42,7 +42,6 @@
         // LUNORA_LINEAGE_SECRET (recursion protection) is a secret too, the same value
         // as on the Outbound Worker; outside `development` a lineage header is refused without it.
     },
-    // Route all hostnames through the dispatcher (subdomains + custom hostnames).
     // Deployed environments — see the long note in `wrangler.jsonc`: a named
     // environment inherits none of the bindings above, so each restates them.
     // `.github/workflows/deploy-cloud.yml` always deploys with `--env`.
