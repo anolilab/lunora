@@ -5,9 +5,16 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            // The erasure tombstones, kept out of the shard so a point-in-time restore of the shard cannot delete them.
+            { "name": "PRIVACY_TOMBSTONES", "class_name": "PrivacyTombstonesDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["PrivacyTombstonesDO"] },
+    ],
     "observability": {
         "enabled": true,
         "head_sampling_rate": 1,

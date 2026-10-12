@@ -11,6 +11,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import type { CallIdentity } from "./privacy-ports";
 import { localPorts, remotePorts } from "./privacy-ports";
 import { presets } from "./privacy-presets";
+import { tombstonesFrom } from "./privacy-tombstones";
 
 /** The tasks a user keeps. Every row is theirs, so the export and erasure cover the whole table. */
 export const tasksData = defineDataset("tasks", {
@@ -34,7 +35,8 @@ export const privacyFor = definePrivacy<PrivacyContext>({
     datasets: [tasksData],
     presets,
     tombstoneSecret,
-    ports: (context) => ("db" in context ? localPorts(context) : remotePorts(context.run)),
+    // A workflow step reaches the shard through `ctx.run`, and the tombstones, which live outside it, through `ctx.env`.
+    ports: (context) => ("db" in context ? localPorts(context) : { ...remotePorts(context.run), tombstones: tombstonesFrom(context.env) }),
 });
 
 /**

@@ -15,7 +15,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../../lunora/_generated/server.js";
-import { privacyAs, privacyWorkflows } from "../../lunora/privacy";
+import { privacyAs, privacyFor, privacyWorkflows } from "../../lunora/privacy";
 import type { CallIdentity } from "../../lunora/privacy-ports";
 import { dispatchPort } from "../../lunora/privacy-ports";
 import schema from "../../lunora/schema";
@@ -64,7 +64,7 @@ const workflowContext = (db: Database, requestId: string, hooks: RunHooks = {}):
         },
     };
 
-    return { params: { requestId }, run, step } as unknown as Context;
+    return { env: { PRIVACY_TOMBSTONES: env.PRIVACY_TOMBSTONES }, params: { requestId }, run, step } as unknown as Context;
 };
 
 /** Runs `body` inside a fresh Durable Object, with the app's runtime built over its SQLite. */
@@ -188,6 +188,33 @@ describe("privacy example lifecycle (workerd)", () => {
             const cancelled = await requestRow(db, request.id);
 
             expect(cancelled?.status).toBe("cancelled");
+        });
+    });
+
+    it("erases a restored subject again, because the tombstones live outside the shard", async () => {
+        expect.assertions(4);
+
+        // Erase the subject in the live shard. The workflow writes the tombstone to its own Durable Object.
+        await withShard(async (db) => {
+            await seed(db);
+
+            const request = await privacyAs(appCtx(db), identity(SUBJECT)).requestErasure();
+
+            await privacyWorkflows.erasureHandler(workflowContext(db, request.id));
+
+            await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
+        });
+
+        // A point-in-time restore brings back the shard as it was before the erasure: a fresh
+        // shard with the subject's rows, and none of the live shard's tables. The tombstone store is untouched.
+        await withShard(async (db) => {
+            await seed(db);
+
+            const reerased = await privacyFor(workflowContext(db, "restore")).restore({ restoredSubjectIds: [SUBJECT, OTHER] });
+
+            expect(reerased).toStrictEqual([SUBJECT]);
+            await expect(tasksOf(db, SUBJECT)).resolves.toStrictEqual([]);
+            await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
         });
     });
 });

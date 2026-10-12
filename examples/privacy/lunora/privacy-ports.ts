@@ -16,6 +16,7 @@ import type { Doc as Document_ } from "./_generated/dataModel.js";
 import { internal } from "./_generated/internal.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { presets } from "./privacy-presets";
+import { tombstonesUnreachable } from "./privacy-tombstones";
 
 type RequestRow = Document_<"privacy_requests">;
 
@@ -259,19 +260,6 @@ const filePort = (ctx: LocalContext): StorePort => {
     };
 };
 
-const tombstonePort = (ctx: LocalContext): Tombstones => {
-    return {
-        add: async (key, erasedAt) => {
-            await writerOf(ctx).insert("privacy_tombstones", { erasedAt: erasedAt.getTime(), scope: "subject", subjectKey: key });
-        },
-        keys: async () => {
-            const rows = await ctx.db.query("privacy_tombstones").collect();
-
-            return new Set(rows.map((row) => row.subjectKey));
-        },
-    };
-};
-
 /**
  * The authenticated subject a call acts for. Resolved by the handler from its session
  * before the call (`identityOf`), never from an argument.
@@ -296,7 +284,7 @@ export const localPorts = (ctx: LocalContext, identity?: CallIdentity): PrivacyP
         newId: () => crypto.randomUUID(),
         now: () => new Date(),
         store: requestStore(ctx),
-        tombstones: tombstonePort(ctx),
+        tombstones: tombstonesUnreachable,
     };
 };
 
@@ -360,17 +348,6 @@ const fromWire = (value: unknown): unknown => {
     return Object.fromEntries(entries.map(([key, item]) => [key, fromWire(item)]));
 };
 
-/** The tombstone port, or a loud failure: `restore` needs it, and a call without it must not look like success. */
-type Tombstones = NonNullable<PrivacyPorts["tombstones"]>;
-
-const requireTombstones = (ports: PrivacyPorts): Tombstones => {
-    if (ports.tombstones === undefined) {
-        throw new LunoraError("INTERNAL", "tombstones are not bound for this call.");
-    }
-
-    return ports.tombstones;
-};
-
 /**
  * One port method, reached by name. The arguments arrive from the wire as `unknown`, so
  * each entry reads them by position and types them once, here.
@@ -393,8 +370,6 @@ const PORT_CALLS: Readonly<Record<string, PortCall>> = {
     "store.listForSubject": (ports, values) => ports.store.listForSubject(values[0] as string),
     "store.listOpen": (ports) => ports.store.listOpen(),
     "store.update": (ports, values) => ports.store.update(values[0] as string, values[1] as Partial<Omit<RequestRecord, "id">>),
-    "tombstones.add": (ports, values) => requireTombstones(ports).add(values[0] as string, values[1] as Date),
-    "tombstones.keys": (ports) => requireTombstones(ports).keys(),
 };
 
 /** Run one port call on the server. `payload` is the JSON array of arguments the workflow sent. */
@@ -414,8 +389,9 @@ export const dispatchPort = async (ctx: MutationCtx, method: string, payload: st
 /**
  * The ports for a workflow step. Each call is one `ctx.run` into the internal
  * `privacyPort` mutation, so every read and write runs in a database transaction.
+ * The tombstones are not in the shard, so the caller binds them from `ctx.env`.
  */
-export const remotePorts = (run: WorkflowRunContext["run"]): PrivacyPorts => {
+export const remotePorts = (run: WorkflowRunContext["run"]): Omit<PrivacyPorts, "tombstones"> => {
     const call = async (method: string, values: ReadonlyArray<unknown>): Promise<unknown> => {
         const text = await run(internal.requests.privacyPort, { method, payload: JSON.stringify(toWire(values)) });
 
@@ -466,12 +442,6 @@ export const remotePorts = (run: WorkflowRunContext["run"]): PrivacyPorts => {
             update: async (id, patch) => {
                 await call("store.update", [id, patch]);
             },
-        },
-        tombstones: {
-            add: async (key, erasedAt) => {
-                await call("tombstones.add", [key, erasedAt]);
-            },
-            keys: async () => (await call("tombstones.keys", [])) as ReadonlySet<string>,
         },
     };
 };

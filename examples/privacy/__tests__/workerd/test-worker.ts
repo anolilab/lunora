@@ -6,8 +6,14 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
+import type { PrivacyTombstonesDO } from "../../src/server/privacy-tombstones-do";
+
+// The app's tombstone store, unchanged: the suite checks it survives a restore of the shard.
+export { PrivacyTombstonesDO } from "../../src/server/privacy-tombstones-do";
+
 export interface Env {
     PRIVACY: DurableObjectNamespace<PrivacyTestDO>;
+    PRIVACY_TOMBSTONES: DurableObjectNamespace<PrivacyTombstonesDO>;
 }
 
 export class PrivacyTestDO extends DurableObject<Env> {}
