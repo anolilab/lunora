@@ -515,6 +515,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
+        description: "Reusable data-subject rights for Lunora apps: export, erasure and retention holds (GDPR Art. 15, 17, 20).",
+        docsPath: "/docs/packages/privacy",
+        features: [],
+        name: "Privacy",
+        npmName: "@lunora/privacy",
+        slug: "privacy",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
         description: "Cloudflare Queues: defineQueue producers + a generated queue() push consumer (or HTTP pull).",
         docsPath: "/docs/packages/queue",
         features: ["defineQueue producers/consumers", "Typed ctx.queues.<name>.send", "Push & pull consumers"],
