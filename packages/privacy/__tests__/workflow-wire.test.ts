@@ -140,4 +140,25 @@ describe("a workflow over the wire", () => {
         expect(local.data.rows).toStrictEqual({ goals: 0, tasks: 0 });
         expect(local.tombstones.stored.size).toBe(1);
     });
+
+    it("erases nothing when the dispatcher side has no tombstone store bound", async () => {
+        const { data, files, newId, now, store } = allPorts();
+        const local = { data, files, newId, now, store };
+        const config: PrivacyConfig<"local" | "remote"> = {
+            datasets: [tasksDataset],
+            ports: (side) => (side === "local" ? local : remotePorts(async ({ method, payload }) => dispatchPort(config, local, method, payload))),
+            presets: [eu()],
+            tombstoneSecret: SECRET,
+        };
+        const privacyFor = definePrivacy(config);
+        const opened = await privacyFor("local", SUBJECT).requestErasure();
+
+        await privacyFor("remote").workflows.erasureHandler({
+            params: { requestId: opened.id },
+            step: { do: async (_name, run) => run(), sleepUntil: async () => undefined },
+        });
+
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+        expect(data.rows).toStrictEqual({ goals: 150, tasks: 40 });
+    });
 });
