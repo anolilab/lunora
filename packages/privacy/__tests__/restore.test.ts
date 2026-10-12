@@ -102,13 +102,15 @@ describe("restore", () => {
             },
             keys: async () => new Set(),
         };
-        const { privacy, runErasureWorkflow, store } = build(failing);
+        const { privacy, rows, runErasureWorkflow, store } = build(failing);
         const opened = await privacy.requestErasure();
 
         await runErasureWorkflow(opened.id);
 
         expect(store.rows.get(opened.id)?.status).toBe("failed");
         expect(store.events).not.toContain(`${opened.id}:completed`);
+        // The tombstone goes first, so a store that cannot take it stops the erasure before any row goes.
+        expect(rows.tasks).toBe(150);
     });
 
     it("refuses an erasure when the ports have no tombstone store, through either entry", async () => {

@@ -541,6 +541,17 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
             return { leftover: [], status: started };
         }
 
+        // The tombstone is written first: before anything is erased, so a store that cannot take it
+        // (unbound behind the workflow's port, or failing) stops the erasure with nothing deleted, and
+        // before the request completes, so a completed erasure always has one. A retried step writes it
+        // again, which the port's upsert absorbs.
+        const key = tombstoneKeyOf(record.subjectId, tombstones.secret);
+        const tombstoned = await step("tombstone", async () => tombstones.port.add(key, scope.ports.now()));
+
+        if (tombstoned.status !== "processing") {
+            return { leftover: [], status: tombstoned.status };
+        }
+
         for (const dataset of erasureOrder(scope.datasets)) {
             // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
             // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
@@ -566,15 +577,6 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 
         if (!verdict.complete) {
             return { leftover: verdict.leftover, status: await failStep(scope, steps, requestId, verdict.leftover.join(",")) };
-        }
-
-        // The tombstone is written before the request completes, so a completed erasure always has one.
-        // A retried step writes it again, which the port's upsert absorbs.
-        const key = tombstoneKeyOf(record.subjectId, tombstones.secret);
-        const tombstoned = await step("tombstone", async () => tombstones.port.add(key, scope.ports.now()));
-
-        if (tombstoned.status !== "processing") {
-            return { leftover: [], status: tombstoned.status };
         }
 
         const completed = await step("complete", async () => completeErasure(scope.ports, requestId, record.subjectId, key));
