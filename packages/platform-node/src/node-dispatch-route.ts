@@ -13,12 +13,10 @@
  * `fetchImpl` for in-process delivery (see `createNodePlatform`'s `dispatch`), or
  * a server the app runs itself. Nothing here binds a port.
  *
- * The auth and body rules mirror `handleSchedulerDispatch` in
- * `@lunora/runtime`'s `create-worker.ts`. They are copied rather than imported,
- * because that handler is private to the Worker composition and this package
- * must not depend on the runtime for it. The HMAC primitive is the one shared
- * `shared/hmac-url` already used by this package, so the signature is computed
- * the same way the scheduler computes it.
+ * The auth rules, the reserved-path refusal, the trust-boundary headers and the
+ * body cap all come from `shared/` files that `@lunora/runtime` also imports, so
+ * the two hosts cannot drift. The in-process `invoke` reaches the shard through
+ * the runtime's `resolveShard`, the same entry the Worker's shard forward uses.
  *
  * Wire format: a 2xx response means done; a 409 with the `DISPATCH_DECLINED`
  * header means come back later. Both pass through from `invoke` untouched, so a
@@ -26,15 +24,13 @@
  * envelope, as in the runtime.
  */
 
-import { LunoraError, toErrorBody } from "@lunora/errors";
-import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
+import { LunoraError } from "@lunora/errors";
+import type { DirectShardDirectory } from "@lunora/platform";
+import { resolveShard, toErrorResponse } from "@lunora/runtime";
 
-import { constantTimeEqual } from "../../../shared/constant-time-equal";
-import { signCanonical } from "../../../shared/hmac-url";
-import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
-
-/** The path `@lunora/dispatch` and `@lunora/scheduler` POST to. */
-const NODE_SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
+import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
+import { isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 
 /** Upper bound on a dispatch body, matching the runtime's default body budget. */
 const MAX_DISPATCH_BODY_BYTES = 1_048_576;
@@ -62,63 +58,14 @@ interface NodeDispatchRouteOptions {
     schedulerSecret?: string;
 }
 
-const errorResponse = (error: unknown): Response => {
-    const { body, status } = toErrorBody(error, { fallbackCode: "INTERNAL", redactedMessage: "Internal error" });
-
-    return Response.json({ error: body }, { headers: { "content-type": "application/json" }, status });
-};
-
-const checkBearer = (request: Request, expected: string | undefined): boolean => {
-    if (expected === undefined || expected.length === 0) {
-        return false;
-    }
-
-    const [scheme, ...rest] = (request.headers.get("authorization") ?? "").split(" ");
-
-    if (scheme?.toLowerCase() !== "bearer") {
-        return false;
-    }
-
-    return constantTimeEqual(expected, rest.join(" ").trim());
-};
-
-const readForwardedIdentity = (request: Request): { identity?: string; userId?: string } | undefined => {
-    const userId = request.headers.get("x-lunora-userid");
-    const identity = request.headers.get("x-lunora-identity");
-
-    if (userId === null && identity === null) {
-        return undefined;
-    }
-
-    return {
-        ...(identity === null ? {} : { identity }),
-        ...(userId === null ? {} : { userId }),
-    };
-};
-
 const readRawBody = async (request: Request): Promise<string> => {
-    const bytes = await request.arrayBuffer();
+    const text = await readBodyTextCapped(request, MAX_DISPATCH_BODY_BYTES);
 
-    if (bytes.byteLength > MAX_DISPATCH_BODY_BYTES) {
+    if (text === null) {
         throw new LunoraError("PAYLOAD_TOO_LARGE", "Scheduler dispatch body is too large");
     }
 
-    return new TextDecoder().decode(bytes);
-};
-
-/**
- * A signature the scheduler computed over the exact body wins when the scheduler
- * secret is set. Otherwise the admin bearer is the credential, as the runtime does.
- */
-const authenticate = async (request: Request, rawBody: string, options: NodeDispatchRouteOptions): Promise<boolean> => {
-    const signature = request.headers.get("x-lunora-scheduler-signature");
-    const secret = options.schedulerSecret;
-
-    if (signature !== null && signature.length > 0 && secret !== undefined && secret.length > 0) {
-        return constantTimeEqual(await signCanonical(secret, rawBody), signature);
-    }
-
-    return checkBearer(request, options.adminToken);
+    return text;
 };
 
 const handle = async (request: Request, options: NodeDispatchRouteOptions): Promise<Response> => {
@@ -128,7 +75,10 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
 
     // The HMAC covers the exact bytes the caller sent, so verify before parsing.
     const rawBody = await readRawBody(request);
-    const authenticated = await authenticate(request, rawBody, options);
+    const authenticated = await verifySchedulerDispatch(request, rawBody, {
+        adminToken: options.adminToken,
+        schedulerSecret: options.schedulerSecret,
+    });
 
     if (!authenticated) {
         // DISPATCH_UNAUTHENTICATED, not FORBIDDEN: consumers treat a 403 as final and
@@ -159,7 +109,7 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
         throw new LunoraError("BAD_REQUEST", "Scheduler dispatch is missing `functionPath`");
     }
 
-    if (candidate["functionPath"].startsWith(RELATION_FUNCTION_PREFIX)) {
+    if (isReservedRelationFunctionPath(candidate["functionPath"])) {
         throw new LunoraError("FORBIDDEN", "`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard");
     }
 
@@ -169,7 +119,7 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
         args: (candidate["args"] ?? {}) as Record<string, unknown>,
         functionPath: candidate["functionPath"],
         id: typeof candidate["id"] === "string" && candidate["id"].length > 0 ? candidate["id"] : undefined,
-        identity: readForwardedIdentity(request),
+        identity: readForwardedDispatchIdentity(request),
         shardKey,
         traceparent: request.headers.get("traceparent") ?? undefined,
     });
@@ -177,17 +127,15 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
 
 /**
  * The in-process `invoke`: forwards one authenticated call to the shard the
- * directory resolves for its key, as the runtime's shard forward does. It refuses
- * when `handlerWired` is false, since no shard handler exists to run the call. The
- * `x-lunora-system` marker is what lets the shard run `internal` functions for a
- * server-initiated dispatch, and the identity and idempotency headers match the
- * runtime's `dispatchToShard`.
+ * directory resolves for its key, through the runtime's `resolveShard`. The
+ * shard's response is returned unchanged, so a 409 `DISPATCH_DECLINED` stays
+ * retryable. It refuses when `handlerWired` is false, since no shard handler
+ * exists to run the call: without it a shard only echoes its key, and a dispatch
+ * answered that way would ack a message whose function never ran.
  */
 const createShardInvoke =
-    (directory: { getByName: (name: string) => { fetch: (request: Request) => Promise<Response> } }, handlerWired: boolean) =>
+    (directory: DirectShardDirectory, handlerWired: boolean) =>
     (call: NodeDispatchInvocation): Promise<Response> => {
-        // Without the registry's `onFetch` a resolved stub only echoes its key, and a
-        // dispatch answered that way would ack a message whose function never ran.
         if (!handlerWired) {
             throw new LunoraError(
                 "SERVICE_UNAVAILABLE",
@@ -195,37 +143,13 @@ const createShardInvoke =
             );
         }
 
-        // The paywall marker: a scheduled `.x402` procedure has no HTTP caller to
-        // charge, so running it unpaid is deliberate here, as in the runtime.
-        const headers: Record<string, string> = {
-            "content-type": "application/json",
-            [ORIGIN_PAYWALL_HEADER]: ORIGIN_PAYWALL_APPLIED,
-            "x-lunora-system": "1",
-        };
-
-        if (call.identity?.userId !== undefined && call.identity.userId.length > 0) {
-            headers["x-lunora-userid"] = call.identity.userId;
-        }
-
-        if (call.identity?.identity !== undefined && call.identity.identity.length > 0) {
-            headers["x-lunora-identity"] = call.identity.identity;
-        }
-
-        if (call.id !== undefined) {
-            headers["x-lunora-mutation-id"] = call.id;
-        }
-
-        if (call.traceparent !== undefined && call.traceparent.length > 0) {
-            headers.traceparent = call.traceparent;
-        }
-
         const request = new Request("https://shard.internal/rpc", {
             body: JSON.stringify({ args: call.args, functionPath: call.functionPath }),
-            headers,
+            headers: buildSystemDispatchHeaders({ forwardedIdentity: call.identity, mutationId: call.id, traceparent: call.traceparent }),
             method: "POST",
         });
 
-        return directory.getByName(call.shardKey).fetch(request);
+        return resolveShard(directory, call.shardKey).fetch(request);
     };
 
 /**
@@ -240,9 +164,12 @@ const createNodeDispatchRoute =
         try {
             return await handle(request, options);
         } catch (error) {
-            return errorResponse(error);
+            return toErrorResponse(error);
         }
     };
+
+/** The path `@lunora/dispatch` and `@lunora/scheduler` POST to. */
+const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch" = SCHEDULER_DISPATCH_PATH;
 
 export type { NodeDispatchInvocation, NodeDispatchRouteOptions };
 export { createNodeDispatchRoute, createShardInvoke, NODE_SCHEDULER_DISPATCH_PATH };

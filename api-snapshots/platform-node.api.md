@@ -14,7 +14,7 @@ SemVer promise until the package graduates.
 ### `NODE_SCHEDULER_DISPATCH_PATH` (const)
 
 ```ts
-const NODE_SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
+const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch";
 ```
 
 ### `NodeDispatchInvocation` (interface)

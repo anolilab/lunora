@@ -135,6 +135,26 @@ describe("the dispatch route's refusals and shard headers", () => {
         expect(invoke).not.toHaveBeenCalled();
     });
 
+    it("refuses a shard key in the reserved role namespace before reaching any shard", async () => {
+        expect.assertions(3);
+
+        // The runtime's `resolveShard` refuses this prefix. Before the route went
+        // through it, the call reached the directory and a shard answered it.
+        const fetch = vi.fn<(request: Request) => Promise<Response>>(async () => Response.json({ result: null }));
+        const getByName = vi.fn<(name: string) => { fetch: (request: Request) => Promise<Response> }>(() => {
+            return { fetch };
+        });
+        const invoke = createShardInvoke({ getByName }, true);
+        const route = createNodeDispatchRoute({ adminToken: TOKEN, defaultShardKey: "__root__", invoke });
+        const response = await route(
+            post(JSON.stringify({ functionPath: "notes:add", shardKey: "__lunora_do__:tenant" }), { authorization: `Bearer ${TOKEN}` }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(getByName).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
     it("sends the system and paywall markers to the shard with the call's idempotency key", async () => {
         expect.assertions(4);
 
