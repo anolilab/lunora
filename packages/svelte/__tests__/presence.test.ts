@@ -388,6 +388,28 @@ describe("presence (Svelte)", () => {
         expect(fake.mutationCalls).toHaveLength(0);
     });
 
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(1);
+
+        handle.setData({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(2);
+        expect(fake.mutationCalls[1]?.args).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+
+        handle.teardown();
+    });
+
     it("setData after teardown sends no heartbeat", async () => {
         const fake = createPresenceFakeClient();
 

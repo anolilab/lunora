@@ -335,6 +335,34 @@ describe("usePresence (Vue)", () => {
         scope.stop();
     });
 
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(1);
+
+        result.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(2);
+        expect(fake.mutationSpy.mock.calls[1]?.[1]).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+
+        scope.stop();
+    });
+
     it("setData after the scope stops sends no heartbeat", async () => {
         const fake = createPresenceFakeClient();
 
