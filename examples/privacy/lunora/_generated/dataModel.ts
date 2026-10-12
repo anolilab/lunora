@@ -52,7 +52,6 @@ export interface Doc_ratelimit_buckets {
 export interface Doc_privacy_archive {
     _id: Id<"privacy_archive">;
     _creationTime: number;
-    archivedAt: number;
     datasetId: string;
     retainUntil: number;
     row: string;
@@ -104,8 +103,8 @@ export interface IndexNamesByTable {
     tasks: "byUser";
     exportFiles: "byRequestAndName";
     ratelimit_buckets: "by_key";
-    privacy_archive: "bySubjectDataset" | "byRetainUntil";
-    privacy_events: "byRequest";
+    privacy_archive: "byRetainUntil";
+    privacy_events: never;
     privacy_requests: "byRequestId" | "bySubject" | "byStatus";
 }
 
@@ -180,7 +179,6 @@ export interface Insert_ratelimit_buckets {
 export interface Insert_privacy_archive {
     _id?: Id<"privacy_archive">;
     _creationTime?: number;
-    archivedAt: number;
     datasetId: string;
     retainUntil: number;
     row: string;

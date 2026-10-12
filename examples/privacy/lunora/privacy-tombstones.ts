@@ -7,10 +7,8 @@
  * refuses instead of letting an erasure complete without its tombstone. A throw inside
  * a mutation rolls back the whole transaction, deletes included.
  */
-import type { PrivacyPorts } from "@lunora/privacy";
+import type { TombstonePort } from "@lunora/privacy";
 import { LunoraError } from "lunorash/errors";
-
-type TombstonePort = NonNullable<PrivacyPorts["tombstones"]>;
 
 /** The RPC surface of one tombstone store instance. */
 interface TombstoneStub {

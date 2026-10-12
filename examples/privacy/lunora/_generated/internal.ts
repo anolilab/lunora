@@ -8,7 +8,7 @@ export interface InternalApiTypes {
     admin: {
         listOpenPrivacyRequests: FunctionReference<"query", {}, import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
         restorePrivacyErasures: FunctionReference<"action", {}, { id: string; subjects: number; }>;
-        retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
+        retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; }>;
     };
     requests: {
         privacyPort: FunctionReference<"mutation", { method: string; payload: string }, string>;

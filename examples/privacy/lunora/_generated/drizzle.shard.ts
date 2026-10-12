@@ -39,14 +39,12 @@ export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
 export const privacy_archive = sqliteTable("privacy_archive", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
-    archivedAt: real("archivedAt").notNull(),
     datasetId: text("datasetId").notNull(),
     retainUntil: real("retainUntil").notNull(),
     row: text("row").notNull(),
     subjectId: text("subjectId").notNull(),
     table: text("table").notNull(),
 }, (t) => ({
-    bySubjectDataset: index("bySubjectDataset").on(t.subjectId, t.datasetId),
     byRetainUntil: index("byRetainUntil").on(t.retainUntil),
 }));
 
@@ -57,9 +55,7 @@ export const privacy_events = sqliteTable("privacy_events", {
     detail: text("detail"),
     kind: text("kind").notNull(),
     requestId: text("requestId").notNull(),
-}, (t) => ({
-    byRequest: index("byRequest").on(t.requestId, t.at),
-}));
+});
 
 export const privacy_requests = sqliteTable("privacy_requests", {
     _id: text("_id").primaryKey(),

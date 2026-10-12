@@ -35,31 +35,24 @@ export const listOpenPrivacyRequests = internalQuery.query(async ({ ctx }): Prom
 });
 
 /**
- * Re-run a failed request. An export re-runs here through the package's `admin.retry`. An
- * erasure restarts its workflow instead: only the workflow reaches the tombstone store,
- * and a failed erasure skips the grace and resumes from its `failed` status.
+ * Re-run a failed request through the package's `admin.retry`, which refuses one that has not failed.
+ * An export re-runs inline. An erasure comes back as `restart`: the package has already moved it out
+ * of `failed`, so a second retry is refused, and only the workflow reaches the tombstone store, so
+ * this starts it again. The workflow resumes from the status the package set.
  */
 export const retryPrivacyRequest = internalMutation.input({ requestId: v.string().max(64) }).mutation(async ({ args: { requestId }, ctx }) => {
-    const privacy = privacyFor(ctx);
-    const open = await privacy.admin.open();
-    const record = open.find((candidate) => candidate.id === requestId);
+    const result = await privacyFor(ctx).admin.retry(requestId);
 
-    if (record?.status !== "failed") {
-        throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; ${requestId} is not one.`);
-    }
-
-    if (record.type === "erasure") {
-        await ctx.workflows.get("privacyErasure").create({ id: `${requestId}-retry-${String(ctx.now)}`, params: { requestId } });
+    if (result.kind === "restart") {
+        await ctx.workflows.get("privacyErasure").create({ id: `${result.requestId}-retry-${String(ctx.now)}`, params: { requestId: result.requestId } });
         ctx.log.info("privacy erasure retry started", { requestId });
 
         return { requestId, status: "restarted" as const };
     }
 
-    const outcome = await privacy.admin.retry(requestId);
+    ctx.log.info("privacy export retried", { requestId, status: result.outcome.status });
 
-    ctx.log.info("privacy export retried", { requestId, status: outcome.status });
-
-    return { requestId, status: outcome.status };
+    return { requestId, status: result.outcome.status };
 });
 
 /**
