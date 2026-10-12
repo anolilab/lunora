@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { dueAt, extendedDueAt } from "../../../../../shared/privacy-deadlines";
 import { PrivacyRequestsPanel } from "../../../src/features/privacy/privacy-requests-panel";
 import type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus } from "../../../src/features/privacy/privacy-requests-source";
 import { PRIVACY_REQUEST_STATUSES } from "../../../src/features/privacy/privacy-requests-source";
@@ -14,12 +15,10 @@ type RetryFn = PrivacyRequestsSource["retryPrivacyRequest"];
 const DAY = 86_400_000;
 const NOW = Date.now();
 
-const PAST_DUE = NOW - 2 * DAY;
-const FUTURE_DUE = NOW + 5 * DAY;
-const EXTENDED_DUE = NOW + 20 * DAY;
+/** Received forty days ago: past the one-month deadline, inside the three-month extended one. */
+const RECEIVED_LONG_AGO = NOW - 40 * DAY;
 
 const openRequest: PrivacyRequestRow = {
-    dueAt: FUTURE_DUE,
     id: "req_open",
     receivedAt: NOW - DAY,
     status: "received",
@@ -28,19 +27,17 @@ const openRequest: PrivacyRequestRow = {
 };
 
 const overdueFailed: PrivacyRequestRow = {
-    dueAt: PAST_DUE,
     id: "req_failed",
-    receivedAt: NOW - 30 * DAY,
+    receivedAt: RECEIVED_LONG_AGO,
     status: "failed",
     subjectId: "user_failed",
     type: "erasure",
 };
 
 const extended: PrivacyRequestRow = {
-    dueAt: PAST_DUE,
-    extendedDueAt: EXTENDED_DUE,
+    extendedDueAt: extendedDueAt(new Date(RECEIVED_LONG_AGO)).getTime(),
     id: "req_extended",
-    receivedAt: NOW - 40 * DAY,
+    receivedAt: RECEIVED_LONG_AGO,
     status: "processing",
     subjectId: "user_extended",
     type: "export",
@@ -122,7 +119,7 @@ describe("privacyRequestsPanel", () => {
         expect(cells[2]?.textContent).toBe("user_open");
         expect(cells[3]?.textContent).toBe("received");
         expect(cells[4]?.textContent).toBe(formatTimestamp(openRequest.receivedAt));
-        expect(cells[5]?.textContent).toBe(formatTimestamp(openRequest.dueAt));
+        expect(cells[5]?.textContent).toBe(formatTimestamp(dueAt(new Date(openRequest.receivedAt)).getTime()));
         expect(cells[6]?.textContent).toBe("—");
         expect(cells[7]?.textContent).toBe("");
     });
@@ -141,7 +138,7 @@ describe("privacyRequestsPanel", () => {
         const extendedRow = rowFor(extended.id);
 
         expect(extendedRow.dataset.overdue).toBe("false");
-        expect(within(extendedRow).getAllByRole("cell")[6]?.textContent).toBe(formatTimestamp(EXTENDED_DUE));
+        expect(within(extendedRow).getAllByRole("cell")[6]?.textContent).toBe(formatTimestamp(extendedDueAt(new Date(RECEIVED_LONG_AGO)).getTime()));
         expect(rowFor(openRequest.id).dataset.overdue).toBe("false");
     });
 

@@ -10,7 +10,7 @@ import { useT } from "../../i18n/i18n-context";
 import { formatTimestamp } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus } from "./privacy-requests-source";
-import { isPrivacyRequestOverdue } from "./privacy-requests-source";
+import { isPrivacyRequestOverdue, privacyRequestDeadlines } from "./privacy-requests-source";
 
 /** Query key shared by the list read and the invalidation after a retry. */
 const QUERY_KEY = ["studio", "privacy-requests"] as const;
@@ -45,7 +45,7 @@ const STATUS_VARIANT: Readonly<Record<PrivacyRequestStatus, StatusBadgeVariant>>
 };
 
 /** Human-readable deadline cell: the extended date when one is set, otherwise a dash. */
-const formatOptionalTimestamp = (value: null | number | undefined): string => formatTimestamp(value ?? undefined, "—");
+const formatOptionalTimestamp = (value: number | undefined): string => formatTimestamp(value, "—");
 
 interface PrivacyRequestRowViewProps {
     readonly asOf: number;
@@ -57,6 +57,7 @@ interface PrivacyRequestRowViewProps {
 const PrivacyRequestRowView = ({ asOf, retrying, row, onRetry }: PrivacyRequestRowViewProps): ReactElement => {
     const t = useT();
     const overdue = isPrivacyRequestOverdue(row, asOf);
+    const deadlines = privacyRequestDeadlines(row);
 
     return (
         <TableRow className={cn(overdue && "bg-destructive/5")} data-overdue={overdue ? "true" : "false"} data-testid="privacy-request-row">
@@ -69,8 +70,8 @@ const PrivacyRequestRowView = ({ asOf, retrying, row, onRetry }: PrivacyRequestR
                 <Badge variant={STATUS_VARIANT[row.status]}>{row.status}</Badge>
             </TableCell>
             <TableCell>{formatTimestamp(row.receivedAt)}</TableCell>
-            <TableCell>{formatTimestamp(row.dueAt)}</TableCell>
-            <TableCell>{formatOptionalTimestamp(row.extendedDueAt)}</TableCell>
+            <TableCell>{formatTimestamp(deadlines.dueAt)}</TableCell>
+            <TableCell>{formatOptionalTimestamp(deadlines.extendedDueAt)}</TableCell>
             <TableCell>
                 {overdue && (
                     <Badge data-testid="privacy-overdue" variant="destructive">
