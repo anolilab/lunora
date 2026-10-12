@@ -30,7 +30,7 @@ export const tasksData = defineDataset("tasks", {
 });
 ```
 
-Then bind the datasets, the presets and the ports into one object. The app supplies the data, storage and request ports, and the clock.
+Then bind the datasets, the presets and the ports into one object. The app supplies the data, storage and request ports, and the clock. The storage port must key a request's files under `<requestId>/`, and lists and deletes them as well as writing them.
 
 ```ts
 // lunora/privacy.ts
@@ -46,6 +46,8 @@ export const privacyFor = definePrivacy({
     presets: [eu(), germany()],
     // Tables that hold a user's data but are not exported, each with the reason a reviewer reads.
     exclude: { featureFlags: "Operator configuration; contains no personal data" },
+    // Derives the tombstone keys. Required once the ports pass `tombstones`; keep it in a secret binding.
+    tombstoneSecret: process.env.PRIVACY_TOMBSTONE_SECRET,
     ports: (ctx) => ({
         // Your ports: the data, the files, the request store, and the clock.
         data: dataPortOver(ctx),
@@ -75,10 +77,11 @@ Declare the functions in their own file as builder calls, so codegen registers t
 
 ## What it does
 
-- **Export (Art. 15 and 20).** Every dataset is collected, then written to a ZIP with a manifest and a readable PDF copy. The manifest says which article each dataset falls under. The download link lasts fifteen minutes, and the export expires after seven days.
-- **Erasure (Art. 17).** A request enters a 14-day grace window, during which the subject can cancel. Erasure then runs one dataset at a time, and the request completes only after a verify step finds every table empty.
+- **Export (Art. 15 and 20).** Every dataset is collected, then written to a ZIP with a manifest and a readable PDF copy. The manifest says which article each dataset falls under. The download link lasts fifteen minutes, and the export expires after seven days. Run `admin.sweep()` from a cron: it deletes each expired export's files and marks the request `expired`.
+- **Erasure (Art. 17).** A request enters a 14-day grace window, during which the subject can cancel. Erasure then runs one dataset at a time and deletes the subject's stored files: every file their requests wrote, and everything under each dataset's `files.prefix(subjectId)`. The request completes only after a verify step finds every table empty and every files prefix listing nothing, apart from rows a retention rule still keeps.
+- **Retention.** The package decides and the app writes. `eraseBatch` receives a `disposition(dataset, table, row, now)` function bound to the presets' rules. Delete a `delete` row, anonymise an `anonymise` row, and move a `keep` row into your archive table so the next batch does not select it again. A dataset with a retained table is marked `restricted` in the export manifest.
 - **Deadlines (Art. 12(3)).** The response is due one calendar month after receipt. `tick` lists requests within seven days of their deadline and those already overdue, so an operator sees a missed one.
-- **Restores.** A completed erasure records a tombstone keyed by a hash of the subject id. If a backup taken before the erasure is restored, `restore` erases those subjects again.
+- **Restores.** A completed erasure records a tombstone keyed by an HMAC of the subject id under `tombstoneSecret`. An erasure or a restore refuses to run without the secret once tombstones are configured. If a backup taken before the erasure is restored, `restore` erases those subjects again.
 
 ## Coverage
 
