@@ -606,5 +606,3 @@ export {
     type StepRunner,
     type StorePort,
 };
-
-export { EXPORT_EXPIRY_MS };

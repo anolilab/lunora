@@ -4298,12 +4298,6 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@lunora/values':
-        specifier: workspace:*
-        version: link:../values
-      '@lunora/workflow':
-        specifier: workspace:*
-        version: link:../workflow
       fflate:
         specifier: catalog:privacy
         version: 0.8.3

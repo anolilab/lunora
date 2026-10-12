@@ -36,5 +36,5 @@ export { fromRequestRow, toRequestPatch, toRequestRow } from "./rows";
 export type { PrivacyPolicy, PrivacyPreset, RetainDirective, RetentionRule, RetentionStart } from "./rules";
 export { retain } from "./rules";
 export type { ArchivePort, DataPort, ErasureOutcome, ExportOutcome, StorePort } from "./run";
-export type { PrivacyTableName } from "./tables";
-export { privacyExtension } from "./tables";
+export { default as privacyExtension } from "./tables";
+export type { TombstonePort } from "./tombstones";

@@ -9,29 +9,24 @@ import { defineSchemaExtension, defineTable, v } from "@lunora/server";
 
 import { REQUEST_STATUSES } from "../../../shared/privacy-request-status";
 
-/** The three table names, before the `privacy_` prefix. */
-export type PrivacyTableName = "archive" | "events" | "requests";
-
-export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDefinition>, "privacy"> = defineSchemaExtension("privacy", {
+/** The three tables, before the `privacy_` prefix. */
+const privacyExtension: SchemaExtension<Record<"archive" | "events" | "requests", TableDefinition>, "privacy"> = defineSchemaExtension("privacy", {
     tables: {
         archive: defineTable({
-            archivedAt: v.number(),
             datasetId: v.string(),
             retainUntil: v.number(),
             /** The row as JSON, kept under a retention rule whose period has not ended. */
             row: v.string(),
             subjectId: v.string(),
             table: v.string(),
-        })
-            .index("bySubjectDataset", ["subjectId", "datasetId"])
-            .index("byRetainUntil", ["retainUntil"]),
+        }).index("byRetainUntil", ["retainUntil"]),
 
         events: defineTable({
             at: v.number(),
             detail: v.optional(v.string()),
             kind: v.string(),
             requestId: v.string(),
-        }).index("byRequest", ["requestId", "at"]),
+        }),
 
         requests: defineTable({
             dueAt: v.number(),
@@ -52,3 +47,5 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
             .index("byStatus", ["status", "dueAt"]),
     },
 });
+
+export default privacyExtension;

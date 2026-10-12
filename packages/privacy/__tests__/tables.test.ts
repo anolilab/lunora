@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { REQUEST_STATUSES } from "../../../shared/privacy-request-status";
-import { privacyExtension } from "../src/tables";
+import privacyExtension from "../src/tables";
 
 /** The Standard Schema surface every Lunora validator carries. */
 interface StandardSchemaV1 {
