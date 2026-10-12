@@ -684,6 +684,13 @@ interface DatabaseWriterLike {
     }>;
     normalizeId: (tableName: string, id: string) => null | string;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patchIf?: (tableName: string, id: string, args: {
+        patch: Record<string, unknown>;
+        where: WhereInput;
+    }) => Promise<{
+        applied: boolean;
+        doc: Record<string, unknown> | null;
+    }>;
     patchMany?: (patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
@@ -3557,7 +3564,7 @@ const assertFlatPredicate: (where: WhereInput | undefined, schema: ResolveContex
 ### `assertNoExplicitUndefined` (const)
 
 ```ts
-const assertNoExplicitUndefined: (op: "patch" | "replace", document: Record<string, unknown>) => void;
+const assertNoExplicitUndefined: (op: "patch" | "patchIf" | "replace", document: Record<string, unknown>) => void;
 ```
 
 ### `assertReadonly` (const)

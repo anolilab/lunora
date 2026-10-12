@@ -291,6 +291,7 @@ interface PlatformCapabilities {
         authJurisdictionMove?: Capability;
         browser?: Capability;
         commitOrderedTables?: Capability;
+        conditionalWrites?: Capability;
         containerEgressPolicy?: Capability;
         containerRuntimeScheduling?: Capability;
         containers?: Capability;

@@ -37,7 +37,7 @@
  * `scheduler`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
- * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`,
  * `serverReactors`,
@@ -48,6 +48,10 @@
  *
  * # Advisory is not one thing — there are two reasons, and only one is final
  *
+ * `conditionalWrites` is advisory by nature as well: it is one `ctx.db` method
+ * (`patchIf`), and every backend that runs it decides in the database's own
+ * statement, so no target needs codegen to withhold it. A backend without one
+ * refuses the call at first use instead of reading and then writing.
  * `authJurisdictionMove` is advisory by nature too: an app never declares it.
  * Codegen wires the admin ops whenever DO-backed auth is pinned to a
  * jurisdiction, so the thing a host would have to refuse is the jurisdiction.
@@ -214,6 +218,21 @@ export interface PlatformCapabilities {
          * guarantee — which is the only thing the feature is.
          */
         commitOrderedTables?: Capability;
+
+        /**
+         * Atomic conditional writes — `ctx.db.patchIf(table, id, { where, patch })`,
+         * which applies a patch only while the stored row matches `where`, decided
+         * in the same step as the write. What makes a read-decide-write (a rate
+         * limiter's admission, a compare-and-set) safe against concurrent callers.
+         *
+         * Carried by no host contract: it is SQL the engines already run. A
+         * shard-local table decides it in one synchronous run over `localSql`; a
+         * `.global()` table in one conditional `UPDATE` through `@lunora/sql-store`
+         * on the target's `globalTables` backend. A writer that cannot decide it
+         * atomically omits the method and the call is refused, never emulated with
+         * a read followed by a write. Advisory by nature (see the module header).
+         */
+        conditionalWrites?: Capability;
 
         /**
          * An outbound-traffic policy on a container — `defineContainer({
