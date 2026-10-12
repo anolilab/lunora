@@ -23,7 +23,9 @@
 #
 # Packages are discovered, never listed — the same `name: "workerd"` predicate the
 # CI drift guard in .github/workflows/test.yml asserts the job matrix against, so
-# this script and that matrix are the same set by construction.
+# the packages here and that matrix are the same set by construction. Examples that
+# declare a workerd project (examples/*) are discovered too, but no CI leg runs them
+# yet: the matrix guard reads packages/* only, so they run locally through this script.
 #
 # Suites run ONE AT A TIME on purpose: every package's vitest in parallel fails a
 # different arbitrary set each run (resource contention, not real failures), which
@@ -35,13 +37,23 @@
 #
 # Usage:
 #   pnpm run test:workerd              # all packages declaring a workerd project
-#   pnpm run test:workerd auth do      # just these
+#   pnpm run test:workerd auth do      # just these (a bare name resolves to packages/ or examples/)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 if [ "$#" -gt 0 ]; then
-    packages=("$@")
+    # A bare name from the command line resolves to whichever directory holds it.
+    packages=()
+    for name in "$@"; do
+        if [ -d "packages/${name}" ]; then
+            packages+=("packages/${name}")
+        elif [ -d "examples/${name}" ]; then
+            packages+=("examples/${name}")
+        else
+            packages+=("${name}")
+        fi
+    done
 else
     # `grep -l` exits 1 when nothing matches, and under `set -e` + `pipefail` that
     # status propagates out of the assignment and kills the script BEFORE the
@@ -50,12 +62,12 @@ else
     # 1 ("no match", explained below) distinct from 2 (a real grep failure, e.g. an
     # unreadable tree), which must not be reported as an empty repo.
     set +e
-    discovered="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+    discovered="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
     status=$?
     set -e
 
     if [ "$status" -gt 1 ]; then
-        echo "Could not scan packages/*/vitest.config.ts (grep exited ${status})." >&2
+        echo "Could not scan packages/*/vitest.config.ts and examples/*/vitest.config.ts (grep exited ${status})." >&2
         exit 1
     fi
 
@@ -74,13 +86,16 @@ pnpm run build:packages
 failed=()
 
 for package in "${packages[@]}"; do
-    echo
-    echo "==> @lunora/${package} (workerd)"
+    # Filter by the manifest name: `@lunora/<dir>` for packages, `@lunora-example/<dir>` for examples.
+    name="$(node -p "require('./${package}/package.json').name")"
 
-    if LUNORA_WORKERD_TESTS=1 pnpm --filter "@lunora/${package}" run test --project workerd; then
-        echo "PASS  @lunora/${package}"
+    echo
+    echo "==> ${name} (workerd)"
+
+    if LUNORA_WORKERD_TESTS=1 pnpm --filter "${name}" run test --project workerd; then
+        echo "PASS  ${name}"
     else
-        echo "FAIL  @lunora/${package}"
+        echo "FAIL  ${name}"
         failed+=("${package}")
     fi
 done
