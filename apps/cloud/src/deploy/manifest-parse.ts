@@ -9,7 +9,7 @@ import { isReleaseAlias } from "@lunora/config/celld";
 
 import type { ProjectRuntime } from "../project-runtime";
 import type { AssetFile, AssetsUpload, BindingRequirement, BindingType, DeployManifest, TargetId } from "../provision-contract";
-import { BINDING_SUPPORT, tenantResourceName, unsupportedReason } from "../provision-contract";
+import { BINDING_SUPPORT, isStatefulType, tenantResourceName, unsupportedReason } from "../provision-contract";
 
 /**
  * Every Lunora tenant worker exports `ShardDO` (binding `SHARD`); without its
@@ -71,7 +71,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const isBindingType = (value: string, target: TargetId): value is BindingType => Object.hasOwn(BINDING_SUPPORT[target], value);
 
 /** Class-backed types the platform binds straight to an export of the tenant bundle. */
-const needsClassName = (type: BindingType): boolean => type === "durable_object" || type === "workflow";
+const needsClassName = (type: BindingType): boolean => isStatefulType(type);
 
 const parseBinding = (entry: unknown, index: number, target: TargetId): Parsed<BindingRequirement> => {
     if (!isRecord(entry) || typeof entry["binding"] !== "string" || typeof entry["type"] !== "string") {
@@ -187,7 +187,40 @@ const kvClassError = (bindings: ReadonlyArray<BindingRequirement>, runtime: Proj
         : `Durable Object class(es) ${kv.map((entry) => entry.className ?? entry.binding).join(", ")} are KV-backed, but Lunora Cloud runs SQLite-backed Durable Objects only — declare them in new_sqlite_classes`;
 };
 
-/** Checks across the (floored) binding list: unique names, per-type caps, and queues that can actually deliver. */
+/**
+ * One Workflow, one binding. A Workflow class bound twice, under two binding names or
+ * as both a Workflow and a Durable Object, is refused: two bindings name one physical
+ * workflow. A Durable Object class may be bound under two names, since its storage is
+ * shared by class. This is checked within one manifest only; a class removed or renamed
+ * between two deploys is caught by the keep check, not here.
+ * Known false positive: a binding with `script_name` names a class in ANOTHER
+ * Worker, and the manifest does not carry `script_name`, so two same-named
+ * classes from different Workers are refused too. Carrying the field is the fix.
+ */
+const statefulClassError = (bindings: ReadonlyArray<BindingRequirement>): string | undefined => {
+    // Two Durable Object bindings of one class are legal (the storage is shared by name), so only a
+    // Workflow is refused: two bindings of one Workflow class are two resources on one physical workflow.
+    const bound = new Map<string, { binding: string; type: string }[]>();
+
+    for (const { binding, className, type } of bindings) {
+        if (className === undefined || !isStatefulType(type)) {
+            continue;
+        }
+
+        const earlier = bound.get(className) ?? [];
+        const clash = earlier.find((entry) => entry.type === "workflow" || type === "workflow");
+
+        if (clash !== undefined) {
+            return `class ${className} is bound twice (by ${clash.binding} and ${binding}); a Workflow class has one binding, because two bindings name one workflow and a converge can delete its instances`;
+        }
+
+        bound.set(className, [...earlier, { binding, type }]);
+    }
+
+    return undefined;
+};
+
+/** Checks across the (floored) binding list: unique names, one binding per class, per-type caps, and queues that can actually deliver. */
 const bindingSetError = (bindings: BindingRequirement[], target: TargetId, runtime: ProjectRuntime): string | undefined => {
     const names = new Set<string>();
 
@@ -199,6 +232,12 @@ const bindingSetError = (bindings: BindingRequirement[], target: TargetId, runti
         }
 
         names.add(binding.toLowerCase());
+    }
+
+    const classError = statefulClassError(bindings);
+
+    if (classError !== undefined) {
+        return classError;
     }
 
     if (bindings.filter((entry) => entry.type === "durable_object").length > MAX_DURABLE_OBJECTS) {

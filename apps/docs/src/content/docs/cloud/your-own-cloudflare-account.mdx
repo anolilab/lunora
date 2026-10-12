@@ -183,6 +183,7 @@ from that same check, so it shows what the deploy actually enforces.
 | Queue consumers       | `queue_consumer`      | Yes                   |                                                                                                                                               |
 | Static assets         | `assets`              | Yes                   |                                                                                                                                               |
 | Workers AI            | `ai`                  | Yes                   |                                                                                                                                               |
+| Workflows             | `workflow`            | Yes                   |                                                                                                                                               |
 | AI Search             | `ai_search`           | No                    | the provision box does not bind an AI Search instance yet.                                                                                    |
 | AI Search namespaces  | `ai_search_namespace` | No                    | the provision box does not bind an AI Search namespace yet.                                                                                   |
 | Analytics SQL         | `analytics_sql`       | No                    | the provision box does not bind Analytics SQL yet.                                                                                            |
@@ -196,7 +197,6 @@ from that same check, so it shows what the deploy actually enforces.
 | Vectorize             | `vectorize`           | No                    | an index needs its dimensions and metric, which wrangler.jsonc does not carry.                                                                |
 | VPC networks          | `vpc_network`         | No                    | the provision box does not bind a VPC network yet.                                                                                            |
 | VPC services          | `vpc_service`         | No                    | the provision box does not bind a VPC service yet.                                                                                            |
-| Workflows             | `workflow`            | No                    | a plain Worker can run Workflows, but the provision box does not register a prebuilt bundle's Workflow class yet.                             |
 
 Beyond bindings, this target does not have:
 
@@ -206,9 +206,21 @@ Beyond bindings, this target does not have:
 - **Runtime logs.** Lunora Cloud's tail consumer runs in its own account and cannot be attached to a Worker in yours, so runtime logs stay in your account's Workers Logs.
 - **Recursion protection.** Loop detection needs Lunora Cloud's dispatcher and an Outbound Worker on its dispatch namespace; a plain Worker in your account has neither. Only Cloudflare's per-invocation subrequest limit applies there.
 - **Edge firewall events and rules.** Your Worker is served from your account, not Lunora Cloud's zone, so its firewall events and DDoS settings live in your Cloudflare dashboard. Usage anomalies still alert.
-- **Emergency stop without a working token.** An emergency stop replaces the Worker in your account through the token you connected, so it fails — and is retried — while that token is revoked or lacks Workers Scripts: Edit. The stub keeps every Durable Object's data and parks its alarms an hour at a time (one invocation and one storage write each), and drops the Worker's cron triggers and queue consumers until the resume restores them; messages sent meanwhile wait on the queue for its retention period.
+- **Emergency stop without a working token.** An emergency stop replaces the Worker in your account through the token you connected, so it fails — and is retried — while that token is revoked or lacks Workers Scripts: Edit. The stub keeps every Durable Object's data and parks its alarms an hour at a time (one invocation and one storage write each), and drops the Worker's cron triggers and queue consumers until the resume restores them; messages sent meanwhile wait on the queue for its retention period. Workflow classes are stubbed too, and a Workflow instance that is running when the stop lands fails on its next wake, permanently: the stub's run() throws rather than resuming the instance, so the instance is not recoverable after a resume. The halt record lists the workflow classes it stubbed.
 
 {/* /generated:capabilities:cloudflare-workers */}
+
+Workflows have three limits beyond the table. Lunora Cloud does not use the
+`name` you declare for a Workflow: the Workflow's name is derived from the
+script and the class, so the name in your dashboard can differ from your
+config. A Workflow class may be bound only once in a deploy, and a deploy that
+binds one Workflow class under two names is refused. A Durable Object class may
+be bound under two names. A workflow is identified by its class, so renaming a
+binding that keeps its class leaves the workflow and its instances alone. Removing
+or renaming the class itself drops it, and the next deploy is refused unless you
+allow that deletion. Its
+instances. An emergency stop does not pause a running Workflow instance: the
+instance fails on its next wake and does not resume after a resume.
 
 ## Limits
 

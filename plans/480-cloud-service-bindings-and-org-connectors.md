@@ -1,7 +1,7 @@
 # Plan 480 — Service bindings and org-owned connectors on Workers for Platforms, with cycles refused at deploy time
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** PARTIAL — the BYO service-binding path is verified on the Lunora account; the WfP path is blocked on account access (no Workers for Platforms). Plan 457 is restored and its framework side is in place. Connector ownership decided: **per org**.
+**Status:** PARTIAL — the BYO service-binding path is verified on the Lunora account; the WfP path is blocked on account access (no Workers for Platforms). Plan 457 is restored and its framework side is in place. Connector ownership decided: **per org**. Workstream A shipped as a pure function, `findServiceCycle` in `apps/cloud/src/deploy/service-graph.ts`, with tests for self-loop, two-cycle, three-cycle, diamond and external edges. It is not wired: no target accepts `service` and the deploy manifest carries no service declaration, so nothing calls it. The module is marked unwired and tied to the `service` rows of `BINDING_SUPPORT`. B to E not started.
 
 ## 0. Headline finding
 
@@ -89,7 +89,7 @@ Size: **L**. Depends on a probe that could make the design smaller or larger.
 - Q3: can the binding carry `props` (fixed per binding), enough to tell a connector which org it serves?
 - Q4: does a service-binding call appear in the callee's tail logs with the caller's script name?
 
-**A. Declaration and deploy-time cycle check (M).** Read the service map from the manifest, build the graph across the project's own Workers, refuse cycles with the cycle
+**A. Declaration and deploy-time cycle check (M).** _Pure function shipped and unwired; see Status._ Read the service map from the manifest, build the graph across the project's own Workers, refuse cycles with the cycle
 named. Unit tests: acyclic, self-loop, two-cycle, three-cycle, and a diamond (allowed).
 
 **B. WfP binding support (M, after Q1).** Remove the `service` refusal for `cloudflare-wfp` only, emit the binding in the upload, and extend the provision contract test
@@ -140,3 +140,18 @@ Framework `ctx.*` is unchanged; plan 457 owns the `ctx`/client surface.
 1. **Are connectors per org or platform-curated?** Decided: per org, owned by an org admin. Platform curation comes later as templates installed into an org (§5F).
 2. **Should a connector's entrypoints be declared in the artifact or the grant?** Decided: the artifact, so a grant cannot widen what a connector exposes.
 3. **Who may deploy a connector?** Decided: org admins only, matching catalog install.
+
+## 10. Review points closed on PR #1126 (2026-10-12)
+
+- **Unwired `findServiceCycle`.** Kept, not wired. Its module comment now names the `service` rows of `BINDING_SUPPORT` as the thing it waits for. The change that flips a target's `service` row to native must call it on the project's service graph before provisioning, and add the refusal test.
+- **Stateful-class rule in one place.** `statefulClassesOf(manifest)` in `provision-contract.ts` is the only definition. The halt stub (`classesOf`), the rollback and resume guard (`droppedStatefulClasses`) and the deployment record (`release-core.ts`) all call it. A stateful binding with no class throws in every caller; it is never skipped, because an unnamed class cannot be seen to be kept.
+- **Recorded field not renamed.** `deployments.durableObjectClasses` is persisted. Renaming it needs a migration, which is out of scope. The field is commented at `release-core.ts`.
+- **Duplicate class refused at deploy.** `manifest-parse.ts` rejects one class bound by two stateful bindings, as a Durable Object, a Workflow, or both. It is checked within one manifest only.
+- **Limitation, not closed.** A binding or class renamed between two deploys is not detected. One manifest cannot show the previous name. Closing it needs the stored previous manifest in the deploy check, a separate change.
+- **Workflow name ignored by the box.** Documented as a platform limitation in the `BINDING_SUPPORT` comment and in `cloud/your-own-cloudflare-account.mdx`. Alchemy derives the name from script and class. Not changed.
+- **Emergency stop and workflows.** The stub's `run()` still throws, so a running instance fails on its next wake and does not resume. The behaviour is in the `emergencyStop` limitation text, the docs, and the halt audit entry and alert, which list the workflow classes stubbed. The synchronous `POST /v1/halts` response cannot list them: the stub is converged later by the sweep, so the list lands on the halt record and in the studio's emergency-stop card (`halts.status`, `stubbedWorkflows`).
+
+## 11. Unverified
+
+- **Workflows API token permission.** The Workflows API may need a token permission that `CLOUDFLARE_TOKEN_PERMISSIONS` does not list. Not confirmed; no account access from here. The permissions table is deliberately unchanged. Verify on a token that lacks it before enabling the BYO path for a customer.
+- **Live run.** The box has not run the stub or a renamed-class deploy end to end.

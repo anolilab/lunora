@@ -36,6 +36,7 @@ import { drainTable } from "../store";
 import type { AlertChannel, EventRule } from "../telemetry/alerts";
 import { fireDeployRules } from "../telemetry/alerts";
 import type { BoundClass } from "./halt-stub";
+import { stubbedWorkflowsOf } from "./halt-stub";
 
 /** The message every refused deploy, rollback and release of a halted project gets. */
 export const HALTED_REFUSAL = "project halted — resume it first";
@@ -98,6 +99,8 @@ export interface HaltRow {
     resumeDeploymentId?: null | string;
     source: HaltSource;
     state: HaltState;
+    /** The classes the stub bound, recorded at the converge (`halt-converge.ts`). */
+    stubClasses?: BoundClass[];
     stubStartedAt?: null | number;
     target: string;
     updatedAt: number;
@@ -665,17 +668,28 @@ const settleHalted = async (
         { ...RELEASED, ...converged, attempts: 0, haltedAt: ports.now, lastError: null, nextAttemptAt: null, state: "halted", updatedAt: ports.now },
         "halts",
     );
+    // The stub stops every workflow class's run() with an error, so an instance running at the stop fails on its next wake and does not resume.
+    // Listed in the alert, and counted in the audit row. The full list is on the halt record (`stubClasses`), because the audit target is cut to MAX_ERROR.
+    // The stub cannot resume such an instance after a resume, so the operator needs the list.
+    const workflows = stubbedWorkflowsOf(outcome.stubClasses);
+    const workflowNote = workflows.length === 0 ? "" : `; workflow classes stubbed, whose running instances fail on their next wake: ${workflows.join(", ")}`;
+    const auditWorkflowNote = workflows.length === 0 ? "" : `; ${String(workflows.length)} workflow classes stubbed; see the halt record`;
+
     await audit(database, {
         action: "halt.halted",
         actor: "system:halt-sweep",
         now: ports.now,
         organizationId: row.organizationId,
-        target: `${row.alias} (${row.reason})`,
+        target: `${row.alias} (${row.reason})${auditWorkflowNote}`,
     });
 
     if (row.state === "halting") {
         await ports
-            .alert?.(row, "halted", `${row.alias} was halted (${row.reason}): its Worker runs a stub that keeps its data and parks its Durable Object alarms.`)
+            .alert?.(
+                row,
+                "halted",
+                `${row.alias} was halted (${row.reason}): its Worker runs a stub that keeps its data and parks its Durable Object alarms${workflowNote}.`,
+            )
             .catch(() => undefined);
     }
 };

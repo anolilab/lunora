@@ -3524,7 +3524,7 @@
                         "type": "array"
                       },
                       "deployKey": {},
-                      "durableObjectClasses": {
+                      "statefulClasses": {
                         "items": {},
                         "type": "array"
                       },
