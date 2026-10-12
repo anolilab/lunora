@@ -267,17 +267,28 @@ const devVariablesIsIgnored = (cwd: string): boolean => {
 };
 
 /** The keys `.dev.vars` needs minted: the admin token when absent, and mintable secrets still at a placeholder. */
-const keysToMint = (cwd: string, entries: ReadonlyArray<{ key: string; value: string }>, result: DoctorFixResult): string[] => {
+const keysToMint = (cwd: string, content: string, entries: ReadonlyArray<{ key: string; value: string }>, result: DoctorFixResult): string[] => {
     const minted: string[] = [];
+    // A key with a real value anywhere in the file is never minted over, even when a later
+    // duplicate line is a placeholder. The later line wins at read time, but the real value
+    // is still the operator's, and the upsert would drop it.
+    // Read every line: parseDevVariableEntries keeps only the last line for a key, which is the placeholder here.
+    const realKeys = new Set(
+        content.split(LINE_BREAK).flatMap((line) => {
+            const [entry] = parseDevVariableEntries(line);
+
+            return entry !== undefined && !isPlaceholderValue(entry.value) ? [entry.key] : [];
+        }),
+    );
 
     // The same resolver doctor uses for `admin-token-missing`, so an admin token
     // already exported in the environment is not shadowed by a second one in .dev.vars.
-    if (resolveAdminBearer({ cwd }).source === undefined) {
+    if (resolveAdminBearer({ cwd }).source === undefined && !realKeys.has("LUNORA_ADMIN_TOKEN")) {
         minted.push("LUNORA_ADMIN_TOKEN");
     }
 
     for (const entry of entries) {
-        if (!isSecretKeyName(entry.key) || !isPlaceholderValue(entry.value)) {
+        if (!isSecretKeyName(entry.key) || !isPlaceholderValue(entry.value) || realKeys.has(entry.key)) {
             continue;
         }
 
@@ -299,7 +310,7 @@ const keysToMint = (cwd: string, entries: ReadonlyArray<{ key: string; value: st
 const fixDevVariables = (options: DoctorFixOptions, result: DoctorFixResult): void => {
     const path = join(options.cwd, DEV_VARS_FILE);
     const content = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const minted = keysToMint(options.cwd, parseDevVariableEntries(content), result);
+    const minted = keysToMint(options.cwd, content, parseDevVariableEntries(content), result);
 
     if (minted.length === 0) {
         return;

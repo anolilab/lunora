@@ -192,4 +192,16 @@ describe("lunora doctor --fix", () => {
 
         expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toMatch(/^LUNORA_ADMIN_TOKEN="[0-9a-f]{64}"$/mu);
     });
+
+    it("never mints over a real value that a later placeholder duplicate shadows", async () => {
+        expect.hasAssertions();
+
+        // eslint-disable-next-line no-secrets/no-secrets -- fixture values in a .dev.vars body, not credentials.
+        const original = 'LUNORA_ADMIN_TOKEN="kept"\nAUTH_SECRET="real-value"\nAUTH_SECRET="<replace-with-secret>"\n';
+        writeFileSync(join(workdir, ".dev.vars"), original);
+
+        await applyDoctorFixes({ configPath: undefined, cwd: workdir, dryRun: false, logger: silentLogger });
+
+        expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe(original);
+    });
 });
