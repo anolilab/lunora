@@ -55,7 +55,7 @@ type DataOrigin = "provided" | "observed" | "derived" | "inferred";
 ```ts
 interface DataPort {
     readonly collect: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, ReadonlyArray<Readonly<Record<string, unknown>>>>>>;
-    readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date) => Promise<{
+    readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date, disposition: RowDisposition) => Promise<{
         readonly hasMore: boolean;
     }>;
     readonly remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
@@ -91,7 +91,7 @@ type DatasetPlacement = "subject" | "root" | "global";
 ```ts
 interface DatasetSpec {
     readonly files?: {
-        readonly prefix: string;
+        readonly prefix: (subjectId: string) => string;
     };
     readonly legalBasis: LegalBasis;
     readonly origin: DataOrigin;
@@ -228,6 +228,7 @@ interface Privacy {
     readonly admin: {
         readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
         readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
+        readonly sweep: () => Promise<ReadonlyArray<RequestRecord>>;
     };
     readonly cancelRequest: (input: {
         requestId: string;
@@ -269,6 +270,7 @@ interface PrivacyConfig<C> {
     readonly ports: (context: C) => PrivacyPorts;
     readonly presets?: ReadonlyArray<PrivacyPreset>;
     readonly subjectKey?: (subjectId: string) => string;
+    readonly tombstoneSecret?: string;
 }
 ```
 
@@ -354,7 +356,7 @@ interface RequestRecord {
 ### `RequestStatus` (type)
 
 ```ts
-type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled";
+type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired";
 ```
 
 ### `RequestStore` (interface)
@@ -365,6 +367,7 @@ interface RequestStore {
     findOpen: (subjectId: string, type: RequestType) => Promise<RequestRecord | undefined>;
     get: (id: string) => Promise<RequestRecord | undefined>;
     insert: (record: RequestRecord) => Promise<void>;
+    listForSubject: (subjectId: string) => Promise<ReadonlyArray<RequestRecord>>;
     listOpen: () => Promise<ReadonlyArray<RequestRecord>>;
     update: (id: string, patch: Partial<Omit<RequestRecord, "id">>) => Promise<void>;
 }
@@ -406,6 +409,14 @@ interface RetentionRule {
 type RetentionStart = "endOfCalendarYear" | "from";
 ```
 
+### `RowDisposition` (type)
+
+```ts
+type RowDisposition = (dataset: Dataset, table: string, row: {
+    readonly [column: string]: unknown;
+}, now: Date) => Disposition;
+```
+
 ### `RunContext` (interface)
 
 ```ts
@@ -423,6 +434,8 @@ interface RunContext {
 
 ```ts
 interface StorePort {
+    readonly delete: (key: string) => Promise<void>;
+    readonly list: (prefix: string) => Promise<ReadonlyArray<string>>;
     readonly put: (requestId: string, file: {
         readonly data: Uint8Array | string;
         readonly name: string;
@@ -567,6 +580,12 @@ const defineDataset: (id: string, spec: DatasetSpec) => Dataset;
 const definePrivacy: <C>(config: PrivacyConfig<C>) => PrivacyFor<C>;
 ```
 
+### `dispositionFor` (const)
+
+```ts
+const dispositionFor: (rules: ReadonlyMap<string, RetentionRule>) => RowDisposition;
+```
+
 ### `dispositionOf` (const)
 
 ```ts
@@ -689,7 +708,7 @@ const runExport: (context: RunContext, datasets: ReadonlyArray<Dataset>, request
 ### `storageObjectsDataset` (const)
 
 ```ts
-const storageObjectsDataset: (prefix: string) => Dataset;
+const storageObjectsDataset: (prefix: (subjectId: string) => string) => Dataset;
 ```
 
 ### `transition` (const)
@@ -701,7 +720,7 @@ const transition: (from: RequestStatus, to: RequestStatus) => RequestStatus;
 ### `verifyErasure` (const)
 
 ```ts
-const verifyErasure: (remaining: Readonly<Record<string, number>>) => VerifyResult;
+const verifyErasure: (remaining: Readonly<Record<string, number>>, kept?: Readonly<Record<string, number>>) => VerifyResult;
 ```
 
 ## `@lunora/privacy/de`
