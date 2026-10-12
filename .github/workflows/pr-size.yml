@@ -1,0 +1,29 @@
+"name": "PR Size"
+
+# Labels each pull request `size:XS` … `size:XXL` from the lines it changes, so a
+# reviewer sees the weight before opening it. Tests, lockfiles and build output do
+# not count. The work is done by the shared `pr-size` workflow, which checks
+# nothing out.
+"on": # yamllint disable-line rule:truthy
+    "pull_request_target":
+        "types":
+            - "opened"
+            - "reopened"
+            - "synchronize"
+            - "ready_for_review"
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.event.pull_request.number }}"
+    "cancel-in-progress": true
+
+"permissions": {}
+
+"jobs":
+    "pr-size":
+        "permissions":
+            "contents": "read"
+            "issues": "write" # to create the labels
+            "pull-requests": "write" # to read the files and apply the label
+        "uses": "anolilab/workflows/.github/workflows/pr-size.yml@fb7a881926480723026a1deaa587ceaaaee7bf12" # v24.2.0
+        "with":
+            "target-repo": "anolilab/lunora"
