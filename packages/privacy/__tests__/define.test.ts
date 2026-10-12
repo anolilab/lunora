@@ -8,6 +8,8 @@ import { definePrivacy } from "../src/define";
 import { eu } from "../src/eu";
 import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
 
+const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
+
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
     origin: "provided",
@@ -20,8 +22,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const EMPTY_TABLES: Readonly<Record<string, number>> = { goals: 0, tasks: 0 };
 
-const build = (rows: Readonly<Record<string, number>> = EMPTY_TABLES) => {
-    const store = memoryRequests();
+const OTHER = { sessionAgeMs: 0, subjectId: "u2" };
+
+/** Build the API as a given subject. Pass a shared store to act on the same requests as another subject. */
+const build = (rows: Readonly<Record<string, number>> = EMPTY_TABLES, identity = SUBJECT, store = memoryRequests()) => {
     const files = memoryFiles();
     const data = memoryData(rows);
     let counter = 0;
@@ -29,6 +33,7 @@ const build = (rows: Readonly<Record<string, number>> = EMPTY_TABLES) => {
         datasets: [tasks],
         ports: () => {
             return {
+                identity: () => identity,
                 data,
                 files,
                 newId: () => {
@@ -92,7 +97,7 @@ describe("definePrivacy coverage", () => {
 describe("definePrivacy export", () => {
     it("opens an export, runs it, and stores the archive and the summary", async () => {
         const { files, privacy } = build();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
         const outcome = await privacy.runExport(opened.id);
 
         expect(outcome).toMatchObject({ archiveKey: "req-1/export.zip", status: "ready" });
@@ -101,7 +106,7 @@ describe("definePrivacy export", () => {
 
     it("writes a ZIP whose manifest carries the subject key", async () => {
         const { files, privacy } = build();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
         await privacy.runExport(opened.id);
         const manifest = JSON.parse(new TextDecoder().decode(unzipSync(files.files.get("req-1/export.zip") as Uint8Array)["manifest.json"])) as {
@@ -121,22 +126,22 @@ describe("definePrivacy export", () => {
 describe("definePrivacy erasure", () => {
     it("opens an erasure into the 14-day grace from a fresh sign-in, and lets the subject cancel it", async () => {
         const { privacy } = build();
-        const opened = await privacy.requestErasure({ sessionAgeMs: 60_000, subjectId: "u1" });
+        const opened = await privacy.requestErasure();
 
         expect(opened).toMatchObject({ status: "grace" });
         expect(opened.erasureGraceUntil?.getTime()).toBe(now.getTime() + 14 * DAY_MS);
-        await expect(privacy.cancelRequest({ requestId: opened.id, subjectId: "u1" })).resolves.toMatchObject({ status: "cancelled" });
+        await expect(privacy.cancelRequest({ requestId: opened.id })).resolves.toMatchObject({ status: "cancelled" });
     });
 
     it("refuses an erasure from a sign-in older than 24 hours", async () => {
-        const { privacy } = build();
+        const { privacy } = build(undefined, { sessionAgeMs: DAY_MS + 1, subjectId: "u1" });
 
-        await expect(codeOf(privacy.requestErasure({ sessionAgeMs: DAY_MS + 1, subjectId: "u1" }))).resolves.toBe("PRIVACY_SESSION_NOT_FRESH");
+        await expect(codeOf(privacy.requestErasure())).resolves.toBe("PRIVACY_SESSION_NOT_FRESH");
     });
 
     it("erases the rows and completes once the grace has run", async () => {
         const { data, privacy, store } = build({ goals: 150, tasks: 40 });
-        const opened = await privacy.requestErasure({ sessionAgeMs: 60_000, subjectId: "u1" });
+        const opened = await privacy.requestErasure();
 
         await runErasureWorkflow(privacy, opened.id);
 
@@ -146,21 +151,22 @@ describe("definePrivacy erasure", () => {
 
     it("lets a subject extend an export once while the first month runs", async () => {
         const { privacy } = build();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
-        await expect(privacy.extendRequest({ reason: "Large request", requestId: opened.id, subjectId: "u1" })).resolves.toMatchObject({
+        await expect(privacy.extendRequest({ reason: "Large request", requestId: opened.id })).resolves.toMatchObject({
             reason: "Large request",
         });
-        await expect(codeOf(privacy.extendRequest({ reason: "again", requestId: opened.id, subjectId: "u1" }))).resolves.toBe("UNPROCESSABLE");
+        await expect(codeOf(privacy.extendRequest({ reason: "again", requestId: opened.id }))).resolves.toBe("UNPROCESSABLE");
     });
 });
 
 describe("definePrivacy ownership", () => {
     it("refuses to cancel or extend another subject's request, as not found", async () => {
-        const { privacy } = build();
-        const opened = await privacy.requestErasure({ sessionAgeMs: 60_000, subjectId: "u1" });
+        const { privacy, store } = build();
+        const other = build(undefined, OTHER, store).privacy;
+        const opened = await privacy.requestErasure();
 
-        await expect(codeOf(privacy.cancelRequest({ requestId: opened.id, subjectId: "u2" }))).resolves.toBe("NOT_FOUND");
-        await expect(codeOf(privacy.extendRequest({ reason: "x", requestId: opened.id, subjectId: "u2" }))).resolves.toBe("NOT_FOUND");
+        await expect(codeOf(other.cancelRequest({ requestId: opened.id }))).resolves.toBe("NOT_FOUND");
+        await expect(codeOf(other.extendRequest({ reason: "x", requestId: opened.id }))).resolves.toBe("NOT_FOUND");
     });
 });

@@ -231,25 +231,18 @@ interface Privacy {
     };
     readonly cancelRequest: (input: {
         requestId: string;
-        subjectId: string;
     }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
     readonly downloadUrl: (input: {
         requestId: string;
-        subjectId: string;
     }) => Promise<string>;
     readonly extendRequest: (input: {
         reason: string;
         requestId: string;
-        subjectId: string;
     }) => Promise<RequestRecord>;
-    readonly requestErasure: (input: {
-        sessionAgeMs: number;
-        subjectId: string;
-    }) => Promise<RequestRecord>;
-    readonly requestExport: (input: {
-        subjectId: string;
-    }) => Promise<RequestRecord>;
+    readonly myRequests: () => Promise<ReadonlyArray<RequestRecord>>;
+    readonly requestErasure: () => Promise<RequestRecord>;
+    readonly requestExport: () => Promise<RequestRecord>;
     readonly restore: (input: {
         restoredSubjectIds: ReadonlyArray<string>;
     }) => Promise<ReadonlyArray<string>>;
@@ -302,6 +295,7 @@ interface PrivacyPolicy {
 interface PrivacyPorts {
     readonly data: DataPort;
     readonly files: StorePort;
+    readonly identity: () => PrivacyIdentity;
     readonly newId: () => string;
     readonly now: () => Date;
     readonly store: RequestStore;
@@ -783,6 +777,15 @@ const eu: (options?: EuOptions) => PrivacyPreset;
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `PrivacyIdentity` (interface)
+
+```ts
+interface PrivacyIdentity {
+    readonly sessionAgeMs: number;
+    readonly subjectId: string;
+}
+```
 
 ### `TombstonePort` (interface)
 

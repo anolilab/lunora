@@ -7,6 +7,8 @@ import type { TombstonePort } from "../src/tombstones";
 import { tombstoneKeyOf } from "../src/tombstones";
 import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
 
+const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
+
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
     origin: "provided",
@@ -33,6 +35,7 @@ const build = (tombstones?: TombstonePort) => {
         datasets: [tasks],
         ports: () => {
             return {
+                identity: () => SUBJECT,
                 data,
                 files: memoryFiles(),
                 newId: () => {
@@ -73,7 +76,7 @@ describe("restore", () => {
     it("tombstones a subject once their erasure completes", async () => {
         const tombstones = memoryTombstones();
         const { privacy } = build(tombstones);
-        const opened = await privacy.requestErasure({ sessionAgeMs: 1000, subjectId: "u1" });
+        const opened = await privacy.requestErasure();
 
         await runErasureWorkflow(privacy, opened.id);
 
@@ -83,7 +86,7 @@ describe("restore", () => {
     it("erases again a subject restored from a backup taken before their erasure", async () => {
         const tombstones = memoryTombstones();
         const { data, privacy } = build(tombstones);
-        const opened = await privacy.requestErasure({ sessionAgeMs: 1000, subjectId: "u1" });
+        const opened = await privacy.requestErasure();
 
         await runErasureWorkflow(privacy, opened.id);
         // The backup brings the rows back.

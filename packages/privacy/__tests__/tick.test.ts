@@ -4,6 +4,8 @@ import { defineDataset } from "../src/dataset";
 import { definePrivacy } from "../src/define";
 import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
 
+const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
+
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
     origin: "provided",
@@ -21,6 +23,7 @@ describe("tick", () => {
             datasets: [tasks],
             ports: () => {
                 return {
+                    identity: () => SUBJECT,
                     data: memoryData({ tasks: 0 }),
                     files: memoryFiles(),
                     newId: () => "r1",
@@ -30,7 +33,7 @@ describe("tick", () => {
             },
         })(undefined);
 
-        await privacy.requestExport({ subjectId: "u1" });
+        await privacy.requestExport();
         // Deadline is 10 May; seven days before it is 3 May.
         clock = new Date(new Date("2026-05-04T00:00:00.000Z"));
 
@@ -47,6 +50,7 @@ describe("tick", () => {
             datasets: [tasks],
             ports: () => {
                 return {
+                    identity: () => SUBJECT,
                     data: memoryData({ tasks: 0 }),
                     files: memoryFiles(),
                     newId: () => "r2",
@@ -56,7 +60,7 @@ describe("tick", () => {
             },
         })(undefined);
 
-        await privacy.requestExport({ subjectId: "u1" });
+        await privacy.requestExport();
         clock = new Date(new Date("2026-05-10T00:00:00.000Z").getTime() + DAY_MS);
 
         const result = await privacy.tick();
@@ -71,6 +75,7 @@ describe("tick", () => {
             datasets: [tasks],
             ports: () => {
                 return {
+                    identity: () => SUBJECT,
                     data: memoryData({ tasks: 0 }),
                     files: memoryFiles(),
                     newId: () => "r3",
@@ -80,7 +85,7 @@ describe("tick", () => {
             },
         })(undefined);
 
-        await privacy.requestExport({ subjectId: "u1" });
+        await privacy.requestExport();
         store.rows.set("r3", { ...store.rows.get("r3")!, status: "completed" });
 
         await expect(privacy.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });

@@ -7,6 +7,8 @@ import { definePrivacy } from "../src/define";
 import { eu } from "../src/eu";
 import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
 
+const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const now = new Date("2026-10-11T10:00:00.000Z");
 
@@ -77,6 +79,7 @@ describe("the erasure grace option", () => {
             datasets: [tasks],
             ports: () => {
                 return {
+                    identity: () => SUBJECT,
                     data: memoryData({ tasks: 0 }),
                     files: memoryFiles(),
                     newId: () => "r1",
@@ -87,7 +90,7 @@ describe("the erasure grace option", () => {
             presets: [eu({ erasureGraceDays: 3 })],
         })(undefined);
 
-        const opened = await privacy.requestErasure({ sessionAgeMs: 1000, subjectId: "u1" });
+        const opened = await privacy.requestErasure();
 
         expect(opened.erasureGraceUntil?.getTime()).toBe(now.getTime() + 3 * DAY_MS);
     });

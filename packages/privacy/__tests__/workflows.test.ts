@@ -6,6 +6,8 @@ import { definePrivacy } from "../src/define";
 import { eu } from "../src/eu";
 import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
 
+const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
+
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
     origin: "provided",
@@ -52,6 +54,7 @@ const setup = (rows: Readonly<Record<string, number>> = EMPTY_TABLES, failCollec
         datasets: [tasks],
         ports: () => {
             return {
+                identity: () => SUBJECT,
                 data: failing,
                 files,
                 newId: () => {
@@ -71,7 +74,7 @@ const setup = (rows: Readonly<Record<string, number>> = EMPTY_TABLES, failCollec
 describe("exportHandler", () => {
     it("runs one collect step per dataset, then assembles, then marks the request ready", async () => {
         const { files, privacy, store } = setup();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
         const { names, step } = fakeStep();
 
         await privacy.workflows.exportHandler({ params: { requestId: opened.id }, step });
@@ -83,7 +86,7 @@ describe("exportHandler", () => {
 
     it("marks the request failed and records why when a collect step throws", async () => {
         const { privacy, store } = setup({}, true);
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
         const { names, step } = fakeStep();
 
         await privacy.workflows.exportHandler({ params: { requestId: opened.id }, step });
@@ -97,7 +100,7 @@ describe("exportHandler", () => {
 describe("erasureHandler", () => {
     it("waits out the grace, then erases every table and completes", async () => {
         const { data, privacy, store } = setup({ goals: 150, tasks: 40 });
-        const opened = await privacy.requestErasure({ sessionAgeMs: 60_000, subjectId: "u1" });
+        const opened = await privacy.requestErasure();
         const { names, step } = fakeStep();
 
         await privacy.workflows.erasureHandler({ params: { requestId: opened.id }, step });
@@ -109,7 +112,7 @@ describe("erasureHandler", () => {
 
     it("stops without erasing when the subject cancels during the grace", async () => {
         const { data, privacy, store } = setup({ goals: 150, tasks: 40 });
-        const opened = await privacy.requestErasure({ sessionAgeMs: 60_000, subjectId: "u1" });
+        const opened = await privacy.requestErasure();
         const { names, step } = fakeStep(() => {
             // The subject cancels while the workflow sleeps.
             store.rows.set(opened.id, { ...store.rows.get(opened.id)!, status: "cancelled" });

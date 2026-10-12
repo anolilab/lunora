@@ -57,7 +57,7 @@ export const privacyFor = definePrivacy({
 });
 ```
 
-Call it from a mutation with that mutation's context: `await privacyFor(ctx).requestExport({ subjectId })`.
+Call it from a mutation with that mutation's context: `await privacyFor(ctx).requestExport()`. The subject comes from the context's authenticated identity (the `identity` port), never from an argument, so a caller cannot act on another subject's data.
 
 Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically.
 

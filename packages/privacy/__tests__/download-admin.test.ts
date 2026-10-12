@@ -6,6 +6,8 @@ import { definePrivacy } from "../src/define";
 import type { DataPort } from "../src/run";
 import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
 
+const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
+
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
     origin: "provided",
@@ -25,8 +27,7 @@ const codeOf = async (promise: Promise<unknown>): Promise<string> => {
     return "no-error";
 };
 
-const setup = (data: DataPort = memoryData({ tasks: 0 })) => {
-    const store = memoryRequests();
+const setup = (data: DataPort = memoryData({ tasks: 0 }), identity = SUBJECT, store = memoryRequests()) => {
     const files = memoryFiles();
     let clock = new Date("2026-10-11T10:00:00.000Z");
     let counter = 0;
@@ -34,6 +35,7 @@ const setup = (data: DataPort = memoryData({ tasks: 0 })) => {
         datasets: [tasks],
         ports: () => {
             return {
+                identity: () => identity,
                 data,
                 files,
                 newId: () => {
@@ -59,44 +61,45 @@ const setup = (data: DataPort = memoryData({ tasks: 0 })) => {
 describe("downloadUrl", () => {
     it("returns a fifteen-minute link to a finished export for its subject", async () => {
         const { privacy } = setup();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
         await privacy.runExport(opened.id);
 
-        await expect(privacy.downloadUrl({ requestId: opened.id, subjectId: "u1" })).resolves.toBe(`https://files.test/${opened.id}/export.zip?ttl=900`);
+        await expect(privacy.downloadUrl({ requestId: opened.id })).resolves.toBe(`https://files.test/${opened.id}/export.zip?ttl=900`);
     });
 
     it("answers not found for another subject, so a caller cannot probe ids", async () => {
-        const { privacy } = setup();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const { privacy, store } = setup();
+        const other = setup(undefined, { sessionAgeMs: 0, subjectId: "u2" }, store).privacy;
+        const opened = await privacy.requestExport();
 
         await privacy.runExport(opened.id);
 
-        await expect(codeOf(privacy.downloadUrl({ requestId: opened.id, subjectId: "u2" }))).resolves.toBe("NOT_FOUND");
+        await expect(codeOf(other.downloadUrl({ requestId: opened.id }))).resolves.toBe("NOT_FOUND");
     });
 
     it("refuses a download before the export is ready", async () => {
         const { privacy } = setup();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
-        await expect(codeOf(privacy.downloadUrl({ requestId: opened.id, subjectId: "u1" }))).resolves.toBe("UNPROCESSABLE");
+        await expect(codeOf(privacy.downloadUrl({ requestId: opened.id }))).resolves.toBe("UNPROCESSABLE");
     });
 
     it("refuses a download after the seven-day window", async () => {
         const { advance, privacy } = setup();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
         await privacy.runExport(opened.id);
         advance(8);
 
-        await expect(codeOf(privacy.downloadUrl({ requestId: opened.id, subjectId: "u1" }))).resolves.toBe("UNPROCESSABLE");
+        await expect(codeOf(privacy.downloadUrl({ requestId: opened.id }))).resolves.toBe("UNPROCESSABLE");
     });
 });
 
 describe("admin", () => {
     it("lists the requests that are still open", async () => {
         const { privacy } = setup();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
         const open = await privacy.admin.open();
 
@@ -117,7 +120,7 @@ describe("admin", () => {
             },
         };
         const { privacy, store } = setup(flaky);
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
         const first = await privacy.runExport(opened.id);
 
@@ -131,7 +134,7 @@ describe("admin", () => {
 
     it("refuses to retry a request that has not failed", async () => {
         const { privacy } = setup();
-        const opened = await privacy.requestExport({ subjectId: "u1" });
+        const opened = await privacy.requestExport();
 
         await expect(codeOf(privacy.admin.retry(opened.id))).resolves.toBe("UNPROCESSABLE");
     });

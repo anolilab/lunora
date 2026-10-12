@@ -43,10 +43,21 @@ interface ErasureOptions {
     readonly graceDays?: number;
 }
 
-/** The ports one invocation binds: the app's data, storage, requests and clock. */
+/**
+ * The authenticated subject of an invocation. The app binds it from its session, never from a
+ * request argument, so a caller cannot act on another subject's data by naming them.
+ */
+interface PrivacyIdentity {
+    readonly sessionAgeMs: number;
+    readonly subjectId: string;
+}
+
+/** The ports one invocation binds: the app's data, storage, requests, clock and authenticated subject. */
 interface PrivacyPorts {
     readonly data: DataPort;
     readonly files: StorePort;
+    /** The authenticated subject. Throws when the invocation has none (a workflow step, a cron). */
+    readonly identity: () => PrivacyIdentity;
     readonly newId: () => string;
     readonly now: () => Date;
     readonly store: RequestStore;
@@ -91,13 +102,15 @@ interface Privacy {
         /** Re-run a failed export or erasure. The Art. 12(3) clock keeps running throughout. */
         readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
     };
-    readonly cancelRequest: (input: { requestId: string; subjectId: string }) => Promise<RequestRecord>;
+    readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
     /** The subject's download link for a finished export. Refused for anyone but the subject, and once expired. */
-    readonly downloadUrl: (input: { requestId: string; subjectId: string }) => Promise<string>;
-    readonly extendRequest: (input: { reason: string; requestId: string; subjectId: string }) => Promise<RequestRecord>;
-    readonly requestErasure: (input: { sessionAgeMs: number; subjectId: string }) => Promise<RequestRecord>;
-    readonly requestExport: (input: { subjectId: string }) => Promise<RequestRecord>;
+    readonly downloadUrl: (input: { requestId: string }) => Promise<string>;
+    readonly extendRequest: (input: { reason: string; requestId: string }) => Promise<RequestRecord>;
+    /** The subject's own requests that are still open. */
+    readonly myRequests: () => Promise<ReadonlyArray<RequestRecord>>;
+    readonly requestErasure: () => Promise<RequestRecord>;
+    readonly requestExport: () => Promise<RequestRecord>;
     /** Erase again any restored subject that was erased after the backup. Returns the subject ids it re-erased. */
     readonly restore: (input: { restoredSubjectIds: ReadonlyArray<string> }) => Promise<ReadonlyArray<string>>;
     readonly runErasure: (requestId: string) => Promise<ErasureOutcome>;
@@ -272,8 +285,8 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
         };
 
         return {
-            cancelRequest: async ({ requestId, subjectId }) => {
-                await requireOwnedRequest(ports.store, requestId, subjectId);
+            cancelRequest: async ({ requestId }) => {
+                await requireOwnedRequest(ports.store, requestId, ports.identity().subjectId);
 
                 return cancelRequest(ports.store, { id: requestId, now: ports.now() });
             },
@@ -295,23 +308,26 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                 return checkCoverage(tables, classifications);
             },
 
-            extendRequest: async ({ reason, requestId, subjectId }) => {
-                await requireOwnedRequest(ports.store, requestId, subjectId);
+            extendRequest: async ({ reason, requestId }) => {
+                await requireOwnedRequest(ports.store, requestId, ports.identity().subjectId);
 
                 return extendRequest(ports.store, { id: requestId, now: ports.now(), reason });
             },
 
-            requestErasure: async ({ sessionAgeMs, subjectId }) =>
-                openRequest(ports.store, {
-                    erasure,
-                    id: ports.newId(),
-                    now: ports.now(),
-                    sessionAgeMs,
-                    subjectId,
-                    type: "erasure",
-                }),
+            requestErasure: async () => {
+                const { sessionAgeMs, subjectId } = ports.identity();
 
-            requestExport: async ({ subjectId }) => openRequest(ports.store, { id: ports.newId(), now: ports.now(), subjectId, type: "export" }),
+                return openRequest(ports.store, { erasure, id: ports.newId(), now: ports.now(), sessionAgeMs, subjectId, type: "erasure" });
+            },
+            requestExport: async () => openRequest(ports.store, { id: ports.newId(), now: ports.now(), subjectId: ports.identity().subjectId, type: "export" }),
+
+            myRequests: async () => {
+                const { subjectId } = ports.identity();
+
+                const open = await ports.store.listOpen();
+
+                return open.filter((record) => record.subjectId === subjectId);
+            },
 
             restore: async ({ restoredSubjectIds }) => {
                 if (ports.tombstones === undefined) {
@@ -362,7 +378,8 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                 },
             },
 
-            downloadUrl: async ({ requestId, subjectId }) => {
+            downloadUrl: async ({ requestId }) => {
+                const { subjectId } = ports.identity();
                 const record = await requireRequest(requestId);
 
                 // A request for someone else reads as not found, so a caller cannot probe which ids exist.
