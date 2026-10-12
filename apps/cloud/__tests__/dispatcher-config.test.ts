@@ -13,8 +13,9 @@ import { describe, expect, it } from "vitest";
  * - every named environment declares its own `LUNORA_ENVIRONMENT` (matching the
  *   block name), `CONTROL_PLANE_URL` and `LUNORA_APP_DOMAIN`;
  * - `development` is never set in a named environment, so it cannot reach a deploy;
- * - no value is the `example.workers.dev` placeholder (unsubstituted `<replace-…>` templates are refused at deploy by
- *   `scripts/check-deploy-config.ts`);
+ * - no value is the `example.workers.dev` placeholder, and no unsubstituted
+ *   `replace-…` template is left in (`scripts/check-deploy-config.ts` refuses
+ *   those at deploy);
  * - the lineage secret is a secret, never a plain `vars` entry.
  *
  * The secrets (`CONTROL_PLANE_TOKEN`) cannot be checked statically; the runtime
@@ -22,10 +23,10 @@ import { describe, expect, it } from "vitest";
  */
 
 interface DispatcherConfig {
-    env?: Record<string, { vars?: Record<string, string> }>;
-    vars?: Record<string, string>;
     dispatch_namespaces?: { namespace: string }[];
+    env?: Record<string, { vars?: Record<string, string> }>;
     routes?: unknown[];
+    vars?: Record<string, string>;
 }
 
 const CONFIG_PATH = fileURLToPath(new URL("../dispatcher.wrangler.jsonc", import.meta.url));
