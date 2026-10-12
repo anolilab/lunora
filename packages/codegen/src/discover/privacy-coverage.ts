@@ -192,8 +192,8 @@ const datasetDeclarationOf = (identifier: Node): VariableDeclaration | undefined
 
 /**
  * The `defineDataset` declarations one `definePrivacy` call passes. Returns `undefined` when any element
- * cannot be resolved statically (a spread, a non-literal `datasets`, an identifier that is not a dataset).
- * An opaque element could be the dataset that looks unused, so the caller must then report nothing.
+ * cannot be resolved statically (a spread, a non-literal `datasets`, an identifier that is not a dataset), or
+ * when `datasets` is absent beside a spread of the config, which may carry it. An opaque element could be the dataset that looks unused, so the caller must then report nothing.
  */
 const passedDatasetsOf = (call: CallExpression): Set<VariableDeclaration> | undefined => {
     const config = call.getArguments()[0];
@@ -205,7 +205,8 @@ const passedDatasetsOf = (call: CallExpression): Set<VariableDeclaration> | unde
     const property = config.getProperty("datasets");
 
     if (property === undefined) {
-        return new Set();
+        // A spread (`definePrivacy({ ...config })`) may carry the datasets, so nothing can be called unused.
+        return config.getProperties().some((candidate) => Node.isSpreadAssignment(candidate)) ? undefined : new Set();
     }
 
     const value = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;

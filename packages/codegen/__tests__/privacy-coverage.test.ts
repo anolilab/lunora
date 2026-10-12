@@ -242,6 +242,20 @@ describe("the privacy coverage lint", () => {
         }).toThrow(/privacy_dataset_unused: "orphanData"/u);
     });
 
+    it("reports nothing as unused when definePrivacy spreads a config that may carry the datasets", () => {
+        expect.assertions(1);
+
+        writeApp({
+            files: {
+                "privacy.ts": `import { defineDataset, definePrivacy } from "@lunora/privacy";\n\n${COVERED_DATASET_BODY}\nexport const privacyConfig = { datasets: [notesData] };\n\nexport const privacy = definePrivacy({ ...privacyConfig, ports: () => undefined });\n`,
+            },
+        });
+
+        expect(() => {
+            generate();
+        }).not.toThrow();
+    });
+
     it("resolves a dataset passed by an import from another lunora file", () => {
         expect.assertions(1);
 
