@@ -117,6 +117,9 @@
             # directories that do — together that makes the matrix and the filesystem
             # the same set, not merely the same size.
             - "name": "Assert the matrix matches the workspaces declaring a workerd project"
+              "env":
+                  "WORKSPACE": "${{ matrix.workspace }}"
+                  "LEGS": "${{ strategy.job-total }}"
               "run": |
                   declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts apps/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
