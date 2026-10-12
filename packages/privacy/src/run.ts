@@ -14,6 +14,7 @@ import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
+import { DAY_MS } from "./deadlines";
 import type { RowDisposition, VerifyResult } from "./erasure";
 import { dispositionFor, drainUntilEmpty, verifyErasure } from "./erasure";
 import type { RequestStatus } from "./lifecycle";
@@ -202,7 +203,7 @@ const verifySubjectErased = async (
 };
 
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
-const EXPORT_EXPIRY_MS: number = 7 * 24 * 60 * 60 * 1000;
+const EXPORT_EXPIRY_MS: number = 7 * DAY_MS;
 
 /** A dataset is restricted (Art. 18) when a retention rule may keep any of its tables after erasure. */
 const isRestricted = (dataset: Dataset): boolean => dataset.tableNames.some((table) => typeof dataset.tables[table]?.erase === "object");

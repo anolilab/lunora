@@ -4,7 +4,9 @@
  * mutations that persist a request call these, so the rules are tested without a
  * database.
  */
-import { dueAt, extendedDueAt } from "./deadlines";
+import { LunoraError } from "@lunora/errors";
+
+import { DAY_MS, dueAt, extendedDueAt } from "./deadlines";
 
 type RequestType = "export" | "erasure";
 
@@ -28,13 +30,13 @@ const TRANSITIONS: Readonly<Record<RequestStatus, ReadonlyArray<RequestStatus>>>
     received: ["cancelled", "grace", "processing"],
 };
 
-/** Thrown when a transition is not in {@link TRANSITIONS}. */
-class InvalidTransitionError extends Error {
+/** Thrown when a transition is not in {@link TRANSITIONS}. An `UNPROCESSABLE` error, like every refused request change. */
+class InvalidTransitionError extends LunoraError {
     public constructor(
         public readonly from: RequestStatus,
         public readonly to: RequestStatus,
     ) {
-        super(`A privacy request cannot move from "${from}" to "${to}".`);
+        super("UNPROCESSABLE", `A privacy request cannot move from "${from}" to "${to}".`);
         this.name = "InvalidTransitionError";
     }
 }
@@ -81,8 +83,6 @@ const effectiveDueAt = (receivedAt: Date, extended: boolean): Date => (extended 
  */
 const isOverdue = (request: { readonly extendedDueAt?: Date; readonly receivedAt: Date; readonly status: RequestStatus }, now: Date): boolean =>
     !isTerminal(request.status) && now.getTime() > effectiveDueAt(request.receivedAt, request.extendedDueAt !== undefined).getTime();
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The smallest drain budget, in days. Enough for a batched erasure and its completion notice. */
 const MIN_DRAIN_BUDGET_DAYS = 3;

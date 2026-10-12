@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { canCancel, canExtend, effectiveDueAt, erasureGraceUntil, InvalidTransitionError, isOverdue, isTerminal, transition } from "../src/lifecycle";
@@ -27,6 +28,11 @@ describe(transition, () => {
 
     it("refuses an erasure that jumps from received straight to completed", () => {
         expect(() => transition("received", "completed")).toThrow(InvalidTransitionError);
+    });
+
+    it("refuses a transition with an UNPROCESSABLE LunoraError, like every other refused change", () => {
+        expect(() => transition("completed", "processing")).toThrow(LunoraError);
+        expect(() => transition("completed", "processing")).toThrow(expect.objectContaining({ code: "UNPROCESSABLE" }));
     });
 });
 

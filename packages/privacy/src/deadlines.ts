@@ -7,6 +7,9 @@
  * result does not depend on the host's timezone.
  */
 
+/** One day in milliseconds. Every day-based period in the package is written in terms of it. */
+export const DAY_MS: number = 24 * 60 * 60 * 1000;
+
 /** Add whole calendar months to `date`, keeping the UTC time of day. */
 export const addCalendarMonths = (date: Date, months: number): Date => {
     const year = date.getUTCFullYear();

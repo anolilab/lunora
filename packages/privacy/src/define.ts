@@ -10,11 +10,12 @@ import type { CoverageProblem, TableClassification } from "./coverage";
 import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
+import { DAY_MS } from "./deadlines";
 import type { RowDisposition } from "./erasure";
 import { dispositionFor, drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import type { RequestStatus } from "./lifecycle";
-import { effectiveDueAt, isOverdue, isTerminal, transition } from "./lifecycle";
+import { effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS, transition } from "./lifecycle";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, fromStepRecord, openRequest, requireRequest, toStepRecord } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
@@ -147,11 +148,9 @@ interface Privacy {
 /** A download link lives fifteen minutes (the plan's D5). */
 const DOWNLOAD_TTL_SECONDS = 15 * 60;
 
-const DEFAULT_GRACE_DAYS = DEFAULT_ERASURE_GRACE_DAYS;
-const DEFAULT_DRAIN_BUDGET_DAYS = 3;
-const DEFAULT_FRESH_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_FRESH_AGE_MS = DAY_MS;
 /** Warn an operator this long before a request's deadline. */
-const DEADLINE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+const DEADLINE_WARNING_MS = 7 * DAY_MS;
 
 /** The app's settings, resolved once by `definePrivacy` and shared by every invocation. */
 interface Settings {
@@ -518,9 +517,9 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
         datasets: config.datasets,
         disposition: dispositionFor(rules),
         erasure: {
-            drainBudgetDays: config.erasure?.drainBudgetDays ?? DEFAULT_DRAIN_BUDGET_DAYS,
+            drainBudgetDays: config.erasure?.drainBudgetDays ?? MIN_DRAIN_BUDGET_DAYS,
             freshAgeMs: config.erasure?.freshAgeMs ?? DEFAULT_FRESH_AGE_MS,
-            graceDays: checkErasureGraceDays(config.erasure?.graceDays ?? presetGraceDays ?? DEFAULT_GRACE_DAYS),
+            graceDays: checkErasureGraceDays(config.erasure?.graceDays ?? presetGraceDays ?? DEFAULT_ERASURE_GRACE_DAYS),
         },
         exclude: config.exclude ?? {},
         rules,
