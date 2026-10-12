@@ -15,11 +15,13 @@ import { isTerminal } from "./privacy-request-status";
 const effectiveDueAt = (request: { readonly dueAt: Date; readonly extendedDueAt?: Date }): Date => request.extendedDueAt ?? request.dueAt;
 
 /**
- * A request is overdue once its effective deadline has passed while the controller still owes
- * the answer. A terminal request is finished, and a `ready` export has been answered: the
- * subject holds a download link.
+ * Whether the controller still owes the subject an answer. A terminal request is finished, and a
+ * `ready` export has been answered: the subject holds a download link.
  */
-const isOverdue = (request: { readonly dueAt: Date; readonly extendedDueAt?: Date; readonly status: RequestStatus }, now: Date): boolean =>
-    !isTerminal(request.status) && request.status !== "ready" && now.getTime() > effectiveDueAt(request).getTime();
+const awaitsResponse = (status: RequestStatus): boolean => !isTerminal(status) && status !== "ready";
 
-export { effectiveDueAt, isOverdue };
+/** A request is overdue once its effective deadline has passed while the controller still owes the answer. */
+const isOverdue = (request: { readonly dueAt: Date; readonly extendedDueAt?: Date; readonly status: RequestStatus }, now: Date): boolean =>
+    awaitsResponse(request.status) && now.getTime() > effectiveDueAt(request).getTime();
+
+export { awaitsResponse, effectiveDueAt, isOverdue };

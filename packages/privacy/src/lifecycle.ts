@@ -54,13 +54,6 @@ class InvalidTransitionError extends LunoraError {
     }
 }
 
-/**
- * Whether the controller still owes the subject a response. A terminal request has had one, and so
- * has a `ready` export: its archive is handed over, so its deadline is met even though the request
- * stays open until the download window ends.
- */
-const awaitsResponse = (status: RequestStatus): boolean => !isTerminal(status) && status !== "ready";
-
 /** Whether a value read from outside the package (a step result, a row) is a known status. */
 const isRequestStatus = (value: string): value is RequestStatus => (REQUEST_STATUSES as ReadonlyArray<string>).includes(value);
 
@@ -106,23 +99,12 @@ const erasureGraceUntil = (receivedAt: Date, due: Date, graceDays: number, drain
     return new Date(Math.min(configured, capped));
 };
 
-export {
-    awaitsResponse,
-    canCancel,
-    canExtend,
-    canTransition,
-    erasureGraceUntil,
-    InvalidTransitionError,
-    isRequestStatus,
-    MIN_DRAIN_BUDGET_DAYS,
-    OPEN_STATUSES,
-    transition,
-};
+export { canCancel, canExtend, canTransition, erasureGraceUntil, InvalidTransitionError, isRequestStatus, MIN_DRAIN_BUDGET_DAYS, OPEN_STATUSES, transition };
 
 /*
  * The status list, the terminal set and the overdue rule are shared with the Studio, which must not
  * depend on this package. They are re-exported here so the package reads one definition of each.
  */
-export { effectiveDueAt, isOverdue } from "../../../shared/privacy-deadlines";
+export { awaitsResponse, effectiveDueAt, isOverdue } from "../../../shared/privacy-deadlines";
 export type { RequestStatus, RequestType } from "../../../shared/privacy-request-status";
 export { isTerminal } from "../../../shared/privacy-request-status";
