@@ -25,7 +25,7 @@ interface UserWorkerStub {
 }
 
 interface DispatchNamespace {
-    get: (name: string, args?: unknown, options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: unknown }) => UserWorkerStub;
+    get: (name: string, args?: unknown, options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: { lineage: string } }) => UserWorkerStub;
 }
 
 interface DispatcherEnv {
