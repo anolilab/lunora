@@ -489,12 +489,12 @@ catalogs:
       specifier: 23.0.0
       version: 23.0.0
   privacy:
+    '@cantoo/pdf-lib':
+      specifier: 2.11.1
+      version: 2.11.1
     fflate:
       specifier: 0.8.3
       version: 0.8.3
-    pdf-lib:
-      specifier: 1.17.1
-      version: 1.17.1
   prod:
     '@anolilab/commitlint-config':
       specifier: 10.1.3
@@ -4289,6 +4289,9 @@ importers:
 
   packages/privacy:
     dependencies:
+      '@cantoo/pdf-lib':
+        specifier: catalog:privacy
+        version: 2.11.1(html-entities@2.6.0)
       '@lunora/auth':
         specifier: workspace:*
         version: link:../auth
@@ -4301,9 +4304,6 @@ importers:
       fflate:
         specifier: catalog:privacy
         version: 0.8.3
-      pdf-lib:
-        specifier: catalog:privacy
-        version: 1.17.1
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -6903,6 +6903,11 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
+
+  '@cantoo/pdf-lib@2.11.1':
+    resolution: {integrity: sha512-lYuRJFfXgoP8WVE8HYSeoLfDcnSXmjMLmdZS7YvmYHngbcZfiqDOruHrZBqjYizkrNa4ad1yW4WCrPYyb26T3Q==}
+    peerDependencies:
+      html-entities: '>=2.3.2'
 
   '@capsizecss/unpack@4.0.0':
     resolution: {integrity: sha512-VERIM64vtTP1C4mxQ5thVT9fK0apjPFobqybMtA1UdUujWka24ERHbRHFGmpbbhp73MhV+KSsHQH9C6uOTdEQA==}
@@ -9856,12 +9861,6 @@ packages:
   '@parcel/watcher@2.5.6':
     resolution: {integrity: sha512-tmmZ3lQxAe/k/+rNnXQRawJ4NjxO2hqiOLTHvWchtGZULp4RyFeh6aU4XdOYBFe2KE1oShQTv4AblOs2iOrNnQ==}
     engines: {node: '>= 10.0.0'}
-
-  '@pdf-lib/standard-fonts@1.0.0':
-    resolution: {integrity: sha512-hU30BK9IUN/su0Mn9VdlVKsWBS6GyhVfqjwl1FjZN4TxP6cCw0jP2w7V3Hf5uX7M0AZJ16vey9yE0ny7Sa59ZA==}
-
-  '@pdf-lib/upng@1.0.1':
-    resolution: {integrity: sha512-dQK2FUMQtowVP00mtIksrlZhdFXQZPC+taih1q4CvPZ5vqdxR/LKBaFg0oAfzd1GlHZXXSPdQfzQnt+ViGvEIQ==}
 
   '@peculiar/asn1-android@2.7.0':
     resolution: {integrity: sha512-iD3VskhVQnM4nE3PN9cBdPTR7JrqZy3FYk+uD2CeG6DUqKoANqaEfx0f7izPmW+Qm5JBM35ek+viLCmjy18ByQ==}
@@ -17082,6 +17081,10 @@ packages:
   csv-parse@7.0.3:
     resolution: {integrity: sha512-YFd3QM/yo17vH91L1IOZuvl09zM0zEEtdfTcOCKWcMdM++MNaQSyp09slXyFCLaPXvHstQFx/xC8myiFHSMUvw==}
 
+  culori@4.0.2:
+    resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
   cz-conventional-changelog@3.3.0:
     resolution: {integrity: sha512-U466fIzU5U22eES5lTNiNbZ+d8dfcHcssH4o7QsdWaCcRs/feIPCxKYSWkYBNs5mny7MvEfwpTLWjvbm94hecw==}
     engines: {node: '>= 10'}
@@ -21162,6 +21165,9 @@ packages:
     resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
     hasBin: true
 
+  node-html-better-parser@1.5.9:
+    resolution: {integrity: sha512-z1I5UINMezJXYL9cH3h0a9KBth2G978gSLlfkpQ+CQzzVHVQy9gpARgm9eDsz1O4gn1HtgUqjdAIYxKFZm6uHQ==}
+
   node-int64@0.4.0:
     resolution: {integrity: sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw==}
 
@@ -21615,9 +21621,6 @@ packages:
   pako@0.2.9:
     resolution: {integrity: sha512-NUcwaKxUxWrZLpDG+z/xZaCgQITkA/Dv4V/T6bw7VON6l1Xz/VnrBqrYjZQ12TamKHzITTfOEIYUj48y2KXImA==}
 
-  pako@1.0.11:
-    resolution: {integrity: sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==}
-
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
     engines: {node: '>=6'}
@@ -21752,9 +21755,6 @@ packages:
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
-
-  pdf-lib@1.17.1:
-    resolution: {integrity: sha512-V/mpyJAoTsN4cnP31vc0wfNA1+p20evqqnap0KLoRUN0Yk/p3wN52DOEsL4oBFcLdb76hlpKPtzJIgo67j/XLw==}
 
   peberminta@0.10.0:
     resolution: {integrity: sha512-80B2AsU+I4Qdb0ZAPSfe9UwvGzwkM37IKIFEvdS3D/3Ndgv2bsuJ0bfG1+iEYO+l7Gfd4EUJmuRyq7efLgRMzQ==}
@@ -26725,6 +26725,14 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
+  '@cantoo/pdf-lib@2.11.1(html-entities@2.6.0)':
+    dependencies:
+      culori: 4.0.2
+      fflate: 0.8.3
+      html-entities: 2.6.0
+      node-html-better-parser: 1.5.9
+      tslib: 2.8.1
+
   '@capsizecss/unpack@4.0.0':
     dependencies:
       fontkitten: 1.0.3
@@ -30074,14 +30082,6 @@ snapshots:
       '@parcel/watcher-win32-arm64': 2.5.6
       '@parcel/watcher-win32-ia32': 2.5.6
       '@parcel/watcher-win32-x64': 2.5.6
-
-  '@pdf-lib/standard-fonts@1.0.0':
-    dependencies:
-      pako: 1.0.11
-
-  '@pdf-lib/upng@1.0.1':
-    dependencies:
-      pako: 1.0.11
 
   '@peculiar/asn1-android@2.7.0':
     dependencies:
@@ -38711,6 +38711,8 @@ snapshots:
 
   csv-parse@7.0.3: {}
 
+  culori@4.0.2: {}
+
   cz-conventional-changelog@3.3.0(@types/node@26.6.4)(typescript@6.0.3):
     dependencies:
       chalk: 2.4.2
@@ -43566,6 +43568,10 @@ snapshots:
 
   node-gyp-build@4.8.4: {}
 
+  node-html-better-parser@1.5.9:
+    dependencies:
+      html-entities: 2.6.0
+
   node-int64@0.4.0: {}
 
   node-mock-http@1.0.4: {}
@@ -44184,8 +44190,6 @@ snapshots:
 
   pako@0.2.9: {}
 
-  pako@1.0.11: {}
-
   parent-module@1.0.1:
     dependencies:
       callsites: 3.1.0
@@ -44311,13 +44315,6 @@ snapshots:
   pathe@1.1.2: {}
 
   pathe@2.0.3: {}
-
-  pdf-lib@1.17.1:
-    dependencies:
-      '@pdf-lib/standard-fonts': 1.0.0
-      '@pdf-lib/upng': 1.0.1
-      pako: 1.0.11
-      tslib: 1.14.1
 
   peberminta@0.10.0: {}
 

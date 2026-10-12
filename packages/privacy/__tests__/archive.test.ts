@@ -1,5 +1,5 @@
+import { PDFDocument } from "@cantoo/pdf-lib";
 import { unzipSync } from "fflate";
-import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 
 import { buildArchive, buildManifest, buildSummaryPdf, MANIFEST_FORMAT_VERSION } from "../src/archive";

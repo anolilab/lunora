@@ -67,10 +67,10 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
+        "@cantoo/pdf-lib": "catalog:privacy",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/server": "1.0.0-alpha.190",
-        "fflate": "catalog:privacy",
-        "pdf-lib": "catalog:privacy"
+        "fflate": "catalog:privacy"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

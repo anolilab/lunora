@@ -3,8 +3,8 @@
  * held, a compressed ZIP of the JSON data, and a readable PDF copy. Every clock
  * value comes from the caller, so the same inputs give the same bytes.
  */
+import { PDFDocument, StandardFonts } from "@cantoo/pdf-lib";
 import { zipSync } from "fflate";
-import { PDFDocument, StandardFonts } from "pdf-lib";
 
 import type { DataOrigin, ExportArticle, LegalBasis } from "./articles";
 
