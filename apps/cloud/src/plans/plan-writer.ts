@@ -1,5 +1,5 @@
 import type { PlanFacts } from "./plan-facts";
-import { normalizeFacts, sameFacts } from "./plan-facts";
+import { normalizeFacts, sameFacts, UNAVAILABLE_PLAN } from "./plan-facts";
 import type { PlanRecord, PlanStore } from "./plan-store";
 
 /**
@@ -37,7 +37,7 @@ export interface RefreshOutcome {
  * record for the staleness bound.
  */
 export const planRecordFor = (facts: PlanFacts, now: number): PlanRecord | undefined => {
-    if (facts.plan === undefined || facts.plan === "unknown") {
+    if (facts.plan === undefined || facts.plan === "unknown" || facts.plan === UNAVAILABLE_PLAN) {
         return undefined;
     }
 

@@ -1,6 +1,6 @@
 import readJson from "../read-json";
 import type { PlanFacts } from "./plan-facts";
-import { normalizeFacts, SERVABLE_PLANS, toScriptFacts } from "./plan-facts";
+import { normalizeFacts, SERVABLE_PLANS, toScriptFacts, UNAVAILABLE_PLAN } from "./plan-facts";
 import type { PlanReader, PlanRecord } from "./plan-store";
 
 /**
@@ -57,7 +57,7 @@ export const parsePlanMaxStaleHours = (raw: string | undefined): number => {
  * that failed, timed out or came back malformed, with no fresh-enough answer
  * cached. Not servable, so it is refused — never served on a default tier.
  */
-export const UNAVAILABLE_PLAN = "unavailable";
+export { UNAVAILABLE_PLAN } from "./plan-facts";
 
 /**
  * How long past its TTL a cached answer still stands in for a failed refresh:

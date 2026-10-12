@@ -19,7 +19,7 @@
         {
             "binding": "DISPATCHER",
             "namespace": "lunora-local-dev-unbound",
-            "outbound": { "service": "lunora-outbound", "parameters": ["lineage"] },
+            "outbound": { "service": "lunora-outbound", "parameters": ["lineage", "egress"] },
         },
     ],
     // Per-request metering source (§4): the dispatcher writes one data point per
@@ -57,7 +57,7 @@
                 {
                     "binding": "DISPATCHER",
                     "namespace": "lunora-staging",
-                    "outbound": { "service": "lunora-outbound-staging", "parameters": ["lineage"] },
+                    "outbound": { "service": "lunora-outbound-staging", "parameters": ["lineage", "egress"] },
                 },
             ],
             "analytics_engine_datasets": [
@@ -77,7 +77,7 @@
                 {
                     "binding": "DISPATCHER",
                     "namespace": "lunora-production",
-                    "outbound": { "service": "lunora-outbound-production", "parameters": ["lineage"] },
+                    "outbound": { "service": "lunora-outbound-production", "parameters": ["lineage", "egress"] },
                 },
             ],
             "analytics_engine_datasets": [
