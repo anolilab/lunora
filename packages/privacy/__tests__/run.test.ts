@@ -2,13 +2,8 @@ import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
-import { isTerminal } from "../src/lifecycle";
-import type { RequestRecord, RequestStore } from "../src/requests";
-import type { RetentionRule } from "../src/rules";
-import type { DataPort, RunContext, StorePort } from "../src/run";
-import { runErasure, runExport } from "../src/run";
-
-const now = new Date("2026-10-11T10:00:00.000Z");
+import type { DataPort } from "../src/run";
+import { setup } from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -55,95 +50,23 @@ const memoryData = (initial: Record<string, number>, options: { failCollect?: bo
     return { calls, port };
 };
 
-const memoryRequests = (): RequestStore & { events: string[]; rows: Map<string, RequestRecord> } => {
-    const rows = new Map<string, RequestRecord>();
-    const events: string[] = [];
+const NO_GRACE = { graceDays: 0 };
 
-    return {
-        addEvent: async (requestId, _at, kind) => {
-            events.push(`${requestId}:${kind}`);
-        },
-        events,
-        findOpen: async () => undefined,
-        get: async (id) => rows.get(id),
-        listForSubject: async (subjectId) => [...rows.values()].filter((row) => row.subjectId === subjectId),
-        listOpen: async () => [...rows.values()].filter((row) => !isTerminal(row.status)),
-        insert: async (record) => {
-            rows.set(record.id, record);
-        },
-        rows,
-        update: async (id, patch) => {
-            rows.set(id, { ...rows.get(id)!, ...patch });
-        },
-    };
-};
-
-const memoryFiles = (): StorePort & { files: Map<string, Uint8Array | string> } => {
-    const files = new Map<string, Uint8Array | string>();
-
-    return {
-        delete: async (key) => {
-            files.delete(key);
-        },
-        files,
-        list: async (prefix) => [...files.keys()].filter((key) => key.startsWith(prefix)),
-        put: async (requestId, file) => {
-            files.set(`${requestId}/${file.name}`, file.data);
-
-            return `${requestId}/${file.name}`;
-        },
-        read: async (requestId, name) => {
-            const value = files.get(`${requestId}/${name}`);
-
-            return typeof value === "string" ? value : undefined;
-        },
-        signedUrl: async (key, ttlSeconds) => `https://files.test/${key}?ttl=${String(ttlSeconds)}`,
-    };
-};
-
-const contextFor = (data: DataPort, requests: RequestStore, files: StorePort): RunContext => {
-    return {
-        data,
-        files,
-        now: () => now,
-        rules: new Map<string, RetentionRule>(),
-        store: requests,
-        subjectKey: "subject-1",
-    };
-};
-
-const request = (overrides: Partial<RequestRecord> = {}): RequestRecord => {
-    return {
-        dueAt: new Date("2026-11-11T10:00:00.000Z"),
-        id: "r1",
-        receivedAt: now,
-        status: "received",
-        subjectId: "u1",
-        type: "export",
-        ...overrides,
-    };
-};
-
-describe(runExport, () => {
+describe("runExport", () => {
     it("collects every dataset and stores the archive and the summary", async () => {
-        const requests = memoryRequests();
-        const files = memoryFiles();
-        const { port } = memoryData({});
-
-        requests.rows.set("r1", request());
-        const outcome = await runExport(contextFor(port, requests, files), [tasks], request());
+        const { files, privacy } = setup({ data: memoryData({}).port });
+        const opened = await privacy.requestExport();
+        const outcome = await privacy.runExport(opened.id);
 
         expect(outcome).toMatchObject({ archiveKey: "r1/export.zip", status: "ready" });
         expect([...files.files.keys()]).toStrictEqual(expect.arrayContaining(["r1/export.zip", "r1/summary.pdf"]));
     });
 
     it("writes the table rows and a manifest that tags each dataset's articles", async () => {
-        const requests = memoryRequests();
-        const files = memoryFiles();
-        const { port } = memoryData({});
+        const { files, privacy } = setup({ data: memoryData({}).port });
+        const opened = await privacy.requestExport();
 
-        requests.rows.set("r1", request());
-        await runExport(contextFor(port, requests, files), [tasks], request());
+        await privacy.runExport(opened.id);
 
         const extracted = unzipSync(files.files.get("r1/export.zip") as Uint8Array);
         const manifest = JSON.parse(new TextDecoder().decode(extracted["manifest.json"])) as { datasets: { articles: string[]; id: string }[] };
@@ -157,67 +80,86 @@ describe(runExport, () => {
     });
 
     it("marks the request failed, and says why, when collection throws", async () => {
-        const requests = memoryRequests();
-        const files = memoryFiles();
-        const { port } = memoryData({}, { failCollect: true });
-
-        requests.rows.set("r1", request());
-        const outcome = await runExport(contextFor(port, requests, files), [tasks], request());
+        const { files, privacy, store } = setup({ data: memoryData({}, { failCollect: true }).port });
+        const opened = await privacy.requestExport();
+        const outcome = await privacy.runExport(opened.id);
 
         expect(outcome.status).toBe("failed");
-        expect(requests.events).toContain("r1:failed");
+        expect(store.events).toContain("r1:failed");
         expect(files.files.size).toBe(0);
+    });
+
+    it("stops at the next step when the request leaves processing during the run, instead of writing over it", async () => {
+        const second = defineDataset("notes", { legalBasis: "contract", origin: "provided", purpose: "Notes", tables: { notes: {} } });
+        const { port } = memoryData({});
+        let cancel: () => void = () => undefined;
+        const interrupting: DataPort = {
+            ...port,
+            collect: async (dataset, subjectId) => {
+                cancel();
+
+                return port.collect(dataset, subjectId);
+            },
+        };
+        const { files, privacy, store } = setup({ data: interrupting, datasets: [tasks, second] });
+        const opened = await privacy.requestExport();
+
+        cancel = () => {
+            store.rows.set(opened.id, { ...store.rows.get(opened.id)!, status: "cancelled" });
+        };
+
+        await expect(privacy.runExport(opened.id)).resolves.toStrictEqual({ status: "cancelled" });
+        expect(store.rows.get(opened.id)?.status).toBe("cancelled");
+        expect(files.files.has(`${opened.id}/parts/notes.json`)).toBe(false);
     });
 });
 
-describe(runErasure, () => {
+describe("runErasure", () => {
     it("erases the quiesce dataset before the others", async () => {
-        const requests = memoryRequests();
         const { calls, port } = memoryData({ goals: 0, jobs: 0, tasks: 0 });
+        const { privacy } = setup({ data: port, datasets: [tasks, quiesced], erasure: NO_GRACE });
+        const opened = await privacy.requestErasure();
 
-        requests.rows.set("r2", request({ status: "processing", type: "erasure" }));
-        await runErasure(contextFor(port, requests, memoryFiles()), [tasks, quiesced], request({ id: "r2", status: "grace", type: "erasure" }));
+        await privacy.runErasure(opened.id);
 
         expect(calls.filter((call) => call.startsWith("erase:"))).toStrictEqual(["erase:scheduler", "erase:tasks"]);
     });
 
-    it("completes when every table reads zero afterwards", async () => {
-        const requests = memoryRequests();
+    it("completes when every table reads zero afterwards, with one event per phase", async () => {
         const { port } = memoryData({ goals: 150, jobs: 0, tasks: 40 });
+        const { privacy, store } = setup({ data: port, datasets: [tasks, quiesced], erasure: NO_GRACE });
+        const opened = await privacy.requestErasure();
 
-        requests.rows.set("r2", request({ status: "grace", type: "erasure" }));
-        const outcome = await runErasure(contextFor(port, requests, memoryFiles()), [tasks, quiesced], request({ id: "r2", status: "grace", type: "erasure" }));
+        await expect(privacy.runErasure(opened.id)).resolves.toStrictEqual({ leftover: [], status: "completed" });
+        expect(store.events).toStrictEqual(["r1:received", "r1:processing", "r1:completed"]);
+    });
 
-        expect(outcome).toStrictEqual({ leftover: [], status: "completed" });
-        expect(requests.events).toContain("r2:completed");
+    it("refuses an erasure still inside its grace window", async () => {
+        const { privacy, store } = setup();
+        const opened = await privacy.requestErasure();
+
+        await expect(privacy.runErasure(opened.id)).rejects.toMatchObject({ code: "UNPROCESSABLE" });
+        expect(store.rows.get(opened.id)?.status).toBe("grace");
     });
 
     it("fails and names the table that still has rows, rather than reporting success", async () => {
-        const requests = memoryRequests();
         // The verify read reports goals still populated, even though the drain stopped.
-        const data = memoryData({ goals: 0, jobs: 0, tasks: 0 });
+        const { port } = memoryData({ goals: 0, jobs: 0, tasks: 0 });
         const stubborn: DataPort = {
-            ...data.port,
+            ...port,
             remaining: async () => {
                 return { goals: 3, jobs: 0, tasks: 0 };
             },
         };
+        const { privacy } = setup({ data: stubborn, datasets: [tasks, quiesced], erasure: NO_GRACE });
+        const opened = await privacy.requestErasure();
 
-        requests.rows.set("r3", request({ status: "grace", type: "erasure" }));
-        const outcome = await runErasure(
-            contextFor(stubborn, requests, memoryFiles()),
-            [tasks, quiesced],
-            request({ id: "r3", status: "grace", type: "erasure" }),
-        );
-
-        expect(outcome).toStrictEqual({ leftover: ["goals"], status: "failed" });
+        await expect(privacy.runErasure(opened.id)).resolves.toStrictEqual({ leftover: ["goals"], status: "failed" });
     });
 });
 
 describe("omitted columns", () => {
     it("never writes a column the dataset omits into the archive", async () => {
-        const requests = memoryRequests();
-        const files = memoryFiles();
         const secretDataset = defineDataset("auth", {
             legalBasis: "contract",
             origin: "provided",
@@ -235,12 +177,12 @@ describe("omitted columns", () => {
                 return { session: 0 };
             },
         };
-        const opened = request({ id: "r9" });
+        const { files, privacy } = setup({ data, datasets: [secretDataset] });
+        const opened = await privacy.requestExport();
 
-        requests.rows.set("r9", opened);
-        await runExport(contextFor(data, requests, files), [secretDataset], opened);
+        await privacy.runExport(opened.id);
 
-        const archive = unzipSync(files.files.get("r9/export.zip") as Uint8Array);
+        const archive = unzipSync(files.files.get(`${opened.id}/export.zip`) as Uint8Array);
         const session = new TextDecoder().decode(archive["data/auth/session.json"]);
 
         expect(session).not.toContain("live-secret");

@@ -11,28 +11,15 @@ import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
 import { DAY_MS } from "./deadlines";
-import type { RowDisposition } from "./erasure";
-import { dispositionFor, drainUntilEmpty } from "./erasure";
+import { dispositionFor } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
-import type { RequestStatus } from "./lifecycle";
-import { effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS, transition } from "./lifecycle";
+import { effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
-import { cancelRequest, extendRequest, fromStepRecord, openRequest, requireRequest, toStepRecord } from "./requests";
+import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
-import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
-import {
-    assembleExport,
-    collectPart,
-    eraseSubjectFiles,
-    expireRequestFiles,
-    EXPORT_EXPIRY_MS,
-    messageOf,
-    runErasure,
-    runExport,
-    verifySubjectErased,
-} from "./run";
-import type { TombstonePort } from "./tombstones";
-import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
+import type { ErasureOutcome, ExportOutcome, PrivacyPorts, RunScope, StepRunner } from "./run";
+import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstoneSecret } from "./run";
+import { subjectsToReerase } from "./tombstones";
 
 /**
  * Load a request the caller may act on. A request that belongs to someone else reads as
@@ -59,17 +46,6 @@ type ErasureOptions = Partial<ErasureSettings>;
 interface PrivacyIdentity {
     readonly sessionAgeMs: number;
     readonly subjectId: string;
-}
-
-/** The ports one invocation binds: the app's data, storage, requests and clock. */
-interface PrivacyPorts {
-    readonly data: DataPort;
-    readonly files: StorePort;
-    readonly newId: () => string;
-    readonly now: () => Date;
-    readonly store: RequestStore;
-    /** Where erased subjects are tombstoned, so a restored backup can be erased again. Optional; `restore` needs it. */
-    readonly tombstones?: TombstonePort;
 }
 
 /**
@@ -105,10 +81,7 @@ type PrivacyFor<C> = (context: C, identity?: PrivacyIdentity) => Privacy;
 /** The step surface a Workflow handler receives. Matches the native `WorkflowStep` methods the package uses. */
 interface PrivacyWorkflowContext {
     readonly params: { readonly requestId: string };
-    readonly step: {
-        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
-        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
-    };
+    readonly step: Required<StepRunner>;
 }
 
 /** The bound API. */
@@ -161,20 +134,14 @@ const DEFAULT_FRESH_AGE_MS = DAY_MS;
 const DEADLINE_WARNING_MS = 7 * DAY_MS;
 
 /** The app's settings, resolved once by `definePrivacy` and shared by every invocation. */
-interface Settings {
-    readonly datasets: ReadonlyArray<Dataset>;
-    readonly disposition: RowDisposition;
+interface Settings extends Omit<RunScope, "ports"> {
     readonly erasure: ErasureSettings;
     readonly exclude: Readonly<Record<string, string>>;
-    readonly rules: ReadonlyMap<string, RetentionRule>;
-    readonly subjectKey: (subjectId: string) => string;
-    readonly tombstoneSecret: string | undefined;
 }
 
 /** One invocation's view of the settings: the ports that call binds, and the caller when it is a subject. */
-interface Scope extends Settings {
+interface Scope extends RunScope, Settings {
     readonly identity: PrivacyIdentity | undefined;
-    readonly ports: PrivacyPorts;
 }
 
 /** The subject the call is bound to. A call bound without one (an operator, a cron) cannot use the subject methods. */
@@ -186,22 +153,6 @@ const callerOf = (scope: Scope): PrivacyIdentity => {
     return scope.identity;
 };
 
-/** The run context without the subject key: the sweep and the verify step need no more than this. */
-const portsContext = (scope: Scope): Omit<RunContext, "subjectKey"> => {
-    return {
-        data: scope.ports.data,
-        files: scope.ports.files,
-        now: scope.ports.now,
-        rules: scope.rules,
-        store: scope.ports.store,
-    };
-};
-
-/** The run context for one request: the ports plus the subject's key in the archive. */
-const contextFor = (scope: Scope, record: RequestRecord): RunContext => {
-    return { ...portsContext(scope), subjectKey: scope.subjectKey(record.subjectId) };
-};
-
 /** The app's `listOpen` is filtered again, so a terminal request never reaches a sweep or a report. */
 const listOpen = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => {
     const listed = await scope.ports.store.listOpen();
@@ -209,61 +160,16 @@ const listOpen = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => 
     return listed.filter((record) => !isTerminal(record.status));
 };
 
-const setStatus = async (scope: Scope, record: RequestRecord, status: RequestStatus, detail?: string): Promise<void> => {
-    await scope.ports.store.update(record.id, { status });
-    await scope.ports.store.addEvent(record.id, scope.ports.now(), status, detail);
-};
-
-/** A failure never overwrites a request that is already terminal (cancelled or completed). */
-const markFailed = async (scope: Scope, record: RequestRecord, message: string): Promise<void> => {
-    const current = await requireRequest(scope.ports.store, record.id);
-
-    if (!isTerminal(current.status)) {
-        await setStatus(scope, record, "failed", message);
-    }
-};
-
-/** The run starts from the status it finds now, so a cancel that lands during the load step is respected. */
-const startRun = async (scope: Scope, record: RequestRecord): Promise<void> => {
-    const current = await requireRequest(scope.ports.store, record.id);
-
-    await setStatus(scope, record, transition(current.status, "processing"));
-};
-
-/** Checked before anything is erased, so a missing secret never leaves an erasure completed without its tombstone. */
-const requireTombstoneSecret = (secret: string | undefined): string => {
-    if (secret === undefined || secret === "") {
-        throw new LunoraError("BAD_REQUEST", "Tombstones need a secret: pass `tombstoneSecret` to definePrivacy.");
-    }
-
-    return secret;
-};
-
-/** Tombstone a completed erasure, so a restored backup is erased again. Does nothing without a tombstone store. */
-const addTombstone = async (scope: Scope, subjectId: string, secret: string | undefined): Promise<void> => {
-    if (scope.ports.tombstones !== undefined && secret !== undefined) {
-        await scope.ports.tombstones.add(tombstoneKeyOf(subjectId, secret), scope.ports.now());
-    }
-};
-
-/** Erase one dataset's rows for the subject, one batch at a time, until the drain finishes. */
-const eraseDataset = async (scope: Scope, dataset: Dataset, subjectId: string): Promise<void> => {
-    await drainUntilEmpty(() => scope.ports.data.eraseBatch(dataset, subjectId, scope.ports.now(), scope.disposition));
-};
-
 /**
- * One erasure path for the workflow, the public entry and the operator retry: the tombstone is
- * written in every case, so a restored backup is erased again whichever path ran it.
+ * The one-call erasure. The tombstone secret is checked before anything runs, so a call without it
+ * is refused outright and leaves the request as it was.
  */
-const eraseAndTombstone = async (scope: Scope, record: RequestRecord): Promise<ErasureOutcome> => {
-    const secret = scope.ports.tombstones === undefined ? undefined : requireTombstoneSecret(scope.tombstoneSecret);
-    const outcome = await runErasure(contextFor(scope, record), scope.datasets, record);
-
-    if (outcome.status === "completed") {
-        await addTombstone(scope, record.subjectId, secret);
+const runErasureNow = async (scope: Scope, requestId: string): Promise<ErasureOutcome> => {
+    if (scope.ports.tombstones !== undefined) {
+        requireTombstoneSecret(scope.tombstoneSecret);
     }
 
-    return outcome;
+    return erasureRun(scope, inlineSteps, requestId);
 };
 
 /** Re-run a failed export or erasure from the operator console. Only a failed request may be retried. */
@@ -274,7 +180,7 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<ExportOutc
         throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
     }
 
-    return record.type === "export" ? runExport(contextFor(scope, record), scope.datasets, record) : eraseAndTombstone(scope, record);
+    return record.type === "export" ? exportRun(scope, inlineSteps, requestId) : runErasureNow(scope, requestId);
 };
 
 /** Expire every ready export past its window. Each export's files go before its status changes, so a failed delete leaves it ready. */
@@ -283,7 +189,7 @@ const sweepExpired = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>>
     const open = await listOpen(scope);
     const due = open.filter((record) => record.status === "ready" && record.expiresAt !== undefined && record.expiresAt.getTime() < now);
 
-    await Promise.all(due.map(async (record) => expireRequestFiles(portsContext(scope), record)));
+    await Promise.all(due.map(async (record) => expireRequestFiles(scope.ports, record)));
 
     return due.map((record) => {
         return { ...record, status: "expired" as const };
@@ -342,86 +248,6 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
     }
 
     return subjects;
-};
-
-/** The export workflow: each dataset is one durable step, so a retry resumes at the step that failed. */
-const exportWorkflow = async (scope: Scope, context: PrivacyWorkflowContext): Promise<void> => {
-    const { requestId } = context.params;
-    // Step results are stored as JSON, so the record crosses the step as ISO strings and is rehydrated here.
-    const record = fromStepRecord(await context.step.do("load", async () => toStepRecord(await requireRequest(scope.ports.store, requestId))));
-    const runContext = contextFor(scope, record);
-
-    try {
-        await context.step.do("start", async () => startRun(scope, record));
-
-        for (const dataset of scope.datasets) {
-            // Each dataset is one step: its rows go to storage, so the step returns nothing large.
-            // eslint-disable-next-line no-await-in-loop -- durable steps run in order by design
-            await context.step.do(`collect:${dataset.id}`, async () => collectPart(runContext, dataset, record));
-        }
-
-        const archiveKey = await context.step.do("assemble", async () => assembleExport(runContext, scope.datasets, record));
-
-        await context.step.do("ready", async () => {
-            await scope.ports.store.update(record.id, {
-                expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS),
-                status: transition("processing", "ready"),
-                storageKey: archiveKey,
-            });
-            await scope.ports.store.addEvent(record.id, scope.ports.now(), "ready", archiveKey);
-        });
-    } catch (error) {
-        await context.step.do("fail", async () => markFailed(scope, record, messageOf(error)));
-    }
-};
-
-/**
- * The erasure workflow. A subject who cancelled during the grace leaves the request cancelled,
- * so the erasure stops after the grace window.
- */
-const erasureWorkflow = async (scope: Scope, context: PrivacyWorkflowContext): Promise<void> => {
-    const { requestId } = context.params;
-    const record = fromStepRecord(await context.step.do("load", async () => toStepRecord(await requireRequest(scope.ports.store, requestId))));
-
-    if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
-        await context.step.sleepUntil("grace", record.erasureGraceUntil);
-
-        const status = await context.step.do("recheck", async () => {
-            const current = await requireRequest(scope.ports.store, requestId);
-
-            return current.status;
-        });
-
-        if (status !== "grace") {
-            return;
-        }
-    }
-
-    try {
-        const secret = scope.ports.tombstones === undefined ? undefined : requireTombstoneSecret(scope.tombstoneSecret);
-
-        await context.step.do("start", async () => startRun(scope, record));
-
-        for (const dataset of erasureOrder(scope.datasets)) {
-            // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
-            // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
-            await context.step.do(`erase:${dataset.id}`, async () => eraseDataset(scope, dataset, record.subjectId));
-        }
-
-        await context.step.do("erase:files", async () => eraseSubjectFiles(scope.ports, scope.datasets, record.subjectId));
-
-        await context.step.do("verify", async () => {
-            const verdict = await verifySubjectErased(portsContext(scope), scope.datasets, record.subjectId);
-
-            await setStatus(scope, record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
-
-            if (verdict.complete) {
-                await addTombstone(scope, record.subjectId, secret);
-            }
-        });
-    } catch (error) {
-        await context.step.do("fail", async () => markFailed(scope, record, messageOf(error)));
-    }
 };
 
 /** The coverage check: every table is in a dataset or excluded with a reason. Exclusions passed here override the app's. */
@@ -484,28 +310,19 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
 
         restore: async ({ restoredSubjectIds }) => restoreSubjects(scope, restoredSubjectIds),
 
-        runErasure: async (requestId) => {
-            const record = await requireRequest(ports.store, requestId);
+        runErasure: async (requestId) => runErasureNow(scope, requestId),
 
-            // The grace window is the subject's cancellation period. The erasure workflow waits it out; this entry must not skip it.
-            if (record.status === "grace") {
-                throw new LunoraError("UNPROCESSABLE", "This erasure is inside its grace window. The erasure workflow runs it when the window ends.");
-            }
-
-            return eraseAndTombstone(scope, record);
-        },
-
-        runExport: async (requestId) => {
-            const record = await requireRequest(ports.store, requestId);
-
-            return runExport(contextFor(scope, record), settings.datasets, record);
-        },
+        runExport: async (requestId) => exportRun(scope, inlineSteps, requestId),
 
         tick: async () => tickRequests(scope),
 
         workflows: {
-            erasureHandler: async (context) => erasureWorkflow(scope, context),
-            exportHandler: async (context) => exportWorkflow(scope, context),
+            erasureHandler: async (context) => {
+                await erasureRun(scope, context.step, context.params.requestId);
+            },
+            exportHandler: async (context) => {
+                await exportRun(scope, context.step, context.params.requestId);
+            },
         },
     };
 };
@@ -535,7 +352,6 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             graceDays: checkErasureGraceDays(config.erasure?.graceDays ?? presetGraceDays ?? DEFAULT_ERASURE_GRACE_DAYS),
         },
         exclude: config.exclude ?? {},
-        rules,
         subjectKey: config.subjectKey ?? ((subjectId: string) => subjectId),
         tombstoneSecret: config.tombstoneSecret,
     };
@@ -543,13 +359,6 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
     return (context, identity) => bind(settings, config.ports(context), identity);
 };
 
-export {
-    definePrivacy,
-    type ErasureOptions,
-    type Privacy,
-    type PrivacyConfig,
-    type PrivacyFor,
-    type PrivacyIdentity,
-    type PrivacyPorts,
-    type PrivacyWorkflowContext,
-};
+export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig, type PrivacyFor, type PrivacyIdentity, type PrivacyWorkflowContext };
+
+export { type PrivacyPorts } from "./run";

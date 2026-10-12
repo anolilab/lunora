@@ -17,17 +17,18 @@ const TERMINAL: ReadonlySet<RequestStatus> = new Set(["cancelled", "completed", 
 
 /**
  * The transitions the package allows. `failed` is not terminal: an operator can
- * retry the work, and the Art. 12(3) clock keeps running throughout.
+ * retry the work, and the Art. 12(3) clock keeps running throughout. A run can fail before it
+ * starts processing (a missing secret), so `received` and `grace` may move to `failed` too.
  */
 const TRANSITIONS: Readonly<Record<RequestStatus, ReadonlyArray<RequestStatus>>> = {
     cancelled: [],
     completed: [],
     expired: [],
     failed: ["processing"],
-    grace: ["cancelled", "processing"],
+    grace: ["cancelled", "failed", "processing"],
     processing: ["completed", "failed", "ready"],
     ready: ["cancelled", "expired", "processing"],
-    received: ["cancelled", "grace", "processing"],
+    received: ["cancelled", "failed", "grace", "processing"],
 };
 
 /** Thrown when a transition is not in {@link TRANSITIONS}. An `UNPROCESSABLE` error, like every refused request change. */
@@ -46,9 +47,12 @@ const isTerminal = (status: RequestStatus): boolean => TERMINAL.has(status);
 /** Whether a value read from outside the package (a step result, a row) is a known status. */
 const isRequestStatus = (value: string): value is RequestStatus => Object.hasOwn(TRANSITIONS, value);
 
+/** Whether {@link TRANSITIONS} allows the move. */
+const canTransition = (from: RequestStatus, to: RequestStatus): boolean => TRANSITIONS[from].includes(to);
+
 /** Check a transition and return the new status, or throw {@link InvalidTransitionError}. */
 const transition = (from: RequestStatus, to: RequestStatus): RequestStatus => {
-    if (!TRANSITIONS[from].includes(to)) {
+    if (!canTransition(from, to)) {
         throw new InvalidTransitionError(from, to);
     }
 
@@ -107,6 +111,7 @@ const erasureGraceUntil = (receivedAt: Date, graceDays: number, drainBudgetDays:
 export {
     canCancel,
     canExtend,
+    canTransition,
     effectiveDueAt,
     erasureGraceUntil,
     InvalidTransitionError,
