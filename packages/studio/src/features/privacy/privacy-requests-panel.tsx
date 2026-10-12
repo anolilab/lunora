@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+import { useId } from "react";
 
 import type { RequestStatus } from "../../../../../shared/privacy-request-status";
 import ErrorAlert from "../../components/error-alert";
@@ -14,7 +15,6 @@ import type { PrivacyRequestRow, PrivacyRequestsSource } from "./privacy-request
 import { isPrivacyRequestOverdue } from "./privacy-requests-source";
 
 /** Query key shared by the list read and the invalidation after a retry. */
-// ponytail: one panel per QueryClient. Key by source when a host mounts several panels under one client.
 const QUERY_KEY = ["studio", "privacy-requests"] as const;
 
 /** The rows plus the clock read when they were fetched, so overdue is pure at render. */
@@ -106,9 +106,11 @@ interface PrivacyRequestsViewProps {
 const PrivacyRequestsView = ({ source }: PrivacyRequestsViewProps): ReactElement => {
     const t = useT();
     const queryClient = useQueryClient();
+    // One cache entry per mounted panel, so two panels under one QueryClient never show each other's rows.
+    const queryKey = [...QUERY_KEY, useId()] as const;
 
     const list = useQuery<PrivacySnapshot>({
-        queryKey: QUERY_KEY,
+        queryKey,
         // Refetch so `asOf` moves on and a deadline that passes while the page is open shows as overdue.
         refetchInterval: 60_000,
         queryFn: async () => {
@@ -122,7 +124,7 @@ const PrivacyRequestsView = ({ source }: PrivacyRequestsViewProps): ReactElement
     const retry = useMutation({
         mutationFn: (id: string) => source.retryPrivacyRequest(id),
         onSuccess: async () => {
-            await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+            await queryClient.invalidateQueries({ queryKey });
         },
     });
 
