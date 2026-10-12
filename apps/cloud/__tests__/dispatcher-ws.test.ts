@@ -29,7 +29,7 @@ describe("dispatcher WebSocket pass-through", () => {
         const upgraded = { status: 101, webSocket: socket } as unknown as Response;
         const env = makeEnv(() => Promise.resolve(upgraded));
 
-        const response = await dispatcher.fetch(upgrade(), env as never);
+        const response = await dispatcher.fetch(upgrade(), env);
 
         expect(response).toBe(upgraded);
         expect((response as unknown as { webSocket: unknown }).webSocket).toBe(socket);
@@ -39,7 +39,7 @@ describe("dispatcher WebSocket pass-through", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.resolve({ status: 101, webSocket: {} } as unknown as Response), { writeDataPoint });
 
-        await dispatcher.fetch(upgrade(), env as never);
+        await dispatcher.fetch(upgrade(), env);
 
         // free-tier limits are applied to the dispatched invocation…
         expect(env.DISPATCHER.get).toHaveBeenCalledWith("acme", undefined, {

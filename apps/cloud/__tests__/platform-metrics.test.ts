@@ -104,7 +104,10 @@ describe("dispatcher platform metrics", () => {
     it("records latency and status class per cell, with no tenant dimension", async () => {
         const sink = dataset();
 
-        await dispatcher.fetch(request(), env(async () => new Response("ok", { status: 201 }), sink) as never);
+        await dispatcher.fetch(
+            request(),
+            env(async () => new Response("ok", { status: 201 }), sink),
+        );
 
         const point = sink.writeDataPoint.mock.calls[0]?.[0];
 
@@ -120,14 +123,17 @@ describe("dispatcher platform metrics", () => {
                 request(),
                 env(async () => {
                     throw new Error("boom");
-                }, sink) as never,
+                }, sink),
             ),
         ).rejects.toThrow("boom");
         expect(sink.writeDataPoint.mock.calls[0]?.[0]).toMatchObject({ blobs: ["dispatch", "eu-1", "exception"] });
     });
 
     it("serves exactly as before without the binding", async () => {
-        const response = await dispatcher.fetch(request(), env(async () => new Response("ok")) as never);
+        const response = await dispatcher.fetch(
+            request(),
+            env(async () => new Response("ok")),
+        );
 
         expect(response.status).toBe(200);
         await expect(response.text()).resolves.toBe("ok");

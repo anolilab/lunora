@@ -31,7 +31,7 @@ describe("dispatcher metering on a failed dispatch", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.reject(new Error("tenant exploded")), { writeDataPoint });
 
-        await expect(dispatcher.fetch(request(), env as never)).rejects.toThrow("tenant exploded");
+        await expect(dispatcher.fetch(request(), env)).rejects.toThrow("tenant exploded");
 
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
 
@@ -47,7 +47,7 @@ describe("dispatcher metering on a failed dispatch", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.reject(new Error("Worker not found: acme-app")), { writeDataPoint });
 
-        const response = await dispatcher.fetch(request(), env as never);
+        const response = await dispatcher.fetch(request(), env);
 
         expect(response.status).toBe(404);
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
@@ -58,7 +58,7 @@ describe("dispatcher metering on a failed dispatch", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.resolve(new Response("ok", { status: 200 })), { writeDataPoint });
 
-        await dispatcher.fetch(request(), env as never);
+        await dispatcher.fetch(request(), env);
 
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
         expect((writeDataPoint.mock.calls[0]?.[0] as { blobs: string[] }).blobs[2]).toBe("2xx");
@@ -71,6 +71,6 @@ describe("dispatcher metering on a failed dispatch", () => {
             },
         });
 
-        await expect(dispatcher.fetch(request(), env as never)).resolves.toMatchObject({ status: 200 });
+        await expect(dispatcher.fetch(request(), env)).resolves.toMatchObject({ status: 200 });
     });
 });
