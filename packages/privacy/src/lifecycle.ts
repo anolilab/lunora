@@ -6,9 +6,15 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { DAY_MS, dueAt, extendedDueAt } from "./deadlines";
+import { DAY_MS } from "./deadlines";
 
 type RequestType = "export" | "erasure";
+
+/** The deadlines a request stores when it is opened and extended. */
+interface RequestDeadlines {
+    readonly dueAt: Date;
+    readonly extendedDueAt?: Date;
+}
 
 type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired";
 
@@ -86,17 +92,17 @@ const canCancel = (type: RequestType, status: RequestStatus): boolean => {
  * original month has not run out. The extension must be notified within the
  * first month, and that notice is what this rule guards.
  */
-const canExtend = (receivedAt: Date, now: Date, alreadyExtended: boolean): boolean => !alreadyExtended && now.getTime() < dueAt(receivedAt).getTime();
+const canExtend = (request: RequestDeadlines, now: Date): boolean => request.extendedDueAt === undefined && now.getTime() < request.dueAt.getTime();
 
-/** The effective deadline: the extended one when an extension was granted, otherwise the original. */
-const effectiveDueAt = (receivedAt: Date, extended: boolean): Date => (extended ? extendedDueAt(receivedAt) : dueAt(receivedAt));
+/** The effective deadline: the extended one when an extension was granted, otherwise the original. Both are stored on the request. */
+const effectiveDueAt = (request: RequestDeadlines): Date => request.extendedDueAt ?? request.dueAt;
 
 /**
  * A request is overdue once its effective deadline has passed and the response is still owed. The deadline
- * is the extended one when `extendedDueAt` is set, and is computed from `receivedAt` either way.
+ * is the extended one when `extendedDueAt` is set, and `dueAt` otherwise, as the request stored them.
  */
-const isOverdue = (request: { readonly extendedDueAt?: Date; readonly receivedAt: Date; readonly status: RequestStatus }, now: Date): boolean =>
-    awaitsResponse(request.status) && now.getTime() > effectiveDueAt(request.receivedAt, request.extendedDueAt !== undefined).getTime();
+const isOverdue = (request: RequestDeadlines & { readonly status: RequestStatus }, now: Date): boolean =>
+    awaitsResponse(request.status) && now.getTime() > effectiveDueAt(request).getTime();
 
 /** The smallest drain budget, in days. Enough for a batched erasure and its completion notice. */
 const MIN_DRAIN_BUDGET_DAYS = 3;
@@ -107,10 +113,10 @@ const MIN_DRAIN_BUDGET_DAYS = 3;
  * notice fall inside the month. With the 14-day grace this cap never binds,
  * because the shortest month leaves 25 days after the budget.
  */
-const erasureGraceUntil = (receivedAt: Date, graceDays: number, drainBudgetDays: number): Date => {
+const erasureGraceUntil = (receivedAt: Date, due: Date, graceDays: number, drainBudgetDays: number): Date => {
     const budgetDays = Math.max(MIN_DRAIN_BUDGET_DAYS, drainBudgetDays);
     const configured = receivedAt.getTime() + graceDays * DAY_MS;
-    const capped = dueAt(receivedAt).getTime() - budgetDays * DAY_MS;
+    const capped = due.getTime() - budgetDays * DAY_MS;
 
     return new Date(Math.min(configured, capped));
 };

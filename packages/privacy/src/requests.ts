@@ -8,7 +8,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { dueAt, extendedDueAt } from "./deadlines";
+import type { DeadlinePolicy } from "./deadlines";
+import { DEFAULT_DEADLINES, dueAt, extendedDueAt } from "./deadlines";
 import type { RequestStatus, RequestType } from "./lifecycle";
 import { canCancel, canExtend, erasureGraceUntil, isRequestStatus, isTerminal, transition } from "./lifecycle";
 
@@ -139,7 +140,7 @@ const requireRequest = async (store: RequestStore, id: string): Promise<RequestR
 /** Open a request, or refuse when the subject already has one open. */
 const openRequest = async (
     store: RequestStore,
-    input: { erasure?: ErasureSettings; id: string; now: Date; sessionAgeMs?: number; subjectId: string; type: RequestType },
+    input: { deadlines?: DeadlinePolicy; erasure?: ErasureSettings; id: string; now: Date; sessionAgeMs?: number; subjectId: string; type: RequestType },
 ): Promise<RequestRecord> => {
     if (input.type === "erasure" && input.erasure !== undefined && (input.sessionAgeMs ?? Number.POSITIVE_INFINITY) > input.erasure.freshAgeMs) {
         throw new LunoraError("PRIVACY_SESSION_NOT_FRESH", "Sign in again to request erasure.");
@@ -153,16 +154,17 @@ const openRequest = async (
     }
 
     const { erasure } = input;
+    const due = dueAt(input.now, input.deadlines ?? DEFAULT_DEADLINES);
     const starts: RequestStatus = input.type === "erasure" && erasure !== undefined && erasure.graceDays > 0 ? "grace" : "received";
     const record: RequestRecord = {
-        dueAt: dueAt(input.now),
+        dueAt: due,
         id: input.id,
         receivedAt: input.now,
         status: starts,
         subjectId: input.subjectId,
         type: input.type,
         ...(input.type === "erasure" && erasure !== undefined
-            ? { erasureGraceUntil: erasureGraceUntil(input.now, erasure.graceDays, erasure.drainBudgetDays) }
+            ? { erasureGraceUntil: erasureGraceUntil(input.now, due, erasure.graceDays, erasure.drainBudgetDays) }
             : {}),
     };
 
@@ -189,15 +191,14 @@ const cancelRequest = async (store: RequestStore, input: { id: string; now: Date
 };
 
 /** Extend a request once, and only while the first month is still running. */
-const extendRequest = async (store: RequestStore, input: { id: string; now: Date; reason: string }): Promise<RequestRecord> => {
+const extendRequest = async (store: RequestStore, input: { deadlines?: DeadlinePolicy; id: string; now: Date; reason: string }): Promise<RequestRecord> => {
     const record = await requireRequest(store, input.id);
-    const alreadyExtended = record.extendedDueAt !== undefined;
 
-    if (isTerminal(record.status) || !canExtend(record.receivedAt, input.now, alreadyExtended)) {
+    if (isTerminal(record.status) || !canExtend(record, input.now)) {
         throw new LunoraError("UNPROCESSABLE", "This request cannot be extended any more.");
     }
 
-    const extended = extendedDueAt(record.receivedAt);
+    const extended = extendedDueAt(record.receivedAt, input.deadlines ?? DEFAULT_DEADLINES);
 
     await store.update(record.id, { extendedDueAt: extended, reason: input.reason });
     await store.addEvent(record.id, input.now, "extended", input.reason);

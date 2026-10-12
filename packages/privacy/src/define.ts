@@ -10,13 +10,14 @@ import type { CoverageProblem, TableClassification } from "./coverage";
 import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
-import { DAY_MS } from "./deadlines";
+import type { DeadlinePolicy } from "./deadlines";
+import { DAY_MS, DEFAULT_DEADLINES } from "./deadlines";
 import { dispositionFor } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
-import type { PrivacyPreset, RetentionRule } from "./rules";
+import type { PrivacyPolicy, PrivacyPreset, RetentionRule } from "./rules";
 import type { ErasureOutcome, ExportOutcome, PrivacyPorts, RunScope, StepRunner } from "./run";
 import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
 import { subjectsToReerase } from "./tombstones";
@@ -135,6 +136,7 @@ const DEADLINE_WARNING_MS = 7 * DAY_MS;
 
 /** The app's settings, resolved once by `definePrivacy` and shared by every invocation. */
 interface Settings extends Omit<RunScope, "ports"> {
+    readonly deadlines: DeadlinePolicy;
     readonly erasure: ErasureSettings;
     readonly exclude: Readonly<Record<string, string>>;
 }
@@ -204,7 +206,7 @@ const tickRequests = async (scope: Scope): Promise<{ readonly approaching: Reado
             return false;
         }
 
-        const due = effectiveDueAt(record.receivedAt, record.extendedDueAt !== undefined).getTime();
+        const due = effectiveDueAt(record).getTime();
 
         return due - at.getTime() <= DEADLINE_WARNING_MS && due >= at.getTime();
     });
@@ -274,7 +276,7 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
 
     return {
         admin: {
-            extend: async (requestId, reason) => extendRequest(ports.store, { id: requestId, now: ports.now(), reason }),
+            extend: async (requestId, reason) => extendRequest(ports.store, { deadlines: settings.deadlines, id: requestId, now: ports.now(), reason }),
             open: async () => listOpen(scope),
             retry: async (requestId) => retryRequest(scope, requestId),
             sweep: async () => sweepExpired(scope),
@@ -300,10 +302,25 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
         requestErasure: async () => {
             const { sessionAgeMs, subjectId } = callerOf(scope);
 
-            return openRequest(ports.store, { erasure: settings.erasure, id: ports.newId(), now: ports.now(), sessionAgeMs, subjectId, type: "erasure" });
+            return openRequest(ports.store, {
+                deadlines: settings.deadlines,
+                erasure: settings.erasure,
+                id: ports.newId(),
+                now: ports.now(),
+                sessionAgeMs,
+                subjectId,
+                type: "erasure",
+            });
         },
 
-        requestExport: async () => openRequest(ports.store, { id: ports.newId(), now: ports.now(), subjectId: callerOf(scope).subjectId, type: "export" }),
+        requestExport: async () =>
+            openRequest(ports.store, {
+                deadlines: settings.deadlines,
+                id: ports.newId(),
+                now: ports.now(),
+                subjectId: callerOf(scope).subjectId,
+                type: "export",
+            }),
 
         restore: async ({ restoredSubjectIds }) => restoreSubjects(scope, restoredSubjectIds),
 
@@ -324,6 +341,22 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
     };
 };
 
+/** The value the last preset that sets `key` gives it. */
+const policyValue = (presets: ReadonlyArray<PrivacyPreset> | undefined, key: keyof PrivacyPolicy): number | undefined => {
+    const value = [...(presets ?? [])].toReversed().find((preset) => typeof preset.policy?.[key] === "number")?.policy?.[key];
+
+    return typeof value === "number" ? value : undefined;
+};
+
+/** Refuse a response period that is not a whole number of months at or above `min`. */
+const checkMonths = (key: string, months: number, min: number): number => {
+    if (!Number.isInteger(months) || months < min) {
+        throw new LunoraError("BAD_REQUEST", `The preset's ${key} must be a whole number of months, at least ${String(min)}; got ${String(months)}.`);
+    }
+
+    return months;
+};
+
 /**
  * Bind the settings into a factory. Pure construction: nothing runs until a method is
  * called, and each call of the factory binds the ports for that invocation.
@@ -337,11 +370,16 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
         }
     }
 
-    // The grace comes from the preset that sets one, unless the app sets it directly.
-    const presetGraceDays = [...(config.presets ?? [])].toReversed().find((preset) => preset.policy?.erasureGraceDays !== undefined)?.policy?.erasureGraceDays;
+    // Each policy value comes from the last preset that sets it; the grace may be set by the app directly.
+    const presetGraceDays = policyValue(config.presets, "erasureGraceDays");
+    const deadlines: DeadlinePolicy = {
+        extensionMonths: checkMonths("extensionMonths", policyValue(config.presets, "extensionMonths") ?? DEFAULT_DEADLINES.extensionMonths, 0),
+        responseMonths: checkMonths("responseMonths", policyValue(config.presets, "responseMonths") ?? DEFAULT_DEADLINES.responseMonths, 1),
+    };
 
     const settings: Settings = {
         datasets: config.datasets,
+        deadlines,
         disposition: dispositionFor(rules),
         erasure: {
             drainBudgetDays: config.erasure?.drainBudgetDays ?? MIN_DRAIN_BUDGET_DAYS,
