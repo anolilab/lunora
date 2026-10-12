@@ -4,7 +4,7 @@ import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass 
 import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
 import { createCustomDomainResolver, createPlanResolver, resolveTenant, SERVABLE_PLANS } from "../targets/cloudflare-wfp/route";
 import type { MisconfiguredSetting } from "../telemetry/platform-metrics";
-import { recordControlPlaneUnconfigured, recordDispatch, recordRecursion } from "../telemetry/platform-metrics";
+import { recordDispatch, recordMisconfiguration, recordRecursion } from "../telemetry/platform-metrics";
 import type { Lineage } from "./lineage";
 import { formatLineageParameter, LINEAGE_HEADER, MAX_LINEAGE_DEPTH, newLineageRoot, readLineage } from "./lineage";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
@@ -77,7 +77,7 @@ const refuse = (code: string, message: string, options: { retryAfter?: string } 
 
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
 
-const SUSPENDED = (): Response => new Response("this deployment is suspended — see your billing page", { status: 503 });
+const SUSPENDED = (): Response => refuse("suspended", "this deployment is suspended — see your billing page");
 
 /**
  * Whether this dispatcher must refuse what it cannot verify. Only an explicit
@@ -99,7 +99,7 @@ const refuseMisconfigured = (env: DispatcherEnv, setting: MisconfiguredSetting, 
         console.error(`[dispatcher] ${log} for environment ${env.LUNORA_ENVIRONMENT ?? "(unset)"}`);
     }
 
-    recordControlPlaneUnconfigured(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default", setting });
+    recordMisconfiguration(env.PLATFORM_METRICS, { cell: env.LUNORA_CELL ?? "default", setting });
 };
 
 /**

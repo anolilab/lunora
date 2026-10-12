@@ -1792,7 +1792,7 @@ to a session or as an MCP tool. It returns:
   `sampleInterval`) and counts by outcome
 - `queue[]`: per cell, the peak depth in each 15-minute bucket
 - `provisionFailures[]`: the top 50 (cell, step, reason) counts
-- `controlPlaneUnconfigured[]`: dispatcher refusals for a missing setting, by `setting` (the control-plane settings, or `lineage_secret`)
+- `misconfigured[]`: dispatcher refusals for a missing setting, by `setting` (the control-plane settings, or `lineage_secret`)
 
 It reads through the AE SQL API with `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN`, and answers 501 when either is missing.

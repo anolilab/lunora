@@ -32,7 +32,7 @@ export const buildPlatformMetricsQueries = (
     dataset: string,
     sinceSec: number,
     toSec: number,
-): Record<"controlPlaneUnconfigured" | "dispatchLatency" | "dispatchOutcomes" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
+): Record<"misconfigured" | "dispatchLatency" | "dispatchOutcomes" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
     const table = analyticsEngineTable(dataset);
     const statement = (kind: string, select: string, tail: string): PlatformMetricsQuery => {
         return {
@@ -57,8 +57,8 @@ export const buildPlatformMetricsQueries = (
             "SELECT blob2 AS cell, blob3 AS step, blob4 AS reason, COUNT(*) AS failures",
             `GROUP BY cell, step, reason ORDER BY failures DESC LIMIT ${String(MAX_FAILURE_ROWS)}`,
         ),
-        controlPlaneUnconfigured: statement(
-            PLATFORM_METRIC_KINDS.controlPlaneUnconfigured,
+        misconfigured: statement(
+            PLATFORM_METRIC_KINDS.misconfigured,
             "SELECT blob2 AS cell, blob3 AS setting, COUNT(*) AS refusals",
             "GROUP BY cell, setting ORDER BY cell, setting",
         ),
@@ -83,9 +83,9 @@ const asString = (value: unknown): string => (typeof value === "string" ? value 
 
 /** What the endpoint returns. */
 export interface PlatformMetricsSnapshot {
-    /** Requests refused fail-closed for a missing setting outside `development` (plan 475), per cell and setting. */
-    controlPlaneUnconfigured: { cell: string; refusals: number; setting: string }[];
     dispatch: { cell: string; outcomes: Record<string, number>; p50Ms: number; p95Ms: number; requests: number }[];
+    /** Requests refused fail-closed for a missing setting outside `development` (plan 475), per cell and setting. */
+    misconfigured: { cell: string; refusals: number; setting: string }[];
     provisionFailures: { cell: string; failures: number; reason: string; step: string }[];
     /** Peak depth per 15-minute bucket; `t` is the bucket start in epoch ms. */
     queue: { buildsPending: number; buildsRunning: number; cell: string; deploysInFlight: number; t: number }[];
@@ -95,9 +95,9 @@ type Rows = ReadonlyArray<Record<string, unknown>>;
 
 /** Fold the five result sets into one snapshot — outcomes nested under their cell's latency row. */
 export const foldPlatformMetrics = (rows: {
-    controlPlaneUnconfigured: Rows;
     dispatchLatency: Rows;
     dispatchOutcomes: Rows;
+    misconfigured: Rows;
     provisionFailures: Rows;
     queueDepth: Rows;
 }): PlatformMetricsSnapshot => {
@@ -122,7 +122,7 @@ export const foldPlatformMetrics = (rows: {
     }
 
     return {
-        controlPlaneUnconfigured: rows.controlPlaneUnconfigured.map((row) => {
+        misconfigured: rows.misconfigured.map((row) => {
             return { cell: asString(row.cell), refusals: asNumber(row.refusals), setting: asString(row.setting) };
         }),
         dispatch,
@@ -153,13 +153,13 @@ export const readPlatformMetrics = async (
 
         return rows;
     };
-    const [controlPlaneUnconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth] = await Promise.all([
-        run(queries.controlPlaneUnconfigured),
+    const [misconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth] = await Promise.all([
+        run(queries.misconfigured),
         run(queries.dispatchLatency),
         run(queries.dispatchOutcomes),
         run(queries.provisionFailures),
         run(queries.queueDepth),
     ]);
 
-    return foldPlatformMetrics({ controlPlaneUnconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth });
+    return foldPlatformMetrics({ misconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth });
 };

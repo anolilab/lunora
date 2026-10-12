@@ -82,7 +82,7 @@ const configured = (overrides: Overrides = {}): Overrides => {
 };
 
 /** The counter rows only: the dispatcher also writes a `dispatch` row for every request, so count by kind. */
-const refusalRows = (): unknown[] => writeDataPoint.mock.calls.map(([point]) => point).filter((point) => point?.blobs?.[0] === "control_plane_unconfigured");
+const refusalRows = (): unknown[] => writeDataPoint.mock.calls.map(([point]) => point).filter((point) => point?.blobs?.[0] === "misconfigured");
 
 /** The outcome of every `recursion` row, so a test can assert that none is `forged`. */
 const recursionOutcomes = (): unknown[] =>
@@ -157,9 +157,7 @@ describe("dispatcher refuses without a control plane outside development", () =>
             environment({ CONTROL_PLANE_URL: undefined, CONTROL_PLANE_TOKEN: undefined, LUNORA_CELL: "eu-1", LUNORA_ENVIRONMENT: "production" }),
         );
 
-        expect(refusalRows()).toStrictEqual([
-            { blobs: ["control_plane_unconfigured", "eu-1", "control_plane"], doubles: [1], indexes: ["control_plane_unconfigured"] },
-        ]);
+        expect(refusalRows()).toStrictEqual([{ blobs: ["misconfigured", "eu-1", "control_plane"], doubles: [1], indexes: ["misconfigured"] }]);
     });
 
     it("logs the refusal once per isolate, not once per request", async () => {
@@ -224,8 +222,8 @@ describe("dispatcher refuses a lineage header it cannot verify outside developme
 
         expect(error).toHaveBeenCalledTimes(1);
         expect(refusalRows()).toStrictEqual([
-            { blobs: ["control_plane_unconfigured", "default", "lineage_secret"], doubles: [1], indexes: ["control_plane_unconfigured"] },
-            { blobs: ["control_plane_unconfigured", "default", "lineage_secret"], doubles: [1], indexes: ["control_plane_unconfigured"] },
+            { blobs: ["misconfigured", "default", "lineage_secret"], doubles: [1], indexes: ["misconfigured"] },
+            { blobs: ["misconfigured", "default", "lineage_secret"], doubles: [1], indexes: ["misconfigured"] },
         ]);
         expect(recursionOutcomes()).not.toContain("forged");
 

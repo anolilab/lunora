@@ -10,8 +10,8 @@ import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/a
 import {
     failureReason,
     readQueueDepth,
-    recordControlPlaneUnconfigured,
     recordDispatch,
+    recordMisconfiguration,
     recordProvisionFailure,
     recordQueueDepth,
 } from "../src/telemetry/platform-metrics";
@@ -33,13 +33,13 @@ describe("platform metric data points", () => {
         recordDispatch(sink, { cell: "eu-1", durationMs: 42, outcome: "2xx" });
         recordQueueDepth(sink, { buildsPending: 3, buildsRunning: 2, cell: "eu-1", deploysInFlight: 1 });
         recordProvisionFailure(sink, { cell: "eu-1", reason: "TimeoutError", step: "converge" });
-        recordControlPlaneUnconfigured(sink, { cell: "eu-1", setting: "lineage_secret" });
+        recordMisconfiguration(sink, { cell: "eu-1", setting: "lineage_secret" });
 
         expect(sink.writeDataPoint.mock.calls.map(([point]) => point)).toStrictEqual([
             { blobs: ["dispatch", "eu-1", "2xx"], doubles: [42], indexes: ["dispatch"] },
             { blobs: ["queue", "eu-1"], doubles: [3, 2, 1], indexes: ["queue"] },
             { blobs: ["provision_failure", "eu-1", "converge", "TimeoutError"], doubles: [1], indexes: ["provision_failure"] },
-            { blobs: ["control_plane_unconfigured", "eu-1", "lineage_secret"], doubles: [1], indexes: ["control_plane_unconfigured"] },
+            { blobs: ["misconfigured", "eu-1", "lineage_secret"], doubles: [1], indexes: ["misconfigured"] },
         ]);
     });
 
@@ -160,7 +160,7 @@ describe(buildPlatformMetricsQueries, () => {
         expect(queries.provisionFailures.query).toBe(
             `SELECT blob2 AS cell, blob3 AS step, blob4 AS reason, COUNT(*) AS failures ${where} GROUP BY cell, step, reason ORDER BY failures DESC LIMIT 50`,
         );
-        expect(queries.controlPlaneUnconfigured.query).toBe(
+        expect(queries.misconfigured.query).toBe(
             `SELECT blob2 AS cell, blob3 AS setting, COUNT(*) AS refusals ${where} GROUP BY cell, setting ORDER BY cell, setting`,
         );
         expect(queries.queueDepth.query).toBe(
@@ -172,7 +172,7 @@ describe(buildPlatformMetricsQueries, () => {
         expect(queries.dispatchLatency.params).toStrictEqual({ kind: "dispatch", since: "2023-11-14T22:13:20Z", to: "2023-11-15T22:13:20Z" });
         expect(queries.queueDepth.params.kind).toBe("queue");
         expect(queries.provisionFailures.params.kind).toBe("provision_failure");
-        expect(queries.controlPlaneUnconfigured.params.kind).toBe("control_plane_unconfigured");
+        expect(queries.misconfigured.params.kind).toBe("misconfigured");
     });
 });
 
@@ -180,7 +180,7 @@ describe(foldPlatformMetrics, () => {
     it("nests outcomes under their cell and coerces numeric strings", () => {
         expect(
             foldPlatformMetrics({
-                controlPlaneUnconfigured: [{ cell: "eu-1", refusals: "4", setting: "control_plane" }],
+                misconfigured: [{ cell: "eu-1", refusals: "4", setting: "control_plane" }],
                 dispatchLatency: [{ cell: "eu-1", p50: "12", p95: 80.5, requests: "1000" }],
                 dispatchOutcomes: [
                     { cell: "eu-1", outcome: "2xx", requests: "990" },
@@ -190,7 +190,7 @@ describe(foldPlatformMetrics, () => {
                 queueDepth: [{ bucket: "1700000000", buildsPending: 3, buildsRunning: 1, cell: "eu-1", deploysInFlight: 0 }],
             }),
         ).toStrictEqual({
-            controlPlaneUnconfigured: [{ cell: "eu-1", refusals: 4, setting: "control_plane" }],
+            misconfigured: [{ cell: "eu-1", refusals: 4, setting: "control_plane" }],
             dispatch: [{ cell: "eu-1", outcomes: { "2xx": 990, "5xx": 10 }, p50Ms: 12, p95Ms: 80.5, requests: 1000 }],
             provisionFailures: [{ cell: "eu-1", failures: 2, reason: "health_check", step: "verify" }],
             queue: [{ buildsPending: 3, buildsRunning: 1, cell: "eu-1", deploysInFlight: 0, t: 1_700_000_000_000 }],
