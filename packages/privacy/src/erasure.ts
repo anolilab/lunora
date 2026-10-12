@@ -6,8 +6,8 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { Dataset, TableErasure } from "./dataset";
-import type { RetainDirective, RetentionRule } from "./rules";
-import { retainUntil } from "./rules";
+import type { PrivacyPreset, RetainDirective, RetentionRule } from "./rules";
+import { retainUntil, retentionRulesOf } from "./rules";
 
 /** Rows per table per call. A drain step never erases more, so one step stays inside the platform's limits. */
 const ERASE_BATCH = 100;
@@ -115,4 +115,7 @@ const verifyErasure = (remaining: Readonly<Record<string, number>>, kept: Readon
     return { complete: leftover.length === 0, leftover };
 };
 
-export { type Disposition, dispositionFor, drainUntilEmpty, ERASE_BATCH, type RowDisposition, verifyErasure, type VerifyResult };
+/** The verdict for the rules a preset set (see {@link dispositionFor}), so every caller binds the same rules. */
+const dispositionForPresets = (presets: ReadonlyArray<PrivacyPreset>): RowDisposition => dispositionFor(retentionRulesOf(presets));
+
+export { type Disposition, dispositionFor, dispositionForPresets, drainUntilEmpty, ERASE_BATCH, type RowDisposition, verifyErasure, type VerifyResult };

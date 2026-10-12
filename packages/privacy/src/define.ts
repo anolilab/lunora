@@ -12,14 +12,13 @@ import type { Dataset } from "./dataset";
 import { erasureOrder, retainedTables } from "./dataset";
 import type { DeadlinePolicy } from "./deadlines";
 import { DAY_MS, DEFAULT_DEADLINES } from "./deadlines";
-import { dispositionFor, drainUntilEmpty } from "./erasure";
+import { dispositionForPresets, drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
 import type { PrivacyPorts } from "./ports";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
-import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
 import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, setStatus } from "./run";
 import { subjectsToReerase } from "./tombstones";
@@ -423,8 +422,6 @@ const checkMonths = (key: string, months: number, min: number): number => {
  * called, and each call of the factory binds the ports for that invocation.
  */
 const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
-    const rules = retentionRulesOf(config.presets ?? []);
-
     // Each policy value comes from the last preset that sets it; the grace may be set by the app directly.
     const presetGraceDays = policyValue(config.presets, "erasureGraceDays");
     const deadlines: DeadlinePolicy = {
@@ -435,7 +432,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
     const settings: Settings = {
         datasets: config.datasets,
         deadlines,
-        disposition: dispositionFor(rules),
+        disposition: dispositionForPresets(config.presets ?? []),
         erasure: {
             drainBudgetDays: config.erasure?.drainBudgetDays ?? MIN_DRAIN_BUDGET_DAYS,
             freshAgeMs: config.erasure?.freshAgeMs ?? DEFAULT_FRESH_AGE_MS,
