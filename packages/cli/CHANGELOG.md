@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.387](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.386...@lunora/cli@1.0.0-alpha.387) (2026-10-12)
+
+### Features
+
+* **cli:** add lunora doctor --fix and --dry-run ([#1137](https://github.com/anolilab/lunora/issues/1137)) ([5f1b8a5](https://github.com/anolilab/lunora/commit/5f1b8a5f7e185436336aad31758773fdae41a229))
+
 ## @lunora/cli [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.385...@lunora/cli@1.0.0-alpha.386) (2026-10-12)
 
 
