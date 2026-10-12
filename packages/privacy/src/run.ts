@@ -433,6 +433,7 @@ const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, d
  * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
  */
 const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
+    const step = async <T>(name: string, run: () => Promise<T>): Promise<Checked<T>> => whileProcessing(scope, steps, requestId, name, run);
     const record = await loadStep(scope, steps, requestId);
 
     try {
@@ -445,28 +446,26 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
         for (const dataset of scope.datasets) {
             // Each dataset is one step: its rows go to storage, so the step returns nothing large.
             // eslint-disable-next-line no-await-in-loop -- steps run in order by design
-            const collected = await whileProcessing(scope, steps, requestId, `collect:${dataset.id}`, async () => collectPart(scope.ports, dataset, record));
+            const collected = await step(`collect:${dataset.id}`, async () => collectPart(scope.ports, dataset, record));
 
             if (collected.status !== "processing") {
                 return { status: collected.status };
             }
         }
 
-        const assembled = await whileProcessing(scope, steps, requestId, "assemble", async () =>
-            assembleExport(scope.ports, scope.datasets, record, scope.subjectKey(record.subjectId)), );
+        const assembled = await step("assemble", async () => assembleExport(scope.ports, scope.datasets, record, scope.subjectKey(record.subjectId)));
         const archiveKey = assembled.value;
 
         if (archiveKey === undefined) {
             return { status: assembled.status };
         }
 
-        const ready = await whileProcessing(scope, steps, requestId, "ready", async () =>
-            setStatus(scope.ports, requestId, {
-                detail: archiveKey,
-                from: "processing",
-                patch: { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), storageKey: archiveKey },
-                to: "ready",
-            }), );
+        const markReady = async (): Promise<void> => {
+            const patch = { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), storageKey: archiveKey };
+
+            await setStatus(scope.ports, requestId, { detail: archiveKey, from: "processing", patch, to: "ready" });
+        };
+        const ready = await step("ready", markReady);
 
         return ready.status === "processing" ? { archiveKey, status: "ready" } : { status: ready.status };
     } catch (error) {
@@ -522,6 +521,7 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
  * rule still keeps; otherwise it is `failed` and names the leftover tables.
  */
 const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ErasureOutcome> => {
+    const step = async <T>(name: string, run: () => Promise<T>): Promise<Checked<T>> => whileProcessing(scope, steps, requestId, name, run);
     const record = await loadStep(scope, steps, requestId);
 
     if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
@@ -544,21 +544,20 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
         for (const dataset of erasureOrder(scope.datasets)) {
             // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
             // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
-            const erased = await whileProcessing(scope, steps, requestId, `erase:${dataset.id}`, async () => eraseDataset(scope, dataset, record.subjectId));
+            const erased = await step(`erase:${dataset.id}`, async () => eraseDataset(scope, dataset, record.subjectId));
 
             if (erased.status !== "processing") {
                 return { leftover: [], status: erased.status };
             }
         }
 
-        const filesErased = await whileProcessing(scope, steps, requestId, "erase:files", async () =>
-            eraseSubjectFiles(scope.ports, scope.datasets, record.subjectId), );
+        const filesErased = await step("erase:files", async () => eraseSubjectFiles(scope.ports, scope.datasets, record.subjectId));
 
         if (filesErased.status !== "processing") {
             return { leftover: [], status: filesErased.status };
         }
 
-        const verified = await whileProcessing(scope, steps, requestId, "verify", async () => verifySubjectErased(scope, scope.datasets, record.subjectId));
+        const verified = await step("verify", async () => verifySubjectErased(scope, scope.datasets, record.subjectId));
         const verdict = verified.value;
 
         if (verdict === undefined) {
@@ -571,15 +570,14 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 
         // The tombstone is written before the request completes, so a completed erasure always has one.
         // A retried step writes it again, which the port's upsert absorbs.
-        const tombstoned = await whileProcessing(scope, steps, requestId, "tombstone", async () =>
-            tombstones.port.add(tombstoneKeyOf(record.subjectId, tombstones.secret), scope.ports.now()), );
+        const key = tombstoneKeyOf(record.subjectId, tombstones.secret);
+        const tombstoned = await step("tombstone", async () => tombstones.port.add(key, scope.ports.now()));
 
         if (tombstoned.status !== "processing") {
             return { leftover: [], status: tombstoned.status };
         }
 
-        const completed = await whileProcessing(scope, steps, requestId, "complete", async () =>
-            completeErasure(scope.ports, requestId, record.subjectId, tombstoneKeyOf(record.subjectId, tombstones.secret)), );
+        const completed = await step("complete", async () => completeErasure(scope.ports, requestId, record.subjectId, key));
 
         return { leftover: [], status: completed.status === "processing" ? "completed" : completed.status };
     } catch (error) {
