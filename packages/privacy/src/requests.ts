@@ -108,6 +108,12 @@ const fromStepRecord = (step: unknown): RequestRecord => {
 /** The storage the service needs. The app implements it over `ctx.db`. */
 interface RequestStore {
     addEvent: (requestId: string, at: Date, kind: string, detail?: string) => Promise<void>;
+
+    /**
+     * Apply the patch only if the request still holds `from`, and report whether it did. The host must
+     * make the check and the write one step, so two callers that both read `from` cannot both win.
+     */
+    claim: (id: string, from: RequestStatus, patch: Partial<Omit<RequestRecord, "id">>) => Promise<boolean>;
     /** The subject's request of this type that is not yet terminal, if any. */
     findOpen: (subjectId: string, type: RequestType) => Promise<RequestRecord | undefined>;
     get: (id: string) => Promise<RequestRecord | undefined>;

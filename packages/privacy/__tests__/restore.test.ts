@@ -33,6 +33,20 @@ describe("restore", () => {
         expect(rows.tasks).toBe(0);
     });
 
+    it("rewrites the request rows a backup brought back to the tombstone key", async () => {
+        const { operator, privacy, rows, runErasureWorkflow, store } = build(memoryTombstones());
+        const opened = await privacy.requestErasure();
+
+        await runErasureWorkflow(opened.id);
+        // The backup holds the request as it was before the erasure, with the raw id.
+        rows.tasks = 150;
+        store.rows.set(opened.id, { ...store.rows.get(opened.id), subjectId: "u1" } as NonNullable<ReturnType<typeof store.rows.get>>);
+
+        await operator.restore({ restoredSubjectIds: ["u1"] });
+
+        expect(store.rows.get(opened.id)?.subjectId).toBe(tombstoneKeyOf("u1", SECRET));
+    });
+
     it("refuses to restore without the tombstone secret", async () => {
         const { operator } = build(memoryTombstones(), null);
 

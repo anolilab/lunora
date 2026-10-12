@@ -110,6 +110,33 @@ describe("admin", () => {
         expect(store.rows.get(opened.id)?.status).toBe("completed");
     });
 
+    it("lets exactly one of two concurrent retries restart a failed erasure", async () => {
+        expect.assertions(2);
+
+        let failing = true;
+        const healthy = memoryData();
+        const flaky: DataPort = {
+            ...healthy,
+            eraseBatch: async (...args) => {
+                if (failing) {
+                    throw new Error("shard unavailable");
+                }
+
+                return healthy.eraseBatch(...args);
+            },
+        };
+        const { operator, privacy, runErasureWorkflow, store } = setup({ data: flaky, erasure: { graceDays: 0 } });
+        const opened = await privacy.requestErasure();
+
+        await runErasureWorkflow(opened.id);
+        failing = false;
+
+        const results = await Promise.allSettled([operator.admin.retry(opened.id), operator.admin.retry(opened.id)]);
+
+        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+        expect(store.rows.get(opened.id)?.status).toBe("processing");
+    });
+
     it("refuses to retry a request that has not failed", async () => {
         const { privacy } = setup();
         const opened = await privacy.requestExport();

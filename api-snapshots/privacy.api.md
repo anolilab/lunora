@@ -311,6 +311,7 @@ type RequestStatus = (typeof REQUEST_STATUSES)[number];
 ```ts
 interface RequestStore {
     addEvent: (requestId: string, at: Date, kind: string, detail?: string) => Promise<void>;
+    claim: (id: string, from: RequestStatus, patch: Partial<Omit<RequestRecord, "id">>) => Promise<boolean>;
     findOpen: (subjectId: string, type: RequestType) => Promise<RequestRecord | undefined>;
     get: (id: string) => Promise<RequestRecord | undefined>;
     insert: (record: RequestRecord) => Promise<void>;

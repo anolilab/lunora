@@ -44,6 +44,18 @@ export const memoryRequests = (): RequestStore & { events: string[]; rows: Map<s
         },
         listForSubject: async (subjectId) => [...rows.values()].filter((row) => row.subjectId === subjectId),
         listOpen: async () => [...rows.values()].filter((row) => !isTerminal(row.status)),
+        claim: async (id, from, patch) => {
+            const existing = rows.get(id);
+
+            // No await between the check and the write, so two claims cannot interleave here.
+            if (existing?.status !== from) {
+                return false;
+            }
+
+            rows.set(id, { ...existing, ...patch });
+
+            return true;
+        },
         rows,
         update: async (id, patch) => {
             const existing = rows.get(id);

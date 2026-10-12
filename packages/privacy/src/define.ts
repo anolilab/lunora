@@ -14,14 +14,14 @@ import type { DeadlinePolicy } from "./deadlines";
 import { DAY_MS, DEFAULT_DEADLINES } from "./deadlines";
 import { dispositionForPresets, drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
-import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
+import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS, transition } from "./lifecycle";
 import type { PrivacyPorts } from "./ports";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, setStatus } from "./run";
-import { subjectsToReerase } from "./tombstones";
+import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
+import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /**
  * Load a request the caller may act on. A request that belongs to someone else reads as
@@ -201,7 +201,12 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResul
     }
 
     if (record.type === "erasure") {
-        await setStatus(scope.ports, requestId, { detail: "retry", from: "failed", to: "processing" });
+        // The claim is the only gate: a second retry that read `failed` too finds the status already moved.
+        if (!(await scope.ports.store.claim(requestId, "failed", { status: transition("failed", "processing") }))) {
+            throw new LunoraError("UNPROCESSABLE", "This request was already retried.");
+        }
+
+        await scope.ports.store.addEvent(requestId, scope.ports.now(), "processing", "retry");
 
         return { kind: "restart", requestId };
     }
@@ -316,6 +321,15 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
             // eslint-disable-next-line no-await-in-loop -- one drain per dataset, in order
             await eraseDataset(scope, dataset, subjectId);
         }
+
+        // The backup also brought back the subject's request rows with their raw id; rewrite them as a first erasure does.
+        const key = tombstoneKeyOf(subjectId, tombstones.secret);
+
+        // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
+        const requests = await scope.ports.store.listForSubject(subjectId);
+
+        // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
+        await Promise.all(requests.map(async (request) => scope.ports.store.update(request.id, { subjectId: key })));
     }
 
     return subjects;

@@ -83,7 +83,7 @@ const PORT_CODECS: CodecTable = {
         },
     },
     files: { delete: asIs(), list: asIs(), put: asIs(), read: asIs(), signedUrl: asIs() },
-    store: { addEvent: asIs(), findOpen: asIs(), get: asIs(), insert: asIs(), listForSubject: asIs(), listOpen: asIs(), update: asIs() },
+    store: { addEvent: asIs(), claim: asIs(), findOpen: asIs(), get: asIs(), insert: asIs(), listForSubject: asIs(), listOpen: asIs(), update: asIs() },
     tombstones: { add: asIs(), keys: asIs() },
 };
 
