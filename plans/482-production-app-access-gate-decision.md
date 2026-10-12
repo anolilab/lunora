@@ -1,7 +1,7 @@
 # Plan 482 — Should Lunora Cloud gate a production app's users at the platform edge? (decided: option A now)
 
 **Baseline:** `origin/feat/cloud-platform-dx` @ `1d8f444fe` (2026-10-11)
-**Status:** DECIDED — option A (no platform gate; the app owns its auth; say so clearly). Option D is deferred to plan 166. Options B and C are rejected for now.
+**Status:** DECIDED — option A (no platform gate; the app owns its auth; say so clearly). Option D is deferred to plan 166. Options B and C are rejected for now. A1: the docs page "Who can open my app?" (`apps/docs/src/content/docs/cloud/who-can-open-my-app.mdx`) is shipped on `feat/cloud-cookie-host-prefix`; the Access card copy and the preview-gate notice are not done. The docs page also states that tenant JS/CSS with a wrong `Content-Type` is blocked (`nosniff`, plan 478 C). A3 (one-time deploy hint) is not shipped. The natural place is the success summary, `renderDeploySummary` in `packages/cli/src/util/deploy-summary.ts`, called from `packages/cli/src/commands/deploy/handler.ts`. Showing it once per project needs a persisted flag in the link file (`.lunora/project.json`, written by `@lunora/config`), a published package with its own API snapshot. That cross-package change is outside this workstream, so A3 waits for it. A2 (Access card in the studio) is not started.
 
 ## 0. Headline finding
 

@@ -143,3 +143,35 @@ describe("dispatcher egress enforcement, through serve", () => {
         expect(parseEgressParameter(options?.outbound?.["egress"])?.origins).toStrictEqual(["https://api.example.com", "https://otlp.example.com"]);
     });
 });
+
+describe("platform response headers at the dispatcher", () => {
+    it("stamps nosniff and the default referrer policy on a tenant response", async () => {
+        expect.assertions(2);
+
+        tenantFetch.mockResolvedValueOnce(new Response("tenant body", { status: 200 }));
+
+        const response = await dispatcher.fetch(new Request("https://acme-ok.lunora.app/"), environment());
+
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    });
+
+    it("keeps the Referrer-Policy a tenant set, and still stamps nosniff", async () => {
+        expect.assertions(2);
+
+        tenantFetch.mockResolvedValueOnce(new Response("tenant body", { headers: { "referrer-policy": "no-referrer" }, status: 200 }));
+
+        const response = await dispatcher.fetch(new Request("https://acme-ok.lunora.app/"), environment());
+
+        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+
+    it("stamps the dispatcher's own refusals too", async () => {
+        expect.assertions(1);
+
+        const response = await dispatcher.fetch(new Request("https://acme-suspended.lunora.app/"), environment());
+
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+});
