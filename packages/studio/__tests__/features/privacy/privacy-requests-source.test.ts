@@ -2,15 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import { isOverdue } from "../../../../../shared/privacy-deadlines";
 import type { PrivacyRequestRow } from "../../../src/features/privacy/privacy-requests-source";
-import { isPrivacyRequestOverdue, PRIVACY_REQUEST_STATUSES, privacyRequestDeadlines } from "../../../src/features/privacy/privacy-requests-source";
+import { isPrivacyRequestOverdue, PRIVACY_REQUEST_STATUSES } from "../../../src/features/privacy/privacy-requests-source";
 
-const RECEIVED = Date.parse("2026-01-31T12:00:00Z");
+const NOW = Date.parse("2026-10-11T00:00:00Z");
 const DAY = 86_400_000;
 
 const row = (overrides: Partial<PrivacyRequestRow> = {}): PrivacyRequestRow => {
     return {
+        dueAt: NOW + DAY,
         id: "req_1",
-        receivedAt: RECEIVED,
+        receivedAt: NOW - DAY,
         status: "received",
         subjectId: "user_1",
         type: "export",
@@ -18,49 +19,42 @@ const row = (overrides: Partial<PrivacyRequestRow> = {}): PrivacyRequestRow => {
     };
 };
 
-describe("privacyRequestDeadlines", () => {
-    it("computes the calendar-month deadlines from the receipt date", () => {
-        expect.assertions(2);
-
-        // 31 January plus one month is the last day of February; plus three months is 30 April.
-        expect(privacyRequestDeadlines(row())).toStrictEqual({ dueAt: Date.parse("2026-02-28T12:00:00Z"), extendedDueAt: undefined });
-        expect(privacyRequestDeadlines(row({ extendedDueAt: 0 })).extendedDueAt).toBe(Date.parse("2026-04-30T12:00:00Z"));
-    });
-});
-
 describe("isPrivacyRequestOverdue", () => {
-    const DUE = Date.parse("2026-02-28T12:00:00Z");
-
-    it("is overdue once the one-month deadline has passed, and not before", () => {
+    it("is overdue once the stored due date has passed, and not before", () => {
         expect.assertions(2);
 
-        expect(isPrivacyRequestOverdue(row(), DUE + 1)).toBe(true);
-        expect(isPrivacyRequestOverdue(row(), DUE)).toBe(false);
+        expect(isPrivacyRequestOverdue(row({ dueAt: NOW - 1 }), NOW)).toBe(true);
+        expect(isPrivacyRequestOverdue(row({ dueAt: NOW + 1 }), NOW)).toBe(false);
     });
 
-    it("judges an extended request against the computed extended date, not the stored one", () => {
+    it("judges an extended request against the extended date, not the original", () => {
         expect.assertions(2);
 
-        // A stored extension date that drifted from the rule does not move the deadline.
-        const extended = row({ extendedDueAt: DUE - DAY });
+        const extended = row({ dueAt: NOW - DAY, extendedDueAt: NOW + DAY });
 
-        expect(isPrivacyRequestOverdue(extended, DUE + DAY)).toBe(false);
-        expect(isPrivacyRequestOverdue(extended, Date.parse("2026-04-30T12:00:00Z") + 1)).toBe(true);
+        expect(isPrivacyRequestOverdue(extended, NOW)).toBe(false);
+        expect(isPrivacyRequestOverdue({ ...extended, extendedDueAt: NOW - 1 }, NOW)).toBe(true);
     });
 
-    it("falls back to the original deadline when extendedDueAt is null", () => {
+    it("falls back to the original due date when extendedDueAt is null", () => {
         expect.assertions(1);
 
-        expect(isPrivacyRequestOverdue(row({ extendedDueAt: null }), DUE + 1)).toBe(true);
+        expect(isPrivacyRequestOverdue(row({ dueAt: NOW - 1, extendedDueAt: null }), NOW)).toBe(true);
+    });
+
+    it("never flags a ready export or a finished request, since the answer was given", () => {
+        expect.assertions(4);
+
+        for (const status of ["ready", "completed", "cancelled", "expired"] as const) {
+            expect(isPrivacyRequestOverdue(row({ dueAt: NOW - DAY, status }), NOW)).toBe(false);
+        }
     });
 
     it("agrees with the shared rule the privacy package's sweep uses, for every status", () => {
         expect.assertions(8);
 
-        const late = DUE + 30 * DAY;
-
         for (const status of PRIVACY_REQUEST_STATUSES) {
-            expect(isPrivacyRequestOverdue(row({ status }), late)).toBe(isOverdue({ receivedAt: new Date(RECEIVED), status }, new Date(late)));
+            expect(isPrivacyRequestOverdue(row({ dueAt: NOW - DAY, status }), NOW)).toBe(isOverdue({ dueAt: new Date(NOW - DAY), status }, new Date(NOW)));
         }
     });
 });

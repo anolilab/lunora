@@ -226,6 +226,7 @@ describe("privacy example", () => {
 
             await expect(listOpen()).resolves.toStrictEqual([
                 {
+                    dueAt: request.dueAt.getTime(),
                     extendedDueAt: null,
                     id: request.id,
                     receivedAt: request.receivedAt.getTime(),

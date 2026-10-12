@@ -9,13 +9,12 @@
  * (`lunora/admin.ts`): the open list is the privacy `admin.open()` API, and a retry
  * is its `admin.retry(requestId)`.
  *
- * The status list and the deadline rule come from `shared/`, the same source the
- * privacy package reads, so the Studio neither mirrors them by hand nor depends on
- * the package. The deadlines are computed from `receivedAt` here exactly as the
- * package's deadline sweep computes them, so the page and the sweep cannot disagree
- * about which request is overdue.
+ * The status list and the overdue rule come from `shared/`, written for the privacy
+ * package to read too, so the Studio neither mirrors them by hand nor depends on the
+ * package. Both judge a request by the deadline it stored, so the page and the
+ * package's deadline sweep cannot disagree about which request is overdue.
  */
-import { dueAt, extendedDueAt, isOverdue } from "../../../../../shared/privacy-deadlines";
+import { isOverdue } from "../../../../../shared/privacy-deadlines";
 import type { RequestStatus, RequestType } from "../../../../../shared/privacy-request-status";
 import { REQUEST_STATUSES } from "../../../../../shared/privacy-request-status";
 
@@ -30,10 +29,11 @@ const PRIVACY_REQUEST_STATUSES: ReadonlyArray<PrivacyRequestStatus> = REQUEST_ST
 
 /**
  * One open request as the Studio displays it. Timestamps are epoch milliseconds.
- * `extendedDueAt` is set only when the deadline was extended. Its presence marks the
- * request as extended, and the deadline itself is computed from `receivedAt`.
+ * `extendedDueAt` is set only when the deadline was extended, so the effective
+ * deadline is `extendedDueAt ?? dueAt`.
  */
 interface PrivacyRequestRow {
+    readonly dueAt: number;
     readonly extendedDueAt?: null | number;
     readonly id: string;
     readonly receivedAt: number;
@@ -50,32 +50,20 @@ interface PrivacyRequestsSource {
     retryPrivacyRequest: (id: string) => Promise<unknown>;
 }
 
-/** The stored extension date, or `undefined` when the request was not extended. */
-const extensionOf = (row: PrivacyRequestRow): Date | undefined =>
-    row.extendedDueAt === undefined || row.extendedDueAt === null ? undefined : new Date(row.extendedDueAt);
-
-/** The row's deadlines in epoch milliseconds: the original one, and the extended one when the request was extended. */
-const privacyRequestDeadlines = (row: PrivacyRequestRow): { readonly dueAt: number; readonly extendedDueAt: number | undefined } => {
-    const receivedAt = new Date(row.receivedAt);
-
-    return {
-        dueAt: dueAt(receivedAt).getTime(),
-        extendedDueAt: extensionOf(row) === undefined ? undefined : extendedDueAt(receivedAt).getTime(),
-    };
-};
-
 /**
  * Whether a request is past its effective deadline at `now`, by the package's own rule. An
- * extended request is judged against the extended date, and a terminal one is never overdue.
+ * extended request is judged against the extended date; a terminal request or a ready
+ * export is never overdue.
  */
-const isPrivacyRequestOverdue = (row: PrivacyRequestRow, now: number): boolean => {
-    const extension = extensionOf(row);
-
-    return isOverdue(
-        { receivedAt: new Date(row.receivedAt), status: row.status, ...(extension === undefined ? {} : { extendedDueAt: extension }) },
+const isPrivacyRequestOverdue = (row: PrivacyRequestRow, now: number): boolean =>
+    isOverdue(
+        {
+            dueAt: new Date(row.dueAt),
+            status: row.status,
+            ...(row.extendedDueAt === undefined || row.extendedDueAt === null ? {} : { extendedDueAt: new Date(row.extendedDueAt) }),
+        },
         new Date(now),
     );
-};
 
 export type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus, PrivacyRequestType };
-export { isPrivacyRequestOverdue, PRIVACY_REQUEST_STATUSES, privacyRequestDeadlines };
+export { isPrivacyRequestOverdue, PRIVACY_REQUEST_STATUSES };

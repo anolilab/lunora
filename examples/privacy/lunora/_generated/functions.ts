@@ -169,7 +169,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     admin: {
-        listOpenPrivacyRequests: (args?: {}) => Promise<{ extendedDueAt: number | null; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; subjectId: string; type: import("@lunora/privacy").RequestType }[]>;
+        listOpenPrivacyRequests: (args?: {}) => Promise<{ dueAt: number; extendedDueAt: number | null; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; subjectId: string; type: import("@lunora/privacy").RequestType }[]>;
         retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
     };
     requests: {

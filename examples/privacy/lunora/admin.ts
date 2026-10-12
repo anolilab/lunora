@@ -15,6 +15,7 @@ import { privacyFor } from "./privacy";
 
 /** One open request as the Studio's page shows it. Dates are epoch milliseconds. */
 export interface OpenRequestRow {
+    dueAt: number;
     extendedDueAt: number | null;
     id: string;
     receivedAt: number;
@@ -25,6 +26,7 @@ export interface OpenRequestRow {
 
 const rowOf = (record: RequestRecord): OpenRequestRow => {
     return {
+        dueAt: record.dueAt.getTime(),
         extendedDueAt: record.extendedDueAt?.getTime() ?? null,
         id: record.id,
         receivedAt: record.receivedAt.getTime(),
