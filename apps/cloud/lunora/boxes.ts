@@ -107,7 +107,7 @@ const latestStableVersions = async (context: QueryContext): Promise<BoxVersions 
     return newestStableRelease(page as StoredReleaseSummary[])?.versions ?? null;
 };
 
-export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxView => {
+const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxView => {
     return {
         _id: row._id,
         createdAt: row.createdAt,

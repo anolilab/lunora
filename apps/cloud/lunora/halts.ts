@@ -69,7 +69,7 @@ const storeOf = (database: MutationContext["db"]): ControlPlaneStore => {
  * release of it is refused under: it has a `halts` row, or support holds its
  * whole organization (which also covers an alias that has no live release yet).
  */
-export const projectHalted = async (context: QueryContext, projectId: Id<"projects">): Promise<boolean> => {
+const projectHalted = async (context: QueryContext, projectId: Id<"projects">): Promise<boolean> => {
     const { page } = await context.db.halts.findMany({ limit: 1, where: { projectId } });
 
     if (page.length > 0) {

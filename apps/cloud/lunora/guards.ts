@@ -115,7 +115,7 @@ export type RateLimitBucket = keyof typeof RATE_LIMITS;
  * real context flow through untouched.
  */
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- load-bearing: `rateLimit<Context>` infers Context from this selector, and `.use()` rewrites the chain's context to it. Inlining the constraint as the parameter type would pin every downstream handler's ctx to that shape.
-export const callerKey = <Context extends { auth: { userId: string | null }; ip?: string }>(context: Context): string =>
+const callerKey = <Context extends { auth: { userId: string | null }; ip?: string }>(context: Context): string =>
     context.auth.userId ?? context.ip ?? "anonymous";
 
 /**
