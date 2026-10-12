@@ -32,16 +32,10 @@ When a plan ships: delete its file and remove its row here in the same change.
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                                               | decisions D1–D6 open; Phase 0 first                           |
 | [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                                    | replay engine, frame handlers, admin surface; decisions D1–D3 |
-| [479](./479-payment-authorize-default-deny.md)         | Make `createPayment`'s `authorize` required (default-deny)                             | DONE: authorize required; breaking on alpha                   |
-| [487](./487-studio-ws-token-no-master-fallback.md)     | Never send the master admin token in a WebSocket URL                                   | P1 security; master-token fallback and server opt-out         |
 | [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot                   | P2 bug; breaking for id-less runtimes                         |
 | [481](./481-presence-bounded-members-and-sweep.md)     | Cap presence sessions after dedup; bound the sweep read                                | P2 perf/bug; workerd gate                                     |
 | [482](./482-ratelimit-db-store-atomic-consume.md)      | Reproduce the database rate-limit lost update on workerd, then make consume atomic     | P2; repro not yet confirmed; workerd gate                     |
-| [486](./486-mcp-data-read-scope-gate.md)               | Gate raw data-read and observability MCP tools behind scopes                           | P2; option A (default-deny scopes) recorded                   |
 | [488](./488-node-dispatch-route-for-queues.md)         | Serve the Node scheduler dispatch route so queue and topic handlers can call functions | P2; option B recorded; keeps `emulated`                       |
-| [484](./484-codegen-aliased-any-validator-lint.md)     | Flag `v.any()` public args reached through an alias, destructure, or helper            | P2 lint coverage gap                                          |
-| [483](./483-dev-vars-exclusive-create.md)              | Make the `.dev.vars` create exclusive on the final path                                | P3                                                            |
-| [485](./485-presence-adapter-ssr-guards.md)            | Stop presence `setData` heartbeats before mount or on the server                       | P3                                                            |
 | [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                                   | umbrella; phase/exit-criteria tracker for `alpha → main`      |
 | [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                                         | P2                                                            |
 | [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts                               | spike; deliverable is a decision                              |
@@ -55,6 +49,20 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                                 | P3, demand-gated                                              |
 | [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                                        | demand-gated                                                  |
 | [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target                            | phase 1 shipped; rest demand-gated                            |
+
+## Shipped
+
+Plans whose files were deleted on this branch. The commit column is the change that
+landed the plan; a follow-up commit that completed it is listed after the first.
+
+| Plan | Title                                                                       | Commit               |
+| ---- | --------------------------------------------------------------------------- | -------------------- |
+| 479  | Make `createPayment`'s `authorize` required (default-deny)                  | 360c4f27c            |
+| 483  | Make the `.dev.vars` create exclusive on the final path                     | 58e11f997, 88b7c1997 |
+| 484  | Flag `v.any()` public args reached through an alias, destructure, or helper | e942bdb5f, 88b7c1997 |
+| 485  | Stop presence `setData` heartbeats before mount or on the server            | c52580876, 7ac090ea7 |
+| 486  | Gate raw data-read and observability MCP tools behind scopes                | ed2a1abe3, 88b7c1997 |
+| 487  | Never send the master admin token in a WebSocket URL                        | 5e89bec39            |
 
 ## Reference designs
 
