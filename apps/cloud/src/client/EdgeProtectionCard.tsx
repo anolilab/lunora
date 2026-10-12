@@ -68,17 +68,119 @@ const RuleStatus = ({ rule }: { rule: EdgeRule | undefined }): ReactElement | nu
  * platform zone (customer boxes, the customer's own Cloudflare account) are
  * named, because nothing here covers them.
  */
+/** What the edge did in the last day: the status lines, the unsupported projects, and the event table. */
+const FirewallEvents = ({ error, view }: { error?: string; view?: FirewallView }): ReactElement => (
+    <>
+        {error ? <p className="text-muted-foreground text-sm">{error}</p> : null}
+        {view?.status === "ok" ? null : <p className="text-muted-foreground text-sm">{view?.reason}</p>}
+        {view && view.unsupported.length > 0 ? (
+            <p className="text-muted-foreground text-sm">
+                Not covered here: {view.unsupported.map((project) => `${project.name} (${project.reason})`).join("; ")}.
+            </p>
+        ) : null}
+        {view?.status === "ok" && view.events.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No firewall events on {String(view.hostnames)} hostnames in the last 24 hours.</p>
+        ) : null}
+        {view?.status === "ok" && view.events.length > 0 ? (
+            <Table>
+                <ColumnHeader labels={["When", "Action", "Host", "Path", "Source"]} />
+                <TableBody>
+                    {view.events.map((event, index) => (
+                        <TableRow key={`${event.datetime}-${String(index)}`}>
+                            <TableCell className="font-mono text-xs">{event.datetime}</TableCell>
+                            <TableCell>{event.action}</TableCell>
+                            <TableCell className="font-mono text-xs">{event.host}</TableCell>
+                            <TableCell className="max-w-[16rem] truncate font-mono text-xs">{event.path}</TableCell>
+                            <TableCell className="text-muted-foreground text-xs">{event.source}</TableCell>
+                        </TableRow>
+                    ))}
+                </TableBody>
+            </Table>
+        ) : null}
+    </>
+);
+
+/** Arm or disarm the anomaly → rate-limit action, with the per-IP requests-per-minute it applies. */
+const AnomalyRateLimit = ({ limit, organizationId, view }: { limit: EdgeRule | undefined; organizationId: OrgId; view?: FirewallView }): ReactElement => {
+    const setRateLimit = useMutation(api.edge.setAnomalyRateLimit);
+    const [requests, setRequests] = useState("600");
+    const [formError, setFormError] = useState<null | string>(null);
+
+    return (
+        <FieldForm
+            action={() => {
+                setFormError(null);
+
+                const run = async (): Promise<void> => {
+                    await setRateLimit.mutate(
+                        limit?.armed === true ? { enabled: false, organizationId } : { enabled: true, organizationId, requestsPerPeriod: Number(requests) },
+                    );
+                };
+
+                void run().catch((error_: unknown) => {
+                    setFormError(error_ instanceof Error ? error_.message : "could not save");
+                });
+            }}
+            className="max-w-2xl sm:grid-cols-2"
+        >
+            <Field htmlFor="anomaly-rate-limit" label="Rate limit per IP during a usage anomaly (requests / minute)">
+                <Input
+                    className="font-mono tabular-nums"
+                    disabled={limit?.armed === true || view?.capabilities.rateLimit !== true}
+                    id="anomaly-rate-limit"
+                    min={10}
+                    onChange={(event) => {
+                        setRequests(event.target.value);
+                    }}
+                    type="number"
+                    value={limit?.armed === true ? String(limit.requestsPerPeriod ?? requests) : requests}
+                />
+            </Field>
+            <div className="grid gap-2 sm:col-span-2">
+                <Button className="justify-self-start" disabled={view?.capabilities.rateLimit !== true} type="submit" variant="outline">
+                    {limit?.armed === true ? "Disarm" : "Arm"}
+                </Button>
+                {view?.capabilities.rateLimit === false ? <p className="text-muted-foreground text-xs">Not enabled on this cell.</p> : null}
+                <RuleStatus rule={limit} />
+                <FormError message={formError} />
+            </div>
+        </FieldForm>
+    );
+};
+
+/** Whether a loop's own traffic is stopped at the lineage depth or allowed to chain. */
+const RecursionPolicy = ({ organizationId }: { organizationId: OrgId }): ReactElement => {
+    const recursion = useQuery(api.edge.recursionPolicy, { organizationId });
+    const setRecursion = useMutation(api.edge.setRecursionPolicy);
+
+    return (
+        <Field htmlFor="recursion-policy" label="Recursion protection">
+            <Select
+                onValueChange={(value: unknown) => {
+                    void setRecursion.mutate({ organizationId, policy: value as "allow" | "terminate" });
+                }}
+                value={recursion ?? "terminate"}
+            >
+                <SelectTrigger className="w-[280px]" id="recursion-policy">
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    <SelectGroup>
+                        <SelectItem value="terminate">Stop loops (508 after {String(MAX_LINEAGE_DEPTH)} hops)</SelectItem>
+                        <SelectItem value="allow">Allow deep chains</SelectItem>
+                    </SelectGroup>
+                </SelectContent>
+            </Select>
+        </Field>
+    );
+};
+
 export const EdgeProtectionCard = ({ organizationId }: { organizationId: OrgId }): ReactElement => {
     const { error, view } = useFirewall(organizationId);
     const rules = useQuery(api.edge.rules, { organizationId });
     const setSensitivity = useMutation(api.edge.setDdosSensitivity);
-    const setRateLimit = useMutation(api.edge.setAnomalyRateLimit);
-    const recursion = useQuery(api.edge.recursionPolicy, { organizationId });
-    const setRecursion = useMutation(api.edge.setRecursionPolicy);
     const ddos = rules?.find((rule) => rule.kind === "ddos_l7");
     const limit = rules?.find((rule) => rule.kind === "rate_limit");
-    const [requests, setRequests] = useState("600");
-    const [formError, setFormError] = useState<null | string>(null);
 
     return (
         <Card>
@@ -91,32 +193,7 @@ export const EdgeProtectionCard = ({ organizationId }: { organizationId: OrgId }
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
                 <ClientOnly fallback={<p className="text-muted-foreground text-sm">Loading firewall events…</p>}>
-                    {error ? <p className="text-muted-foreground text-sm">{error}</p> : null}
-                    {view?.status === "ok" ? null : <p className="text-muted-foreground text-sm">{view?.reason}</p>}
-                    {view && view.unsupported.length > 0 ? (
-                        <p className="text-muted-foreground text-sm">
-                            Not covered here: {view.unsupported.map((project) => `${project.name} (${project.reason})`).join("; ")}.
-                        </p>
-                    ) : null}
-                    {view?.status === "ok" && view.events.length === 0 ? (
-                        <p className="text-muted-foreground text-sm">No firewall events on {String(view.hostnames)} hostnames in the last 24 hours.</p>
-                    ) : null}
-                    {view?.status === "ok" && view.events.length > 0 ? (
-                        <Table>
-                            <ColumnHeader labels={["When", "Action", "Host", "Path", "Source"]} />
-                            <TableBody>
-                                {view.events.map((event, index) => (
-                                    <TableRow key={`${event.datetime}-${String(index)}`}>
-                                        <TableCell className="font-mono text-xs">{event.datetime}</TableCell>
-                                        <TableCell>{event.action}</TableCell>
-                                        <TableCell className="font-mono text-xs">{event.host}</TableCell>
-                                        <TableCell className="max-w-[16rem] truncate font-mono text-xs">{event.path}</TableCell>
-                                        <TableCell className="text-muted-foreground text-xs">{event.source}</TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    ) : null}
+                    <FirewallEvents error={error} view={view} />
                 </ClientOnly>
 
                 <Field htmlFor="ddos-sensitivity" label="HTTP DDoS sensitivity">
@@ -142,65 +219,9 @@ export const EdgeProtectionCard = ({ organizationId }: { organizationId: OrgId }
                 {view?.capabilities.ddosOverride === false ? <p className="text-muted-foreground text-xs">Not enabled on this cell.</p> : null}
                 <RuleStatus rule={ddos} />
 
-                <FieldForm
-                    action={() => {
-                        setFormError(null);
+                <AnomalyRateLimit limit={limit} organizationId={organizationId} view={view} />
 
-                        const run = async (): Promise<void> => {
-                            await setRateLimit.mutate(
-                                limit?.armed === true
-                                    ? { enabled: false, organizationId }
-                                    : { enabled: true, organizationId, requestsPerPeriod: Number(requests) },
-                            );
-                        };
-
-                        void run().catch((error_: unknown) => {
-                            setFormError(error_ instanceof Error ? error_.message : "could not save");
-                        });
-                    }}
-                    className="max-w-2xl sm:grid-cols-2"
-                >
-                    <Field htmlFor="anomaly-rate-limit" label="Rate limit per IP during a usage anomaly (requests / minute)">
-                        <Input
-                            className="font-mono tabular-nums"
-                            disabled={limit?.armed === true || view?.capabilities.rateLimit !== true}
-                            id="anomaly-rate-limit"
-                            min={10}
-                            onChange={(event) => {
-                                setRequests(event.target.value);
-                            }}
-                            type="number"
-                            value={limit?.armed === true ? String(limit.requestsPerPeriod ?? requests) : requests}
-                        />
-                    </Field>
-                    <div className="grid gap-2 sm:col-span-2">
-                        <Button className="justify-self-start" disabled={view?.capabilities.rateLimit !== true} type="submit" variant="outline">
-                            {limit?.armed === true ? "Disarm" : "Arm"}
-                        </Button>
-                        {view?.capabilities.rateLimit === false ? <p className="text-muted-foreground text-xs">Not enabled on this cell.</p> : null}
-                        <RuleStatus rule={limit} />
-                        <FormError message={formError} />
-                    </div>
-                </FieldForm>
-
-                <Field htmlFor="recursion-policy" label="Recursion protection">
-                    <Select
-                        onValueChange={(value: unknown) => {
-                            void setRecursion.mutate({ organizationId, policy: value as "allow" | "terminate" });
-                        }}
-                        value={recursion ?? "terminate"}
-                    >
-                        <SelectTrigger className="w-[280px]" id="recursion-policy">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectGroup>
-                                <SelectItem value="terminate">Stop loops (508 after {String(MAX_LINEAGE_DEPTH)} hops)</SelectItem>
-                                <SelectItem value="allow">Allow deep chains</SelectItem>
-                            </SelectGroup>
-                        </SelectContent>
-                    </Select>
-                </Field>
+                <RecursionPolicy organizationId={organizationId} />
                 <p className="text-muted-foreground text-xs">
                     Counts requests that leave a Worker through fetch() and come back in through Lunora Cloud. Durable Object calls and service bindings are not
                     counted, and the projects named above are not covered.

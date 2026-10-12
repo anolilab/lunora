@@ -135,6 +135,7 @@ export const validateEgressPolicy = (value: unknown, maxOrigins: number = MAX_US
     }
 
     const origins: string[] = [];
+    const seen = new Set<string>();
 
     for (const entry of entries) {
         const parsed = parseEgressOrigin(entry);
@@ -143,7 +144,8 @@ export const validateEgressPolicy = (value: unknown, maxOrigins: number = MAX_US
             return { ok: false, reason: parsed.reason };
         }
 
-        if (!origins.includes(parsed.origin)) {
+        if (!seen.has(parsed.origin)) {
+            seen.add(parsed.origin);
             origins.push(parsed.origin);
         }
     }
@@ -187,17 +189,17 @@ export const malformedPlatformVariables = (env: PlatformEnv): number =>
  * and cannot block telemetry without a refusal.
  */
 export const platformEgressOrigins = (env: PlatformEnv): string[] => {
-    const origins: string[] = [];
+    const origins = new Set<string>();
 
     for (const raw of configuredPlatformVariables(env)) {
         const origin = platformOriginOf(raw);
 
-        if (origin !== undefined && !origins.includes(origin)) {
-            origins.push(origin);
+        if (origin !== undefined) {
+            origins.add(origin);
         }
     }
 
-    return origins;
+    return [...origins];
 };
 
 /**
@@ -256,15 +258,13 @@ export const egressOutbound = (policy: EgressPolicy | undefined, env: PlatformEn
         return { refuse };
     }
 
-    const origins = [...policy.origins];
+    const origins = new Set(policy.origins);
 
     for (const origin of platform) {
-        if (!origins.includes(origin)) {
-            origins.push(origin);
-        }
+        origins.add(origin);
     }
 
-    return { parameter: JSON.stringify({ mode: policy.mode, origins, v: EGRESS_POLICY_VERSION }) };
+    return { parameter: JSON.stringify({ mode: policy.mode, origins: [...origins], v: EGRESS_POLICY_VERSION }) };
 };
 
 /**

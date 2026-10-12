@@ -544,6 +544,46 @@ const ProjectDataCard = ({
 }): ReactElement =>
     runtime === "worker" ? <RuntimeGapsCard runtime={runtime} /> : <BackupsSection organizationId={organizationId} projectId={projectId} target={target} />;
 
+/** Where the project deploys and what that target cannot give it. Shown before the first deploy too. */
+const TargetSettings = ({
+    organizationId,
+    placementRef,
+    projectId,
+    target,
+}: {
+    organizationId: OrgId;
+    placementRef?: string;
+    projectId: ProjectId;
+    target: TargetId;
+}): ReactElement => (
+    <>
+        <ProjectTargetCard
+            key={`${target}|${placementRef ?? ""}`}
+            organizationId={organizationId}
+            placementRef={placementRef}
+            projectId={projectId}
+            target={target}
+        />
+        <TargetCapabilitiesCard target={target} />
+    </>
+);
+
+/** The resources the active deployment connects to, from its wrangler config. Nothing when it has none. */
+const BindingsCard = ({ active, projectName, target }: { active?: Deployment; projectName: string; target: TargetId }): ReactElement | null =>
+    active?.bindings && active.bindings.length > 0 ? (
+        <Card>
+            <CardHeader>
+                <CardTitle>Bindings</CardTitle>
+                <CardDescription>
+                    {target === "cloudflare-wfp" ? "Cloudflare resources" : "Resources"} this deployment connects to, from its wrangler config.
+                </CardDescription>
+            </CardHeader>
+            <CardContent>
+                <ProjectGraph bindings={active.bindings} projectName={projectName} target={target} />
+            </CardContent>
+        </Card>
+    ) : null;
+
 export const DeploymentsSection = ({
     gitProvider,
     githubRepo,
@@ -583,20 +623,7 @@ export const DeploymentsSection = ({
         />
     );
 
-    // Where it deploys, and what that target cannot give it — before the first
-    // deploy too, since the target is chosen before anything is deployed.
-    const targetSettings = (
-        <>
-            <ProjectTargetCard
-                key={`${target}|${placementRef ?? ""}`}
-                organizationId={organizationId}
-                placementRef={placementRef}
-                projectId={projectId}
-                target={target}
-            />
-            <TargetCapabilitiesCard target={target} />
-        </>
-    );
+    const targetSettings = <TargetSettings organizationId={organizationId} placementRef={placementRef} projectId={projectId} target={target} />;
 
     const header = (
         <div className="flex items-center gap-3">
@@ -631,19 +658,7 @@ export const DeploymentsSection = ({
                     gitProvider={gitProvider ?? undefined}
                 />
             </div>
-            {active?.bindings && active.bindings.length > 0 ? (
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Bindings</CardTitle>
-                        <CardDescription>
-                            {target === "cloudflare-wfp" ? "Cloudflare resources" : "Resources"} this deployment connects to, from its wrangler config.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <ProjectGraph bindings={active.bindings} projectName={projectName} target={target} />
-                    </CardContent>
-                </Card>
-            ) : null}
+            <BindingsCard active={active} projectName={projectName} target={target} />
             <BuildCards findingsBuildId={deployedBuild?._id} logsBuildId={activeBuild?._id} organizationId={organizationId} />
             {buildSettings}
             {targetSettings}

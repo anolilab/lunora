@@ -116,8 +116,10 @@ const readObject = (value: unknown, path: string, required: ReadonlyArray<string
 
     const record = value as Record<string, unknown>;
 
+    const known = new Set([...required, ...optional]);
+
     for (const key of Object.keys(record)) {
-        if (!required.includes(key) && !optional.includes(key)) {
+        if (!known.has(key)) {
             fail(`${path}.${key}`, "is not a known field");
         }
     }
