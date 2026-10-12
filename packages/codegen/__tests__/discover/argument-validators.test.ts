@@ -139,6 +139,18 @@ const HELPER_BOUNDED_AT_SITE = `
     });
 `;
 
+/** A helper returning an array of unbounded strings; the call-site `.max()` bounds the array only. */
+const HELPER_ARRAY_BOUNDED_AT_SITE = `
+    import { mutation } from "@lunora/server";
+
+    const tags = () => v.array(v.string());
+
+    export const tag = mutation({
+        args: { tags: tags().max(3) },
+        handler: async () => null,
+    });
+`;
+
 /** A destructure of `any` inside one function does not bind `any` for another function. */
 const NESTED_DESTRUCTURE = `
     import { mutation } from "@lunora/server";
@@ -285,6 +297,17 @@ describe("discoverArgumentValidators", () => {
         writeFileSync(join(workdir, "lunora", "rename.ts"), HELPER_BOUNDED_AT_SITE, "utf8");
 
         expect(discoverArgumentValidators(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("keeps the inner string unbounded when the call-site bound applies to the outer array", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "tag.ts"), HELPER_ARRAY_BOUNDED_AT_SITE, "utf8");
+
+        const found = discoverArgumentValidators(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.unboundedStringArgs).toStrictEqual(["tags"]);
     });
 
     it("does NOT flag a non-validator call named any", () => {

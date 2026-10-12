@@ -1,5 +1,5 @@
 import type { CallExpression, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
 import type { ArgumentValidatorIR } from "../ir";
 import { isServerSurfaceModule } from "../module-specifiers";
@@ -165,9 +165,59 @@ const sameFileHelperBody = (callee: Node, sourceFile: SourceFile): Node | undefi
 /** A `v.<name>(…)` factory reached from an arg initializer, and whether a bounding call applies to it. */
 type FactoryCall = { bounded: boolean; factory: string };
 
+/** The nearest function-like ancestor of `node`, or `undefined` at the top level. */
+const enclosingFunction = (node: Node): Node | undefined => {
+    let current: Node | undefined = node.getParent();
+
+    while (current && !Node.isFunctionLikeDeclaration(current)) {
+        current = current.getParent();
+    }
+
+    return current;
+};
+
+/** A `return` statement's operand, typed as possibly absent because a bare `return;` has none. */
+const returnOperand = (statement: Node): Node | undefined => (Node.isReturnStatement(statement) ? statement.getExpression() : undefined);
+
+/** The expressions a helper body returns: its arrow expression body, or each `return` of its own function. */
+const returnedExpressions = (body: Node): Node[] => {
+    if (Node.isArrowFunction(body) && !Node.isBlock(body.getBody())) {
+        return [body.getBody()];
+    }
+
+    return body
+        .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+        .filter((statement) => enclosingFunction(statement)?.compilerNode === body.compilerNode)
+        .flatMap((statement) => {
+            const operand = returnOperand(statement);
+
+            return operand ? [operand] : [];
+        });
+};
+
+/**
+ * The `v.<name>(…)` call that produces `expression`, found by walking its
+ * receiver chain outward-in: `v.array(v.string()).optional()` yields the
+ * `v.array(…)` call, and a nested `v.string()` inside it is not the producer.
+ */
+const producingFactoryCall = (expression: Node, scope: ValidatorScope): Node | undefined => {
+    if (vFactoryName(expression, scope) !== undefined) {
+        return expression;
+    }
+
+    if (Node.isCallExpression(expression) || Node.isPropertyAccessExpression(expression)) {
+        return producingFactoryCall(expression.getExpression(), scope);
+    }
+
+    return undefined;
+};
+
 /**
  * The factory calls in a same-file helper's body, reached through `call`. A
- * bound applied at the call site (`helper().max(200)`) counts for each of them.
+ * bound applied at the call site (`helper().max(200)`) bounds only the factory
+ * that produces the helper's returned value: `helper().max(3)` over a helper
+ * returning `v.array(v.string())` bounds the array, not each string inside it.
+ * When no producing factory can be read, the call-site bound counts for none.
  */
 const helperFactoryCalls = (call: CallExpression, scope: ValidatorScope): FactoryCall[] => {
     const body = sameFileHelperBody(call.getExpression(), call.getSourceFile());
@@ -177,11 +227,16 @@ const helperFactoryCalls = (call: CallExpression, scope: ValidatorScope): Factor
     }
 
     const boundAtSite = isBounded(call);
+    const producers = new Set(
+        returnedExpressions(body)
+            .map((expression) => producingFactoryCall(expression, scope))
+            .filter((producer): producer is Node => producer !== undefined),
+    );
 
     return [body, ...body.getDescendants()].flatMap((node) => {
         const factory = vFactoryName(node, scope);
 
-        return factory === undefined ? [] : [{ bounded: boundAtSite || isBounded(node), factory }];
+        return factory === undefined ? [] : [{ bounded: isBounded(node) || (boundAtSite && producers.has(node)), factory }];
     });
 };
 
