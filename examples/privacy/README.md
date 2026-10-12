@@ -30,25 +30,31 @@ data, erases it, cancels a pending erasure, and sees the requests they have open
   stored there would be rolled back with the rows it exists to re-erase. Only the
   erasure workflow reaches the store (through `ctx.env`), so an erasure run from a
   mutation is refused rather than completed without its tombstone.
+- **Operator view.** `lunora/admin.ts` holds two internal functions, the open list
+  (`admin.open()`) and a retry of a failed request. They are what a Studio
+  `privacyRequests` source calls. A failed erasure is retried by restarting its
+  workflow, which is the only path that writes its tombstone. Extending a deadline is
+  an operator decision with a reason, so no client function offers it.
 - **Ownership.** The subject is always the caller's session (`lunora/subject.ts`), so
   a caller cannot open or cancel someone else's request.
 
 ## Layout
 
-| File                                  | Role                                                                    |
-| ------------------------------------- | ----------------------------------------------------------------------- |
-| `lunora/schema.ts`                    | `tasks`, the export parts table, rate limits, and `privacyExtension`    |
-| `lunora/tasks.ts`                     | the task list the subject owns                                          |
-| `lunora/privacy.ts`                   | the dataset, `definePrivacy`, and the workflow handlers                 |
-| `lunora/privacy-ports.ts`             | the ports over `ctx.db`, and the wire format for workflow steps         |
-| `lunora/privacy-tombstones.ts`        | the tombstone port over the `PRIVACY_TOMBSTONES` Durable Object         |
-| `src/server/privacy-tombstones-do.ts` | the tombstone store, with its own SQLite outside the shard              |
-| `lunora/requests.ts`                  | the client functions, and the internal `privacyTick` and `privacyPort`  |
-| `lunora/workflows.ts`                 | `privacyExport` and `privacyErasure`, built from the package's handlers |
-| `lunora/crons.ts`                     | the daily deadline sweep                                                |
-| `lunora/subject.ts`                   | the subject and session age, taken from the caller's session            |
-| `lunora/limits.ts`                    | the rate limit every public write shares                                |
-| `__tests__/privacy.test.ts`           | export, download, erasure, cancel and the session check                 |
+| File                                  | Role                                                                       |
+| ------------------------------------- | -------------------------------------------------------------------------- |
+| `lunora/schema.ts`                    | `tasks`, the export parts table, rate limits, and `privacyExtension`       |
+| `lunora/tasks.ts`                     | the task list the subject owns                                             |
+| `lunora/privacy.ts`                   | the dataset, `definePrivacy`, and the workflow handlers                    |
+| `lunora/privacy-ports.ts`             | the ports over `ctx.db`, and the wire format for workflow steps            |
+| `lunora/privacy-tombstones.ts`        | the tombstone port over the `PRIVACY_TOMBSTONES` Durable Object            |
+| `src/server/privacy-tombstones-do.ts` | the tombstone store, with its own SQLite outside the shard                 |
+| `lunora/admin.ts`                     | the operator's open list and retry, for the Studio's Privacy requests page |
+| `lunora/requests.ts`                  | the client functions, and the internal `privacyTick` and `privacyPort`     |
+| `lunora/workflows.ts`                 | `privacyExport` and `privacyErasure`, built from the package's handlers    |
+| `lunora/crons.ts`                     | the daily deadline sweep                                                   |
+| `lunora/subject.ts`                   | the subject and session age, taken from the caller's session               |
+| `lunora/limits.ts`                    | the rate limit every public write shares                                   |
+| `__tests__/privacy.test.ts`           | export, download, erasure, cancel and the session check                    |
 
 ## Run it
 

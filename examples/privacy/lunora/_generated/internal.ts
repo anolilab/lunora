@@ -5,6 +5,10 @@ import type { FunctionReference } from "lunorash/client";
 
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
+    admin: {
+        listOpenPrivacyRequests: FunctionReference<"query", {}, { extendedDueAt: number | null; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; subjectId: string; type: import("@lunora/privacy").RequestType }[]>;
+        retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
+    };
     requests: {
         privacyPort: FunctionReference<"mutation", { method: string; payload: string }, string>;
         privacyTick: FunctionReference<"mutation", {}, { approaching: string[]; overdue: string[]; }>;
@@ -12,6 +16,10 @@ export interface InternalApiTypes {
 }
 
 export const internal: InternalApiTypes = {
+    admin: {
+        listOpenPrivacyRequests: { __lunoraRef: "admin:listOpenPrivacyRequests" },
+        retryPrivacyRequest: { __lunoraRef: "admin:retryPrivacyRequest" },
+    },
     requests: {
         privacyPort: { __lunoraRef: "requests:privacyPort" },
         privacyTick: { __lunoraRef: "requests:privacyTick" },

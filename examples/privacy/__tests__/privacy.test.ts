@@ -11,6 +11,7 @@ import type { WorkflowRunContext } from "@lunora/workflow";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server.js";
+import { listOpenPrivacyRequests, retryPrivacyRequest } from "../lunora/admin";
 import { privacyAs, privacyWorkflows } from "../lunora/privacy";
 import { dispatchPort } from "../lunora/privacy-ports";
 import { cancelRequest, downloadUrl, myRequests, requestErasure } from "../lunora/requests";
@@ -27,6 +28,7 @@ type Context = WorkflowRunContext<{ requestId: string }>;
 const appCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
 
 const DOWNLOAD_PATH = /\/privacy\/files\//u;
+const NO_WORKFLOWS = /ctx\.workflows/u;
 
 /** An in-memory stand-in for the `PRIVACY_TOMBSTONES` Durable Object. The workerd suite runs the real one. */
 const tombstoneNamespace = () => {
@@ -198,5 +200,72 @@ describe("privacy example", () => {
         expect.assertions(1);
 
         await expect(t.withIdentity(SUBJECT).mutation(requestErasure, {})).rejects.toMatchObject({ code: "PRIVACY_SESSION_NOT_FRESH" });
+    });
+
+    describe("operator functions for the Studio page", () => {
+        // Internal functions are refused at the client boundary, so the tests reach them as server code does.
+        const listOpen = async () => t.run(async (ctx) => appCtx(ctx).runQuery(listOpenPrivacyRequests, {}));
+        const retry = async (requestId: string) => t.run(async (ctx) => appCtx(ctx).runMutation(retryPrivacyRequest, { requestId }));
+
+        /** Marks a request failed, as a run that threw would. */
+        const fail = async (requestId: string): Promise<void> => {
+            await t.run(async (ctx) => {
+                const row = await appCtx(ctx)
+                    .db.query("privacy_requests")
+                    .withIndex("byRequestId", (q) => q.eq("requestId", requestId))
+                    .first();
+
+                await appCtx(ctx).db.patch(row!._id, { status: "failed" });
+            });
+        };
+
+        it("lists the open requests in the shape the Studio's page reads", async () => {
+            expect.assertions(1);
+
+            const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+
+            await expect(listOpen()).resolves.toStrictEqual([
+                {
+                    extendedDueAt: null,
+                    id: request.id,
+                    receivedAt: request.receivedAt.getTime(),
+                    status: "received",
+                    subjectId: SUBJECT.userId,
+                    type: "export",
+                },
+            ]);
+        });
+
+        it("re-runs a failed export through the package's retry", async () => {
+            expect.assertions(2);
+
+            const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+
+            await fail(request.id);
+
+            await expect(retry(request.id)).resolves.toStrictEqual({ requestId: request.id, status: "ready" });
+            await expect(t.withIdentity(SUBJECT).query(downloadUrl, { requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+        });
+
+        it("restarts a failed erasure's workflow rather than erasing without a tombstone", async () => {
+            expect.assertions(2);
+
+            const request = await openErasure(t, SUBJECT.userId);
+
+            await fail(request.id);
+
+            // The harness has no `ctx.workflows`, so reaching the workflow start is where the call stops here.
+            await expect(retry(request.id)).rejects.toThrow(NO_WORKFLOWS);
+            // Nothing was erased inline: the restarted workflow does that, and writes the tombstone.
+            await expect(t.withIdentity(SUBJECT).query(myTasks, {})).resolves.toHaveLength(2);
+        });
+
+        it("refuses to retry a request that has not failed", async () => {
+            expect.assertions(1);
+
+            const request = await openErasure(t, SUBJECT.userId);
+
+            await expect(retry(request.id)).rejects.toMatchObject({ code: "UNPROCESSABLE" });
+        });
     });
 });
