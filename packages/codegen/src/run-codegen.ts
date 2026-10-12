@@ -28,7 +28,9 @@ import discoverMaskMetadata from "./discover/mask-procedures/metadata";
 import discoverMigrations from "./discover/migrations";
 import { discoverModules, resolveModules } from "./discover/modules";
 import { discoverMutators } from "./discover/mutators";
+import readPackageDependencies from "./discover/package-dependencies";
 import hasPaymentStoreTables from "./discover/payment-store-tables";
+import { assertPrivacyCoverage, discoverPrivacyCoverage } from "./discover/privacy-coverage";
 import discoverQueries from "./discover/queries";
 import discoverRlsMetadata from "./discover/rls-procedures/metadata";
 import discoverSchema from "./discover/schema";
@@ -358,6 +360,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     setStandardTypeResolver(resolveStandardSchemaType);
 
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
+
+    // Plan 468 WS H: a table that holds user data must be covered by a privacy dataset or excluded.
+    assertPrivacyCoverage(schema.tables, discoverPrivacyCoverage(project, lunoraDirectory, readPackageDependencies(options.projectRoot)));
 
     // Phase 1 — everything that must be resolved and RENDERED before a single
     // handler's type is inferred against it. See `declaration-surface.ts` for why
