@@ -2,15 +2,16 @@ import { LunoraError } from "@lunora/server";
 
 import { assertStatusMove } from "../src/deploy/status-transitions";
 import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
-import type { Id } from "./_generated/dataModel.js";
+import type { Id, TableName } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
-import { assertMember } from "./authz";
+import { assertMember, assertSignedIn } from "./authz";
 import { releaseIdleAliases } from "./deployment-aliases";
 import { queueCertificateReleases } from "./domains";
 import { releaseEdgeRules } from "./edge";
 import { orgPlan } from "./entitlements";
 import { rateLimit } from "./guards";
 import { anonymiseScopedRows, ERASED_REFERENCE, purgeScopedRows } from "./purge";
+import schema from "./schema";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -39,35 +40,21 @@ interface OrganizationRow {
     suspendedReason?: null | string;
 }
 
-const assertSignedIn = (userId: null | string): string => {
-    if (!userId) {
-        throw new LunoraError("UNAUTHORIZED", "not signed in");
-    }
-
-    return userId;
-};
-
 /**
  * The organizations the signed-in caller belongs to (the dashboard's org list).
  * Scoped to the caller's memberships — returning every org leaked the full tenant
  * roster (enumeration) to any caller. `.global()` → D1 facade.
  */
 export const list = query.query(async ({ ctx: context }): Promise<OrganizationRow[]> => {
-    const { userId } = context.auth;
-
-    if (!userId) {
-        throw new LunoraError("UNAUTHORIZED", "not signed in");
-    }
+    const userId = assertSignedIn(context.auth.userId);
 
     const { page: memberships } = await context.db.members.findMany({ where: { userId } });
     const orgIds = [...new Set(memberships.map((membership) => membership.organizationId))];
 
-    // Fetched BY ID rather than read-all-and-filter. The previous form pulled one
-    // page of every organization on the platform and kept the caller's — which is
-    // not just wasteful but wrong past a page: an org outside the first 1000 was
-    // silently missing from its own member's switcher, with nothing to indicate
-    // the list was truncated. The read now scales with the caller's memberships,
-    // which is what the answer depends on.
+    // Fetched BY ID, not read-all-and-filter: a single page of every organization on the
+    // platform would silently drop any org past the first thousand from its member's
+    // switcher, with nothing to say the list was truncated. The read scales with the
+    // caller's memberships, which is what the answer depends on.
     const organizations = await Promise.all(orgIds.map(async (id) => (await context.db.get(id)) as null | OrganizationRow));
     const present = organizations.filter((organization): organization is OrganizationRow => organization !== null);
 
@@ -140,7 +127,7 @@ export const create = mutation
 
         let { cellId } = arguments_;
 
-        // An explicit cell must take new organizations, as an auto-picked one must.
+        // An explicit cell must take new organizations, as an auto-candidate one must.
         if (cellId) {
             const cell = await context.db.get(cellId);
 
@@ -154,16 +141,14 @@ export const create = mutation
             const candidate = cellPage.find(
                 (cell) => cell.status === "active" && (arguments_.jurisdiction === undefined || cell.jurisdiction === arguments_.jurisdiction),
             );
-            const picked = candidate;
-
-            if (!picked) {
+            if (!candidate) {
                 throw new LunoraError(
                     "UNPROCESSABLE",
                     arguments_.jurisdiction ? `no active cell in jurisdiction "${arguments_.jurisdiction}"` : "no active cell available",
                 );
             }
 
-            cellId = picked._id;
+            cellId = candidate._id;
         }
 
         const organizationId = await context.db.insert("organizations", {
@@ -260,6 +245,37 @@ const PURGE_BATCH = 100;
 const PAYMENT_DELETE_TABLES = ["payment_customers", "payment_usageEvents"] as const;
 
 /**
+ * Tables with an `organizationId` that the purge does not hard-delete, each with the
+ * step that handles it instead. Naming them here, with the reason, is what keeps
+ * the derivation honest: a new exception needs a reason, not a silent omission.
+ */
+export const PURGED_ELSEWHERE: Readonly<Record<string, string>> = {
+    aliasOwnership:
+        "released by releaseIdleAliases: an alias names its tenant, so it stays claimed until the teardown sweep has destroyed that tenant; purged here, another organization could claim it and deploy onto the erased tenant's data",
+    deployments:
+        "transitioned to destroyed, not deleted, so the teardown path can still reach the live dispatch script, D1 and R2; the retention sweep removes the row later",
+    edgeRules:
+        "released by releaseEdgeRules, which deletes the rows whose rule is off; an applied rule stays on the zone until the edge-rule reconciler removes it, then its row",
+    tenantBackups:
+        "each row points at an R2 snapshot a mutation cannot delete; the tenant backup sweep deletes each snapshot whose project is gone, object first, then the row",
+};
+
+/**
+ * The tables an organization purge hard-deletes: every table in the schema that has
+ * an `organizationId` column, minus {@link PURGED_ELSEWHERE}. Derived, not listed, so
+ * a table added with an `organizationId` is erased with no list to update.
+ *
+ * `githubInstallations` is included although its `organizationId` is optional: the
+ * column is present in the table's shape either way.
+ */
+export const orgPurgeTables = (): TableName[] =>
+    Object.entries(schema.tables)
+        .filter(([name, table]) => "organizationId" in table.shape && !Object.hasOwn(PURGED_ELSEWHERE, name))
+        .map(([name]) => name as TableName);
+
+const ORG_PURGE_TABLES = orgPurgeTables();
+
+/**
  * Purge orgs whose deletion request has aged past the retention window
  * (GAPS.md D3 right-to-erasure). Erases the org's control-plane rows across
  * every org-scoped table, marks its deployments destroyed (the provisioner
@@ -279,61 +295,6 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         where: { deletionRequestedAt: { lt: cutoff } },
     });
 
-    // EVERY table carrying an `organizationId`, not a hand-kept subset. The list
-    // had drifted to 12 of 25 while the docblock above claimed erasure "across
-    // every org-scoped table" — so a right-to-erasure purge left the org's
-    // telemetry (`observations`, `metricPoints`, `issues`/`incidents` bodies, all
-    // of which can carry end-user data), its live alert destinations, and — the
-    // sharpest one — its envelope-encrypted Cloudflare tokens in
-    // `cloudflareAccounts`, orphaned with no org row left to key a future sweep off.
-    //
-    // The deliberate exceptions to "every table with an organizationId":
-    // `deployments` is NOT hard-deleted here — the block below transitions it to
-    // `destroyed` so the teardown path can still reach the live dispatch script,
-    // D1 and R2; deleting the row first would leak all three. `aliasOwnership`
-    // is released by `releaseIdleAliases` instead: an alias whose tenant still
-    // exists stays claimed until the teardown sweep destroyed it. And
-    // `githubInstallations` IS included even though its `organizationId` is
-    // optional, which is why it cannot simply be derived from the schema.
-    //
-    // Kept as an explicit literal rather than derived at runtime because codegen
-    // types `context.db.delete` per table; the guard against it drifting again is
-    // the test that diffs this list against the schema.
-    const orgScopedTables = [
-        "alertRuleState",
-        "alertRules",
-        "alerts",
-        "anomalyBaselines",
-        "anomalySilences",
-        "auditLog",
-        "boxEnrolments",
-        "boxes",
-        "buildLogs",
-        "builds",
-        "catalogInstalls",
-        "cloudflareAccounts",
-        "dashboards",
-        "deployKeys",
-        "domains",
-        "githubInstallations",
-        "halts",
-        "incidents",
-        "invitations",
-        "issues",
-        "members",
-        "metricPoints",
-        "observations",
-        "overageDebits",
-        "notificationChannels",
-        "notificationDeliveries",
-        "platformUsage",
-        "projects",
-        "secrets",
-        "tenantLogs",
-        "uptimeChecks",
-        "uptimeState",
-    ] as const;
-
     for (const organization of due) {
         const organizationId = organization._id;
 
@@ -341,7 +302,7 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         // eslint-disable-next-line no-await-in-loop -- one org purged at a time keeps the writer simple
         await queueCertificateReleases(context, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
-        await purgeScopedRows(context, orgScopedTables, { organizationId });
+        await purgeScopedRows(context, ORG_PURGE_TABLES, { organizationId });
         // The payment mirror is keyed by the organization id as its reference. The
         // customer record (email, provider id) and metered usage are personal or
         // operational data with no retention duty, so they are deleted. Payment and
