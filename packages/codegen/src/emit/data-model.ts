@@ -34,7 +34,11 @@ const emitDataModel = (schema: SchemaIR): string => {
                     if (validator.kind === "optional") {
                         const inner = validator.inner ? validatorToType(validator.inner) : "unknown";
 
-                        return `    ${propertyKey}?: ${inner};`;
+                        // A `.global()` table is D1: an unset optional column comes back as SQL NULL,
+                        // not as an absent key. A shard document is JSON, where an unset field is absent.
+                        const absent = table.shardMode === "global" ? `${inner} | null` : inner;
+
+                        return `    ${propertyKey}?: ${absent};`;
                     }
 
                     return `    ${propertyKey}: ${validatorToType(validator)};`;
