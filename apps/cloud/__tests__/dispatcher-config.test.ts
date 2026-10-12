@@ -24,6 +24,8 @@ import { describe, expect, it } from "vitest";
 interface DispatcherConfig {
     env?: Record<string, { vars?: Record<string, string> }>;
     vars?: Record<string, string>;
+    dispatch_namespaces?: { namespace: string }[];
+    routes?: unknown[];
 }
 
 const CONFIG_PATH = fileURLToPath(new URL("../dispatcher.wrangler.jsonc", import.meta.url));
