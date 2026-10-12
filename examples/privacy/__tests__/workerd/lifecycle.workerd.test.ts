@@ -38,16 +38,30 @@ const identity = (subjectId: string): CallIdentity => {
  */
 const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx;
 
+/** What a test can observe of, and do during, a workflow run. */
+interface RunHooks {
+    /** Runs while the workflow sleeps through the grace window, as a subject's cancel would. */
+    readonly duringSleep?: () => Promise<void>;
+    /** Every step name the run reached, in order. */
+    readonly steps?: string[];
+}
+
 /**
  * A workflow context over the shard. `run` is the dispatcher the internal `privacyPort` mutation
  * runs. `step.do` runs its callback at once, since the test has no durable replay.
  */
-const workflowContext = (db: Database, requestId: string): Context => {
+const workflowContext = (db: Database, requestId: string, hooks: RunHooks = {}): Context => {
     const run = async (_reference: unknown, args: { method: string; payload: string }) => dispatchPort(appCtx(db), args.method, args.payload);
 
     const step = {
-        do: async (_name: string, callback: () => Promise<unknown>) => callback(),
-        sleepUntil: async () => undefined,
+        do: async (name: string, callback: () => Promise<unknown>) => {
+            hooks.steps?.push(name);
+
+            return callback();
+        },
+        sleepUntil: async () => {
+            await hooks.duringSleep?.();
+        },
     };
 
     return { params: { requestId }, run, step } as unknown as Context;
@@ -144,16 +158,30 @@ describe("privacy example lifecycle (workerd)", () => {
     });
 
     it("leaves the rows alone when the subject cancels during the grace", async () => {
-        expect.assertions(3);
+        expect.assertions(5);
 
         await withShard(async (db) => {
             await seed(db);
 
             const request = await privacyAs(appCtx(db), identity(SUBJECT)).requestErasure();
+            const opened = await requestRow(db, request.id);
 
-            await privacyAs(appCtx(db), identity(SUBJECT)).cancelRequest({ requestId: request.id });
-            await privacyWorkflows.erasureHandler(workflowContext(db, request.id));
+            expect(opened?.status).toBe("grace");
 
+            // The workflow loads the request while it is still in its grace, and the subject cancels
+            // while it sleeps, so the run reaches the after-grace recheck and stops there.
+            const steps: string[] = [];
+
+            await privacyWorkflows.erasureHandler(
+                workflowContext(db, request.id, {
+                    duringSleep: async () => {
+                        await privacyAs(appCtx(db), identity(SUBJECT)).cancelRequest({ requestId: request.id });
+                    },
+                    steps,
+                }),
+            );
+
+            expect(steps).toStrictEqual(["load", "recheck"]);
             await expect(tasksOf(db, SUBJECT)).resolves.toHaveLength(2);
             await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
 

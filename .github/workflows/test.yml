@@ -212,21 +212,22 @@
             "matrix":
                 "package":
                     [
-                        "auth",
-                        "browser",
-                        "client",
-                        "container",
-                        "d1",
-                        "do",
-                        "payment",
-                        "queue",
-                        "runtime",
-                        "scheduler",
-                        "server",
-                        "sql-store",
-                        "storage",
-                        "workflow",
-                        "x402",
+                        "packages/auth",
+                        "packages/browser",
+                        "packages/client",
+                        "packages/container",
+                        "packages/d1",
+                        "packages/do",
+                        "packages/payment",
+                        "packages/queue",
+                        "packages/runtime",
+                        "packages/scheduler",
+                        "packages/server",
+                        "packages/sql-store",
+                        "packages/storage",
+                        "packages/workflow",
+                        "packages/x402",
+                        "examples/privacy",
                     ]
         "steps":
             - "name": "Harden Runner"
@@ -248,19 +249,20 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 15 packages, duplicated verbatim in
-            # test.yml and nightly.yml, with nothing tying either copy to the packages
-            # that actually declare a `workerd` vitest project. Drop a package from one
-            # and its workerd suites stop running with every check green. Each leg
-            # asserts its own package still declares the project, and that the leg count
-            # equals the number of packages that do — together that makes the matrix and
-            # the filesystem the same set, not merely the same size.
+            # The matrix is a hand-typed list of directories (15 packages, one example),
+            # duplicated verbatim in test.yml and nightly.yml, with nothing tying either
+            # copy to the packages/* and examples/* that actually declare a `workerd`
+            # vitest project. Drop one from either copy and its workerd suites stop
+            # running with every check green. Each leg asserts its own directory still
+            # declares the project, and that the leg count equals the number of
+            # directories that do — together that makes the matrix and the filesystem
+            # the same set, not merely the same size.
             - "name": "Assert the matrix matches the packages declaring a workerd project"
               "run": |
-                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
                   if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
-                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
                     echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     exit 1
                   fi
@@ -273,16 +275,21 @@
 
             # `vis run build` walks upstream deps via dependsOn, so the package's dist
             # and everything it imports exists. `pnpm --filter "pkg..."` does not build
-            # deps reliably.
+            # deps reliably. An example is an app, not a library: only its dependencies
+            # are built (`name^...`), since its suites import their dist, not its own.
             - "name": "Build package and dependencies"
               "run": |
-                  pnpm exec vis run build --query "project=${{ matrix.package }}"
+                  project="$(node -p "require('./${{ matrix.package }}/project.json').name")"
+                  case "${{ matrix.package }}" in
+                    examples/*) pnpm exec vis run build --filter "${project}^..." ;;
+                    *) pnpm exec vis run build --query "project=${project}" ;;
+                  esac
 
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
               "run": |
-                  pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+                  pnpm --filter "$(node -p "require('./${{ matrix.package }}/package.json').name")" run test --project workerd
 
     # The `@lunora/platform` and `@lunora/shard-engine` conformance suites against a
     # live single-node celld (`@lunora/platform-celld`, project `celld`), gated

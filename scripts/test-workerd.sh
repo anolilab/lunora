@@ -22,10 +22,9 @@
 # Run this before pushing anything that touches SQL, storage, or a Durable Object.
 #
 # Packages are discovered, never listed — the same `name: "workerd"` predicate the
-# CI drift guard in .github/workflows/test.yml asserts the job matrix against, so
-# the packages here and that matrix are the same set by construction. Examples that
-# declare a workerd project (examples/*) are discovered too, but no CI leg runs them
-# yet: the matrix guard reads packages/* only, so they run locally through this script.
+# CI drift guard in .github/workflows/test.yml asserts the job matrix against, over
+# packages/* and examples/* both, so the suites here and that matrix are the same set
+# by construction.
 #
 # Suites run ONE AT A TIME on purpose: every package's vitest in parallel fails a
 # different arbitrary set each run (resource contention, not real failures), which
