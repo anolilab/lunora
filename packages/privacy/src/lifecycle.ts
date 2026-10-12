@@ -75,9 +75,12 @@ const canExtend = (receivedAt: Date, now: Date, alreadyExtended: boolean): boole
 /** The effective deadline: the extended one when an extension was granted, otherwise the original. */
 const effectiveDueAt = (receivedAt: Date, extended: boolean): Date => (extended ? extendedDueAt(receivedAt) : dueAt(receivedAt));
 
-/** A request is overdue once its effective deadline has passed and it has not finished. */
-const isOverdue = (receivedAt: Date, extended: boolean, status: RequestStatus, now: Date): boolean =>
-    !isTerminal(status) && now.getTime() > effectiveDueAt(receivedAt, extended).getTime();
+/**
+ * A request is overdue once its effective deadline has passed and it has not finished. The deadline
+ * is the extended one when `extendedDueAt` is set, and is computed from `receivedAt` either way.
+ */
+const isOverdue = (request: { readonly extendedDueAt?: Date; readonly receivedAt: Date; readonly status: RequestStatus }, now: Date): boolean =>
+    !isTerminal(request.status) && now.getTime() > effectiveDueAt(request.receivedAt, request.extendedDueAt !== undefined).getTime();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

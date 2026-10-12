@@ -220,7 +220,6 @@ const retentionText = (dataset: Dataset): string => {
     return names.length === 0 ? "until erasure" : `kept under ${names.join(", ")}`;
 };
 
-/** Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent. */
 /** Rows with the named columns removed, so credential columns never reach the archive. */
 const withoutColumns = (
     rows: ReadonlyArray<Readonly<Record<string, unknown>>>,
@@ -233,6 +232,7 @@ const withoutColumns = (
     return rows.map((row) => Object.fromEntries(Object.entries(row).filter(([column]) => !omit.includes(column))));
 };
 
+/** Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent. */
 const collectPart = async (context: RunContext, dataset: Dataset, request: RequestRecord): Promise<void> => {
     const rows = await context.data.collect(dataset, request.subjectId);
     // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
@@ -292,16 +292,36 @@ const assembleExport = async (context: RunContext, datasets: ReadonlyArray<Datas
     return archiveKey;
 };
 
+/** The text a failed run records: the error message, or the value thrown when it is not an `Error`. */
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** Move a request into `processing` and record the event that names the run. Returns the status it now holds. */
+const beginRun = async (context: Pick<RunContext, "now" | "store">, request: RequestRecord, event: string): Promise<RequestStatus> => {
+    const status = transition(request.status, "processing");
+
+    await context.store.update(request.id, { status });
+    await context.store.addEvent(request.id, context.now(), event);
+
+    return status;
+};
+
+/** Mark a run failed and keep the error on the event. A failed request stays retryable. */
+const failRun = async (context: Pick<RunContext, "now" | "store">, request: RequestRecord, status: RequestStatus, error: unknown): Promise<RequestStatus> => {
+    const failed = transition(status, "failed");
+
+    await context.store.update(request.id, { status: failed });
+    await context.store.addEvent(request.id, context.now(), "failed", messageOf(error));
+
+    return failed;
+};
+
 /**
  * Export the subject's data in one call: collect each dataset, assemble, and mark
  * the request ready. A failure marks it `failed` for an operator to retry; the
  * Art. 12(3) clock keeps running.
  */
 const runExport = async (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord): Promise<ExportOutcome> => {
-    let status: RequestStatus = transition(request.status, "processing");
-
-    await context.store.update(request.id, { status });
-    await context.store.addEvent(request.id, context.now(), "processing");
+    let status = await beginRun(context, request, "processing");
 
     try {
         for (const dataset of datasets) {
@@ -318,11 +338,7 @@ const runExport = async (context: RunContext, datasets: ReadonlyArray<Dataset>, 
 
         return { archiveKey, status };
     } catch (error) {
-        status = transition(status, "failed");
-        await context.store.update(request.id, { status });
-        await context.store.addEvent(request.id, context.now(), "failed", error instanceof Error ? error.message : String(error));
-
-        return { status };
+        return { status: await failRun(context, request, status, error) };
     }
 };
 
@@ -332,11 +348,7 @@ const runExport = async (context: RunContext, datasets: ReadonlyArray<Dataset>, 
  * the leftover tables.
  */
 const runErasure = async (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord): Promise<ErasureOutcome> => {
-    let status: RequestStatus = transition(request.status, "processing");
-
-    await context.store.update(request.id, { status });
-    await context.store.addEvent(request.id, context.now(), "erasing");
-
+    let status = await beginRun(context, request, "erasing");
     const disposition = dispositionFor(context.rules);
 
     try {
@@ -356,11 +368,7 @@ const runErasure = async (context: RunContext, datasets: ReadonlyArray<Dataset>,
 
         return { leftover: verdict.leftover, status };
     } catch (error) {
-        status = transition(status, "failed");
-        await context.store.update(request.id, { status });
-        await context.store.addEvent(request.id, context.now(), "failed", error instanceof Error ? error.message : String(error));
-
-        return { leftover: [], status };
+        return { leftover: [], status: await failRun(context, request, status, error) };
     }
 };
 
@@ -373,6 +381,7 @@ export {
     type ErasureOutcome,
     expireRequestFiles,
     type ExportOutcome,
+    messageOf,
     type RunContext,
     runErasure,
     runExport,

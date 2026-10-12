@@ -76,15 +76,17 @@ describe("effectiveDueAt and isOverdue", () => {
     });
 
     it("flags an unfinished request after its deadline", () => {
-        expect(isOverdue(receivedAt, false, "processing", at("2026-05-11T00:00:00.000Z"))).toBe(true);
+        expect(isOverdue({ receivedAt, status: "processing" }, at("2026-05-11T00:00:00.000Z"))).toBe(true);
     });
 
     it("does not flag a finished request, even past its deadline", () => {
-        expect(isOverdue(receivedAt, false, "completed", at("2026-08-01T00:00:00.000Z"))).toBe(false);
+        expect(isOverdue({ receivedAt, status: "completed" }, at("2026-08-01T00:00:00.000Z"))).toBe(false);
     });
 
     it("honours the extension when one was granted", () => {
-        expect(isOverdue(receivedAt, true, "processing", at("2026-06-01T00:00:00.000Z"))).toBe(false);
+        const extendedDueAt = at("2026-07-10T00:00:00.000Z");
+
+        expect(isOverdue({ extendedDueAt, receivedAt, status: "processing" }, at("2026-06-01T00:00:00.000Z"))).toBe(false);
     });
 });
 
