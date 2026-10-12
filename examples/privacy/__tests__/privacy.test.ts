@@ -11,7 +11,7 @@ import type { WorkflowRunContext } from "@lunora/workflow";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server.js";
-import { listOpenPrivacyRequests, retryPrivacyRequest } from "../lunora/admin";
+import { listOpenPrivacyRequests, restorePrivacyErasures, retryPrivacyRequest } from "../lunora/admin";
 import { privacyFor, privacyWorkflows } from "../lunora/privacy";
 import { cancelRequest, downloadUrl, myRequests, privacyPort, requestErasure } from "../lunora/requests";
 import schema from "../lunora/schema";
@@ -73,6 +73,12 @@ describe("privacy example", () => {
 
     afterEach(() => {
         t.close();
+    });
+
+    it("keeps the restore action internal, so no client can start a re-erasure", () => {
+        expect.assertions(1);
+
+        expect(restorePrivacyErasures).toMatchObject({ visibility: "internal" });
     });
 
     it("exports the subject's own rows and leaves other subjects out", async () => {

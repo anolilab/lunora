@@ -83,6 +83,18 @@ const requestStore = (ctx: LocalContext): RequestStore => {
 
             return batches.flat().map((row) => fromRequestRow(row));
         },
+        // One mutation is one transaction on the shard, so this read and write cannot interleave with another claim.
+        claim: async (id, from, patch) => {
+            const row = await rowFor(ctx, id);
+
+            if (row?.status !== from) {
+                return false;
+            }
+
+            await writerOf(ctx).patch(row._id, toRequestPatch(patch));
+
+            return true;
+        },
         update: async (id, patch) => {
             const row = await rowFor(ctx, id);
 
