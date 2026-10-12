@@ -176,7 +176,17 @@ const listOpen = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => 
  * The one-call erasure. The tombstone store and secret are checked before anything runs, so a call
  * without them is refused outright and leaves the request as it was.
  */
+/** Refuses a request of the other kind, so an export run cannot erase a subject and an erasure cannot skip its grace. */
+const requireType = async (scope: Scope, requestId: string, type: RequestRecord["type"]): Promise<void> => {
+    const record = await requireRequest(scope.ports.store, requestId);
+
+    if (record.type !== type) {
+        throw new LunoraError("UNPROCESSABLE", `Request ${requestId} is an ${record.type}, not an ${type}.`);
+    }
+};
+
 const runErasureNow = async (scope: Scope, requestId: string): Promise<ErasureOutcome> => {
+    await requireType(scope, requestId, "erasure");
     requireTombstones(scope);
 
     return erasureRun(scope, inlineSteps, requestId);
@@ -400,15 +410,21 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
 
         runErasure: async (requestId) => runErasureNow(scope, requestId),
 
-        runExport: async (requestId) => exportRun(scope, inlineSteps, requestId),
+        runExport: async (requestId) => {
+            await requireType(scope, requestId, "export");
+
+            return exportRun(scope, inlineSteps, requestId);
+        },
 
         tick: async () => tickRequests(scope),
 
         workflows: {
             erasureHandler: async (context) => {
+                await requireType(scope, context.params.requestId, "erasure");
                 await erasureRun(scope, context.step, context.params.requestId);
             },
             exportHandler: async (context) => {
+                await requireType(scope, context.params.requestId, "export");
                 await exportRun(scope, context.step, context.params.requestId);
             },
         },

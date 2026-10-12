@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { decodeWire } from "../../../shared/wire-codec";
 import { defineDataset } from "../src/dataset";
 import type { DataPort } from "../src/ports";
-import { setup } from "./harness";
+import { codeOf, setup } from "./harness";
 
 const tasks = defineDataset("tasks", {
     legalBasis: "contract",
@@ -208,5 +208,20 @@ describe("omitted columns", () => {
 
         expect(session).not.toContain("live-secret");
         expect(session).toContain("s1");
+    });
+});
+
+describe("run entries", () => {
+    it("refuses an export run on an erasure, and an erasure run on an export, without touching either", async () => {
+        expect.assertions(4);
+
+        const { privacy, store } = setup();
+        const erasure = await privacy.requestErasure();
+        const exported = await privacy.requestExport();
+
+        await expect(codeOf(privacy.runExport(erasure.id))).resolves.toBe("UNPROCESSABLE");
+        await expect(codeOf(privacy.runErasure(exported.id))).resolves.toBe("UNPROCESSABLE");
+        expect(store.rows.get(erasure.id)?.status).toBe("grace");
+        expect(store.rows.get(exported.id)?.status).toBe("received");
     });
 });
