@@ -1,6 +1,7 @@
 import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { defineDataset } from "../src/dataset";
 import type { DataPort } from "../src/run";
 import { setup } from "./harness";
@@ -53,6 +54,26 @@ const memoryData = (initial: Record<string, number>, options: { failCollect?: bo
 const NO_GRACE = { graceDays: 0 };
 
 describe("runExport", () => {
+    it("exports a bigint and a bytes column, writing each as the wire codec's tagged leaf", async () => {
+        const row = { blob: new Uint8Array([0, 1, 254, 255]).buffer, id: 12_345_678_901_234_567_890n };
+        const data: DataPort = {
+            ...memoryData({}).port,
+            collect: async () => {
+                return { goals: [], tasks: [row] };
+            },
+        };
+        const { files, privacy } = setup({ data });
+        const opened = await privacy.requestExport();
+
+        await expect(privacy.runExport(opened.id)).resolves.toMatchObject({ status: "ready" });
+
+        const text = new TextDecoder().decode(unzipSync(files.files.get("r1/export.zip") as Uint8Array)["data/tasks/tasks.json"]);
+
+        expect(text).toContain('"12345678901234567890"');
+        expect(text).toContain('"AAH+/w=="');
+        expect(decodeWire(JSON.parse(text))).toStrictEqual([row]);
+    });
+
     it("collects every dataset and stores the archive and the summary", async () => {
         const { files, privacy } = setup({ data: memoryData({}).port });
         const opened = await privacy.requestExport();

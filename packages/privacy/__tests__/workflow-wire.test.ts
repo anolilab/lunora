@@ -1,36 +1,16 @@
+import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { PrivacyConfig } from "../src/define";
 import { definePrivacy } from "../src/define";
 import { eu } from "../src/eu";
 import { tombstoneKeyOf } from "../src/tombstones";
-import { decodeWire, dispatchPort, encodeWire, PORT_METHODS, portMethods, remotePorts } from "../src/workflow";
-import { codeOf, memoryData, memoryFiles, memoryRequests, memoryTombstones, NOW, SECRET, SUBJECT, tasksDataset } from "./harness";
+import { dispatchPort, remotePorts } from "../src/workflow";
+import { codeOf, durableStep, memoryData, memoryFiles, memoryRequests, memoryTombstones, NOW, SECRET, SUBJECT, tasksDataset } from "./harness";
 
-describe("the wire codec", () => {
-    it("round-trips a Date, a Set, a byte array and undefined, nested anywhere", () => {
-        const value = {
-            at: new Date("2026-10-11T10:00:00.000Z"),
-            bytes: new Uint8Array([0, 1, 254, 255]),
-            list: [undefined, new Set(["a", "b"]), { nested: new Date(0) }],
-            missing: undefined,
-            plain: { count: 3, name: "x" },
-        };
-
-        expect(decodeWire(encodeWire(value))).toStrictEqual(value);
-    });
-
-    it("keeps a plain object that happens to look like a tag", () => {
-        const value = [{ $date: "not a date" }, { $undefined: true }, { $object: 1 }];
-
-        expect(decodeWire(encodeWire(value))).toStrictEqual(value);
-    });
-
-    it("carries undefined as a value, not as null", () => {
-        expect(decodeWire(encodeWire([undefined]))).toStrictEqual([undefined]);
-        expect(decodeWire(encodeWire(undefined))).toBeUndefined();
-    });
-});
+/** A port call's payload as `remotePorts` writes it. */
+const payloadOf = (args: ReadonlyArray<unknown>): string => JSON.stringify(encodeWire(args));
 
 /** Ports with every optional port bound, so the table can be checked against each one. */
 const allPorts = () => {
@@ -49,20 +29,45 @@ const allPorts = () => {
     };
 };
 
-describe("the port method table", () => {
-    it("lists exactly the methods of every remote port", () => {
-        const ports = allPorts();
+describe("the port wire", () => {
+    it("returns a bigint, an ArrayBuffer and a Date column from a data call as they were", async () => {
+        const rows = { goals: [], tasks: [{ at: new Date(0), blob: new Uint8Array([0, 1, 254, 255]).buffer, id: 12_345_678_901_234_567_890n }] };
+        const remote = remotePorts(async ({ method, payload }) =>
+            dispatchPort({ datasets: [tasksDataset] }, { ...allPorts(), data: { ...memoryData(), collect: async () => rows } }, method, payload),
+        );
 
-        for (const [port, methods] of Object.entries(PORT_METHODS)) {
-            const bound = Object.entries(ports[port as keyof typeof PORT_METHODS])
-                .filter(([, member]) => typeof member === "function")
-                .map(([name]) => name)
-                .toSorted((a, b) => a.localeCompare(b));
-
-            expect(Object.keys(methods).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(bound);
-        }
+        await expect(remote.data.collect(tasksDataset, "u1")).resolves.toStrictEqual(rows);
     });
 
+    it("passes an undefined argument as undefined, a Date as a Date and bytes as bytes", async () => {
+        const local = allPorts();
+        const seen: unknown[][] = [];
+        const remote = remotePorts(async ({ method, payload }) =>
+            dispatchPort(
+                { datasets: [tasksDataset] },
+                {
+                    ...local,
+                    store: {
+                        ...local.store,
+                        addEvent: async (...args) => {
+                            seen.push(args);
+                        },
+                    },
+                },
+                method,
+                payload,
+            ),
+        );
+
+        await remote.store.addEvent("r1", NOW, "kind", undefined);
+        await remote.files.put("r1", { data: new Uint8Array([1, 2]), name: "a.bin" });
+
+        expect(seen).toStrictEqual([["r1", NOW, "kind", undefined]]);
+        expect(local.files.files.get("r1/a.bin")).toStrictEqual(new Uint8Array([1, 2]));
+    });
+});
+
+describe("the port codec table", () => {
     it("reaches every listed method through remotePorts and dispatchPort", async () => {
         const local = allPorts();
         const config = { datasets: [tasksDataset], presets: [eu()] };
@@ -104,7 +109,26 @@ describe("the port method table", () => {
         await expect(remote.archive.purgeBatch(NOW)).resolves.toStrictEqual({ hasMore: false, purged: 0 });
 
         expect(local.store.rows.get("r1")?.status).toBe("processing");
-        expect([...new Set(reached)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([...portMethods()].toSorted((a, b) => a.localeCompare(b)));
+        expect([...new Set(reached)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "archive.purgeBatch",
+            "data.collect",
+            "data.eraseBatch",
+            "data.remaining",
+            "files.delete",
+            "files.list",
+            "files.put",
+            "files.read",
+            "files.signedUrl",
+            "store.addEvent",
+            "store.findOpen",
+            "store.get",
+            "store.insert",
+            "store.listForSubject",
+            "store.listOpen",
+            "store.update",
+            "tombstones.add",
+            "tombstones.keys",
+        ]);
     });
 
     it("refuses a method the table does not list, and a port the call did not bind", async () => {
@@ -114,8 +138,8 @@ describe("the port method table", () => {
 
         await expect(codeOf(dispatchPort(config, withoutArchive, "store.drop", "[]"))).resolves.toBe("BAD_REQUEST");
         await expect(codeOf(dispatchPort(config, withoutArchive, "constructor.name", "[]"))).resolves.toBe("BAD_REQUEST");
-        await expect(codeOf(dispatchPort(config, withoutArchive, "archive.purgeBatch", encodeWire([NOW])))).resolves.toBe("BAD_REQUEST");
-        await expect(codeOf(dispatchPort(config, withoutArchive, "data.collect", encodeWire(["unknown", "u1"])))).resolves.toBe("BAD_REQUEST");
+        await expect(codeOf(dispatchPort(config, withoutArchive, "archive.purgeBatch", payloadOf([NOW])))).resolves.toBe("BAD_REQUEST");
+        await expect(codeOf(dispatchPort(config, withoutArchive, "data.collect", payloadOf(["unknown", "u1"])))).resolves.toBe("BAD_REQUEST");
     });
 });
 
@@ -160,5 +184,37 @@ describe("a workflow over the wire", () => {
 
         expect(store.rows.get(opened.id)?.status).toBe("failed");
         expect(data.rows).toStrictEqual({ goals: 150, tasks: 40 });
+    });
+});
+
+describe("an export over the wire", () => {
+    it("archives a bigint and a bytes column a remote collect returned, losing neither", async () => {
+        const row = { blob: new Uint8Array([0, 1, 254, 255]).buffer, id: 12_345_678_901_234_567_890n };
+        const base = allPorts();
+        const local = {
+            ...base,
+            data: {
+                ...base.data,
+                collect: async () => {
+                    return { goals: [], tasks: [row] };
+                },
+            },
+        };
+        const config: PrivacyConfig<"local" | "remote"> = {
+            datasets: [tasksDataset],
+            ports: (side) => (side === "local" ? local : remotePorts(async ({ method, payload }) => dispatchPort(config, local, method, payload))),
+            presets: [eu()],
+            tombstoneSecret: SECRET,
+        };
+        const privacyFor = definePrivacy(config);
+        const opened = await privacyFor("local", SUBJECT).requestExport();
+
+        await privacyFor("remote").workflows.exportHandler({ params: { requestId: opened.id }, step: durableStep().step });
+
+        expect(local.store.rows.get(opened.id)?.status).toBe("ready");
+
+        const text = new TextDecoder().decode(unzipSync(local.files.files.get(`${opened.id}/export.zip`) as Uint8Array)["data/tasks/tasks.json"]);
+
+        expect(decodeWire(JSON.parse(text))).toStrictEqual([row]);
     });
 });

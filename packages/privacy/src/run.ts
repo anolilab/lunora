@@ -11,6 +11,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ManifestDataset } from "./archive";
 import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
@@ -283,13 +284,18 @@ const withoutColumns = (
     return rows.map((row) => Object.fromEntries(Object.entries(row).filter(([column]) => !omit.includes(column))));
 };
 
-/** Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent. */
+/**
+ * Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent.
+ * The rows go through the Lunora wire codec, which plain JSON cannot replace: a `bigint` column would
+ * throw and a bytes column would be written as `{}`. The codec writes them as tagged leaves, a bigint
+ * as its decimal string and bytes as base64, and the archive keeps that form.
+ */
 const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord): Promise<void> => {
     const rows = await ports.data.collect(dataset, request.subjectId);
     // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
     const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
 
-    await ports.files.put(request.id, { data: JSON.stringify({ tables }), name: partName(dataset) });
+    await ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(dataset) });
 };
 
 /** Assemble the archive and the summary from the stored parts, then store both. */
@@ -306,6 +312,7 @@ const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Datas
             throw new Error(`Export part for "${dataset.id}" is missing; collect it again.`);
         }
 
+        // The part stays in its encoded form: decoding it would bring back the bigint JSON cannot write.
         const { tables } = JSON.parse(text) as { tables: Record<string, unknown[]> };
 
         for (const table of dataset.tableNames) {

@@ -5,148 +5,113 @@
  * and returns `dispatchPort(privacyConfig, localPorts(ctx), method, payload)`. The workflow's ports
  * are `remotePorts((call) => ctx.run(internal.privacy.privacyPort, call))`.
  *
- * Both ends derive from {@link PORT_METHODS}, so a port method cannot be reachable on one side
- * and missing on the other. A dataset crosses the wire by id and the erasure disposition does not
- * cross it at all: the dispatcher rebuilds both from the same config `definePrivacy` reads.
+ * Both ends read one codec per port method from {@link PORT_CODECS}: `encode` turns the call's
+ * arguments into the wire tuple and `decode` turns the tuple back into the arguments the app's port
+ * takes, both typed against the port method. A dataset crosses the wire by id and the erasure
+ * disposition does not cross it at all: `decode` rebuilds both from the same config `definePrivacy`
+ * reads. Values cross through the Lunora wire codec, so a `Date`, a `Set`, bytes and a `bigint`
+ * arrive as they were sent.
  */
-import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { Dataset } from "./dataset";
+import type { PrivacyConfig } from "./define";
+import type { RowDisposition } from "./erasure";
 import { dispositionFor } from "./erasure";
-import type { PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
 import type { PrivacyPorts } from "./run";
 
 /** The ports a workflow reaches over the wire. The clock and the id source stay on the caller's side. */
 type RemotePort = Exclude<keyof PrivacyPorts, "newId" | "now">;
 
-/**
- * Every port method the wire carries, by port. Typed against {@link PrivacyPorts}: a port method
- * missing here, or listed here but absent from the port, fails to compile.
- */
-/** One `true` per method of every remote port: the compiler refuses a missing or an extra method. */
-type PortMethodTable = { readonly [P in RemotePort]-?: { readonly [M in keyof NonNullable<PrivacyPorts[P]>]-?: true } };
+type PortOf<P extends RemotePort> = NonNullable<PrivacyPorts[P]>;
 
-const PORT_METHODS: PortMethodTable = {
-    archive: { purgeBatch: true },
-    data: { collect: true, eraseBatch: true, remaining: true },
-    files: { delete: true, list: true, put: true, read: true, signedUrl: true },
-    store: { addEvent: true, findOpen: true, get: true, insert: true, listForSubject: true, listOpen: true, update: true },
-    tombstones: { add: true, keys: true },
+/** The widest function type, so `Parameters` applies to every port method. */
+type AnyMethod = (...args: any[]) => unknown;
+
+type ArgumentsOf<P extends RemotePort, M extends keyof PortOf<P>> = PortOf<P>[M] extends AnyMethod ? Parameters<PortOf<P>[M]> : never;
+
+/**
+ * The wire tuple of each data method. A dataset goes as its id, since its `files.prefix` function
+ * cannot cross JSON, and `eraseBatch` sends no disposition. Every other method sends its arguments.
+ */
+interface DataWire {
+    readonly collect: readonly [datasetId: string, subjectId: string];
+    readonly eraseBatch: readonly [datasetId: string, subjectId: string, now: Date];
+    readonly remaining: readonly [datasetId: string, subjectId: string];
+}
+
+type WireOf<P extends RemotePort, M extends keyof PortOf<P>> = P extends "data" ? (M extends keyof DataWire ? DataWire[M] : never) : ArgumentsOf<P, M>;
+
+/** What `decode` reads on the dispatcher side: a dataset by id, and the disposition the presets give. */
+interface DecodeContext {
+    readonly dataset: (id: string) => Dataset;
+    readonly disposition: () => RowDisposition;
+}
+
+/** One port method's two ends. Adding a parameter to the method fails `decode` until it supplies it. */
+interface MethodCodec<A, W> {
+    readonly decode: (wire: W, context: DecodeContext) => A;
+    readonly encode: (args: A) => W;
+}
+
+type CodecTable = {
+    readonly [P in RemotePort]-?: { readonly [M in keyof PortOf<P>]-?: MethodCodec<ArgumentsOf<P, M>, WireOf<P, M>> };
 };
 
-/** A port method's wire name: the port and the method, as `"data.collect"`. */
-type PortMethod = { [P in RemotePort]: `${P}.${keyof PortMethodTable[P] & string}` }[RemotePort];
+/** A method whose arguments cross the wire as they are. */
+const asIs = <A>(): MethodCodec<A, A> => {
+    return { decode: (wire) => wire, encode: (args) => args };
+};
 
-const isRemotePort = (name: string): name is RemotePort => Object.hasOwn(PORT_METHODS, name);
+const PORT_CODECS: CodecTable = {
+    archive: { purgeBatch: asIs() },
+    data: {
+        collect: {
+            decode: ([datasetId, subjectId], context) => [context.dataset(datasetId), subjectId],
+            encode: ([dataset, subjectId]) => [dataset.id, subjectId],
+        },
+        eraseBatch: {
+            decode: ([datasetId, subjectId, now], context) => [context.dataset(datasetId), subjectId, now, context.disposition()],
+            encode: ([dataset, subjectId, now]) => [dataset.id, subjectId, now],
+        },
+        remaining: {
+            decode: ([datasetId, subjectId], context) => [context.dataset(datasetId), subjectId],
+            encode: ([dataset, subjectId]) => [dataset.id, subjectId],
+        },
+    },
+    files: { delete: asIs(), list: asIs(), put: asIs(), read: asIs(), signedUrl: asIs() },
+    store: { addEvent: asIs(), findOpen: asIs(), get: asIs(), insert: asIs(), listForSubject: asIs(), listOpen: asIs(), update: asIs() },
+    tombstones: { add: asIs(), keys: asIs() },
+};
 
-/** Every wire name, in table order. */
-const portMethods = (): ReadonlyArray<PortMethod> =>
-    Object.entries(PORT_METHODS).flatMap(([port, methods]) => Object.keys(methods).map((method) => `${port}.${method}` as PortMethod));
+/** A codec once its method is chosen at run time by name. */
+type ErasedCodec = MethodCodec<ReadonlyArray<unknown>, ReadonlyArray<unknown>>;
 
-/** Split a wire name into its port and method, or refuse one the table does not list. */
-const parseMethod = (name: string): { readonly method: string; readonly port: RemotePort } => {
+const isRemotePort = (name: string): name is RemotePort => Object.hasOwn(PORT_CODECS, name);
+
+/** The codec of a wire name such as `"data.collect"`, or a refusal for a name the table does not list. */
+const codecOf = (name: string): { readonly codec: ErasedCodec; readonly method: string; readonly port: RemotePort } => {
     const [port = "", method = "", ...rest] = name.split(".");
 
-    if (rest.length > 0 || !isRemotePort(port) || !Object.hasOwn(PORT_METHODS[port], method)) {
+    if (rest.length > 0 || !isRemotePort(port) || !Object.hasOwn(PORT_CODECS[port], method)) {
         throw new LunoraError("BAD_REQUEST", `Unknown privacy port call "${name}".`);
     }
 
-    return { method, port };
+    // The table is typed per method; a name read at run time can only reach it erased.
+    const codec = (PORT_CODECS[port] as unknown as Readonly<Record<string, ErasedCodec>>)[method] as ErasedCodec;
+
+    return { codec, method, port };
 };
 
-/** The tags the codec writes. A plain object whose only key is a tag is escaped, so data never reads as one. */
-const TAGS = ["$bytes", "$date", "$object", "$set", "$undefined"] as const;
+const toText = (value: unknown): string => JSON.stringify(encodeWire(value));
 
-const looksTagged = (value: object): boolean => {
-    const keys = Object.keys(value);
+const fromText = (text: string): unknown => decodeWire(JSON.parse(text));
 
-    return keys.length === 1 && (TAGS as ReadonlyArray<string>).includes(keys[0] ?? "");
-};
-
-const toWire = (value: unknown): unknown => {
-    if (value === undefined) {
-        return { $undefined: true };
-    }
-
-    if (value instanceof Date) {
-        return { $date: value.toISOString() };
-    }
-
-    if (value instanceof Set) {
-        return { $set: [...value].map((item) => toWire(item)) };
-    }
-
-    if (value instanceof Uint8Array) {
-        return { $bytes: Buffer.from(value).toString("base64") };
-    }
-
-    if (Array.isArray(value)) {
-        return value.map((item) => toWire(item));
-    }
-
-    if (value !== null && typeof value === "object") {
-        const encoded = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, toWire(item)]));
-
-        return looksTagged(value) ? { $object: encoded } : encoded;
-    }
-
-    return value;
-};
-
-const fromWire = (value: unknown): unknown => {
-    if (Array.isArray(value)) {
-        return value.map((item) => fromWire(item));
-    }
-
-    if (value === null || typeof value !== "object") {
-        return value;
-    }
-
-    const entries = Object.entries(value);
-    const [tag, inner] = entries.length === 1 ? (entries[0] ?? []) : [];
-
-    switch (tag) {
-        case "$bytes": {
-            return new Uint8Array(Buffer.from(String(inner), "base64"));
-        }
-        case "$date": {
-            return new Date(String(inner));
-        }
-        case "$object": {
-            return Object.fromEntries(Object.entries(inner as object).map(([key, item]) => [key, fromWire(item)]));
-        }
-        case "$set": {
-            return new Set(Array.isArray(inner) ? inner.map((item) => fromWire(item)) : []);
-        }
-        case "$undefined": {
-            return undefined;
-        }
-        default: {
-            return Object.fromEntries(entries.map(([key, item]) => [key, fromWire(item)]));
-        }
-    }
-};
-
-/**
- * Write a value as JSON text that keeps a `Date`, a `Set`, a `Uint8Array` and `undefined`. Plain JSON
- * turns `undefined` into `null` inside an argument list, which a validator then refuses.
- */
-const encodeWire = (value: unknown): string => JSON.stringify(toWire(value));
-
-/** Read text {@link encodeWire} wrote. */
-const decodeWire = (text: string): unknown => fromWire(JSON.parse(text));
-
-/** The part of the `definePrivacy` config the dispatcher reads: the datasets and the presets. */
-interface DispatchConfig {
-    readonly datasets: ReadonlyArray<Dataset>;
-    readonly presets?: ReadonlyArray<PrivacyPreset>;
-}
-
-/** Call a method on a port object by name. The name was checked against {@link PORT_METHODS}. */
+/** Call a method on a port object by name. The name was checked against {@link PORT_CODECS}. */
 const callPort = async (target: object, method: string, args: ReadonlyArray<unknown>): Promise<unknown> => {
     const run: unknown = Reflect.get(target, method);
 
@@ -159,18 +124,22 @@ const callPort = async (target: object, method: string, args: ReadonlyArray<unkn
 
 /**
  * Run one port call on the server side of the hop: decode the arguments, call the app's own port,
- * and encode the result. A data call names its dataset by id, which is looked up in `config`, and an
- * `eraseBatch` gets the disposition the presets' retention rules give.
+ * and encode the result. `config` is the `definePrivacy` config, or any object with its datasets and
+ * presets: a data call's dataset is looked up there by id, and an `eraseBatch` gets the disposition
+ * the presets' retention rules give.
  */
-const dispatchPort = async (config: DispatchConfig, ports: PrivacyPorts, method: string, payload: string): Promise<string> => {
-    const call = parseMethod(method);
-    const decoded = decodeWire(payload);
+const dispatchPort = async (
+    config: Pick<PrivacyConfig<never>, "datasets" | "presets">,
+    ports: PrivacyPorts,
+    method: string,
+    payload: string,
+): Promise<string> => {
+    const call = codecOf(method);
+    const wire = fromText(payload);
 
-    if (!Array.isArray(decoded)) {
+    if (!Array.isArray(wire)) {
         throw new LunoraError("BAD_REQUEST", `The privacy port call "${method}" needs an argument list.`);
     }
-
-    const args: ReadonlyArray<unknown> = decoded;
 
     const target = ports[call.port];
 
@@ -178,38 +147,24 @@ const dispatchPort = async (config: DispatchConfig, ports: PrivacyPorts, method:
         throw new LunoraError("BAD_REQUEST", `The privacy port "${call.port}" is not bound for this call.`);
     }
 
-    let values: ReadonlyArray<unknown> = args;
+    const context: DecodeContext = {
+        dataset: (id) => {
+            const dataset = config.datasets.find((candidate) => candidate.id === id);
 
-    if (call.port === "data") {
-        const [datasetId, ...rest] = args;
-        const dataset = config.datasets.find((candidate) => candidate.id === datasetId);
+            if (dataset === undefined) {
+                throw new LunoraError("BAD_REQUEST", `No privacy dataset with id "${id}".`);
+            }
 
-        if (dataset === undefined) {
-            throw new LunoraError("BAD_REQUEST", `No privacy dataset with id "${String(datasetId)}".`);
-        }
+            return dataset;
+        },
+        disposition: () => dispositionFor(retentionRulesOf(config.presets ?? [])),
+    };
 
-        values = call.method === "eraseBatch" ? [dataset, ...rest.slice(0, 2), dispositionFor(retentionRulesOf(config.presets ?? []))] : [dataset, ...rest];
-    }
-
-    return encodeWire(await callPort(target, call.method, values));
+    return toText(await callPort(target, call.method, call.codec.decode(wire, context)));
 };
 
 /** Send one encoded port call across the hop and resolve to the encoded result text. */
 type PortTransport = (call: { readonly method: string; readonly payload: string }) => Promise<unknown>;
-
-/**
- * The arguments a call sends. A dataset goes as its id, since its `files.prefix` function cannot cross
- * JSON, and `eraseBatch` sends no disposition: the dispatcher rebuilds it.
- */
-const wireArguments = (port: RemotePort, method: string, args: ReadonlyArray<unknown>): ReadonlyArray<unknown> => {
-    if (port !== "data") {
-        return args;
-    }
-
-    const [dataset, ...rest] = args as [Dataset, ...unknown[]];
-
-    return method === "eraseBatch" ? [dataset.id, ...rest.slice(0, 2)] : [dataset.id, ...rest];
-};
 
 /**
  * The ports for a workflow step: every method is one call through `send`, which the app points at
@@ -218,26 +173,26 @@ const wireArguments = (port: RemotePort, method: string, args: ReadonlyArray<unk
  * the id source run locally.
  */
 const remotePorts = (send: PortTransport): Required<PrivacyPorts> => {
-    const call = async (port: RemotePort, method: string, args: ReadonlyArray<unknown>): Promise<unknown> => {
-        const name = `${port}.${method}`;
-        const text = await send({ method: name, payload: encodeWire(wireArguments(port, method, args)) });
+    const call = async (name: string, args: ReadonlyArray<unknown>): Promise<unknown> => {
+        const { codec } = codecOf(name);
+        const text = await send({ method: name, payload: toText(codec.encode(args)) });
 
         if (typeof text !== "string") {
             throw new LunoraError("INTERNAL", `The privacy port call "${name}" returned no result.`);
         }
 
-        return decodeWire(text);
+        return fromText(text);
     };
 
     const ports = Object.fromEntries(
-        Object.entries(PORT_METHODS).map(([port, methods]) => [
+        Object.entries(PORT_CODECS).map(([port, methods]) => [
             port,
-            Object.fromEntries(Object.keys(methods).map((method) => [method, async (...args: unknown[]) => call(port as RemotePort, method, args)])),
+            Object.fromEntries(Object.keys(methods).map((method) => [method, async (...args: unknown[]) => call(`${port}.${method}`, args)])),
         ]),
     );
 
-    // Built from PORT_METHODS, which the compiler checks against every port method, so the shape is
-    // complete; only the per-method signatures are asserted here, and the wire codec carries them.
+    // Built from PORT_CODECS, which the compiler checks against every port method, so the shape is
+    // complete; only the per-method signatures are asserted here, and each method's codec carries them.
     return {
         ...(ports as unknown as Pick<Required<PrivacyPorts>, RemotePort>),
         newId: () => randomUUID(),
@@ -245,4 +200,4 @@ const remotePorts = (send: PortTransport): Required<PrivacyPorts> => {
     };
 };
 
-export { decodeWire, type DispatchConfig, dispatchPort, encodeWire, PORT_METHODS, type PortMethod, portMethods, type PortTransport, remotePorts };
+export { dispatchPort, type PortTransport, remotePorts };
