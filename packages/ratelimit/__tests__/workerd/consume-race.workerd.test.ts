@@ -12,12 +12,15 @@
  * input gate, so B cannot start until A has written. Admits 1.
  * - `sql`: `exec` is synchronous and the limiter does not await a synchronous read,
  * so a consume's read, decision and write run without yielding. Admits 1.
- * - `d1` (`.global()` table): the read and the write are D1 calls, network I/O that
- * does not hold the input gate. B runs inside A's read-to-write window.
+ * - `d1` (`.global()` table, through the production `createD1CtxDb` writer): the
+ * read and the write are D1 calls, network I/O that does not hold the input gate,
+ * so B runs inside A's read-to-write window. `createDbStore` writes through
+ * `ctx.db.patchIf` with the value it read as the condition, and creates a row under
+ * an id derived from the key, so B's write fails, B re-reads, and is refused.
+ * Admits 1.
  *
- * The `d1` case double-admits: `ctx.db` exposes no conditional write, so
- * `createDbStore` cannot make the pair atomic on D1. It is kept as a plain `it` so
- * the failure stays visible.
+ * Without the conditional write the `d1` case admitted 1 to 5 per round, with one
+ * duplicate row per extra admit.
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";

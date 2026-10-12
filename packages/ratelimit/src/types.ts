@@ -88,4 +88,17 @@ export interface RateLimitStore {
     delete: (storageKey: string) => Promise<void> | void;
     get: (storageKey: string) => Promise<RateLimitValue | undefined> | RateLimitValue | undefined;
     set: (storageKey: string, value: RateLimitValue) => Promise<void> | void;
+
+    /**
+     * Optional conditional write: persist `value` only while the stored value is
+     * still `prior` (what `get` returned for this consume, `undefined` for no
+     * row), and resolve `false` when it no longer is. When present the limiter
+     * writes through it instead of `set`, and a `false` makes it read and decide
+     * again rather than admit off a stale read.
+     *
+     * A store whose `get` and write cannot be interleaved by another consume
+     * (memory, SQL: synchronous) needs none. One whose calls can be
+     * (`createDbStore`: every call is awaited I/O) must have it.
+     */
+    setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
 }

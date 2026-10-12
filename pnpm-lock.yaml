@@ -4280,9 +4280,15 @@ importers:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@lunora/values':
         specifier: workspace:*
         version: link:../values

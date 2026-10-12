@@ -7,20 +7,23 @@
  * storage. This is the shard-local table case: every await between the limiter's
  * read and its write is a DO storage operation, so the input gate stays closed
  * across the whole consume.
- * - `d1`: `createDbStore` over a `ctx.db`-shaped adapter on a D1 binding. This is
- * the `.global()` table case: a shard's `ctx.db` routes a global table's reads and
- * writes to D1, and a D1 call is network I/O, which does not hold the input gate.
+ * - `d1`: `createDbStore` over the production `.global()` writer (`createD1CtxDb`)
+ * on a D1 binding. A shard's `ctx.db` forwards a global table's reads and writes
+ * to that writer, and a D1 call is network I/O, which does not hold the input gate.
  * - `sql`: `createSqlStore` over `storage.sql`, the control. Its `exec` is
  * synchronous, so a consume never yields to the event loop.
  *
  * No barrier, rendezvous or timer is injected anywhere. Concurrency comes only from
  * the test sending several RPCs at once.
  */
+import type { D1Exec } from "@lunora/d1";
+import { createD1CtxDb, runD1GlobalTableMigrations } from "@lunora/d1";
+import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import type { Id } from "@lunora/values";
 import { DurableObject } from "cloudflare:workers";
 
 import { RateLimiter } from "../../src/rate-limiter";
-import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, SqlLike } from "../../src/store";
+import type { RateLimitDb, SqlLike } from "../../src/store";
 import { createDbStore, createSqlStore } from "../../src/store";
 import type { RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "../../src/types";
 
@@ -37,125 +40,116 @@ const D1_TABLE = "rateLimits";
 
 type StoreKind = "d1" | "kv" | "sql";
 
-/** Collects the `eq()` condition of an indexed lookup; only `eq` is used by the store. */
-const indexRange = (): { builder: RateLimitDbIndexRange; condition: { value?: unknown } } => {
-    const condition: { value?: unknown } = {};
-    const builder: RateLimitDbIndexRange = {
-        eq: (_field, value) => {
-            condition.value = value;
-
-            return builder;
-        },
-        gt: () => builder,
-        gte: () => builder,
-        lt: () => builder,
-        lte: () => builder,
-    };
-
-    return { builder, condition };
-};
+/** `where` against a stored row: plain equality, a `null` filter matching an absent field as SQL NULL does. */
+const matchesWhere = (row: Record<string, unknown>, where: Record<string, unknown> = {}): boolean =>
+    Object.entries(where).every(([field, value]) => (value === null ? row[field] === undefined || row[field] === null : row[field] === value));
 
 /**
  * A `ctx.db`-shaped adapter over the DO's KV storage. A row is `row:<id>`, and the
- * `key` column is also indexed as `idx:<table>:<key>` -> id, so `first()` after an
- * indexed `eq()` is two awaited storage reads, as an index lookup would be.
+ * `key` column is also indexed as `idx:<table>:<key>` -> id, so `findFirst()` by
+ * key is two awaited storage reads, as an index lookup would be. Every await is a
+ * DO storage operation, which holds the input gate: the shard-local table case.
  */
 const kvDatabase = (storage: DurableObjectStorage): RateLimitDb => {
     const rowKey = (id: string): string => `row:${id}`;
     const indexKey = (table: string, key: unknown): string => `idx:${table}:${String(key)}`;
 
-    const query = (table: string): RateLimitDbQuery => {
-        const { builder, condition } = indexRange();
-        const self: RateLimitDbQuery = {
-            first: async () => {
-                const id = await storage.get<string>(indexKey(table, condition.value));
-
-                if (id === undefined) {
-                    return null;
-                }
-
-                return (await storage.get<Record<string, unknown>>(rowKey(id))) ?? null;
-            },
-            withIndex: (_index, range) => {
-                range(builder);
-
-                return self;
-            },
-        };
-
-        return self;
-    };
-
     return {
         delete: async (id) => {
             await storage.delete(rowKey(id));
         },
-        insert: async (table, document) => {
-            const id = `${table}/${crypto.randomUUID()}`;
+        findFirst: async (table, args) => {
+            const id = await storage.get<string>(indexKey(table, args?.where?.["key"]));
+
+            if (id === undefined) {
+                return null;
+            }
+
+            return (await storage.get<Record<string, unknown>>(rowKey(id))) ?? null;
+        },
+        insert: async (table, document, options) => {
+            const id = options?.clientId ?? `${table}/${crypto.randomUUID()}`;
+
+            if ((await storage.get(rowKey(id))) !== undefined) {
+                throw Object.assign(new Error(`unique constraint violation on "${table}"`), { code: "CONFLICT" });
+            }
 
             await storage.put(rowKey(id), { ...document, _id: id });
             await storage.put(indexKey(table, document["key"]), id);
 
             return id as Id<typeof table>;
         },
-        patch: async (id, patch) => {
-            const row = (await storage.get<Record<string, unknown>>(rowKey(id))) ?? {};
+        patchIf: async (_table, id, args) => {
+            const row = await storage.get<Record<string, unknown>>(rowKey(id));
 
-            await storage.put(rowKey(id), { ...row, ...patch });
+            if (row === undefined) {
+                return { applied: false, doc: null };
+            }
+
+            if (!matchesWhere(row, args.where)) {
+                return { applied: false, doc: row };
+            }
+
+            const next = { ...row, ...args.patch };
+
+            await storage.put(rowKey(id), next);
+
+            return { applied: true, doc: next };
         },
-        query,
+    };
+};
+
+const column = (kind: string, meta: Record<string, unknown> = {}): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, ...meta }, kind };
+};
+
+/**
+ * The `.global()` table the `d1` store writes, as the schema declares it. The key
+ * index is not UNIQUE, matching a declared `.index("by_key", ["key"])`.
+ */
+const D1_SCHEMA: SchemaLike = {
+    tables: {
+        [D1_TABLE]: {
+            indexes: [{ fields: ["key"], name: "by_key" }],
+            shape: {
+                key: column("string"),
+                prev: column("optional", { inner: column("number") }),
+                ts: column("number"),
+                value: column("number"),
+            },
+            shardMode: { kind: "global" },
+        },
+    },
+};
+
+/** The ctx-db exec over a real D1 binding. */
+const d1Exec = (database: D1Database): D1Exec => {
+    return {
+        all: async (query, parameters) => {
+            const result = await database
+                .prepare(query)
+                .bind(...parameters)
+                .all();
+
+            return result.results;
+        },
+        run: async (query, parameters) => {
+            const result = await database
+                .prepare(query)
+                .bind(...parameters)
+                .run();
+
+            return { rowsAffected: result.meta.changes };
+        },
     };
 };
 
 /**
- * A `ctx.db`-shaped adapter over D1, standing in for a `.global()` table. The key
- * index is not UNIQUE, matching a declared `.index("by_key", ["key"])`.
+ * The production `.global()` writer over D1: the same `createD1CtxDb` a shard's
+ * `ctx.db` forwards a global table's reads and writes to.
  */
-const d1Database = (database: D1Database): RateLimitDb => {
-    const query = (table: string): RateLimitDbQuery => {
-        const { builder, condition } = indexRange();
-        const self: RateLimitDbQuery = {
-            first: async () => {
-                const row = await database
-                    .prepare(`SELECT id AS _id, key, ts, value, prev FROM "${table}" WHERE key = ? LIMIT 1`)
-                    .bind(condition.value)
-                    .first();
-
-                return row ?? null;
-            },
-            withIndex: (_index, range) => {
-                range(builder);
-
-                return self;
-            },
-        };
-
-        return self;
-    };
-
-    return {
-        delete: async (id) => {
-            await database.prepare(`DELETE FROM "${D1_TABLE}" WHERE id = ?`).bind(id).run();
-        },
-        insert: async (table, document) => {
-            const id = `${table}/${crypto.randomUUID()}`;
-
-            await database
-                .prepare(`INSERT INTO "${table}" (id, key, ts, value, prev) VALUES (?, ?, ?, ?, ?)`)
-                .bind(id, document["key"], document["ts"], document["value"], document["prev"] ?? null)
-                .run();
-
-            return id as Id<typeof table>;
-        },
-        patch: async (id, patch) => {
-            await database
-                .prepare(`UPDATE "${D1_TABLE}" SET ts = ?, value = ?, prev = ? WHERE id = ?`)
-                .bind(patch["ts"], patch["value"], patch["prev"] ?? null, id)
-                .run();
-        },
-        query,
-    };
-};
+const d1Database = (database: D1Database): RateLimitDb =>
+    createD1CtxDb({ exec: d1Exec(database), idGenerator: () => crypto.randomUUID(), schema: D1_SCHEMA }) as unknown as RateLimitDb;
 
 class RateLimitDO extends DurableObject<Env> {
     readonly #stores = new Map<StoreKind, RateLimitStore>();
@@ -164,12 +158,7 @@ class RateLimitDO extends DurableObject<Env> {
 
     /** Creates the D1 table once; every consume awaits it before its first read. */
     async #ensureSchema(): Promise<void> {
-        this.#schema ??= this.env.GLOBAL_DB.batch([
-            this.env.GLOBAL_DB.prepare(
-                `CREATE TABLE IF NOT EXISTS "${D1_TABLE}" (id TEXT PRIMARY KEY, key TEXT NOT NULL, ts INTEGER NOT NULL, value REAL NOT NULL, prev REAL)`,
-            ),
-            this.env.GLOBAL_DB.prepare(`CREATE INDEX IF NOT EXISTS "${D1_TABLE}_by_key" ON "${D1_TABLE}" (key)`),
-        ]);
+        this.#schema ??= runD1GlobalTableMigrations(d1Exec(this.env.GLOBAL_DB), D1_SCHEMA);
 
         await this.#schema;
     }
@@ -226,7 +215,9 @@ class RateLimitDO extends DurableObject<Env> {
             return [...rows.values()].filter((row) => row["key"] === `login:${key}`).length;
         }
 
-        const result = await this.env.GLOBAL_DB.prepare(`SELECT COUNT(*) AS n FROM "${D1_TABLE}" WHERE key = ?`).bind(`login:${key}`).first<{ n: number }>();
+        const result = await this.env.GLOBAL_DB.prepare(`SELECT COUNT(*) AS n FROM "${D1_TABLE}" WHERE "${D1_TABLE}"."key" = ?`)
+            .bind(`login:${key}`)
+            .first<{ n: number }>();
 
         return result?.n ?? 0;
     }

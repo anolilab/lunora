@@ -3,74 +3,68 @@ import type { Id } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../src/rate-limiter";
-import type {
-    RateLimitDb as RateLimitDatabase,
-    RateLimitDbIndexRange as RateLimitDatabaseIndexRange,
-    RateLimitDbQuery as RateLimitDatabaseQuery,
-    RateLimitDbReader as RateLimitDatabaseReader,
-} from "../src/store";
+import type { RateLimitDb as RateLimitDatabase, RateLimitDbReader as RateLimitDatabaseReader } from "../src/store";
 import { createDbStore as createDatabaseStore, createReadOnlyDbStore as createReadOnlyDatabaseStore } from "../src/store";
 
 /**
- * A faithful in-memory stand-in for the Lunora ORM writer: real row storage and
- * a real `withIndex(...).eq(...).first()` lookup, not a mock. It exercises the
- * adapter's read-then-write logic the same way `ctx.db` would.
+ * A faithful in-memory stand-in for the Lunora ORM writer: real row storage, a
+ * primary key that refuses a duplicate `clientId` with `CONFLICT`, and a
+ * `patchIf` that compares the stored row to its `where` (a `null` filter
+ * matching an absent field, as SQL NULL does). Not a mock: it exercises the
+ * adapter's read-then-conditional-write logic the way `ctx.db` would.
  */
-const createFakeDatabase = (): RateLimitDatabase => {
+const createFakeDatabase = (): RateLimitDatabase & { rows: Map<string, Record<string, unknown>> } => {
     const rows = new Map<string, Record<string, unknown>>();
     let counter = 0;
+
+    const matches = (document: Record<string, unknown>, where: Record<string, unknown> = {}): boolean =>
+        Object.entries(where).every(([field, value]) =>
+            value === null ? document[field] === undefined || document[field] === null : document[field] === value,
+        );
 
     const remove = async <T extends string>(id: Id<T>): Promise<void> => {
         rows.delete(id);
     };
 
-    const insert = async <T extends string>(table: T, document: Record<string, unknown>): Promise<Id<T>> => {
+    const insert = async <T extends string>(table: T, document: Record<string, unknown>, options?: { clientId?: string }): Promise<Id<T>> => {
         counter += 1;
-        const id = `${table}-${String(counter)}` as Id<T>;
+        const id = (options?.clientId ?? `${table}-${String(counter)}`) as Id<T>;
 
-        rows.set(id, { _id: id, ...document });
+        if (rows.has(id)) {
+            throw Object.assign(new Error(`unique constraint violation on "${table}"`), { code: "CONFLICT" });
+        }
+
+        rows.set(id, { _id: id, _table: table, ...document });
 
         return id;
     };
 
-    const patch = async <T extends string>(id: Id<T>, fields: Record<string, unknown>): Promise<void> => {
+    const patchIf = async <T extends string>(
+        _table: T,
+        id: Id<T>,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+    ): Promise<{ applied: boolean; doc: Record<string, unknown> | null }> => {
         const existing = rows.get(id);
 
-        if (existing) {
-            rows.set(id, { ...existing, ...fields });
+        if (!existing) {
+            return { applied: false, doc: null };
         }
+
+        if (!matches(existing, args.where)) {
+            return { applied: false, doc: existing };
+        }
+
+        const next = { ...existing, ...args.patch };
+
+        rows.set(id, next);
+
+        return { applied: true, doc: next };
     };
 
-    const matches = (document: Record<string, unknown>, constraints: [string, unknown][]): boolean =>
-        constraints.every(([field, value]) => document[field] === value);
+    const findFirst = async (table: string, args?: { where?: Record<string, unknown> }): Promise<Record<string, unknown> | null> =>
+        [...rows.values()].find((document) => document["_table"] === table && matches(document, args?.where)) ?? null;
 
-    const query = (): RateLimitDatabaseQuery => {
-        const constraints: [string, unknown][] = [];
-        const handle: RateLimitDatabaseQuery = {
-            first: async () => [...rows.values()].find((document) => matches(document, constraints)) ?? null,
-            withIndex: (_indexName, range) => {
-                const recorder: RateLimitDatabaseIndexRange = {
-                    eq: (field, value) => {
-                        constraints.push([field, value]);
-
-                        return recorder;
-                    },
-                    gt: () => recorder,
-                    gte: () => recorder,
-                    lt: () => recorder,
-                    lte: () => recorder,
-                };
-
-                range(recorder);
-
-                return handle;
-            },
-        };
-
-        return handle;
-    };
-
-    return { delete: remove, insert, patch, query };
+    return { delete: remove, findFirst, insert, patchIf, rows };
 };
 
 describe("db store", () => {
@@ -105,14 +99,72 @@ describe("db store", () => {
         await expect(store.get("hits:bob")).resolves.toEqual({ prev: 7, ts: 1000, value: 3 });
     });
 
-    it("honors a custom table, index, and key field", async () => {
-        expect.assertions(1);
+    it("honors a custom table and key field", async () => {
+        expect.assertions(2);
 
-        const store = createDatabaseStore({ db: createFakeDatabase(), index: "by_id", keyField: "k", table: "limits" });
+        const database = createFakeDatabase();
+        const store = createDatabaseStore({ db: database, keyField: "k", table: "limits" });
 
         await store.set("x", { ts: 1, value: 2 });
 
         await expect(store.get("x")).resolves.toEqual({ ts: 1, value: 2 });
+        expect([...database.rows.values()]).toStrictEqual([expect.objectContaining({ k: "x" })]);
+    });
+
+    it("refuses a write whose prior is no longer what is stored, and keeps the stored value", async () => {
+        expect.assertions(3);
+
+        const store = createDatabaseStore({ db: createFakeDatabase() });
+
+        await store.set("k", { ts: 1, value: 2 });
+        await store.get("k");
+
+        // The first write moves the row on from { ts: 1, value: 2 }; the second still claims that prior.
+        await expect(store.setIf?.("k", { ts: 1, value: 1 }, { ts: 1, value: 2 })).resolves.toBe(true);
+        await expect(store.setIf?.("k", { ts: 1, value: 1 }, { ts: 1, value: 2 })).resolves.toBe(false);
+        await expect(store.get("k")).resolves.toEqual({ ts: 1, value: 1 });
+    });
+
+    it("refuses a second creator of the same key instead of inserting a duplicate row", async () => {
+        expect.assertions(3);
+
+        const database = createFakeDatabase();
+        const first = createDatabaseStore({ db: database });
+        const second = createDatabaseStore({ db: database });
+
+        await expect(first.setIf?.("k", { ts: 1, value: 0 }, undefined)).resolves.toBe(true);
+        await expect(second.setIf?.("k", { ts: 1, value: 0 }, undefined)).resolves.toBe(false);
+        expect(database.rows.size).toBe(1);
+    });
+
+    it("creates the row under a UUID derived from table and key", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase();
+
+        await createDatabaseStore({ db: database }).set("k", { ts: 1, value: 0 });
+        await createDatabaseStore({ db: database, table: "other" }).set("k", { ts: 1, value: 0 });
+
+        const ids = [...database.rows.keys()];
+
+        expect(ids.every((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(id))).toBe(true);
+        expect(new Set(ids).size).toBe(2);
+    });
+
+    it("admits exactly the limit when consumes for one key race, then refuses the rest", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase();
+        const config = { login: { kind: "fixed window", period: 60_000, rate: 1 } } as const;
+        // A fresh store and limiter per call, as a handler builds them.
+        const statuses = await Promise.all(
+            Array.from({ length: 10 }, async () =>
+                new RateLimiter({ config, now: () => 0, store: createDatabaseStore({ db: database }) }).limit("login", { key: "u1" }),
+            ),
+        );
+
+        expect(statuses.filter((status) => status.ok)).toHaveLength(1);
+        expect(database.rows.size).toBe(1);
     });
 
     it("backs a RateLimiter end to end", async () => {
@@ -159,8 +211,8 @@ describe("db store", () => {
 
             await writing.limit("send", { count: 2, key: "u1" });
 
-            // A reader exposes `query` and nothing else — the shape of a QueryCtx's db.
-            const reader: RateLimitDatabaseReader = { query: database.query.bind(database) };
+            // A reader exposes `findFirst` and nothing else — the slice of a QueryCtx's db the store reads.
+            const reader: RateLimitDatabaseReader = { findFirst: database.findFirst.bind(database) };
             const reading = new RateLimiter({ config, now: () => clock.now, store: createReadOnlyDatabaseStore({ db: reader }) });
 
             // The exact figure the writing store would report: 3 minus the 2 taken.
@@ -173,7 +225,7 @@ describe("db store", () => {
 
             // Failing loudly beats appearing to consume budget and not doing so.
             const database = createFakeDatabase();
-            const reader: RateLimitDatabaseReader = { query: database.query.bind(database) };
+            const reader: RateLimitDatabaseReader = { findFirst: database.findFirst.bind(database) };
             const limiter = new RateLimiter({
                 config: { send: { kind: "token bucket", period: 1000, rate: 3 } },
                 store: createReadOnlyDatabaseStore({ db: reader }),
@@ -190,7 +242,7 @@ describe("db store", () => {
             // Error would be classified as a store outage and swallowed by
             // failOpen — the exact misuse this store exists to surface.
             const database = createFakeDatabase();
-            const reader: RateLimitDatabaseReader = { query: database.query.bind(database) };
+            const reader: RateLimitDatabaseReader = { findFirst: database.findFirst.bind(database) };
             const limiter = new RateLimiter({
                 config: { send: { kind: "token bucket", period: 1000, rate: 3 } },
                 store: createReadOnlyDatabaseStore({ db: reader }),
