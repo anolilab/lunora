@@ -1,14 +1,14 @@
 /**
  * The package's own tables, installed with `defineSchema(...).extend(privacyExtension)`.
  * They are prefixed `privacy_` by the extension key. The schema holds the request
- * state, its event log, the retention holds, the archive of records kept past
- * erasure, and the tombstones a restore needs to re-apply erasures.
+ * state, its event log, and the archive of records kept past erasure. Tombstones are
+ * not here: they must survive a restore of this database, so the app keeps them elsewhere.
  */
 import type { SchemaExtension, TableDefinition } from "@lunora/server";
 import { defineSchemaExtension, defineTable, v } from "@lunora/server";
 
-/** The five table names, before the `privacy_` prefix. */
-export type PrivacyTableName = "archive" | "events" | "holds" | "requests" | "tombstones";
+/** The three table names, before the `privacy_` prefix. */
+export type PrivacyTableName = "archive" | "events" | "requests";
 
 export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDefinition>, "privacy"> = defineSchemaExtension("privacy", {
     tables: {
@@ -31,21 +31,11 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
             requestId: v.string(),
         }).index("byRequest", ["requestId", "at"]),
 
-        holds: defineTable({
-            datasetId: v.string(),
-            requestId: v.optional(v.string()),
-            retainUntil: v.number(),
-            rule: v.string(),
-            subjectId: v.string(),
-        }).index("bySubject", ["subjectId"]),
-
         requests: defineTable({
             dueAt: v.number(),
-            errorMessage: v.optional(v.string()),
             erasureGraceUntil: v.optional(v.number()),
             expiresAt: v.optional(v.number()),
             extendedDueAt: v.optional(v.number()),
-            progress: v.number(),
             reason: v.optional(v.string()),
             receivedAt: v.number(),
             /** The id the package hands out. Stored as a column so the app's table row id stays the app's own. */
@@ -63,17 +53,9 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
             storageKey: v.optional(v.string()),
             subjectId: v.string(),
             type: v.union(v.literal("export"), v.literal("erasure")),
-            verifiedAt: v.optional(v.number()),
-            workflowInstanceId: v.optional(v.string()),
         })
             .index("byRequestId", ["requestId"])
             .index("bySubject", ["subjectId", "type"])
             .index("byStatus", ["status", "dueAt"]),
-
-        tombstones: defineTable({
-            erasedAt: v.number(),
-            scope: v.string(),
-            subjectKey: v.string(),
-        }).index("bySubjectKey", ["subjectKey"]),
     },
 });

@@ -113,7 +113,7 @@ interface Privacy {
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
     /** The subject's download link for a finished export. Refused for anyone but the subject, and once expired. */
     readonly downloadUrl: (input: { requestId: string }) => Promise<string>;
-    /** The subject's own requests that are still open. */
+    /** Every request of the subject, in every status, newest first. A finished erasure's requests no longer carry the subject's id. */
     readonly myRequests: () => Promise<ReadonlyArray<RequestRecord>>;
     readonly requestErasure: () => Promise<RequestRecord>;
     readonly requestExport: () => Promise<RequestRecord>;
@@ -267,10 +267,9 @@ const tickRequests = async (scope: Scope): Promise<{ readonly approaching: Reado
 
 /** The subject's download link. A request for someone else reads as not found, and the link is refused once expired. */
 const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> => {
-    const { subjectId } = callerOf(scope);
-    const record = await requireRequest(scope.ports.store, requestId);
+    const record = await requireOwnedRequest(scope.ports.store, requestId, callerOf(scope).subjectId);
 
-    if (record.subjectId !== subjectId || record.type !== "export") {
+    if (record.type !== "export") {
         throw new LunoraError("NOT_FOUND", `No export with id ${requestId}.`);
     }
 
@@ -344,10 +343,9 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
         downloadUrl: async ({ requestId }) => downloadUrlFor(scope, requestId),
 
         myRequests: async () => {
-            const { subjectId } = callerOf(scope);
-            const open = await listOpen(scope);
+            const requests = await ports.store.listForSubject(callerOf(scope).subjectId);
 
-            return open.filter((record) => record.subjectId === subjectId);
+            return requests.toSorted((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
         },
 
         requestErasure: async () => {

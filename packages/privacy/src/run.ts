@@ -589,10 +589,8 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 
 export {
     type ArchivePort,
-    collectPart,
     type DataPort,
     eraseDataset,
-    eraseSubjectFiles,
     type ErasureOutcome,
     erasureRun,
     expireRequestFiles,

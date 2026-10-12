@@ -60,6 +60,11 @@ const awaitsResponse = (status: RequestStatus): boolean => !isTerminal(status) &
 /** Whether a value read from outside the package (a step result, a row) is a known status. */
 const isRequestStatus = (value: string): value is RequestStatus => Object.hasOwn(TRANSITIONS, value);
 
+/** Every status that is not terminal, for a `listOpen` that reads a status index once per status. */
+const OPEN_STATUSES: ReadonlyArray<RequestStatus> = Object.keys(TRANSITIONS)
+    .filter((status) => isRequestStatus(status))
+    .filter((status) => !isTerminal(status));
+
 /** Whether {@link TRANSITIONS} allows the move. */
 const canTransition = (from: RequestStatus, to: RequestStatus): boolean => TRANSITIONS[from].includes(to);
 
@@ -133,6 +138,7 @@ export {
     isRequestStatus,
     isTerminal,
     MIN_DRAIN_BUDGET_DAYS,
+    OPEN_STATUSES,
     type RequestStatus,
     type RequestType,
     transition,
