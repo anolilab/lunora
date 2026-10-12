@@ -12,14 +12,11 @@ erasure, and retention holds for records the law says to keep.
 
 ## What is built
 
-- `addCalendarMonths`, `dueAt`, `extendedDueAt`: the Art. 12(3) deadline, counted
-  in calendar months under Reg. 1182/71 Art. 3(2)(c).
-- `retain`, `retainUntil`: a named retention period, from the end of the calendar
-  year or from a date.
-- `checkCoverage`: flags a table that no dataset covers and that no exclusion
-  explains.
-- `articlesFor`: decides whether a dataset's export falls under Art. 15 only, or
-  under Art. 15 and 20.
+- `retain`: a retention hold on a table's rows, naming a rule from a preset.
+- `definePrivacy`: the bound API. Its `tick` reports requests near or past the Art. 12(3)
+  deadline, counted in calendar months under Reg. 1182/71 Art. 3(2)(c). Its `coverage` flags a table
+  that no dataset covers and that no exclusion explains. Its export decides, per
+  dataset, whether the archive lists Art. 15 only or Art. 15 and 20.
 - `@lunora/privacy/eu`: the EU response time and erasure grace.
 - `@lunora/privacy/de`: the HGB §257 and AO §147 retention periods.
 

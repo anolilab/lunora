@@ -163,6 +163,7 @@ export {
     openRequest,
     type RequestRecord,
     type RequestStore,
+    requireRequest,
     type StepRequestRecord,
     toStepRecord,
 };

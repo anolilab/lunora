@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { privacyExtension } from "../src/index";
+import { privacyExtension } from "../src/tables";
 
 const LIFECYCLE_SOURCE = new URL("../src/lifecycle.ts", import.meta.url);
 const TABLES_SOURCE = new URL("../src/tables.ts", import.meta.url);

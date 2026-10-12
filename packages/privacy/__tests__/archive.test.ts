@@ -2,7 +2,7 @@ import { unzipSync } from "fflate";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 
-import { buildArchive, buildManifest, buildSummaryPdf, MANIFEST_FORMAT_VERSION } from "../src/index";
+import { buildArchive, buildManifest, buildSummaryPdf, MANIFEST_FORMAT_VERSION } from "../src/archive";
 
 const generatedAt = new Date("2026-10-11T10:00:00.000Z");
 

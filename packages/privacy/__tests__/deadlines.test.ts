@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addCalendarMonths, dueAt, extendedDueAt } from "../src/index";
+import { addCalendarMonths, dueAt, extendedDueAt } from "../src/deadlines";
 
 const utc = (iso: string): Date => new Date(iso);
 

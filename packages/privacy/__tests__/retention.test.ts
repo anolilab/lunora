@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { germany } from "../src/de";
-import { retain, retainUntil } from "../src/index";
+import { retain, retainUntil } from "../src/rules";
 
 const [books, voucher, , correspondence] = germany().retention;
 

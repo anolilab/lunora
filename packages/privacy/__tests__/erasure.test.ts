@@ -2,8 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { dispositionOf, drainUntilEmpty, ERASE_BATCH, verifyErasure } from "../src/erasure";
-import type { RetentionRule } from "../src/index";
-import { retain } from "../src/index";
+import type { RetentionRule } from "../src/rules";
+import { retain } from "../src/rules";
 
 const rules = new Map<string, RetentionRule>([
     ["de.correspondence", { citation: "HGB §257", id: "de.correspondence", reviewRequired: true, start: "endOfCalendarYear", years: 6 }],

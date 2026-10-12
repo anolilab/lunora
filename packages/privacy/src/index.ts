@@ -1,41 +1,28 @@
-export type { ArchiveFile, Manifest, ManifestDataset, SummaryDataset } from "./archive";
-export { buildArchive, buildManifest, buildSummaryPdf, MANIFEST_FORMAT_VERSION } from "./archive";
-export type { DataOrigin, ExportArticle, LegalBasis } from "./articles";
-export { articlesFor } from "./articles";
-export type { AuthTableNames } from "./builtins";
-export { actionCacheDataset, authDataset, documentHistoryDataset, storageObjectsDataset } from "./builtins";
-export type { CoverageProblem, TableClassification } from "./coverage";
-export { checkCoverage } from "./coverage";
-export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
-export { defineDataset, erasureOrder } from "./dataset";
+export type { DataOrigin, LegalBasis } from "./articles";
 
 /**
  * `@lunora/privacy`: data-subject rights for Lunora apps. Export (GDPR Art. 15
  * and 20), erasure (Art. 17) and retention holds. This entry holds the pure core;
  * the jurisdiction presets live at `./eu` and `./de`.
+ *
+ * The surface is what an app calls or annotates: the datasets, the bound API, the
+ * ports it implements and the retention directives. The services behind them stay
+ * internal, so the app reaches them through `definePrivacy`.
  */
-export { addCalendarMonths, dueAt, extendedDueAt } from "./deadlines";
+export type { AuthTableNames } from "./builtins";
+export { actionCacheDataset, authDataset, documentHistoryDataset, storageObjectsDataset } from "./builtins";
+export type { CoverageProblem } from "./coverage";
+export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
+export { defineDataset } from "./dataset";
 export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyPorts, PrivacyWorkflowContext } from "./define";
 export { definePrivacy } from "./define";
-export type { Disposition, RowDisposition, VerifyResult } from "./erasure";
-export { dispositionFor, dispositionOf, drainUntilEmpty, ERASE_BATCH, verifyErasure } from "./erasure";
+export type { Disposition, RowDisposition } from "./erasure";
+export { dispositionFor, ERASE_BATCH } from "./erasure";
 export type { RequestStatus, RequestType } from "./lifecycle";
-export {
-    canCancel,
-    canExtend,
-    effectiveDueAt,
-    erasureGraceUntil,
-    InvalidTransitionError,
-    isOverdue,
-    isTerminal,
-    MIN_DRAIN_BUDGET_DAYS,
-    transition,
-} from "./lifecycle";
-export type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
-export { cancelRequest, extendRequest, openRequest } from "./requests";
+export { isTerminal } from "./lifecycle";
+export type { RequestRecord, RequestStore } from "./requests";
 export type { PrivacyPolicy, PrivacyPreset, RetainDirective, RetentionRule, RetentionStart } from "./rules";
-export { retain, retainUntil } from "./rules";
-export type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
-export { runErasure, runExport } from "./run";
+export { retain } from "./rules";
+export type { DataPort, ErasureOutcome, ExportOutcome, StorePort } from "./run";
 export type { PrivacyTableName } from "./tables";
 export { privacyExtension } from "./tables";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { articlesFor } from "../src/index";
+import { articlesFor } from "../src/articles";
 
 describe(articlesFor, () => {
     it("exports provided data on consent under both Art. 15 and Art. 20", () => {
