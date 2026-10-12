@@ -107,7 +107,7 @@ specific language governing permissions and limitations under the License.
 <!-- DEPENDENCIES -->
 
 # Licenses of bundled dependencies
-The published @lunora/config artifact additionally contains code with the following licenses:
+The published @lunora/privacy artifact additionally contains code with the following licenses:
 MIT
 
 # Bundled dependencies:

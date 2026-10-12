@@ -61,8 +61,17 @@ else
     # 1 ("no match", explained below) distinct from 2 (a real grep failure, e.g. an
     # unreadable tree), which must not be reported as an empty repo.
     set +e
-    discovered="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
-    status=$?
+    # Only paths that exist: an unmatched glob is passed to grep literally, and grep then exits 2.
+    configs=()
+    for config in packages/*/vitest.config.ts examples/*/vitest.config.ts; do
+        [ -f "$config" ] && configs+=("$config")
+    done
+    discovered=""
+    status=0
+    if [ "${#configs[@]}" -gt 0 ]; then
+        discovered="$(grep -l 'name: "workerd"' "${configs[@]}" | sed 's|/vitest.config.ts||' | sort)"
+        status=$?
+    fi
     set -e
 
     if [ "$status" -gt 1 ]; then
