@@ -52,13 +52,17 @@ export const App = (): ReactElement => {
                     void submit(event);
                 }}
             >
-                <input
-                    onChange={(event) => {
-                        setDraft(event.target.value);
-                    }}
-                    placeholder="A task"
-                    value={draft}
-                />
+                <label htmlFor="new-task">
+                    New task
+                    <input
+                        id="new-task"
+                        onChange={(event) => {
+                            setDraft(event.target.value);
+                        }}
+                        placeholder="A task"
+                        value={draft}
+                    />
+                </label>
                 <button type="submit">Add</button>
             </form>
 
