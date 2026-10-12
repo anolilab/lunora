@@ -1,3 +1,10 @@
+## @lunora/db [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.199...@lunora/db@1.0.0-alpha.200) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.198
+
 ## @lunora/db [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.198...@lunora/db@1.0.0-alpha.199) (2026-10-12)
 
 

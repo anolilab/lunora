@@ -557,6 +557,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PatchIfResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `Permission` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -3891,14 +3895,6 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
-### `RateLimitDbIndexRange` (interface)
-
-Re-exported from `@lunora/ratelimit` — signature tracked at its source.
-
-### `RateLimitDbQuery` (interface)
-
-Re-exported from `@lunora/ratelimit` — signature tracked at its source.
-
 ### `RateLimitDbReader` (interface)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
@@ -5548,6 +5544,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PaginationResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PatchIfResult` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7590,6 +7590,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PaginationResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PatchIfResult` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

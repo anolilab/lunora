@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.59...@lunora/platform@1.0.0-alpha.60) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
 ## @lunora/platform [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.58...@lunora/platform@1.0.0-alpha.59) (2026-10-12)
 
 ### Bug Fixes

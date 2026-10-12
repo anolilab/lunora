@@ -35,6 +35,11 @@ interface RateLimiterOptions<Names extends string> {
 const storageKeyFor = (name: string, key: string | undefined): string =>
     key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
 
+/** Read-decide-write rounds one consume makes before failing closed; see `RateLimiter.decide`. */
+const MAX_DECIDE_ATTEMPTS = 16;
+
+const isThenable = <T>(value: PromiseLike<T> | T): value is PromiseLike<T> => typeof (value as PromiseLike<T> | undefined)?.then === "function";
+
 // The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
 const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
     normalize ? (key: string): string => ipRateLimitKey(normalize(key)) : ipRateLimitKey;
@@ -153,6 +158,53 @@ class RateLimiter<Names extends string = string> {
         await Promise.resolve(this.store.delete(storageKeyFor(name, this.normalizeKey(args.key))));
     }
 
+    /**
+     * Read, evaluate and write one consume. A store that reports the write lost
+     * (`setIf` resolved `false`: another consume changed the value since this one
+     * read it) gets a fresh read and a fresh decision, so the admission always
+     * rests on the value the write replaced. Bounded: each lost round means some
+     * other consume was admitted (a refusal writes nothing), and past
+     * {@link MAX_DECIDE_ATTEMPTS} the call is refused with `retryAfter: 0` rather
+     * than admitted.
+     */
+    private async decide(
+        config: RateLimitConfig,
+        storageKey: string,
+        options: { consume: boolean; count: number; reserve: boolean },
+    ): Promise<RateLimitStatus> {
+        for (let attempt = 0; attempt < MAX_DECIDE_ATTEMPTS; attempt += 1) {
+            // Await the read only when the store is asynchronous. An `await` on a plain
+            // value still yields, and every consume started in the same tick would then
+            // read the same prior before any of them wrote: a synchronous store (memory,
+            // SQL) admitted all of them. Without the yield, read, decide and write run as
+            // one step. An asynchronous store yields at its own I/O regardless.
+            const read = this.store.get(storageKey);
+            // eslint-disable-next-line no-await-in-loop -- a retry must re-read what the lost write replaced
+            const prior = isThenable(read) ? await read : read;
+            const { status, value } = evaluate(config, prior, { ...options, now: this.now() });
+
+            if (value === undefined) {
+                return status;
+            }
+
+            if (this.store.setIf === undefined) {
+                // eslint-disable-next-line no-await-in-loop -- returns on the first pass; only `setIf` loops
+                await this.store.set(storageKey, value);
+
+                return status;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            if (await this.store.setIf(storageKey, value, prior)) {
+                return status;
+            }
+        }
+
+        // Refused, not thrown: an error would reach the middleware's failure policy,
+        // and `failOpen` would then admit exactly the call contention kept out.
+        return { ok: false, reason: "rate", retryAfter: 0 };
+    }
+
     private normalizeKey(key: string | undefined): string | undefined {
         return key === undefined ? undefined : this.normalize(key);
     }
@@ -199,17 +251,7 @@ class RateLimiter<Names extends string = string> {
         }
 
         const storageKey = storageKeyFor(name, normalizedKey);
-        const prior = await this.store.get(storageKey);
-        const { status, value } = evaluate(config, prior, {
-            consume,
-            count,
-            now: this.now(),
-            reserve: args.reserve ?? false,
-        });
-
-        if (value !== undefined) {
-            await this.store.set(storageKey, value);
-        }
+        const status = await this.decide(config, storageKey, { consume, count, reserve: args.reserve ?? false });
 
         if (!status.ok && args.throws) {
             throw new RateLimitError(status);

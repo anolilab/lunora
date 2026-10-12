@@ -2,7 +2,9 @@
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
         "moduleResolution": "bundler",
-        "types": ["node"]
+        // The workers types are for the `workerd` test tier only (`__tests__/workerd/`);
+        // `src/` stays runtime-agnostic.
+        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
     },
     "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
 }

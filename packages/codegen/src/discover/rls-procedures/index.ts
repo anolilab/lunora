@@ -78,7 +78,7 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"
  * policy-gated table ONLY via a batch method would slip past the
  * `rls-uncovered-table` advisor.
  */
-const WRITE_METHODS = new Set(["delete", "deleteMany", "insert", "insertMany", "patch", "patchMany", "replace"]);
+const WRITE_METHODS = new Set(["delete", "deleteMany", "insert", "insertMany", "patch", "patchIf", "patchMany", "replace"]);
 
 // ---------------------------------------------------------------------------
 // Top-level discovery

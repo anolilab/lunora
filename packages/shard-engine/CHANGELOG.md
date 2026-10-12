@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.120...@lunora/shard-engine@1.0.0-alpha.121) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.105
+
 ## @lunora/shard-engine [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.119...@lunora/shard-engine@1.0.0-alpha.120) (2026-10-12)
 
 ### Bug Fixes

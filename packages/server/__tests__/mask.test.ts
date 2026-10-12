@@ -96,6 +96,11 @@ interface FakeDatabase {
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+        patchIf: (
+            tableName: string,
+            id: string,
+            args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
         patchWhere: (
             tableName: string,
             args: { patch: Record<string, unknown>; where: Record<string, unknown> },
@@ -197,6 +202,13 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             async patch(id, patchValue) {
                 calls.push({ args: patchValue, method: "patch", tableOrId: id });
+            },
+            async patchIf(tableName, id, args) {
+                calls.push({ args, method: "patchIf", tableOrId: id });
+
+                const row = rowsOfTable(tableName).find((candidate) => candidate["_id"] === id);
+
+                return { applied: true, doc: row ? { ...row, ...args.patch } : null };
             },
             async patchWhere(tableName, args, options) {
                 calls.push({ args: { ...args, options }, method: "patchWhere", tableOrId: tableName });
@@ -1334,6 +1346,37 @@ describe("mask — value oracle via filter/sort fails closed (regression)", () =
         // Must fail closed and never reach the writer.
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "patchWhere")).toBe(false);
+    });
+
+    it("patchIf with a masked column in its where throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", table: "users" }]);
+
+        const handler = lunora.mutation
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .mutation(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db.patchIf("users", "u1", { patch: { status: "flagged" }, where: { ssn: "123-45-6789" } }),
+            );
+
+        // `applied` alone answers "does the hidden value equal my guess".
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "patchIf")).toBe(false);
+    });
+
+    it("patchIf masks the row it returns", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", ssn: "123-45-6789", status: "ok", table: "users" }]);
+
+        const handler = lunora.mutation
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .mutation(async ({ ctx }) => (ctx as unknown as TestContext).db.patchIf("users", "u1", { patch: { status: "flagged" }, where: { status: "ok" } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({
+            applied: true,
+            doc: expect.not.objectContaining({ ssn: "123-45-6789" }),
+        });
     });
 
     it("findMany with a baseWhere on a masked column throws MASK_UNSUPPORTED", async () => {

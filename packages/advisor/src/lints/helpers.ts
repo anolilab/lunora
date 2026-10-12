@@ -21,7 +21,7 @@ interface CallSiteRow {
  * lint cannot read which field a patch sets, so a patch counts as progress. A sweep
  * that patches a field the range does not depend on is therefore not reported.
  */
-const ROW_CHANGING_WRITES: ReadonlySet<string> = new Set(["delete", "deleteMany", "hardDelete", "patch", "patchMany", "patchWhere", "replace"]);
+const ROW_CHANGING_WRITES: ReadonlySet<string> = new Set(["delete", "deleteMany", "hardDelete", "patch", "patchIf", "patchMany", "patchWhere", "replace"]);
 
 /**
  * Whether one change can take a row out of the range a read selects. A delete or

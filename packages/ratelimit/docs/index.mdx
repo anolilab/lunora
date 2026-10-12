@@ -237,8 +237,9 @@ value forward to the current clock, which is a pure read; only `limit`/`reset`
 write, and those reject with a message naming `createDbStore` as the fix.
 
 `createSqlStore` creates its table (default `_lunora_rate_limits`) if missing.
-`createDbStore` expects a table you declare in your schema with a key column and
-its index (defaults: table `rateLimits`, index `by_key`, key column `key`):
+`createDbStore` expects a table you declare in your schema with a key column,
+indexed (defaults: table `rateLimits`, key column `key`). It works on a
+shard-local table and on a `.global()` one:
 
 ```ts
 import { defineTable, v } from "lunorash/server";
@@ -252,8 +253,10 @@ export const rateLimits = defineTable({
 ```
 
 <Callout type="info">
-    Inside a Durable Object the input gate serializes the limiter's read-modify-write against storage, so both SQL- and ORM-backed stores are atomic against
-    concurrent calls without an explicit transaction. Driving `createSqlStore` outside a DO, you own serialization yourself.
+    Every store admits exactly the configured rate under concurrent consumes. `createMemoryStore` and `createSqlStore` are synchronous, and the limiter reads,
+    decides and writes through them in one step. `createDbStore` writes through `ctx.db.patchIf` with the value it read as the condition, and creates a key's
+    row under an id derived from the key, so a consume that raced another one loses its write, re-reads, and decides again. That holds on a `.global()` table
+    too, where D1 calls do not hold the Durable Object's input gate.
 </Callout>
 
 ## Token budgets

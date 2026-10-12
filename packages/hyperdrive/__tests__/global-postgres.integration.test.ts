@@ -99,6 +99,41 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
         await harness.close();
     });
 
+    describe("patchIf — one conditional UPDATE", () => {
+        it("applies only while the stored row matches, and reports the row either way", async () => {
+            expect.assertions(3);
+
+            const writer = await setupTodos();
+
+            await seed(writer);
+
+            await expect(writer.patchIf?.("todos", "t1", { patch: { seq: 10 }, where: { seq: 99 } })).resolves.toStrictEqual({
+                applied: false,
+                doc: expect.objectContaining({ _id: "t1", seq: 1 }),
+            });
+            await expect(writer.patchIf?.("todos", "t1", { patch: { seq: 10 }, where: { archived: false, seq: 1 } })).resolves.toStrictEqual({
+                applied: true,
+                doc: expect.objectContaining({ _id: "t1", seq: 10 }),
+            });
+            await expect(writer.get("t1")).resolves.toMatchObject({ seq: 10 });
+        });
+
+        it("lets exactly one of ten concurrent compare-and-set patches win", async () => {
+            expect.assertions(2);
+
+            const writer = await setupTodos();
+
+            await seed(writer);
+
+            const results = await Promise.all(
+                Array.from({ length: 10 }, async () => writer.patchIf?.("todos", "t2", { patch: { seq: 3 }, where: { seq: 2 } })),
+            );
+
+            expect(results.filter((result) => result?.applied)).toHaveLength(1);
+            await expect(writer.get("t2")).resolves.toMatchObject({ seq: 3 });
+        });
+    });
+
     describe("findMany — where filtering", () => {
         it("filters by an equality field, defaulting to creation+id order", async () => {
             expect.assertions(3);

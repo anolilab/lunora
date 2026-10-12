@@ -1,3 +1,22 @@
+## @lunora/codegen [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.292...@lunora/codegen@1.0.0-alpha.293) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.208
+* **@lunora/agent:** upgraded to 1.0.0-alpha.197
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/queue:** upgraded to 1.0.0-alpha.99
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.118
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.105
+* **@lunora/do:** upgraded to 1.0.0-alpha.204
+* **@lunora/server:** upgraded to 1.0.0-alpha.192
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+
 ## @lunora/codegen [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.291...@lunora/codegen@1.0.0-alpha.292) (2026-10-12)
 
 ### Features

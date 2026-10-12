@@ -67,6 +67,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",
         },
+        conditionalWrites: {
+            level: "native",
+            note: "SQLite decides it on both paths: shard-local in one synchronous better-sqlite3 run, .global() in one conditional UPDATE on the host's own SQLite file (one node, so nothing to replicate)",
+        },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         serverReactors: {
             level: "emulated",

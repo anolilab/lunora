@@ -2836,3 +2836,129 @@ describe("createSqlCtxDb — groupBy decodes its group key", () => {
         expect(groups.find((group) => group.key["archived"] === false)).toStrictEqual({ key: { archived: false }, value: 1 });
     });
 });
+
+describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
+    const counterSchema: SchemaLike = {
+        tables: {
+            counters: {
+                indexes: [{ fields: ["name"], name: "by_name" }],
+                shape: { name: col("string"), prev: optionalCol("number"), value: col("number") },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    let database: DatabaseSync;
+
+    /** `node:sqlite` exec; `run` reports the changed-row count so the no-RETURNING (MySQL) path has a real signal. */
+    const execOver = (db: DatabaseSync): SqlCtxExec => {
+        return {
+            all: (query, parameters) => Promise.resolve(db.prepare(query).all(...(parameters as never[]))),
+            run: (query, parameters) => Promise.resolve({ rowsAffected: Number(db.prepare(query).run(...(parameters as never[])).changes) }),
+        };
+    };
+
+    const makeWriter = (dialect: SqlDialect = makeSqliteDialect(), exec: SqlCtxExec = execOver(database)) =>
+        createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect, exec, schema: counterSchema });
+
+    /** The no-RETURNING dialect shape: the affected-row count is the CAS signal. */
+    const affectedRowsDialect = (): SqlDialect => {
+        return { ...makeSqliteDialect(), affectedRows: (result) => result.rowsAffected, supportsReturning: false };
+    };
+
+    beforeEach(() => {
+        database = new DatabaseSync(":memory:");
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    it("applies when the stored row matches and returns the decoded row as written", async () => {
+        expect.assertions(2);
+
+        const writer = makeWriter();
+        const id = await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", id, { patch: { value: 2 }, where: { value: 1 } })).resolves.toStrictEqual({
+            applied: true,
+            doc: expect.objectContaining({ _id: id, name: "a", value: 2 }),
+        });
+        await expect(writer.get(id)).resolves.toMatchObject({ value: 2 });
+    });
+
+    it("leaves a row that does not match untouched", async () => {
+        expect.assertions(2);
+
+        const writer = makeWriter();
+        const id = await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", id, { patch: { value: 9 }, where: { value: 5 } })).resolves.toStrictEqual({
+            applied: false,
+            doc: expect.objectContaining({ _id: id, value: 1 }),
+        });
+        await expect(writer.get(id)).resolves.toMatchObject({ value: 1 });
+    });
+
+    it("matches an absent optional field with a null filter", async () => {
+        expect.assertions(2);
+
+        const writer = makeWriter();
+        const id = await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", id, { patch: { prev: 4 }, where: { prev: null, value: 1 } })).resolves.toMatchObject({ applied: true });
+        await expect(writer.patchIf?.("counters", id, { patch: { prev: 5 }, where: { prev: null } })).resolves.toMatchObject({ applied: false });
+    });
+
+    it("reports a missing row as not applied with a null doc", async () => {
+        expect.assertions(1);
+
+        const writer = makeWriter();
+
+        await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", "missing", { patch: { value: 2 }, where: {} })).resolves.toStrictEqual({ applied: false, doc: null });
+    });
+
+    it.each([
+        ["RETURNING", makeSqliteDialect],
+        ["affected rows", affectedRowsDialect],
+    ])("lets exactly one of ten concurrent compare-and-set patches win (%s)", async (_label, dialect) => {
+        expect.assertions(2);
+
+        const writer = makeWriter(dialect());
+        const id = await writer.insert("counters", { name: "a", value: 0 });
+
+        const results = await Promise.all(
+            Array.from({ length: 10 }, async () => writer.patchIf?.("counters", id, { patch: { value: 1 }, where: { value: 0 } })),
+        );
+
+        expect(results.filter((result) => result?.applied)).toHaveLength(1);
+        await expect(writer.get(id)).resolves.toMatchObject({ value: 1 });
+    });
+
+    it("gives up with a conflict when every attempt loses the row to another writer", async () => {
+        expect.assertions(2);
+
+        const base = execOver(database);
+        let updates = 0;
+        // Every conditional UPDATE finds the row's version moved by someone else first.
+        const contended: SqlCtxExec = {
+            ...base,
+            all: async (query, parameters) => {
+                if (/^update/iu.test(query)) {
+                    updates += 1;
+                    database.prepare(`UPDATE "counters" SET "_version" = COALESCE("_version", 0) + 1`).run();
+                }
+
+                return base.all(query, parameters);
+            },
+        };
+        const id = await makeWriter().insert("counters", { name: "a", value: 0 });
+
+        await expect(makeWriter(makeSqliteDialect(), contended).patchIf?.("counters", id, { patch: { value: 1 }, where: { value: 0 } })).rejects.toMatchObject({
+            code: "CONFLICT",
+        });
+        expect(updates).toBe(16);
+    });
+});

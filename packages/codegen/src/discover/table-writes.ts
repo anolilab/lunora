@@ -10,7 +10,7 @@ import { isDatabaseAccessor } from "./database-calls";
 const BY_ID = new Set(["delete", "hardDelete", "patch", "replace", "restore"]);
 
 /** `ctx.db.<method>("table", …)` writes that name the table first. `insert` is `discoverInserts`'. */
-const BY_NAME = new Set(["insertMany", "insertManyUnsafe", "patchWhere"]);
+const BY_NAME = new Set(["insertMany", "insertManyUnsafe", "patchIf", "patchWhere"]);
 
 /** `ctx.db.<table>.<method>(…)` facade writes — the table is the receiver's property name. */
 const FACADE_WRITES = new Set([

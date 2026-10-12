@@ -192,6 +192,11 @@ interface MaskDatabase {
     ) => Promise<(string | null)[]>;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patchIf?: (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
     patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
     patchWhere?: (
         tableName: string,
@@ -910,6 +915,22 @@ const wrapDatabase = <Context>(
             }
 
             return base.deleteWhere(tableName, where, options);
+        },
+
+        // `applied` answers "did the stored row match `where`", so a masked column
+        // in `where` is a value oracle exactly as in a read; the returned row is
+        // masked like `get`'s.
+        async patchIf(tableName, id, args) {
+            assertWhereAllowed(tableName, args.where, "patchIf");
+
+            if (base.patchIf === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.patchIf on "${tableName}" is unsupported: this writer has no conditional write`);
+            }
+
+            const result = await base.patchIf(tableName, id, args);
+            const columns = perTable.get(tableName);
+
+            return result.doc && columns ? { applied: result.applied, doc: maskRow(result.doc, columns, context) } : result;
         },
 
         async patchWhere(tableName, args, options) {

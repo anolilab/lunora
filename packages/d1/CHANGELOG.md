@@ -1,3 +1,17 @@
+## @lunora/d1 [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.170...@lunora/d1@1.0.0-alpha.171) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.172
+* **@lunora/do:** upgraded to 1.0.0-alpha.204
+
 ## @lunora/d1 [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.169...@lunora/d1@1.0.0-alpha.170) (2026-10-12)
 
 

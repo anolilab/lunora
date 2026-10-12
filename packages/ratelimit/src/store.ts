@@ -47,15 +47,12 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * SQLite-backed store for durable, per-DO rate-limit state. Persists each
  * `(name, key)` pair as one row so limits survive hibernation and eviction.
  *
- * **Atomicity:** the store does not wrap individual operations in an explicit
- * SQL transaction. Inside a Durable Object the DO's input gate serializes
- * every RPC call against the storage, so the limiter's read-modify-write
- * sequence runs to completion without interleaving — this is the same
- * guarantee the surrounding `evaluate()` step depends on. **Outside a DO**
- * (e.g. driving `createSqlStore` from a long-lived `node:sqlite` connection in
- * tests or a custom host) the caller is responsible for serialization; the
- * SQL surface used here (`exec`) is not a substitute for transactional
- * isolation across concurrent invocations.
+ * **Atomicity:** `exec` is synchronous and the limiter does not yield between a
+ * synchronous store's read and its write, so one consume's read, decision and
+ * write run as a single JavaScript step. No other call on the same isolate can
+ * interleave, which is what makes concurrent consumes admit exactly the
+ * configured rate. Two isolates sharing one SQLite file (not a Durable Object
+ * case) are not covered; serialize those yourself.
  */
 const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;
@@ -99,25 +96,6 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
 };
 
 /**
- * The slice of an index-range builder the store uses. Mirrors `@lunora/server`'s
- * `IndexRangeBuilder` field-for-field so the real `ctx.db` query builder is
- * assignable; only `eq` is exercised.
- */
-interface RateLimitDatabaseIndexRange {
-    eq: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    gt: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    gte: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    lt: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    lte: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-}
-
-/** The slice of a `ctx.db` table query the store relies on. */
-interface RateLimitDatabaseQuery {
-    first: () => Promise<Record<string, unknown> | null>;
-    withIndex: (indexName: string, range: (q: RateLimitDatabaseIndexRange) => RateLimitDatabaseIndexRange) => RateLimitDatabaseQuery;
-}
-
-/**
  * The READ slice — everything the store needs to answer `RateLimiter.getValue`
  * and `check`, which the docs describe as projecting the stored value forward to
  * the current clock. A `QueryCtx`'s `ctx.db` is a reader and satisfies this.
@@ -127,9 +105,14 @@ interface RateLimitDatabaseQuery {
  * at all — every remaining-quota display had to cast, and a cast that appears
  * often enough stops carrying information. The distinction was already in the
  * methods: `getValue`/`check` read, `limit`/`reset` write.
+ *
+ * `findFirst` rather than `query(table).withIndex(...)`: a `.global()` table's
+ * reader has no `withIndex`, so the indexed builder failed every read there.
+ * `findFirst` routes to whichever backend owns the table, and an equality on the
+ * key column still uses its index.
  */
 interface RateLimitDatabaseReader {
-    query: (table: string) => RateLimitDatabaseQuery;
+    findFirst: (table: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
 }
 
 /**
@@ -140,15 +123,17 @@ interface RateLimitDatabaseReader {
  */
 interface RateLimitDatabase extends RateLimitDatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
-    insert: <T extends string>(table: T, document: Record<string, unknown>) => Promise<Id<T>>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    insert: <T extends string>(table: T, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<Id<T>>;
+    patchIf: <T extends string>(
+        table: T,
+        id: Id<T>,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
 }
 
-/** The table/column/index knobs shared by the read-only and read-write stores. */
+/** The table/column knobs shared by the read-only and read-write stores. */
 interface DatabaseStoreLocation {
-    /** Index that resolves a row by its key column. Defaults to `by_key`. */
-    index?: string;
-    /** Column storing the opaque key. Defaults to `key`. */
+    /** Column storing the opaque key. Defaults to `key`. Index it: every consume reads by it. */
     keyField?: string;
     /** Table holding one row per `(name, key)` pair. Defaults to `rateLimits`. */
     table?: string;
@@ -164,10 +149,34 @@ interface ReadOnlyDatabaseStoreOptions extends DatabaseStoreLocation {
     db: RateLimitDatabaseReader;
 }
 
+const toHex = (byte: number): string => byte.toString(16).padStart(2, "0");
+
 /**
- * Store backed by a Lunora table through `ctx.db`, for durable per-DO limits
- * inside a procedure (the procedure context exposes no raw SQL). Declare a
- * table with the key column and its index, e.g.
+ * The row id a `(table, storageKey)` pair is created under: a UUID (version 8,
+ * RFC 9562's custom layout) taken from the pair's SHA-256. Concurrent first
+ * consumes for one key then insert the SAME primary key, so the engine admits
+ * one and refuses the rest, where random ids let every one of them create a row.
+ */
+const rowIdFor = async (table: string, storageKey: string): Promise<string> => {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${table}\u0000${storageKey}`)));
+    const bytes = [...digest.subarray(0, 16)];
+
+    // Version 8 in the high nibble of byte 6, variant 10 in the top bits of byte 8.
+    bytes[6] = 0x80 + ((bytes[6] as number) % 16);
+    bytes[8] = 0x80 + ((bytes[8] as number) % 64);
+
+    const hex = bytes.map((byte) => toHex(byte)).join("");
+
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
+const isConflict = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === "CONFLICT";
+
+/**
+ * Store backed by a Lunora table through `ctx.db`, for durable limits inside a
+ * procedure (the procedure context exposes no raw SQL). Works on a shard-local
+ * table and on a `.global()` one. Declare a table with the key column and its
+ * index, e.g.
  *
  * ```ts
  * rateLimits: defineTable({
@@ -178,35 +187,36 @@ interface ReadOnlyDatabaseStoreOptions extends DatabaseStoreLocation {
  * }).index("by_key", ["key"])
  * ```
  *
- * Each operation is a read-then-write; inside a mutation/action that pair runs
- * under the DO's input gate, so it is atomic against concurrent calls.
+ * **Atomic against concurrent consumes.** `setIf` writes only if the row still
+ * holds the value `get` returned: an existing row through `ctx.db.patchIf` with
+ * that value as its `where`, a new row through an `insert` under an id derived
+ * from the key, which a concurrent creator's insert collides with. A consume
+ * that loses either race gets `false` back and the limiter reads and decides
+ * again, so a limit of 1 admits one caller however many arrive together — on a
+ * `.global()` table too, where D1 calls do not hold the Durable Object's input
+ * gate.
  *
  * **Consumption commits with the procedure.** A mutation's `ctx.db` writes ride
  * its storage transaction, so a handler that throws after `limit()` rolls the
  * consumed unit back with everything else — inside a mutation this store counts
  * successful calls, not attempts. To charge every attempt (a login limiter),
  * consume from an action, where each write commits on its own, or return a
- * failure value from the mutation instead of throwing.
+ * failure value from the mutation instead of throwing. A `.global()` table's
+ * row lives in D1, outside the DO transaction, so there the unit stays spent.
  */
 const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const { db } = options;
     const table = options.table ?? "rateLimits";
-    const index = options.index ?? "by_key";
     const keyField = options.keyField ?? "key";
 
-    // The limiter's hot path is get() immediately followed by set() under the
-    // DO input gate (read-modify-write). Caching the row id (or its absence)
-    // resolved by the get()'s find() lets the following set()/delete() patch or
-    // insert directly, halving the index lookups per consuming limit() (was
-    // find-in-get + find-in-set; now one find total). The cache is invalidated
-    // on every write so a subsequent get() re-reads, never serving stale state.
+    // The limiter's hot path is get() immediately followed by set(). Caching the
+    // row id (or its absence) resolved by get()'s find() lets set()/delete()
+    // write directly instead of repeating the lookup. A lost race or a write
+    // drops the entry, so the next get() re-reads.
     const idCache = new Map<string, Id<string> | undefined>();
 
     const find = async (storageKey: string): Promise<Record<string, unknown> | null> => {
-        const row = await db
-            .query(table)
-            .withIndex(index, (q) => q.eq(keyField, storageKey))
-            .first();
+        const row = await db.findFirst(table, { where: { [keyField]: storageKey } });
 
         idCache.set(storageKey, row ? (row._id as Id<string>) : undefined);
 
@@ -214,18 +224,39 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     };
 
     // The row id resolved by the most recent find(): the id when a row matched,
-    // or a cached `undefined` (tracked via `idCache.has()`) when it didn't. A
-    // missing cache entry means no lookup is cached (the caller must find()).
-    // Re-running find() only when the cache is cold is what saves the redundant
-    // lookup on the get()→set() hot path.
+    // or a cached `undefined` (tracked via `idCache.has()`) when it didn't.
     const resolveId = async (storageKey: string): Promise<Id<string> | undefined> => {
-        if (idCache.has(storageKey)) {
-            return idCache.get(storageKey);
+        if (!idCache.has(storageKey)) {
+            await find(storageKey);
         }
 
-        await find(storageKey);
-
         return idCache.get(storageKey);
+    };
+
+    const documentFor = (storageKey: string, value: RateLimitValue): Record<string, unknown> => {
+        const document: Record<string, unknown> = { [keyField]: storageKey, ts: value.ts, value: value.value };
+
+        if (value.prev !== undefined) {
+            document.prev = value.prev;
+        }
+
+        return document;
+    };
+
+    const create = async (storageKey: string, document: Record<string, unknown>): Promise<boolean> => {
+        try {
+            idCache.set(storageKey, await db.insert(table, document, { clientId: await rowIdFor(table, storageKey) }));
+
+            return true;
+        } catch (error) {
+            if (isConflict(error)) {
+                idCache.delete(storageKey);
+
+                return false;
+            }
+
+            throw error;
+        }
     };
 
     return {
@@ -254,18 +285,48 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
             return value;
         },
         set: async (storageKey, value) => {
-            const id = await resolveId(storageKey);
-            const document: Record<string, unknown> = { [keyField]: storageKey, ts: value.ts, value: value.value };
-
-            if (value.prev !== undefined) {
-                document.prev = value.prev;
-            }
+            const document = documentFor(storageKey, value);
+            let id = await resolveId(storageKey);
 
             if (id === undefined) {
-                idCache.set(storageKey, await db.insert(table, document));
-            } else {
-                await db.patch(id, document);
+                if (await create(storageKey, document)) {
+                    return;
+                }
+
+                // Someone else created the row first: overwrite it, as `set` always does.
+                await find(storageKey);
+                id = idCache.get(storageKey);
             }
+
+            if (id !== undefined) {
+                await db.patchIf(table, id, { patch: document, where: {} });
+            }
+        },
+        setIf: async (storageKey, value, prior) => {
+            const document = documentFor(storageKey, value);
+
+            if (prior === undefined) {
+                // No row was read: create it, or lose to whoever did.
+                return create(storageKey, document);
+            }
+
+            const id = await resolveId(storageKey);
+
+            if (id === undefined) {
+                return false;
+            }
+
+            const { applied } = await db.patchIf(table, id, {
+                patch: document,
+                // eslint-disable-next-line unicorn/no-null -- an absent `prev` is stored as SQL NULL, and only a null filter matches it
+                where: { prev: prior.prev ?? null, ts: prior.ts, value: prior.value },
+            });
+
+            if (!applied) {
+                idCache.delete(storageKey);
+            }
+
+            return applied;
         },
     };
 };
@@ -296,9 +357,9 @@ const createReadOnlyDatabaseStore = (options: ReadOnlyDatabaseStoreOptions): Rat
         ...options,
         db: {
             delete: () => reject("delete"),
+            findFirst: options.db.findFirst.bind(options.db),
             insert: () => reject("insert"),
-            patch: () => reject("patch"),
-            query: options.db.query.bind(options.db),
+            patchIf: () => reject("patchIf"),
         },
     });
 
@@ -306,14 +367,13 @@ const createReadOnlyDatabaseStore = (options: ReadOnlyDatabaseStoreOptions): Rat
         delete: () => reject("reset"),
         get: readable.get,
         set: () => reject("limit"),
+        setIf: () => reject("limit"),
     };
 };
 
 export type {
     DatabaseStoreOptions as DbStoreOptions,
     RateLimitDatabase as RateLimitDb,
-    RateLimitDatabaseIndexRange as RateLimitDbIndexRange,
-    RateLimitDatabaseQuery as RateLimitDbQuery,
     RateLimitDatabaseReader as RateLimitDbReader,
     ReadOnlyDatabaseStoreOptions as ReadOnlyDbStoreOptions,
     SqlLike,

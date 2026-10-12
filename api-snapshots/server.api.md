@@ -257,6 +257,9 @@ interface DataModelInit<DataModel> {
 ```ts
 interface DatabaseReader {
     asId: <T extends string>(tableName: T, id: string) => Id<T>;
+    findFirst: (tableName: string, args?: {
+        where?: Record<string, unknown>;
+    }) => Promise<Record<string, unknown> | null>;
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
@@ -295,6 +298,10 @@ interface DatabaseWriter extends DatabaseReader {
         allowExplicitId?: boolean;
     }) => Promise<Id<T>[]>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patchIf: <T extends string>(tableName: T, id: Id<T>, args: {
+        patch: Record<string, unknown>;
+        where: Record<string, unknown>;
+    }) => Promise<PatchIfResult>;
     patchMany: <T extends string>(patches: ReadonlyArray<{
         id: Id<T>;
         patch: Record<string, unknown>;
@@ -1475,6 +1482,15 @@ interface PaginationResult<T = Record<string, unknown>> {
     isDone: boolean;
     page: T[];
     splitCursor?: null | string;
+}
+```
+
+### `PatchIfResult` (interface)
+
+```ts
+interface PatchIfResult {
+    applied: boolean;
+    doc: Record<string, unknown> | null;
 }
 ```
 
@@ -5142,6 +5158,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `PatchIfResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `QueryCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5725,7 +5745,9 @@ interface DatabaseWriterLike {
         key: Record<string, unknown>;
         value: null | number;
     }>>;
-    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    insert: (tableName: string, document: Record<string, unknown>, options?: {
+        clientId?: string;
+    }) => Promise<string>;
     insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: {
         limit?: number;
         skipDuplicates?: boolean;
@@ -5739,6 +5761,13 @@ interface DatabaseWriterLike {
         tableName: string;
     }>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patchIf?: (tableName: string, id: string, args: {
+        patch: Record<string, unknown>;
+        where: WhereInput;
+    }) => Promise<{
+        applied: boolean;
+        doc: Record<string, unknown> | null;
+    }>;
     patchMany: (patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
@@ -6031,6 +6060,13 @@ interface MaskDatabase {
         tableName: string;
     }>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patchIf?: (tableName: string, id: string, args: {
+        patch: Record<string, unknown>;
+        where: Record<string, unknown>;
+    }) => Promise<{
+        applied: boolean;
+        doc: Record<string, unknown> | null;
+    }>;
     patchMany: (patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;

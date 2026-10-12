@@ -580,7 +580,11 @@ describe("createDatabasePaymentStore", () => {
         const db = makeValidatingDb();
         const store = createDatabasePaymentStore(db);
         // `parseWebhook` only verifies and normalizes; it never calls the client.
-        const payment = createPayment({ adapter: createCreemAdapter({ client: {} as CreemClientLike, webhookSecret: secret }), store });
+        const payment = createPayment({
+            adapter: createCreemAdapter({ client: {} as CreemClientLike, webhookSecret: secret }),
+            authorize: () => true,
+            store,
+        });
         const body = JSON.stringify({
             eventType: "checkout.completed",
             id: "evt_checkout_1",

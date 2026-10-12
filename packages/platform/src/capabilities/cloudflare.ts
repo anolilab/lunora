@@ -27,6 +27,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
         },
+        conditionalWrites: {
+            level: "native",
+            note: "Shard-local: one synchronous state.storage.sql run. .global(): one conditional UPDATE on D1, so concurrent callers stay atomic although D1 calls do not hold the Durable Object's input gate",
+        },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         serverReactors: {
             level: "emulated",

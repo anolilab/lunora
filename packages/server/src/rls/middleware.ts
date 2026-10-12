@@ -51,7 +51,7 @@
  * The middleware is signature-compatible with the builder's `Middleware<>`,
  * so `.use(rls(policies))` slots in like any other middleware.
  */
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 // The traversal itself, not a structural mirror of it. Every other read here is
 // table-named, so the wrapper can `route()` it; a traversal DISCOVERS its tables
 // as it walks, so the only way to route one per hop is to run the walk here over
@@ -255,7 +255,7 @@ interface DatabaseWriterLike {
      * rows the caller may read. Required for the same reason as `aggregate`.
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
-    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
     insertMany: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -277,6 +277,13 @@ interface DatabaseWriterLike {
      */
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+
+    /** Conditional patch. Optional: a writer without an atomic conditional write omits it, and the wrapper refuses. */
+    patchIf?: (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; where: WhereInput },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
     patchMany: (
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
@@ -1400,7 +1407,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return allowed?.["_id"] === id ? { row: allowed, tableName: located.tableName } : null;
         },
 
-        async insert(tableName, document) {
+        // `options` (a caller-pinned `clientId`) is forwarded on both branches: a
+        // caller that keys a row deterministically relies on the primary key
+        // refusing a duplicate, and a dropped option silently mints a fresh id.
+        async insert(tableName, document, options) {
             if (policyTables.has(tableName)) {
                 if (!allowsWrite(tableName, "insert", document)) {
                     throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
@@ -1408,12 +1418,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
                 // Policy table, insert authorized: write through the UNGUARDED
                 // `raw` writer (the guard would deny this protected table).
-                return raw.insert(tableName, document);
+                return raw.insert(tableName, document, options);
             }
 
             // Non-policy table → GUARDED `base` enforces secure-by-default: a
             // protected, policy-less table is denied; a `.public()` one passes.
-            return base.insert(tableName, document);
+            return base.insert(tableName, document, options);
         },
 
         async insertMany(tableName, documents, options) {
@@ -1473,6 +1483,54 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                 },
                 expectedTable,
             ),
+
+        // The update gate of a single patch, against the row as it stands, with the
+        // patch's post-image as WITH CHECK. Overriding is mandatory: the `...base`
+        // spread would otherwise expose the guard's version, which checks only the
+        // table, and a policy-denied row could be written through it. The returned
+        // row is a read, so it is handed back only when this caller's `get` would
+        // return it: update rights do not imply read rights.
+        async patchIf(tableName, id, args) {
+            const result = await gateById(
+                id,
+                "update",
+                async (writer) => {
+                    if (writer.patchIf === undefined) {
+                        throw new LunoraError("INTERNAL", `ctx.db.patchIf on "${tableName}" is unsupported: this writer has no conditional write`);
+                    }
+
+                    return writer.patchIf(tableName, id, args);
+                },
+                (preRow) => {
+                    return { ...preRow, ...args.patch };
+                },
+                tableName,
+            );
+
+            if (result.doc === null) {
+                return result;
+            }
+
+            // Under `.rls("required")` a table with no read policy makes the guarded read throw,
+            // after the write has committed. The caller cannot read that row, so it is not visible.
+            const visible = await wrapped.get(id, tableName).then(
+                (row) => row !== null,
+                (error: unknown) => {
+                    if (isLunoraError(error) && error.code === "RLS_REQUIRED") {
+                        return false;
+                    }
+
+                    throw error;
+                },
+            );
+
+            if (visible) {
+                return result;
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- `doc` is `Record | null`; the read policy hides this row from the caller
+            return { applied: result.applied, doc: null };
+        },
 
         async patchMany(patches, options, expectedTable) {
             assertBatchLimit(patches.length, options?.limit, "patchMany");

@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.207...@lunora/advisor@1.0.0-alpha.208) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.192
+
 ## @lunora/advisor [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.206...@lunora/advisor@1.0.0-alpha.207) (2026-10-12)
 
 ### Features

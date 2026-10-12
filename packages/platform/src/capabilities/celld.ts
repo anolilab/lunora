@@ -119,6 +119,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "Workers KV bindings against the fleet bucket. No edge cache, so `cacheTtl` has no effect and `cacheStatus` reads `null`; a value above 1 MiB requires a fleet bucket; and a namespace has a single writer, so write capacity scales by adding namespaces rather than by concurrency",
         },
+        conditionalWrites: {
+            level: "native",
+            note: "The same two statements as on Cloudflare: shard-local over the cell's state.storage.sql, .global() as one conditional UPDATE on the fleet-backed D1 binding",
+        },
         localSql: {
             level: "native",
             note: "`state.storage.sql` over the cell's own SQLite database, replicated to the fleet bucket. One edge: `Cursor.toArray()` raises a celld-specific error when the isolate is near its 128 MB V8 heap limit rather than materialising the set",

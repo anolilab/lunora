@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.130...@lunora/platform-node@1.0.0-alpha.131) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.171
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/queue:** upgraded to 1.0.0-alpha.99
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.191
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.172
+* **@lunora/do:** upgraded to 1.0.0-alpha.204
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.81
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+* **@lunora/storage:** upgraded to 1.0.0-alpha.126
+
 ## @lunora/platform-node [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.129...@lunora/platform-node@1.0.0-alpha.130) (2026-10-12)
 
 ### Bug Fixes

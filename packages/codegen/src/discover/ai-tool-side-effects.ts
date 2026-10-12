@@ -24,7 +24,7 @@ const MODEL_INPUT_KEYS = new Set(["messages", "prompt", "system"]);
  */
 const SIDE_EFFECT_SINKS: ReadonlyArray<{ methods: ReadonlySet<string>; prefixes: ReadonlyArray<string> }> = [
     // Database writes.
-    { methods: new Set(["delete", "insert", "insertManyUnsafe", "patch", "replace"]), prefixes: ["context.db", "ctx.db"] },
+    { methods: new Set(["delete", "insert", "insertManyUnsafe", "patch", "patchIf", "replace"]), prefixes: ["context.db", "ctx.db"] },
     // Function dispatch (runs another mutation / action with the caller's authority).
     { methods: new Set(["run", "runAction", "runMutation"]), prefixes: ["context", "ctx"] },
     // Outbound network / mail / queue sends.

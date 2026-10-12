@@ -1,3 +1,15 @@
+## @lunora/payment [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.194...@lunora/payment@1.0.0-alpha.195) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.192
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+
 ## @lunora/payment [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.193...@lunora/payment@1.0.0-alpha.194) (2026-10-12)
 
 ### Bug Fixes
