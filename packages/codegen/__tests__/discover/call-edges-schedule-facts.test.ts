@@ -70,4 +70,16 @@ describe("schedule edge delay and cursor facts", () => {
         expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, args);")[0]?.schedule?.argKeys).toBeUndefined();
         expect(schedulesOf("await ctx.scheduler.runAfter(100, internal.tick.tick, { ...args });")[0]?.schedule?.argKeys).toBeUndefined();
     });
+
+    it("reads the keys of a const args object the dispatch names, and not of a let", () => {
+        expect.assertions(2);
+
+        expect(
+            schedulesOf("const next = { cursor: args.cursor };\n        await ctx.scheduler.runAfter(100, internal.tick.tick, next);")[0]?.schedule?.argKeys,
+        ).toStrictEqual(["cursor"]);
+        // A `let` can be reassigned before the dispatch, so its keys are not evidence.
+        expect(
+            schedulesOf("let next = { cursor: 1 };\n        await ctx.scheduler.runAfter(100, internal.tick.tick, next);")[0]?.schedule?.argKeys,
+        ).toBeUndefined();
+    });
 });

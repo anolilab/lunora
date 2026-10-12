@@ -122,3 +122,41 @@ export const syncProjectFile = (project: Project, filePath: string, content: str
 
 /** Whether `project` already holds `filePath` with exactly `content`. */
 export const projectFileMatches = (project: Project, filePath: string, content: string): boolean => project.getSourceFile(filePath)?.getFullText() === content;
+
+/**
+ * One step of the write phase, in write order. `always` writes the file. `optional`
+ * writes it, or DELETES it when `content` is `""`, so a feature that is no longer in
+ * use leaves no stale file behind. `services` writes the service declaration files.
+ */
+export type GeneratedFileStep = { content: string; kind: "always" | "optional"; name: string } | { files: Record<string, string>; kind: "services" };
+
+/**
+ * Write the `_generated/` files in the order the steps give, and return the names
+ * that were written. An optional file counts only when it has content: an empty one
+ * is removed, not written.
+ */
+export const writeGeneratedFiles = (outputDirectory: string, steps: ReadonlyArray<GeneratedFileStep>): string[] => {
+    if (!existsSync(outputDirectory)) {
+        mkdirSync(outputDirectory, { recursive: true });
+    }
+
+    const written: string[] = [];
+
+    for (const step of steps) {
+        if (step.kind === "services") {
+            writeServiceDeclarations(outputDirectory, step.files);
+            written.push(...Object.keys(step.files));
+        } else if (step.kind === "always") {
+            writeIfChanged(join(outputDirectory, step.name), step.content);
+            written.push(step.name);
+        } else {
+            writeIfPresent(join(outputDirectory, step.name), step.content);
+
+            if (step.content !== "") {
+                written.push(step.name);
+            }
+        }
+    }
+
+    return written;
+};

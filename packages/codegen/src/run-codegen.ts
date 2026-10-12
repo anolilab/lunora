@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 
@@ -63,14 +63,13 @@ import { emitServiceDeclarations } from "./emit/service-declarations";
 import { emitApp } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
-import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
-import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
 import { resolveCodegenTarget } from "./platform-target";
 import { readMergeDurableObjects } from "./project-config-file";
-import { projectFileMatches, readProjectVersion, syncProjectFile, writeIfChanged, writeIfPresent, writeServiceDeclarations } from "./run-codegen-files";
+import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot } from "./schema-drift";
+import { buildSpecArtifacts } from "./spec-artifacts";
 
 /**
  * Committed, tracked baseline file holding the blessed structural schema
@@ -784,20 +783,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         wantsOpenRpc,
     });
 
-    // Build each spec document once, then derive both artifacts from the same
-    // object so the portable `.json` and the worker-importable `.ts` are
-    // identical content and can never drift. Both are computed regardless of
-    // `apiSpec` (cheap, pure) so `CodegenResult` can carry whichever the caller
-    // asked for; only the requested file(s) are written.
-    const projectVersion = readProjectVersion(options.projectRoot);
-    // Module-tagged specs only once the app opts in, matching the manifest.
-    const specModules = wantsArchitecture ? modules : [];
-    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes, modules: specModules, version: projectVersion });
-    const openRpcDocument = buildOpenRpcDocument({ functions, modules: specModules, version: projectVersion });
-
-    const openApiContent = `${JSON.stringify(openApiDocument, undefined, 2)}\n`;
-
-    const openRpcContent = `${JSON.stringify(openRpcDocument, undefined, 2)}\n`;
+    // Both spec documents, each as its `.json` and `.ts` artifact. See `buildSpecArtifacts`.
+    const { openApiContent, openApiModuleContent, openRpcContent, openRpcModuleContent } = buildSpecArtifacts({
+        functions,
+        httpRoutes,
+        modules,
+        projectRoot: options.projectRoot,
+        wantsArchitecture,
+    });
 
     // The architecture manifest (module catalog + call graph) is emitted only
     // once the app declares a module, so an app without one keeps byte-identical
@@ -817,9 +810,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   workflows,
               })
             : undefined;
-    const openApiModuleContent = emitOpenApiModule(openApiDocument);
-    const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
-
     const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
 
@@ -828,86 +818,65 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // recorded here rather than restated by each caller — the CLI used to print
     // a hardcoded three-file list that had been wrong since the fourth file was
     // added, and nothing could have caught it.
-    const writtenFiles: string[] = [];
+    const writtenFiles = options.dryRun
+        ? []
+        : writeGeneratedFiles(outputDirectory, [
+              { content: appContent, kind: "always", name: "app.ts" },
+              { content: dataModelContent, kind: "always", name: "dataModel.ts" },
+              { content: apiContent, kind: "always", name: "api.ts" },
+              { content: internalContent, kind: "always", name: "internal.ts" },
+              { content: serverContent, kind: "always", name: "server.ts" },
+              { content: functionsContent, kind: "always", name: "functions.ts" },
+              { content: shardContent, kind: "always", name: "shard.ts" },
+              { content: cronsContent, kind: "always", name: "crons.ts" },
+              { content: vectorsContent, kind: "always", name: "vectors.ts" },
+              { content: drizzleFiles.global, kind: "always", name: "drizzle.global.ts" },
+              { content: drizzleFiles.shard, kind: "always", name: "drizzle.shard.ts" },
+              // Conditionally-emitted files: each is written only when its feature is in use
+              // (the `emit*` helper returns `""` otherwise), so projects that don't use them
+              // keep a clean `_generated/` and never import the package.
+              //   - containers.ts  → `@lunora/container`, when containers are declared
+              //   - workflows.ts   → `@lunora/workflow`, when workflows are declared
+              //   - agents.ts      → `@lunora/agent`, when agents are declared
+              //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
+              //   - collections.ts → `@lunora/db`, when the project declares shapes
+              { content: containersContent, kind: "optional", name: "containers.ts" },
+              { content: workflowsContent, kind: "optional", name: "workflows.ts" },
+              { content: agentsContent, kind: "optional", name: "agents.ts" },
+              { content: queuesContent, kind: "optional", name: "queues.ts" },
+              { content: schedulerContent, kind: "optional", name: "scheduler.ts" },
+              { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
+              { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
+              { content: seedContent, kind: "optional", name: "seed.ts" },
+              { content: collectionsContent, kind: "optional", name: "collections.ts" },
+              { files: serviceDeclarations, kind: "services" },
+              // The `.json` is the portable artifact for external tooling; the `.ts` (same
+              // document, inlined) is what the worker imports and passes to `createWorker({
+              // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate
+              // together, and an unselected format is removed rather than left stale.
+              { content: wantsOpenApi ? openApiContent : "", kind: "optional", name: "openapi.json" },
+              { content: wantsOpenApi ? openApiModuleContent : "", kind: "optional", name: "openapi.ts" },
+              { content: wantsOpenRpc ? openRpcContent : "", kind: "optional", name: "openrpc.json" },
+              { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
+              // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
+              // both removed when the last module goes.
+              {
+                  content: architectureDocument === undefined ? "" : `${JSON.stringify(architectureDocument, undefined, 2)}\n`,
+                  kind: "optional",
+                  name: "architecture.json",
+              },
+              {
+                  content: architectureDocument === undefined ? "" : emitArchitectureModule(architectureDocument),
+                  kind: "optional",
+                  name: "architecture.ts",
+              },
+          ]);
 
-    if (!options.dryRun) {
-        if (!existsSync(outputDirectory)) {
-            mkdirSync(outputDirectory, { recursive: true });
-        }
-
-        /** Always-emitted file: write it and record the name. */
-        const emit = (fileName: string, content: string): void => {
-            writeIfChanged(join(outputDirectory, fileName), content);
-            writtenFiles.push(fileName);
-        };
-
-        /**
-         * Conditionally-emitted file: `writeIfPresent` DELETES it when `content`
-         * is `""`, so only a non-empty emit counts as written.
-         */
-        const emitOptional = (fileName: string, content: string): void => {
-            writeIfPresent(join(outputDirectory, fileName), content);
-
-            if (content !== "") {
-                writtenFiles.push(fileName);
-            }
-        };
-
-        emit("app.ts", appContent);
-        emit("dataModel.ts", dataModelContent);
-        emit("api.ts", apiContent);
-        emit("internal.ts", internalContent);
-        emit("server.ts", serverContent);
-        emit("functions.ts", functionsContent);
-        emit("shard.ts", shardContent);
-        emit("crons.ts", cronsContent);
-        emit("vectors.ts", vectorsContent);
-        emit("drizzle.global.ts", drizzleFiles.global);
-        emit("drizzle.shard.ts", drizzleFiles.shard);
-
-        // Conditionally-emitted files: each is written only when its feature is
-        // in use (the `emit*` helper returns `""` otherwise), so projects that
-        // don't use them keep a clean `_generated/` and never import the package.
-        //   - containers.ts  → `@lunora/container`, when containers are declared
-        //   - workflows.ts   → `@lunora/workflow`, when workflows are declared
-        //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
-        emitOptional("containers.ts", containersContent);
-        emitOptional("workflows.ts", workflowsContent);
-        //   - agents.ts      → `@lunora/agent`, when agents are declared
-        emitOptional("agents.ts", agentsContent);
-        emitOptional("queues.ts", queuesContent);
-        emitOptional("scheduler.ts", schedulerContent);
-        emitOptional("shardRegistry.ts", shardRegistryContent);
-        emitOptional("durableObjects.ts", durableObjectsContent);
-        emitOptional("seed.ts", seedContent);
-        //   - collections.ts → `@lunora/db`, when the project declares shapes
-        emitOptional("collections.ts", collectionsContent);
-        writeServiceDeclarations(outputDirectory, serviceDeclarations);
-        writtenFiles.push(...Object.keys(serviceDeclarations));
-
-        // The `.json` is the portable artifact for external tooling; the `.ts`
-        // (same document, inlined) is what the worker imports and passes to
-        // `createWorker({ openApiSpec })`. Both are gated on the same `apiSpec`
-        // choice so they regenerate together — and routed through `writeIfPresent`
-        // (empty content when the mode is off) so switching `apiSpec` away from a
-        // format also DELETES its now-stale spec files instead of leaving a
-        // portable artifact that documents endpoints/args that no longer exist.
-        emitOptional("openapi.json", wantsOpenApi ? openApiContent : "");
-        emitOptional("openapi.ts", wantsOpenApi ? openApiModuleContent : "");
-        emitOptional("openrpc.json", wantsOpenRpc ? openRpcContent : "");
-        emitOptional("openrpc.ts", wantsOpenRpc ? openRpcModuleContent : "");
-        // Same pairing as the specs: the `.json` for tooling, the `.ts` for
-        // `createWorker({ architecture })`, both removed when the last module goes.
-        emitOptional("architecture.json", architectureDocument === undefined ? "" : `${JSON.stringify(architectureDocument, undefined, 2)}\n`);
-        emitOptional("architecture.ts", architectureDocument === undefined ? "" : emitArchitectureModule(architectureDocument));
-
-        // Bless the schema baseline on first capture (so a project gets a
-        // committed snapshot the moment it runs codegen) or when explicitly
-        // asked to refresh it. The CLI gate reads the existing baseline BEFORE
-        // calling codegen, so re-blessing here never hides drift from that run.
-        if (!schemaSnapshotExists || options.updateSchemaBaseline === true) {
-            writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
-        }
+    // Bless the schema baseline on first capture (so a project gets a committed snapshot the
+    // moment it runs codegen) or when explicitly asked to refresh it. The CLI gate reads the
+    // existing baseline BEFORE calling codegen, so re-blessing here never hides drift from that run.
+    if (!options.dryRun && (!schemaSnapshotExists || options.updateSchemaBaseline === true)) {
+        writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
     }
 
     if (timingEnabled) {

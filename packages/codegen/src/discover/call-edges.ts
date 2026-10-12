@@ -1,5 +1,5 @@
-import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node, SyntaxKind, ts } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
+import { Node, SyntaxKind, ts, VariableDeclarationKind } from "ts-morph";
 
 import type { CallEdgeIR } from "../ir";
 import { collectCallRows, collectNodeRows, functionKeyOf, isFunctionLike, isSameNode, RUN_METHODS } from "./ast";
@@ -66,22 +66,13 @@ const runEdge = (method: string, reference: TsNode | undefined): CallSiteEdge | 
 };
 
 /**
- * The top-level property names of a dispatch's args object: `[]` when there are no
- * args, and `undefined` when they are not an object literal, or contain a spread
- * whose keys cannot be read. The cursor decision belongs to the lint, not here.
+ * The top-level property names of an object literal, or `undefined` when a spread
+ * hides some of them, since then the keys cannot be known.
  */
-const argumentKeysOf = (args: TsNode | undefined): string[] | undefined => {
-    if (args === undefined) {
-        return [];
-    }
-
-    if (!Node.isObjectLiteralExpression(args)) {
-        return undefined;
-    }
-
+const keysOfObjectLiteral = (object: ObjectLiteralExpression): string[] | undefined => {
     const keys: string[] = [];
 
-    for (const property of args.getProperties()) {
+    for (const property of object.getProperties()) {
         if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
             return undefined;
         }
@@ -90,6 +81,34 @@ const argumentKeysOf = (args: TsNode | undefined): string[] | undefined => {
     }
 
     return keys;
+};
+
+/**
+ * The top-level property names of a dispatch's args: `[]` when there are no args, the
+ * keys of an object literal, or the keys of a `const` the args name whose initializer
+ * is an object literal. `undefined` when the keys cannot be read, which includes a
+ * `let` or a value built some other way. The cursor decision belongs to the lint.
+ */
+const argumentKeysOf = (args: TsNode | undefined): string[] | undefined => {
+    if (args === undefined) {
+        return [];
+    }
+
+    if (Node.isObjectLiteralExpression(args)) {
+        return keysOfObjectLiteral(args);
+    }
+
+    if (Node.isIdentifier(args)) {
+        const declaration = args.getSymbol()?.getDeclarations()[0];
+
+        if (Node.isVariableDeclaration(declaration) && declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const) {
+            const initializer = declaration.getInitializer();
+
+            return Node.isObjectLiteralExpression(initializer) ? keysOfObjectLiteral(initializer) : undefined;
+        }
+    }
+
+    return undefined;
 };
 
 /**
