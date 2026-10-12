@@ -336,6 +336,25 @@ const atomicWrite = (path: string, content: string, options: { mode?: number } =
 };
 
 /**
+ * Exclusive create without hard links, for filesystems that refuse `link`
+ * (`EPERM` / `ENOTSUP`). A `wx` open fails with `EEXIST` when a peer already
+ * created `path`, so the create stays exclusive.
+ */
+const createDirectlyExclusively = (path: string, content: string): boolean => {
+    try {
+        writeFileSync(path, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+
+        return true;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+            return false;
+        }
+
+        throw error;
+    }
+};
+
+/**
  * Create `path` with `content` only if nothing is there. Returns `false` when
  * a peer already created it. The content goes to a sibling temp file, which is
  * then hard-linked to `path`: `link` fails with `EEXIST` when `path` exists, so
@@ -343,6 +362,8 @@ const atomicWrite = (path: string, content: string, options: { mode?: number } =
  * replace a peer's (possibly secret-bearing) file that landed after the
  * caller's existence check. The temp file is removed on every path, and the
  * hard link shares the temp file's inode, so `mode: 0o600` carries over.
+ * Where the filesystem has no hard links (`EPERM` / `ENOTSUP`), it falls back
+ * to {@link createDirectlyExclusively}.
  */
 const createExclusively = (path: string, content: string): boolean => {
     const temporaryPath = temporaryPathFor(path);
@@ -355,8 +376,14 @@ const createExclusively = (path: string, content: string): boolean => {
 
             return true;
         } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+            const { code } = error as NodeJS.ErrnoException;
+
+            if (code === "EEXIST") {
                 return false;
+            }
+
+            if (code === "EPERM" || code === "ENOTSUP") {
+                return createDirectlyExclusively(path, content);
             }
 
             throw error;
