@@ -15,6 +15,12 @@ describe(transition, () => {
         expect(transition("failed", "processing")).toBe("processing");
     });
 
+    it("expires a ready export, and nothing moves out of expired", () => {
+        expect(transition("ready", "expired")).toBe("expired");
+        expect(() => transition("expired", "processing")).toThrow(InvalidTransitionError);
+        expect(() => transition("processing", "expired")).toThrow(InvalidTransitionError);
+    });
+
     it("refuses a move out of a completed request", () => {
         expect(() => transition("completed", "processing")).toThrow(InvalidTransitionError);
     });
@@ -25,8 +31,9 @@ describe(transition, () => {
 });
 
 describe(isTerminal, () => {
-    it("treats completed and cancelled as terminal, and failed as retryable", () => {
+    it("treats completed, cancelled and expired as terminal, and failed as retryable", () => {
         expect(isTerminal("completed")).toBe(true);
+        expect(isTerminal("expired")).toBe(true);
         expect(isTerminal("cancelled")).toBe(true);
         expect(isTerminal("failed")).toBe(false);
     });

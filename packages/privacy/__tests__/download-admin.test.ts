@@ -138,4 +138,45 @@ describe("admin", () => {
 
         await expect(codeOf(privacy.admin.retry(opened.id))).resolves.toBe("UNPROCESSABLE");
     });
+
+    it("expires a ready export past its window and deletes every file it wrote", async () => {
+        const { advance, files, privacy, store } = setup();
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+
+        expect([...files.files.keys()].some((key) => key.startsWith(`${opened.id}/`))).toBe(true);
+
+        advance(8);
+        const expired = await privacy.admin.sweep();
+
+        expect(expired.map((record) => record.id)).toStrictEqual([opened.id]);
+        expect(store.rows.get(opened.id)?.status).toBe("expired");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${opened.id}/`))).toStrictEqual([]);
+        await expect(privacy.admin.open()).resolves.toStrictEqual([]);
+        await expect(privacy.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });
+    });
+
+    it("leaves a ready export inside its window alone", async () => {
+        const { advance, files, privacy, store } = setup();
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+        advance(6);
+
+        await expect(privacy.admin.sweep()).resolves.toStrictEqual([]);
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+        expect(files.files.has(`${opened.id}/export.zip`)).toBe(true);
+    });
+
+    it("lets the subject open a new export once the old one expired", async () => {
+        const { advance, privacy } = setup();
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+        advance(8);
+        await privacy.admin.sweep();
+
+        await expect(privacy.requestExport()).resolves.toMatchObject({ status: "received" });
+    });
 });

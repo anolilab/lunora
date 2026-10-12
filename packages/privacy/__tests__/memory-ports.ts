@@ -3,6 +3,7 @@
  * request rows and events, stored files, and the rows each table still holds.
  */
 import type { Dataset } from "../src/dataset";
+import { isTerminal } from "../src/lifecycle";
 import type { RequestRecord, RequestStore } from "../src/requests";
 import type { DataPort, StorePort } from "../src/run";
 
@@ -15,13 +16,12 @@ export const memoryRequests = (): RequestStore & { events: string[]; rows: Map<s
             events.push(`${requestId}:${kind}`);
         },
         events,
-        findOpen: async (subjectId, type) =>
-            [...rows.values()].find((row) => row.subjectId === subjectId && row.type === type && row.status !== "completed" && row.status !== "cancelled"),
+        findOpen: async (subjectId, type) => [...rows.values()].find((row) => row.subjectId === subjectId && row.type === type && !isTerminal(row.status)),
         get: async (id) => rows.get(id),
         insert: async (record) => {
             rows.set(record.id, record);
         },
-        listOpen: async () => [...rows.values()].filter((row) => row.status !== "completed" && row.status !== "cancelled"),
+        listOpen: async () => [...rows.values()].filter((row) => !isTerminal(row.status)),
         rows,
         update: async (id, patch) => {
             const existing = rows.get(id);
@@ -37,7 +37,11 @@ export const memoryFiles = (): StorePort & { files: Map<string, Uint8Array | str
     const files = new Map<string, Uint8Array | string>();
 
     return {
+        delete: async (key) => {
+            files.delete(key);
+        },
         files,
+        list: async (prefix) => [...files.keys()].filter((key) => key.startsWith(prefix)),
         put: async (requestId, file) => {
             files.set(`${requestId}/${file.name}`, file.data);
 

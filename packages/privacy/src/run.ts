@@ -28,8 +28,15 @@ interface DataPort {
     readonly remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
 }
 
-/** Where a request's files are kept between steps and in the end. */
+/**
+ * Where a request's files are kept between steps and in the end. `put` must key a request's
+ * files under `${requestId}/`, so listing that prefix finds every file the request wrote.
+ */
 interface StorePort {
+    /** Remove one stored object. Removing a key that is not there is not an error. */
+    readonly delete: (key: string) => Promise<void>;
+    /** The keys of every stored object whose key starts with the prefix. */
+    readonly list: (prefix: string) => Promise<ReadonlyArray<string>>;
     readonly put: (requestId: string, file: { readonly data: Uint8Array | string; readonly name: string }) => Promise<string>;
     /** The text of a file written earlier in the same request, or `undefined` if it is not there. */
     readonly read: (requestId: string, name: string) => Promise<string | undefined>;
@@ -60,6 +67,17 @@ interface ErasureOutcome {
 }
 
 const partName = (dataset: Dataset): string => `parts/${dataset.id}.json`;
+
+/** Delete every file a request wrote: its parts, the archive and the summary. */
+const deleteRequestFiles = async (files: StorePort, request: RequestRecord): Promise<void> => {
+    const keys = new Set(await files.list(`${request.id}/`));
+
+    if (request.storageKey !== undefined) {
+        keys.add(request.storageKey);
+    }
+
+    await Promise.all([...keys].map(async (key) => files.delete(key)));
+};
 
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
 const EXPORT_EXPIRY_MS: number = 7 * 24 * 60 * 60 * 1000;
@@ -224,6 +242,17 @@ const runErasure = async (context: RunContext, datasets: ReadonlyArray<Dataset>,
     }
 };
 
-export { assembleExport, collectPart, type DataPort, type ErasureOutcome, type ExportOutcome, type RunContext, runErasure, runExport, type StorePort };
+export {
+    assembleExport,
+    collectPart,
+    type DataPort,
+    deleteRequestFiles,
+    type ErasureOutcome,
+    type ExportOutcome,
+    type RunContext,
+    runErasure,
+    runExport,
+    type StorePort,
+};
 
 export { EXPORT_EXPIRY_MS };

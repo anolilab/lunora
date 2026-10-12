@@ -8,10 +8,10 @@ import { dueAt, extendedDueAt } from "./deadlines";
 
 type RequestType = "export" | "erasure";
 
-type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled";
+type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired";
 
-/** A request in a terminal state takes no further transitions. */
-const TERMINAL: ReadonlySet<RequestStatus> = new Set(["cancelled", "completed"]);
+/** A request in a terminal state takes no further transitions. `expired` is a ready export whose files were removed. */
+const TERMINAL: ReadonlySet<RequestStatus> = new Set(["cancelled", "completed", "expired"]);
 
 /**
  * The transitions the package allows. `failed` is not terminal: an operator can
@@ -20,10 +20,11 @@ const TERMINAL: ReadonlySet<RequestStatus> = new Set(["cancelled", "completed"])
 const TRANSITIONS: Readonly<Record<RequestStatus, ReadonlyArray<RequestStatus>>> = {
     cancelled: [],
     completed: [],
+    expired: [],
     failed: ["processing"],
     grace: ["cancelled", "processing"],
     processing: ["completed", "failed", "ready"],
-    ready: ["cancelled", "processing"],
+    ready: ["cancelled", "expired", "processing"],
     received: ["cancelled", "grace", "processing"],
 };
 

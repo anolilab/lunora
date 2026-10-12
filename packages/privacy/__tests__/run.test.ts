@@ -2,6 +2,7 @@ import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
+import { isTerminal } from "../src/lifecycle";
 import type { RequestRecord, RequestStore } from "../src/requests";
 import type { RetentionRule } from "../src/rules";
 import type { DataPort, RunContext, StorePort } from "../src/run";
@@ -65,7 +66,7 @@ const memoryRequests = (): RequestStore & { events: string[]; rows: Map<string, 
         events,
         findOpen: async () => undefined,
         get: async (id) => rows.get(id),
-        listOpen: async () => [...rows.values()],
+        listOpen: async () => [...rows.values()].filter((row) => !isTerminal(row.status)),
         insert: async (record) => {
             rows.set(record.id, record);
         },
@@ -80,7 +81,11 @@ const memoryFiles = (): StorePort & { files: Map<string, Uint8Array | string> } 
     const files = new Map<string, Uint8Array | string>();
 
     return {
+        delete: async (key) => {
+            files.delete(key);
+        },
         files,
+        list: async (prefix) => [...files.keys()].filter((key) => key.startsWith(prefix)),
         put: async (requestId, file) => {
             files.set(`${requestId}/${file.name}`, file.data);
 

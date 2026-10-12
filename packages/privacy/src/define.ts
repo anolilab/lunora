@@ -18,7 +18,7 @@ import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
 import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
-import { assembleExport, collectPart, EXPORT_EXPIRY_MS, runErasure, runExport } from "./run";
+import { assembleExport, collectPart, deleteRequestFiles, EXPORT_EXPIRY_MS, runErasure, runExport } from "./run";
 import type { TombstonePort } from "./tombstones";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
@@ -101,6 +101,12 @@ interface Privacy {
         readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
         /** Re-run a failed export or erasure. The Art. 12(3) clock keeps running throughout. */
         readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
+
+        /**
+         * Expire every ready export past its download window: delete its files, then mark it
+         * `expired`. Returns the requests it expired. Run it from a cron.
+         */
+        readonly sweep: () => Promise<ReadonlyArray<RequestRecord>>;
     };
     readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
@@ -175,6 +181,13 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             }
 
             return record;
+        };
+
+        // The app's `listOpen` is filtered again, so a terminal request never reaches a sweep or a report.
+        const listOpen = async (): Promise<ReadonlyArray<RequestRecord>> => {
+            const listed = await ports.store.listOpen();
+
+            return listed.filter((record) => !isTerminal(record.status));
         };
 
         const setStatus = async (record: RequestRecord, status: RequestStatus, detail?: string): Promise<void> => {
@@ -324,7 +337,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             myRequests: async () => {
                 const { subjectId } = ports.identity();
 
-                const open = await ports.store.listOpen();
+                const open = await listOpen();
 
                 return open.filter((record) => record.subjectId === subjectId);
             },
@@ -365,7 +378,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             },
 
             admin: {
-                open: async () => ports.store.listOpen(),
+                open: listOpen,
 
                 retry: async (requestId) => {
                     const record = await requireRequest(requestId);
@@ -375,6 +388,20 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                     }
 
                     return record.type === "export" ? runExport(contextFor(record), config.datasets, record) : eraseAndTombstone(record);
+                },
+
+                sweep: async () => {
+                    const now = ports.now().getTime();
+                    const open = await listOpen();
+                    const due = open.filter((record) => record.status === "ready" && record.expiresAt !== undefined && record.expiresAt.getTime() < now);
+
+                    // The files go first: a failed delete leaves the request ready, so the next sweep retries it.
+                    await Promise.all(due.map(async (record) => deleteRequestFiles(ports.files, record)));
+                    await Promise.all(due.map(async (record) => setStatus(record, transition(record.status, "expired"))));
+
+                    return due.map((record) => {
+                        return { ...record, status: "expired" as const };
+                    });
                 },
             },
 
@@ -400,7 +427,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
 
             tick: async () => {
                 const now = ports.now().getTime();
-                const open = await ports.store.listOpen();
+                const open = await listOpen();
                 const overdue = open.filter((record) => isOverdue(record.receivedAt, record.extendedDueAt !== undefined, record.status, ports.now()));
                 const approaching = open.filter((record) => {
                     const due = effectiveDueAt(record.receivedAt, record.extendedDueAt !== undefined).getTime();
