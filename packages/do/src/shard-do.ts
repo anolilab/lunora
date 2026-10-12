@@ -13704,7 +13704,7 @@ abstract class ShardDO {
      * ephemeral sub-token with WebCrypto HMAC.
      */
     private async isUpgradeAllowed(request: Request): Promise<boolean> {
-        const env = (this.env ?? {}) as { LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
         if (allowedOrigins && allowedOrigins.trim() !== "") {
@@ -13730,6 +13730,16 @@ abstract class ShardDO {
 
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
+            const adminToken = env.LUNORA_ADMIN_TOKEN;
+
+            // The master token in `?token=` is refused even when it matches the bearer:
+            // the query string is where it leaks (see `isAdminSocket`).
+            const masterInQuery =
+                supplied !== undefined &&
+                adminToken !== undefined &&
+                adminToken.length > 0 &&
+                extractBearerToken(request.headers.get("authorization")) === undefined &&
+                constantTimeEqual(supplied, adminToken);
 
             // The admin credential is accepted as an alternate so a studio can open
             // its socket even when `LUNORA_WS_BEARER` gates ordinary subscribers: a
@@ -13737,7 +13747,7 @@ abstract class ShardDO {
             // in the `Authorization` header only. The socket is flagged admin
             // separately (see `isAdminSocket`); matching the bearer alone never
             // grants it.
-            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
+            if (masterInQuery || !supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
                 return false;
             }
         }

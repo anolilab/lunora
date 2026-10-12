@@ -422,6 +422,19 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toBeUndefined();
     });
 
+    it("refuses the raw master token in ?token= when it also equals LUNORA_WS_BEARER", async () => {
+        expect.assertions(1);
+
+        // Bearer set to the master token: the query-string copy must not pass the
+        // bearer gate, or the master token rides the URL past the admin rule.
+        const attachment = await upgradeAndCaptureAttachment(
+            { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_WS_BEARER: ADMIN_TOKEN },
+            `https://shard.internal/?token=${ADMIN_TOKEN}`,
+        );
+
+        expect(attachment).toBeUndefined();
+    });
+
     describe("ephemeral WS token enforcement (master token never admitted via ?token=)", () => {
         const ADMIN_ENV = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
 
