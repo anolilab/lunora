@@ -16,6 +16,7 @@ import {
     recordQueueDepth,
 } from "../src/telemetry/platform-metrics";
 import { buildPlatformMetricsQueries, foldPlatformMetrics } from "../src/telemetry/platform-metrics-read";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 const dataset = (): AnalyticsEngineDatasetLike & { writeDataPoint: ReturnType<typeof vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>> } => {
     return { writeDataPoint: vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>() };
@@ -95,20 +96,9 @@ describe(readQueueDepth, () => {
 });
 
 describe("dispatcher platform metrics", () => {
-    const env = (fetchImpl: () => Promise<Response>, metrics?: AnalyticsEngineDatasetLike): Record<string, unknown> => {
-        return {
-            DISPATCHER: {
-                get: () => {
-                    return { fetch: fetchImpl };
-                },
-            },
-            // No control plane here, so this is the `development` free tier (plan 475).
-            LUNORA_APP_DOMAIN: "lunora.app",
-            LUNORA_CELL: "eu-1",
-            LUNORA_ENVIRONMENT: "development",
-            ...(metrics ? { PLATFORM_METRICS: metrics } : {}),
-        };
-    };
+    /** No control plane here, so this is the `development` free tier (plan 475). */
+    const env = (fetchImpl: () => Promise<Response>, metrics?: AnalyticsEngineDatasetLike) =>
+        dispatcherEnv({ development: true, LUNORA_CELL: "eu-1", PLATFORM_METRICS: metrics, tenant: fetchImpl });
     const request = (): Request => new Request("https://acme-app.lunora.app/api/orders");
 
     it("records latency and status class per cell, with no tenant dimension", async () => {

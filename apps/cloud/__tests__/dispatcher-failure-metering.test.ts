@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import dispatcher from "../src/dispatcher/worker";
 import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 /**
  * A dispatch that never returns a response must still be metered.
@@ -19,21 +20,9 @@ import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/a
  * guard, whose entire job is to catch exactly this.
  */
 
-type DispatchNamespaceGet = (
-    name: string,
-    args?: unknown,
-    options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: unknown },
-) => { fetch: (request: Request) => Promise<Response> };
-
-const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics: AnalyticsEngineDatasetLike): Record<string, unknown> => {
-    return {
-        DISPATCHER: { get: vi.fn<DispatchNamespaceGet>().mockReturnValue({ fetch: fetchImpl }) },
-        // No control plane here on purpose: this is the `development` free tier (plan 475).
-        LUNORA_APP_DOMAIN: "lunora.app",
-        LUNORA_ENVIRONMENT: "development",
-        USAGE_ANALYTICS: analytics,
-    };
-};
+/** No control plane here on purpose: this is the `development` free tier (plan 475). */
+const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics: AnalyticsEngineDatasetLike) =>
+    dispatcherEnv({ development: true, tenant: fetchImpl, USAGE_ANALYTICS: analytics });
 
 const request = (): Request => new Request("https://acme-app.lunora.app/api/orders");
 

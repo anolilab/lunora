@@ -4,6 +4,7 @@ import { recordRecursionStop, setRecursionPolicy } from "../lunora/edge";
 import { LINEAGE_HEADER, MAX_LINEAGE_DEPTH, parseLineageParameter, readLineage, signLineage, stampLineage } from "../src/dispatcher/lineage";
 import dispatcher from "../src/dispatcher/worker";
 import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 const SECRET = "lineage-test-secret";
@@ -60,27 +61,14 @@ describe(stampLineage, () => {
     });
 });
 
-type Get = (
-    name: string,
-    args?: unknown,
-    options?: { limits?: unknown; outbound?: { lineage?: string } },
-) => { fetch: (request: Request) => Promise<Response> };
-
 const metrics = () => vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
 
+/** `development` by default: most cases here run without a control plane (plan 475). */
 const makeEnv = (tenant: (request: Request) => Promise<Response>, extra: Record<string, unknown> = {}) => {
     const writeDataPoint = metrics();
 
     return {
-        env: {
-            DISPATCHER: { get: vi.fn<Get>().mockReturnValue({ fetch: tenant }) },
-            // `development` by default: most cases here run without a control plane (plan 475).
-            LUNORA_APP_DOMAIN: "lunora.app",
-            LUNORA_ENVIRONMENT: "development",
-            LUNORA_LINEAGE_SECRET: SECRET,
-            PLATFORM_METRICS: { writeDataPoint },
-            ...extra,
-        },
+        env: dispatcherEnv({ development: true, tenant, LUNORA_LINEAGE_SECRET: SECRET, PLATFORM_METRICS: { writeDataPoint }, ...extra }),
         writeDataPoint,
     };
 };

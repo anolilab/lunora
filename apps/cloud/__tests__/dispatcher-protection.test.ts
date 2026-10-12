@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { previewCookieHeader, signPreviewToken } from "../src/dispatcher/preview-auth";
 import dispatcher from "../src/dispatcher/worker";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 /**
  * Deployment protection at the dispatcher (GAPS.md B-series follow-on).
@@ -52,18 +53,7 @@ const controlPlane = vi.fn<typeof globalThis.fetch>(async (input, init) => {
 
 vi.stubGlobal("fetch", controlPlane);
 
-const makeEnv = () => {
-    return {
-        CONTROL_PLANE_TOKEN,
-        CONTROL_PLANE_URL: "https://cp.example",
-        DISPATCHER: {
-            get: vi.fn<() => { fetch: typeof tenantFetch }>(() => {
-                return { fetch: tenantFetch };
-            }),
-        },
-        LUNORA_APP_DOMAIN: "lunora.app",
-    };
-};
+const makeEnv = () => dispatcherEnv({ CONTROL_PLANE_TOKEN, CONTROL_PLANE_URL: "https://cp.example", tenant: tenantFetch });
 
 const get = (cookie?: string, script: string = SCRIPT): Request =>
     new Request(`https://${script}.lunora.app/dashboard`, { headers: cookie === undefined ? {} : { cookie } });
