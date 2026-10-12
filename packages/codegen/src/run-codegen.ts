@@ -62,6 +62,7 @@ import discoverNondeterministicCalls from "./discover/nondeterministic-calls";
 import discoverNormalizeIdAuthorization from "./discover/normalize-id-authorization";
 import { discoverNotifyCalls, discoverNotifyConfig } from "./discover/notify";
 import discoverOwnerFieldWrites from "./discover/owner-field-writes";
+import readPackageDependencies from "./discover/package-dependencies";
 import hasPaymentStoreTables from "./discover/payment-store-tables";
 import discoverPaymentWebhooks from "./discover/payment-webhooks";
 import { assertPrivacyCoverage, discoverPrivacyCoverage } from "./discover/privacy-coverage";
@@ -668,7 +669,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
 
     // Plan 468 WS H: a table that holds user data must be covered by a privacy dataset or excluded.
-    assertPrivacyCoverage(schema.tables, discoverPrivacyCoverage(project, lunoraDirectory));
+    assertPrivacyCoverage(schema.tables, discoverPrivacyCoverage(project, lunoraDirectory, readPackageDependencies(options.projectRoot)));
 
     // Phase 1 — everything that must be resolved and RENDERED before a single
     // handler's type is inferred against it. See `declaration-surface.ts` for why
