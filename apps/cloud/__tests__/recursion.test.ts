@@ -4,6 +4,7 @@ import { recordRecursionStop, setRecursionPolicy } from "../lunora/edge";
 import { LINEAGE_HEADER, MAX_LINEAGE_DEPTH, parseLineageParameter, readLineage, signLineage, stampLineage } from "../src/dispatcher/lineage";
 import dispatcher from "../src/dispatcher/worker";
 import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 const SECRET = "lineage-test-secret";
@@ -60,25 +61,14 @@ describe(stampLineage, () => {
     });
 });
 
-type Get = (
-    name: string,
-    args?: unknown,
-    options?: { limits?: unknown; outbound?: { lineage?: string } },
-) => { fetch: (request: Request) => Promise<Response> };
-
 const metrics = () => vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
 
+/** `development` by default: most cases here run without a control plane (plan 475). */
 const makeEnv = (tenant: (request: Request) => Promise<Response>, extra: Record<string, unknown> = {}) => {
     const writeDataPoint = metrics();
 
     return {
-        env: {
-            DISPATCHER: { get: vi.fn<Get>().mockReturnValue({ fetch: tenant }) },
-            LUNORA_APP_DOMAIN: "lunora.app",
-            LUNORA_LINEAGE_SECRET: SECRET,
-            PLATFORM_METRICS: { writeDataPoint },
-            ...extra,
-        },
+        env: dispatcherEnv({ development: true, tenant, LUNORA_LINEAGE_SECRET: SECRET, PLATFORM_METRICS: { writeDataPoint }, ...extra }),
         writeDataPoint,
     };
 };
@@ -101,7 +91,7 @@ describe("dispatcher recursion protection", () => {
     it("starts a request from outside at depth 0 and hands the Outbound Worker its lineage", async () => {
         const { env } = makeEnv(async () => new Response("ok"));
 
-        await dispatcher.fetch(new Request("https://acme.lunora.app/"), env as never);
+        await dispatcher.fetch(new Request("https://acme.lunora.app/"), env);
 
         const lineage = parseLineageParameter(env.DISPATCHER.get.mock.calls[0]?.[2]?.outbound?.lineage);
 
@@ -112,7 +102,7 @@ describe("dispatcher recursion protection", () => {
         const tenant = vi.fn(async (_request: Request) => new Response("ok"));
         const { env } = makeEnv(tenant);
 
-        await dispatcher.fetch(await signedRequest(3), env as never);
+        await dispatcher.fetch(await signedRequest(3), env);
 
         expect(env.DISPATCHER.get.mock.calls[0]?.[2]?.outbound?.lineage).toBe(`3.${ROOT}`);
         expect(tenant.mock.calls[0]?.[0].headers.get(LINEAGE_HEADER)).toBeNull();
@@ -125,9 +115,10 @@ describe("dispatcher recursion protection", () => {
             headers: { [LINEAGE_HEADER]: `v1.0.${ROOT}.${String(Math.floor(Date.now() / 1000))}.${"0".repeat(64)}` },
         });
 
-        const response = await dispatcher.fetch(forged, env as never);
+        const response = await dispatcher.fetch(forged, env);
 
         expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: "invalid_lineage" });
         expect(tenant).not.toHaveBeenCalled();
         expect(recursionPoints(writeDataPoint)).toStrictEqual([["forged", 0]]);
     });
@@ -143,9 +134,10 @@ describe("dispatcher recursion protection", () => {
         const tenant = vi.fn(async () => new Response("ok"));
         const { env, writeDataPoint } = makeEnv(tenant, { CONTROL_PLANE_TOKEN: "admin", CONTROL_PLANE_URL: "https://cp.example" });
 
-        const response = await dispatcher.fetch(await signedRequest(MAX_LINEAGE_DEPTH, "loopy.lunora.app"), env as never);
+        const response = await dispatcher.fetch(await signedRequest(MAX_LINEAGE_DEPTH, "loopy.lunora.app"), env);
 
         expect(response.status).toBe(508);
+        await expect(response.json()).resolves.toMatchObject({ depth: MAX_LINEAGE_DEPTH, error: "loop_detected" });
         expect(tenant).not.toHaveBeenCalled();
         expect(recursionPoints(writeDataPoint)).toStrictEqual([["terminated", MAX_LINEAGE_DEPTH]]);
 
@@ -165,7 +157,7 @@ describe("dispatcher recursion protection", () => {
         const tenant = vi.fn(async () => new Response("ok"));
         const { env, writeDataPoint } = makeEnv(tenant, { CONTROL_PLANE_TOKEN: "admin-allow", CONTROL_PLANE_URL: "https://cp-allow.example" });
 
-        const response = await dispatcher.fetch(await signedRequest(MAX_LINEAGE_DEPTH, "allowed.lunora.app"), env as never);
+        const response = await dispatcher.fetch(await signedRequest(MAX_LINEAGE_DEPTH, "allowed.lunora.app"), env);
 
         expect(response.status).toBe(200);
         expect(recursionPoints(writeDataPoint)).toStrictEqual([["allowed", MAX_LINEAGE_DEPTH]]);
@@ -184,12 +176,12 @@ describe("dispatcher recursion protection", () => {
 
                     const outgoing = await stampLineage(request, { LUNORA_LINEAGE_SECRET: SECRET, lineage: options?.outbound?.lineage }, Date.now());
 
-                    return dispatcher.fetch(outgoing, env as never);
+                    return dispatcher.fetch(outgoing, env);
                 },
             };
         });
 
-        const response = await dispatcher.fetch(new Request("https://acme.lunora.app/"), env as never);
+        const response = await dispatcher.fetch(new Request("https://acme.lunora.app/"), env);
 
         expect(response.status).toBe(508);
         expect(invocations).toBe(MAX_LINEAGE_DEPTH);
@@ -198,7 +190,7 @@ describe("dispatcher recursion protection", () => {
     it("is inert without the secret: a header is stripped and nothing is refused", async () => {
         const tenant = vi.fn(async (_request: Request) => new Response("ok"));
         const { env } = makeEnv(tenant, { LUNORA_LINEAGE_SECRET: undefined });
-        const response = await dispatcher.fetch(new Request("https://acme.lunora.app/", { headers: { [LINEAGE_HEADER]: "garbage" } }), env as never);
+        const response = await dispatcher.fetch(new Request("https://acme.lunora.app/", { headers: { [LINEAGE_HEADER]: "garbage" } }), env);
 
         expect(response.status).toBe(200);
     });

@@ -33,7 +33,7 @@ import type { BoundClass } from "./halt-stub";
 import { assertStubKeepsClasses, buildHaltStub, classesOf, mergeClasses, provisionableClasses } from "./halt-stub";
 import type { DeployPacer } from "./pacing";
 import type { DeployTelemetry, ReleaseDeps } from "./release";
-import { droppedDurableObjectClasses, reprovision } from "./release";
+import { droppedStatefulClasses, reprovision } from "./release";
 import type { ReleaseStore } from "./release-store";
 import { assertStatusMove } from "./status-transitions";
 import { classesOnWorker, recordingDriver, storeRecorder } from "./worker-classes";
@@ -184,7 +184,7 @@ export const haltAlias = async (row: HaltRow, deps: HaltConvergeDeps): Promise<H
         reason: row.reason,
     });
 
-    assertStubKeepsClasses(stub.manifest, classes, droppedDurableObjectClasses);
+    assertStubKeepsClasses(stub.manifest, classes, droppedStatefulClasses);
 
     const placement = await placementOf(live, deps.read);
     const driver = recordingDriver(deps.driverFor(placement), storeRecorder(deps.database));

@@ -313,7 +313,7 @@ describe("deployments keep the Worker's Durable Object data", () => {
 
         await createDeployment.handler(ctx, {
             ...(allowDeleteClasses === undefined ? {} : { allowDeleteClasses }),
-            durableObjectClasses: classes,
+            statefulClasses: classes,
             kind: "production",
             organizationId: ORG as never,
             projectId: "prj_1" as never,
@@ -345,7 +345,7 @@ describe("deployments keep the Worker's Durable Object data", () => {
         await expect(releaseClasses([onWorker(["Counter", "Room"])], ["Counter"])).rejects.toMatchObject({
             code: "CONFLICT",
             message:
-                'this release no longer binds the Durable Object class(es) Room that web runs, and deploying it would delete their data. Bind them again — or, to delete that data on purpose, deploy with "allowDeleteClasses": ["Room"] (POST /v1/deploy).',
+                'this release no longer binds the stateful class(es) Room (Durable Object storage or Workflow instances) that web runs, and deploying it would delete their data. Bind them again — or, to delete that data on purpose, deploy with "allowDeleteClasses": ["Room"] (POST /v1/deploy).',
         });
     });
 

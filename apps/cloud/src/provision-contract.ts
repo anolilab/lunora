@@ -42,6 +42,56 @@ export interface DeployManifest {
     vars?: Record<string, string>;
 }
 
+/** The binding types whose stored state a converge deletes when the Worker stops binding them: Durable Object storage and Workflow instances. */
+const STATEFUL_TYPES: ReadonlySet<string> = new Set(["durable_object", "workflow"]);
+
+/** Whether a binding type keeps stored state that a converge could delete, so it must name a class. */
+export const isStatefulType = (type: string): boolean => STATEFUL_TYPES.has(type);
+
+/**
+ * Every stateful class a manifest binds (a Durable Object or a Workflow), in
+ * manifest order. This is the one definition the halt stub, the rollback and
+ * resume guards, and the deployment record all read; a second copy would let
+ * them disagree about which classes hold data.
+ *
+ * A stateful binding that names no class THROWS, in every caller. Skipping it
+ * instead would let a converge delete its class's data unchecked, since a class
+ * that is not named cannot be seen to be kept. `manifest-parse.ts` refuses such a
+ * manifest at deploy, so a stored one should never have it; a throw here means a
+ * stored manifest predates that rule and needs a look.
+ *
+ * Workflow identity is the class, not the name. The provision box does not honour
+ * a workflow `name` a project declares: Alchemy derives the Workflow's name from
+ * the script and the class, so the name in the dashboard can differ from the
+ * config. One manifest cannot show that a binding or class was renamed between
+ * two deploys. A binding renamed under the same class keeps the workflow; a removed or
+ * renamed class is a dropped class, which the keep check refuses unless the deletion is allowed.
+ * @throws {Error} naming the binding that names no class.
+ */
+export const statefulClassesOf = (manifest: DeployManifest): (BindingRequirement & { className: string })[] =>
+    manifest.bindings.flatMap((requirement) => {
+        if (!STATEFUL_TYPES.has(requirement.type)) {
+            return [];
+        }
+
+        if (requirement.className === undefined) {
+            throw new Error(`binding ${requirement.binding} (${requirement.type}) names no class`);
+        }
+
+        return [{ ...requirement, className: requirement.className }];
+    });
+
+/**
+ * The class names in `previous` that `next` does not keep, each once, in first-seen order.
+ * The one set difference behind every "would this drop a class's data" check: the rollback
+ * guard (`droppedStatefulClasses`) and the forward keep-check (`lunora/deployments.ts`).
+ */
+export const classesMissingFrom = (previous: ReadonlyArray<string>, next: ReadonlyArray<string>): string[] => {
+    const kept = new Set(next);
+
+    return [...new Set(previous)].filter((className) => !kept.has(className));
+};
+
 /** One static file, keyed by its URL path (`/index.html`), content base64-encoded. */
 export interface AssetFile {
     content: string;
@@ -267,7 +317,7 @@ export const TARGETS = {
             {
                 id: "emergencyStop",
                 label: "Emergency stop without a working token",
-                reason: "An emergency stop replaces the Worker in your account through the token you connected, so it fails — and is retried — while that token is revoked or lacks Workers Scripts: Edit. The stub keeps every Durable Object's data and parks its alarms an hour at a time (one invocation and one storage write each), and drops the Worker's cron triggers and queue consumers until the resume restores them; messages sent meanwhile wait on the queue for its retention period.",
+                reason: "An emergency stop replaces the Worker in your account through the token you connected, so it fails — and is retried — while that token is revoked or lacks Workers Scripts: Edit. The stub keeps every Durable Object's data and parks its alarms an hour at a time (one invocation and one storage write each), and drops the Worker's cron triggers and queue consumers until the resume restores them; messages sent meanwhile wait on the queue for its retention period. Workflow classes are stubbed too, and a Workflow instance that is running when the stop lands fails on its next wake, permanently: the stub's run() throws rather than resuming the instance, so the instance is not recoverable after a resume. The halt record lists the workflow classes it stubbed.",
             },
         ],
         // Request counts are read back from the account's GraphQL Analytics API, and shown, never billed.
@@ -403,7 +453,11 @@ export const BINDING_SUPPORT = {
         vectorize: "unsupported",
         vpc_network: "unsupported",
         vpc_service: "unsupported",
-        workflow: "unsupported",
+        // `bound` means the box binds the Worker's exported class as a Workflow. The box
+        // ignores a workflow `name` declared in the project: Alchemy derives the name from
+        // the script and the class, so the dashboard name can differ from the config. A
+        // platform limitation, not a bug; do not work around it here.
+        workflow: "bound",
     },
 } as const satisfies Record<TargetId, BindingSupportTable>;
 
@@ -432,7 +486,8 @@ export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, 
         vectorize: "an index needs its dimensions and metric, which wrangler.jsonc does not carry",
         vpc_network: "a VPC network reaches into your own infrastructure; bring-your-own networks are not supported on Lunora Cloud yet",
         vpc_service: "a VPC service reaches into your own infrastructure; bring-your-own services are not supported on Lunora Cloud yet",
-        workflow: "Workflows register per account script, and Workers for Platforms scripts have no such registration yet",
+        workflow:
+            "a Workflow registers against an account-level script, and a Workers for Platforms script has no such registration yet; move the project to bring-your-own Cloudflare or the customer box, or remove the workflow declaration",
     },
     "cloudflare-workers": {
         ai_search: "the provision box does not bind an AI Search instance yet",
@@ -449,7 +504,6 @@ export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, 
         vectorize: "an index needs its dimensions and metric, which wrangler.jsonc does not carry",
         vpc_network: "the provision box does not bind a VPC network yet",
         vpc_service: "the provision box does not bind a VPC service yet",
-        workflow: "a plain Worker can run Workflows, but the provision box does not register a prebuilt bundle's Workflow class yet",
     },
 };
 

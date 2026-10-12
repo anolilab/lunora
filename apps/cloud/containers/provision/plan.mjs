@@ -32,7 +32,7 @@
  * @typedef {{ id: string, kind: ProjectResourceKind, name: string }} ProjectResource
  * @typedef {{ id: string, queueId: string, scriptName: string }} QueueConsumer
  * @typedef {{ consumers: QueueConsumer[], resources: ProjectResource[], stackName: string }} ProjectStack
- * @typedef {{ binding: string, id: string, kind: "ref", resource: ProjectResourceKind } | { binding: string, kind: "ai" | "browser" | "images" } | { binding: string, className: string, kind: "durable_object" } | { binding: string, dataset: string, kind: "analytics_engine" }} WorkerBinding
+ * @typedef {{ binding: string, id: string, kind: "ref", resource: ProjectResourceKind } | { binding: string, kind: "ai" | "browser" | "images" } | { binding: string, className: string, kind: "durable_object" | "workflow" } | { binding: string, dataset: string, kind: "analytics_engine" }} WorkerBinding
  * @typedef {{ headers?: string, htmlHandling?: string, notFoundHandling?: string, redirects?: string, runWorkerFirst?: boolean | string[] }} AssetsConfig
  * @typedef {{ id: string, queueId: string }} WorkerConsumer
  * @typedef {{ assets?: { config: AssetsConfig }, bindings: WorkerBinding[], compatibility: { date: string, flags: string[] }, consumers: WorkerConsumer[], crons: string[], namespace?: string, secretNames: string[], stackName: string, tags: string[], tailConsumers: string[], vars: Record<string, string>, workerName: string }} WorkerStack
@@ -196,10 +196,36 @@ const resourceName = (requirement) => {
 };
 
 /**
+ * The class a stateful binding names, validated. A Durable Object and a Workflow both name one.
+ * @param {JobBinding} requirement A `durable_object` or `workflow` binding.
+ * @param {string} binding Its validated `env` name.
+ * @returns {string} The class name.
+ */
+const classNameOf = (requirement, binding) => expect(requirement.className, CLASS_NAME, `class name for ${binding}`);
+
+/**
+ * Record a Workflow class as bound by this job. Alchemy keys a Workflow by its class, so a
+ * second binding of one class would name the same workflow twice; refuse it.
+ * @param {Set<string>} workflowClasses The Workflow classes this job already binds.
+ * @param {string} className The class this binding names.
+ */
+const claimWorkflowClass = (workflowClasses, className) => {
+    if (workflowClasses.has(className)) {
+        throw new PlanError(`workflow class ${className} is bound more than once; a Workflow class takes one binding`);
+    }
+
+    workflowClasses.add(className);
+};
+
+/**
  * What one binding contributes to the Worker, creating its project resource on the way.
+ *
+ * The stateful types (`durable_object`, `workflow`) mirror `isStatefulType` in
+ * `src/provision-contract.ts`. This file ships as plain JS in the provision container
+ * and cannot import it, so keep the two lists in step.
  * @param {JobBinding} requirement The manifest entry (never a `queue_consumer`).
  * @param {string} binding Its validated `env` name.
- * @param {{ assets: JobSpec["assets"], consumed: Set<string | undefined>, consumers: WorkerConsumer[], controlPlaneScript: string | undefined, project: ProjectStack, provision: (requirement: JobBinding, kind: ProjectResourceKind) => string, target: PlanTarget }} context The deploy being planned.
+ * @param {{ assets: JobSpec["assets"], consumed: Set<string | undefined>, consumers: WorkerConsumer[], controlPlaneScript: string | undefined, project: ProjectStack, provision: (requirement: JobBinding, kind: ProjectResourceKind) => string, target: PlanTarget, workflowClasses: Set<string> }} context The deploy being planned.
  * @returns {WorkerBinding | undefined} The Worker's `env` entry, if the binding has one of its own.
  */
 const planBinding = (requirement, binding, context) => {
@@ -236,7 +262,7 @@ const planBinding = (requirement, binding, context) => {
         case "durable_object": {
             // Alchemy creates every new class SQLite-backed (WorkerProvider.ts); a
             // KV-storage class still works there, as that API is a subset of SQLite's.
-            return { binding, className: expect(requirement.className, CLASS_NAME, `class name for ${binding}`), kind: "durable_object" };
+            return { binding, className: classNameOf(requirement, binding), kind: "durable_object" };
         }
         case "queue_producer": {
             const id = context.provision(requirement, "queue");
@@ -258,10 +284,19 @@ const planBinding = (requirement, binding, context) => {
             return { binding, id, kind: "ref", resource: "queue" };
         }
         case "workflow": {
-            // Alchemy registers a Workflow with the account-level `putWorkflow`
-            // (Workflows/Workflow.ts), which has no dispatch-namespace variant, and
-            // only for an Effect-native Workflow — not a prebuilt bundle's class.
-            throw new PlanError(`workflow binding ${binding}: Workflows cannot be registered for a prebuilt Worker yet`);
+            // A dispatch-namespace script has no account-level Workflow registration,
+            // so only a plain Worker in an account can carry one.
+            if (context.target.kind !== "account") {
+                throw new PlanError(`workflow binding ${binding}: a dispatch-namespace Worker cannot register a Workflow`);
+            }
+
+            // The Worker's own exported class. Alchemy registers it against this
+            // Worker's script (props-only Workflow reference), in the Worker stack.
+            const className = classNameOf(requirement, binding);
+
+            claimWorkflowClass(context.workflowClasses, className);
+
+            return { binding, className, kind: "workflow" };
         }
         default: {
             throw new PlanError(`binding ${binding} has type ${JSON.stringify(requirement.type)}, which Lunora Cloud does not provision`);
@@ -363,6 +398,7 @@ const planDeploy = (spec, controlPlaneScript, target) => {
         project,
         provision,
         target,
+        workflowClasses: new Set(),
     };
     // A queue consumer entry binds nothing: its queue is attached as the producer's consumer above.
     const bindings = spec.manifest.bindings.flatMap((requirement) =>

@@ -37,12 +37,10 @@
  * reason travels as a JSON string literal.
  */
 import type { BindingRequirement, DeployManifest } from "../provision-contract";
+import { statefulClassesOf } from "../provision-contract";
 
 /** How far out a parked alarm is re-armed: the most a resumed tenant waits for its own alarm to run again. */
 export const PARK_ALARM_MS = 60 * 60 * 1000;
-
-/** The class-backed binding types: the ones whose data a converge can delete. */
-const CLASS_TYPES: ReadonlySet<string> = new Set(["durable_object", "workflow"]);
 
 /**
  * The class-name grammar `containers/provision/plan.mjs` enforces (`CLASS_NAME`)
@@ -70,25 +68,18 @@ export interface BoundClass {
     type: string;
 }
 
-/** Every Durable Object and Workflow class a manifest binds, in manifest order. */
+/**
+ * Every Durable Object and Workflow class a manifest binds, in manifest order
+ * ({@link statefulClassesOf}; it throws on a binding that names no class).
+ */
 export const classesOf = (manifest: DeployManifest): BoundClass[] =>
-    manifest.bindings.flatMap((requirement) => {
-        if (!CLASS_TYPES.has(requirement.type)) {
-            return [];
-        }
-
-        if (requirement.className === undefined) {
-            throw new HaltStubError(`binding ${requirement.binding} (${requirement.type}) names no class`);
-        }
-
-        return [
-            {
-                binding: requirement.binding,
-                className: requirement.className,
-                ...(requirement.sqlite === undefined ? {} : { sqlite: requirement.sqlite }),
-                type: requirement.type,
-            },
-        ];
+    statefulClassesOf(manifest).map((requirement) => {
+        return {
+            binding: requirement.binding,
+            className: requirement.className,
+            ...(requirement.sqlite === undefined ? {} : { sqlite: requirement.sqlite }),
+            type: requirement.type,
+        };
     });
 
 /**
@@ -146,7 +137,7 @@ const manifestOf = (classes: ReadonlyArray<BoundClass>): DeployManifest => {
  * Refuse a stub that does not bind exactly `expected` — the classes that may
  * be on the Worker, by class name and type — or that would stop binding one
  * of them (the converge deletes that class's data). `dropped` is
- * `droppedDurableObjectClasses` (`./release.ts`), the check a rollback runs,
+ * `droppedStatefulClasses` (`./release.ts`), the check a rollback runs,
  * passed in so this module stays free of the release wiring.
  * @throws {HaltStubError} naming every class that differs.
  */
@@ -181,6 +172,13 @@ export interface HaltStub {
     /** The stub module's source (the same bytes as `bundle`). */
     source: string;
 }
+
+/**
+ * The Workflow classes among a stub's classes, by class name. A stub stops each one's run(), so an
+ * instance running at the stop fails on its next wake; the halt record lists them for the operator.
+ */
+export const stubbedWorkflowsOf = (stubClasses: ReadonlyArray<BoundClass> | null | undefined): string[] =>
+    (stubClasses ?? []).filter((bound) => bound.type === "workflow").map((bound) => bound.className);
 
 /** The 503 body every request to a halted tenant gets. */
 export const haltedBody = (reason: string): string => JSON.stringify({ error: `project halted: ${reason}` });

@@ -112,6 +112,27 @@ describe(requestOrganizationHalt, () => {
 });
 
 describe(runHaltConverges, () => {
+    it("names the workflow classes a halt stubs in the halt record, and that their running instances fail on their next wake", async () => {
+        const { database, deps, releases } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
+
+        // `shop` is on a connected account, where a workflow is bound; `acme` is on Workers for Platforms, which refuses one.
+        await releases.store.put("d_shop", release({ bindings: [...LIVE_MANIFEST.bindings, { binding: "FLOW", className: "OrderFlow", type: "workflow" }] }));
+        await syncSuspensionHalts(database, NOW);
+
+        await runHaltConverges(database, ports(deps));
+
+        // The audit row carries a count; the halt record carries the full list.
+        expect((database.tables["auditLog"] ?? []).filter((row) => row["action"] === "halt.halted").map((row) => row["target"])).toStrictEqual([
+            "acme (spend-cap)",
+            "shop (spend-cap); 1 workflow classes stubbed; see the halt record",
+        ]);
+        expect((database.tables["halts"] ?? []).find((row) => row["alias"] === "shop")?.["stubClasses"]).toContainEqual({
+            binding: "FLOW",
+            className: "OrderFlow",
+            type: "workflow",
+        });
+    });
+
     it("converges each alias onto a stub of its live release's classes — no secrets, crons or consumers — and records it halted", async () => {
         const { converged, database, deps } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
 

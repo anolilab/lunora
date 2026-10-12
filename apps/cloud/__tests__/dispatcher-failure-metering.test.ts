@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import dispatcher from "../src/dispatcher/worker";
 import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 /**
  * A dispatch that never returns a response must still be metered.
@@ -19,19 +20,9 @@ import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/a
  * guard, whose entire job is to catch exactly this.
  */
 
-type DispatchNamespaceGet = (
-    name: string,
-    args?: unknown,
-    options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: unknown },
-) => { fetch: (request: Request) => Promise<Response> };
-
-const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics: AnalyticsEngineDatasetLike): Record<string, unknown> => {
-    return {
-        DISPATCHER: { get: vi.fn<DispatchNamespaceGet>().mockReturnValue({ fetch: fetchImpl }) },
-        LUNORA_APP_DOMAIN: "lunora.app",
-        USAGE_ANALYTICS: analytics,
-    };
-};
+/** No control plane here on purpose: this is the `development` free tier (plan 475). */
+const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics: AnalyticsEngineDatasetLike) =>
+    dispatcherEnv({ development: true, tenant: fetchImpl, USAGE_ANALYTICS: analytics });
 
 const request = (): Request => new Request("https://acme-app.lunora.app/api/orders");
 
@@ -40,7 +31,7 @@ describe("dispatcher metering on a failed dispatch", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.reject(new Error("tenant exploded")), { writeDataPoint });
 
-        await expect(dispatcher.fetch(request(), env as never)).rejects.toThrow("tenant exploded");
+        await expect(dispatcher.fetch(request(), env)).rejects.toThrow("tenant exploded");
 
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
 
@@ -56,7 +47,7 @@ describe("dispatcher metering on a failed dispatch", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.reject(new Error("Worker not found: acme-app")), { writeDataPoint });
 
-        const response = await dispatcher.fetch(request(), env as never);
+        const response = await dispatcher.fetch(request(), env);
 
         expect(response.status).toBe(404);
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
@@ -67,7 +58,7 @@ describe("dispatcher metering on a failed dispatch", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.resolve(new Response("ok", { status: 200 })), { writeDataPoint });
 
-        await dispatcher.fetch(request(), env as never);
+        await dispatcher.fetch(request(), env);
 
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
         expect((writeDataPoint.mock.calls[0]?.[0] as { blobs: string[] }).blobs[2]).toBe("2xx");
@@ -80,6 +71,6 @@ describe("dispatcher metering on a failed dispatch", () => {
             },
         });
 
-        await expect(dispatcher.fetch(request(), env as never)).resolves.toMatchObject({ status: 200 });
+        await expect(dispatcher.fetch(request(), env)).resolves.toMatchObject({ status: 200 });
     });
 });

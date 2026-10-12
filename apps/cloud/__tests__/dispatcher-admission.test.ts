@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import dispatcher from "../src/dispatcher/worker";
+import { parseEgressParameter } from "../src/egress/policy";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 /**
  * Admission at the dispatcher (plan 365 W3, and the fail-closed review). A
@@ -13,6 +15,7 @@ import dispatcher from "../src/dispatcher/worker";
 /** What the control-plane double answers, by script name or hostname. */
 const PLANS: Record<string, unknown> = {
     "acme-broken": "not json",
+    "acme-enforce": { egress: { mode: "enforce", origins: ["https://api.example.com"], v: 1 }, plan: "pro" },
     "acme-ok": { plan: "pro" },
     "acme-suspended": { plan: "suspended" },
     "acme-unknown": { plan: "unknown" },
@@ -50,21 +53,25 @@ vi.stubGlobal("fetch", controlPlane);
 
 const tenantFetch = vi.fn<() => Promise<Response>>(() => Promise.resolve(new Response("tenant body", { status: 200 })));
 
+/** The dispatch namespace's `get`, recorded so a test can read the `outbound` options it was called with. */
+const dispatchGet = vi.fn<(name: string, args?: unknown, options?: { outbound?: unknown }) => { fetch: typeof tenantFetch }>(() => {
+    return { fetch: tenantFetch };
+});
+
 let cell = 0;
 
 /** A fresh control-plane URL per test, so each gets its own resolver caches. */
-const environment = () => {
+const environment = (platform: { LUNORA_OTLP_ENDPOINT?: string } = {}) => {
     cell += 1;
 
     return {
-        CONTROL_PLANE_TOKEN: "cp_token_fixture", // gitleaks:allow -- fabricated fixture, not a credential
-        CONTROL_PLANE_URL: `https://cp-${String(cell)}.example`,
-        DISPATCHER: {
-            get: () => {
-                return { fetch: tenantFetch };
-            },
-        },
-        LUNORA_APP_DOMAIN: "lunora.app",
+        ...dispatcherEnv({
+            CONTROL_PLANE_TOKEN: "cp_token_fixture", // gitleaks:allow -- fabricated fixture, not a credential
+            CONTROL_PLANE_URL: `https://cp-${String(cell)}.example`,
+            tenant: tenantFetch,
+        }),
+        DISPATCHER: { get: dispatchGet },
+        ...platform,
     };
 };
 
@@ -105,5 +112,66 @@ describe("dispatcher admission", () => {
 
     it("404s an unknown hostname rather than guessing a tenant", async () => {
         await expect(status("https://nobody.example/")).resolves.toBe(404);
+    });
+});
+
+describe("dispatcher egress enforcement, through serve", () => {
+    it("refuses an enforcing policy with no platform origins outside development, without running the tenant", async () => {
+        dispatchGet.mockClear();
+
+        const response = await dispatcher.fetch(new Request("https://acme-enforce.lunora.app/"), environment());
+        const body: { error: string; reason: string } = await response.json();
+
+        expect(response.status).toBe(503);
+        expect(body.error).toBe("egress_policy_unenforceable");
+        expect(body.reason).not.toMatch(/LUNORA_/);
+        expect(dispatchGet).not.toHaveBeenCalled();
+        expect(tenantFetch).not.toHaveBeenCalled();
+    });
+
+    it("passes the egress and lineage parameters together once the platform origin is configured", async () => {
+        dispatchGet.mockClear();
+
+        const response = await dispatcher.fetch(
+            new Request("https://acme-enforce.lunora.app/"),
+            environment({ LUNORA_OTLP_ENDPOINT: "https://otlp.example.com/v1/traces" }),
+        );
+        const options = dispatchGet.mock.calls[0]?.[2] as undefined | { outbound?: Record<string, unknown> };
+
+        expect(response.status).toBe(200);
+        expect(options?.outbound).toStrictEqual({ egress: expect.any(String), lineage: expect.stringMatching(/^0\./) });
+        expect(parseEgressParameter(options?.outbound?.["egress"])?.origins).toStrictEqual(["https://api.example.com", "https://otlp.example.com"]);
+    });
+});
+
+describe("platform response headers at the dispatcher", () => {
+    it("stamps nosniff and the default referrer policy on a tenant response", async () => {
+        expect.assertions(2);
+
+        tenantFetch.mockResolvedValueOnce(new Response("tenant body", { status: 200 }));
+
+        const response = await dispatcher.fetch(new Request("https://acme-ok.lunora.app/"), environment());
+
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    });
+
+    it("keeps the Referrer-Policy a tenant set, and still stamps nosniff", async () => {
+        expect.assertions(2);
+
+        tenantFetch.mockResolvedValueOnce(new Response("tenant body", { headers: { "referrer-policy": "no-referrer" }, status: 200 }));
+
+        const response = await dispatcher.fetch(new Request("https://acme-ok.lunora.app/"), environment());
+
+        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+
+    it("stamps the dispatcher's own refusals too", async () => {
+        expect.assertions(1);
+
+        const response = await dispatcher.fetch(new Request("https://acme-suspended.lunora.app/"), environment());
+
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     });
 });

@@ -59,6 +59,7 @@ import { runAlertSweep } from "../telemetry/sweep";
 import { runUsageAlertSweep } from "../telemetry/usage-alert-sweep";
 import { runUptimeSweep } from "../uptime/sweep";
 import { runAccountErasureSweep } from "./account-erasure";
+import { sweepPlanRecords } from "./plan-records";
 
 /** The Worker's own entry, as far as a scheduled run reaches it. */
 type ScheduledWorker = Pick<LunoraWorker, "fetch" | "scheduled">;
@@ -800,6 +801,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (tick: TickContext) => Promise<void
     { cron: EVERY_HOUR, run: withStore(sweepCertificates) },
     // Suspended organizations blocked at the edge, recovered ones restored (plan 365 W8).
     { cron: EVERY_HOUR, run: withStore(sweepEdgeBlocks) },
+    // Stored plan records the dispatcher reads during a control-plane outage (plan 476). Sweep stage, so it runs after the code crons above.
+    { cron: EVERY_HOUR, run: (tick) => sweepPlanRecords(tick.env, tick.context, tick.worker) },
     // Anomaly scores over the last completed hour (plan 365 W4). It reads the hour
     // BEFORE this tick, so the usage rollback writing this tick's rows alongside
     // it lands in the next bucket rather than racing this one.

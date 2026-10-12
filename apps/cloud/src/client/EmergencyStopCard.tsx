@@ -32,7 +32,14 @@ const HaltTable = ({ halts }: { halts: HaltStatusView["halts"] }): ReactElement 
                             {halt.lastError === undefined ? null : <span className="text-destructive text-xs">Retrying: {halt.lastError}</span>}
                         </span>
                     </TableCell>
-                    <TableCell className="text-sm">{describeHaltReason(halt)}</TableCell>
+                    <TableCell className="text-sm">
+                        {describeHaltReason(halt)}
+                        {halt.stubbedWorkflows === undefined ? null : (
+                            <span className="text-muted-foreground block text-xs">
+                                Workflows stopped, running instances fail on their next wake: {halt.stubbedWorkflows.join(", ")}
+                            </span>
+                        )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                         <RelativeTime at={halt.haltedAt ?? halt.requestedAt} />
                     </TableCell>

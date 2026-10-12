@@ -55,7 +55,7 @@ const ADMIN_ROUTES = [
 const WRONG_CREDENTIALS: ReadonlyArray<[string, Record<string, string>]> = [
     ["no credential", {}],
     ["a deploy key", { authorization: `Bearer ${DEPLOY_KEY}` }],
-    ["a session cookie", { cookie: `better-auth.session_token=${SESSION_TOKEN}` }],
+    ["a session cookie", { cookie: `__Host-better-auth.session_token=${SESSION_TOKEN}` }],
     ["a session bearer", { authorization: `Bearer ${SESSION_TOKEN}` }],
     ["the admin token without the Bearer scheme", { authorization: ADMIN_TOKEN }],
 ];

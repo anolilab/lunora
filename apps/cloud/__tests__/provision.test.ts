@@ -155,6 +155,18 @@ describe(createCloudflareWorkersDriver, () => {
         expect(driver.domains.platformTargets()).toStrictEqual(["acme.workers.dev"]);
     });
 
+    it("hands the box a workflow requirement for the Worker's own class, with no resource name, so the box registers it", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+        const workflow = { binding: "FLOW", className: "OrderFlow", type: "workflow" as const };
+
+        await createCloudflareWorkersDriver({ account, box: () => box, credentials, state }).deploy({
+            ...spec,
+            manifest: { bindings: [workflow] },
+        });
+
+        expect(calls[0]?.job.action === "deploy" && calls[0].job.spec.manifest.bindings).toStrictEqual([workflow]);
+    });
+
     it("destroys in the account, and refuses a token that drifted to another account", async () => {
         const { box, calls } = fakeBox(['{"type":"result"}\n']);
 

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { limitsForPlan } from "../src/billing/plans";
-import { createPlanResolver, PLAN_STALE_GRACE_MS, resolveTenant, UNAVAILABLE_PLAN } from "../src/targets/cloudflare-wfp/route";
+import { createPlanResolver, PLAN_STALE_GRACE_MS, UNAVAILABLE_PLAN } from "../src/plans/plan-resolver";
+import { resolveTenant } from "../src/targets/cloudflare-wfp/route";
 
 describe(resolveTenant, () => {
     it("maps a single-label subdomain to its script", async () => {

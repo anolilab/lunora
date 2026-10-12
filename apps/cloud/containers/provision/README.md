@@ -155,9 +155,10 @@ Telemetry (`otel.alchemy.run`) is disabled by env and needs no egress.
 
 ## Not supported, and why
 
-- **`workflow`** — Alchemy registers a Workflow with the account-level `putWorkflow`
-  (`src/Cloudflare/Workflows/Workflow.ts`), which has no dispatch-namespace variant, and only for an
-  Effect-native Workflow — not a prebuilt bundle's class. Refused on both targets.
+- **`workflow` on a dispatch namespace** — Alchemy registers a Workflow with the account-level
+  `putWorkflow`, and a dispatch-namespace script has no such registration. Refused. On an `account`
+  target the Worker's own exported class is bound as a props-only Workflow reference, so Alchemy
+  registers it in the Worker stack, and destroying the Worker removes it.
 - **An assets binding not named `ASSETS`** — Alchemy always binds uploaded assets as `ASSETS`. Refused.
 - `container`, `hyperdrive`, `pipeline`, `vectorize` — refused here too, as in the deploy handler.
 

@@ -13,6 +13,9 @@ import type { ControlPlaneDatabase } from "../src/store";
 
 const NOW = 1_700_000_000_000;
 
+// The fixture's webhook secret, sealed for storage and used to sign the expected body. Generated, never written out.
+const SIGNING_SECRET = randomSecret();
+
 const message = renderNotification("deployment.live", { detail: "Version 3 is live at https://app.example.com.", project: "Acme" });
 
 describe(renderNotification, () => {
@@ -279,7 +282,7 @@ describe(runNotificationSweep, () => {
 
     it("decrypts a sealed channel secret and signs with it", async () => {
         const key = randomSecret();
-        const sealed = await encryptSecret(key, "signing-key");
+        const sealed = await encryptSecret(key, SIGNING_SECRET);
         const database = fakeDatabase({
             notificationChannels: [
                 {
@@ -301,16 +304,14 @@ describe(runNotificationSweep, () => {
         const [, init] = fetchSpy.mock.calls[0] ?? [];
         const headers = init?.headers as Record<string, string>;
         const body = init?.body as string;
-        // A fixed test key, never a credential.
-        // eslint-disable-next-line sonarjs/hardcoded-secret-signatures -- fixture key for the signature check
-        const expected = createHmac("sha256", "signing-key").update(`1700000000.${body}`).digest("hex");
+        const expected = createHmac("sha256", SIGNING_SECRET).update(`1700000000.${body}`).digest("hex");
 
         expect(headers["lunora-signature"]).toBe(`t=1700000000,v1=${expected}`);
         expect(database.rows.notificationDeliveries[0]).toMatchObject({ status: "delivered" });
     });
 
     it("fails a sealed channel permanently when no encryption key is configured", async () => {
-        const sealed = await encryptSecret(randomSecret(), "signing-key");
+        const sealed = await encryptSecret(randomSecret(), SIGNING_SECRET);
         const database = fakeDatabase({
             notificationChannels: [
                 {

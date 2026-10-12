@@ -27,12 +27,12 @@ export interface PlatformMetricsQuery {
     query: string;
 }
 
-/** Build the four statements for the window `(sinceSec, toSec]`. Pure, so the SQL is pinned by tests. */
+/** Build one statement per metric for the window `(sinceSec, toSec]`. Pure, so the SQL is pinned by tests. */
 export const buildPlatformMetricsQueries = (
     dataset: string,
     sinceSec: number,
     toSec: number,
-): Record<"dispatchLatency" | "dispatchOutcomes" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
+): Record<"dispatchLatency" | "dispatchOutcomes" | "misconfigured" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
     const table = analyticsEngineTable(dataset);
     const statement = (kind: string, select: string, tail: string): PlatformMetricsQuery => {
         return {
@@ -51,6 +51,11 @@ export const buildPlatformMetricsQueries = (
             PLATFORM_METRIC_KINDS.dispatch,
             "SELECT blob2 AS cell, blob3 AS outcome, COUNT(*) AS requests",
             "GROUP BY cell, outcome ORDER BY cell, outcome",
+        ),
+        misconfigured: statement(
+            PLATFORM_METRIC_KINDS.misconfigured,
+            "SELECT blob2 AS cell, blob3 AS setting, COUNT(*) AS refusals",
+            "GROUP BY cell, setting ORDER BY cell, setting",
         ),
         provisionFailures: statement(
             PLATFORM_METRIC_KINDS.provisionFailure,
@@ -79,6 +84,8 @@ const asString = (value: unknown): string => (typeof value === "string" ? value 
 /** What the endpoint returns. */
 export interface PlatformMetricsSnapshot {
     dispatch: { cell: string; outcomes: Record<string, number>; p50Ms: number; p95Ms: number; requests: number }[];
+    /** Requests refused fail-closed for a missing setting outside `development` (plan 475), per cell and setting. */
+    misconfigured: { cell: string; refusals: number; setting: string }[];
     provisionFailures: { cell: string; failures: number; reason: string; step: string }[];
     /** Peak depth per 15-minute bucket; `t` is the bucket start in epoch ms. */
     queue: { buildsPending: number; buildsRunning: number; cell: string; deploysInFlight: number; t: number }[];
@@ -86,10 +93,11 @@ export interface PlatformMetricsSnapshot {
 
 type Rows = ReadonlyArray<Record<string, unknown>>;
 
-/** Fold the four result sets into one snapshot — outcomes nested under their cell's latency row. */
+/** Fold the result sets into one snapshot — outcomes nested under their cell's latency row. */
 export const foldPlatformMetrics = (rows: {
     dispatchLatency: Rows;
     dispatchOutcomes: Rows;
+    misconfigured: Rows;
     provisionFailures: Rows;
     queueDepth: Rows;
 }): PlatformMetricsSnapshot => {
@@ -114,6 +122,9 @@ export const foldPlatformMetrics = (rows: {
     }
 
     return {
+        misconfigured: rows.misconfigured.map((row) => {
+            return { cell: asString(row.cell), refusals: asNumber(row.refusals), setting: asString(row.setting) };
+        }),
         dispatch,
         provisionFailures: rows.provisionFailures.map((row) => {
             return { cell: asString(row.cell), failures: asNumber(row.failures), reason: asString(row.reason), step: asString(row.step) };
@@ -130,7 +141,7 @@ export const foldPlatformMetrics = (rows: {
     };
 };
 
-/** Read a snapshot over `[from, to]` (epoch ms). The four reads are independent, so they run together. */
+/** Read a snapshot over `[from, to]` (epoch ms). The reads are independent, so they run together. */
 export const readPlatformMetrics = async (
     options: AnalyticsSqlCredentials & { dataset: string },
     window: { from: number; to: number },
@@ -142,12 +153,9 @@ export const readPlatformMetrics = async (
 
         return rows;
     };
-    const [dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth] = await Promise.all([
-        run(queries.dispatchLatency),
-        run(queries.dispatchOutcomes),
-        run(queries.provisionFailures),
-        run(queries.queueDepth),
-    ]);
+    // Keyed by metric, so each result is bound to its name rather than to its position in a destructure.
+    const entries = await Promise.all(Object.entries(queries).map(async ([key, query]): Promise<[string, Rows]> => [key, await run(query)]));
+    const rows = Object.fromEntries(entries) as Record<keyof typeof queries, Rows>;
 
-    return foldPlatformMetrics({ dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth });
+    return foldPlatformMetrics(rows);
 };

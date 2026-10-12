@@ -2,17 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import dispatcher from "../src/dispatcher/worker";
 import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
-
-/**
- * The `DISPATCHER.get` shape the worker calls, mirrored from its own
- * `DispatchNamespace` — binding the doubles to it means a change to the
- * dispatch call breaks these tests instead of letting them drift.
- */
-type DispatchNamespaceGet = (
-    name: string,
-    args?: unknown,
-    options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: unknown },
-) => { fetch: (request: Request) => Promise<Response> };
+import type { DispatchGet } from "./_helpers/dispatcher-env";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 /**
  * Dispatcher WebSocket pass-through spike. The hottest
@@ -26,19 +17,9 @@ type DispatchNamespaceGet = (
 
 const upgrade = (host = "acme.lunora.app"): Request => new Request(`https://${host}/_lunora/ws?shard=default`, { headers: { Upgrade: "websocket" } });
 
-interface FakeEnv {
-    DISPATCHER: { get: ReturnType<typeof vi.fn> };
-    LUNORA_APP_DOMAIN: string;
-    USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
-}
-
-const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics?: AnalyticsEngineDatasetLike): FakeEnv => {
-    return {
-        LUNORA_APP_DOMAIN: "lunora.app",
-        DISPATCHER: { get: vi.fn<DispatchNamespaceGet>().mockReturnValue({ fetch: fetchImpl }) },
-        USAGE_ANALYTICS: analytics,
-    };
-};
+/** No control plane in these tests: the `development` free tier (plan 475). */
+const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics?: AnalyticsEngineDatasetLike) =>
+    dispatcherEnv({ development: true, tenant: fetchImpl, USAGE_ANALYTICS: analytics });
 
 describe("dispatcher WebSocket pass-through", () => {
     it("returns the tenant's 101 + webSocket response unchanged", async () => {
@@ -48,7 +29,7 @@ describe("dispatcher WebSocket pass-through", () => {
         const upgraded = { status: 101, webSocket: socket } as unknown as Response;
         const env = makeEnv(() => Promise.resolve(upgraded));
 
-        const response = await dispatcher.fetch(upgrade(), env as never);
+        const response = await dispatcher.fetch(upgrade(), env);
 
         expect(response).toBe(upgraded);
         expect((response as unknown as { webSocket: unknown }).webSocket).toBe(socket);
@@ -58,7 +39,7 @@ describe("dispatcher WebSocket pass-through", () => {
         const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.resolve({ status: 101, webSocket: {} } as unknown as Response), { writeDataPoint });
 
-        await dispatcher.fetch(upgrade(), env as never);
+        await dispatcher.fetch(upgrade(), env);
 
         // free-tier limits are applied to the dispatched invocation…
         expect(env.DISPATCHER.get).toHaveBeenCalledWith("acme", undefined, {
@@ -81,8 +62,8 @@ describe("dispatcher WebSocket pass-through", () => {
     });
 
     it("404s an upgrade to an unknown hostname without calling the namespace", async () => {
-        const get = vi.fn<DispatchNamespaceGet>();
-        const response = await dispatcher.fetch(upgrade("lunora.app"), { LUNORA_APP_DOMAIN: "lunora.app", DISPATCHER: { get } });
+        const get = vi.fn<DispatchGet>();
+        const response = await dispatcher.fetch(upgrade("lunora.app"), dispatcherEnv({ development: true, dispatch: get }));
 
         expect(response.status).toBe(404);
         expect(get).not.toHaveBeenCalled();

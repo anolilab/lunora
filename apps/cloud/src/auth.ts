@@ -68,7 +68,7 @@ const socialProviders = (env: AuthEnv): LunoraAuthOptions["socialProviders"] => 
  * `organizations`/`members` model — the better-auth `organization` plugin is
  * deliberately omitted to avoid two parallel org models.
  */
-const authOptions = (env: AuthEnv, requestOrigin?: string): LunoraAuthOptions => {
+export const authOptions = (env: AuthEnv, requestOrigin?: string): LunoraAuthOptions => {
     if (!env.AUTH_SECRET) {
         throw new Error("AUTH_SECRET is required");
     }
@@ -118,7 +118,21 @@ const authOptions = (env: AuthEnv, requestOrigin?: string): LunoraAuthOptions =>
         // sign-in exhausted the limit for every legitimate user, and per-attacker
         // brute-force protection did not exist. `cf-connecting-ip` is set by the
         // edge and cannot be spoofed by the client on Workers.
-        advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] } },
+        /*
+         * Every cookie carries the `__Host-` prefix, so a sibling tenant host (every
+         * app is served from `<alias>.lunora.app`) cannot plant one with a `Domain`
+         * attribute that the control plane reads. `cookiePrefix` names all of them,
+         * including each plugin's and the OAuth state cookies, which better-auth names
+         * by bare key. The automatic `__Secure-` prefix is off because it does not stop
+         * a `Domain` cookie. Existing sessions are signed out once by the rename.
+         */
+        advanced: {
+            ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
+            cookiePrefix: "__Host-better-auth",
+            useSecureCookies: false,
+            // With the automatic prefix off, Secure is restated for every cookie.
+            defaultCookieAttributes: { httpOnly: true, path: "/", sameSite: "lax", secure: true },
+        },
         /*
          * `inviteOnly()` makes account creation a PLATFORM decision: no row is
          * written for an address with no unspent invitation, whatever minted it

@@ -365,7 +365,7 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
       so the studio links there and never claims to create or check one.
 - **Not yet:** custom domains on the customer's zone, platform runtime logs
   (the tail consumer lives in the platform's account), per-plan runtime limits
-  (no dispatcher in front), and Workflows, containers, Hyperdrive, Vectorize,
+  (no dispatcher in front), and containers, Hyperdrive, Vectorize,
   Pipelines, Stream, Media and VPC bindings — each refused with its reason.
 
 ### Customer boxes (`celld-vps`, plan 458)
@@ -802,7 +802,7 @@ consumers keep firing in the customer's account. A halt stops that code:
   free (`HALTED_CLASS_<n>` otherwise), limited to the types the target
   provisions. `assertStubKeepsClasses` refuses any other stub before anything
   converges, and runs the rollback's own drop guard
-  (`droppedDurableObjectClasses`). The `sqlite` flag is never compared: the
+  (`droppedStatefulClasses`). The `sqlite` flag is never compared: the
   provision box never sends it, and a class keeps its storage. An alias
   deployed before the record falls back to its live release and the newer
   releases that may have reached its Worker. A release that converged
@@ -1138,8 +1138,9 @@ third party that drops the header before calling back, where the chain restarts
 at depth 0. Cloudflare's per-invocation subrequest limit and the per-plan CPU
 limits still apply to those.
 
-Deployment is fail-safe in both directions. Without `LUNORA_LINEAGE_SECRET` on
-the dispatcher, lineage headers are stripped and ignored and nothing is refused.
+Deployment is fail-safe in both directions. Without `LUNORA_LINEAGE_SECRET` on the dispatcher, a request that carries a
+lineage header is refused with 503 `lineage_unverifiable`. Requests without one are unaffected. The check is skipped
+only in `development`.
 Without it on the Outbound Worker, nothing is stamped. Deploy the Outbound
 Worker before the dispatcher, because the dispatcher's namespace binding names
 it (`.github/workflows/deploy-cloud.yml` does this), and put the same secret on
@@ -1788,6 +1789,7 @@ to a session or as an MCP tool. It returns:
   `sampleInterval`) and counts by outcome
 - `queue[]`: per cell, the peak depth in each 15-minute bucket
 - `provisionFailures[]`: the top 50 (cell, step, reason) counts
+- `misconfigured[]`: dispatcher refusals for a missing setting, by `setting` (the control-plane settings, or `lineage_secret`)
 
 It reads through the AE SQL API with `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN`, and answers 501 when either is missing.
