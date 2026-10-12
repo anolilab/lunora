@@ -25,11 +25,11 @@
     "env": {
         "staging": {
             "workers_dev": true,
-            "vars": { "LUNORA_CONTROL_PLANE_URL": "<replace-with-staging-control-plane-url>" },
+            "vars": { "LUNORA_CONTROL_PLANE_URL": "https://staging.lunora.cloud" },
         },
         "production": {
             "workers_dev": true,
-            "vars": { "LUNORA_CONTROL_PLANE_URL": "<replace-with-production-control-plane-url>" },
+            "vars": { "LUNORA_CONTROL_PLANE_URL": "https://lunora.cloud" },
         },
     },
 }

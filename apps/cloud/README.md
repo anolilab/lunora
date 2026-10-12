@@ -480,7 +480,7 @@ public key and nothing else (plan 458 §3).
 | `POST /v1/hostd/rollout`                     | `adminToken`     |
 
 Configuration: `BOX_SESSION` (Durable Object, declared in every env with
-migration `v5`), `LUNORA_BOX_DOMAIN` (var, default `boxes.lunora.app`),
+migration `v5`), `LUNORA_BOX_DOMAIN` (var, default `boxes.lunora.run`),
 `LUNORA_BOX_ZONE_ID` (that domain's zone; unset → boxes enrol without
 hostnames and say so in `dnsError`), and `LUNORA_ORIGIN_URL` (already set per
 cell: the origin boxes fetch releases and manifests from).

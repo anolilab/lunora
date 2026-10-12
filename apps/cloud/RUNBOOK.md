@@ -13,7 +13,7 @@ check it worked. The detail behind each step lives in [`README.md`](./README.md)
 ## 0. Prerequisites
 
 - A Cloudflare account with **Workers Paid**, **Workers for Platforms** and
-  **Containers** enabled, and the zone the dispatcher routes (`lunora.app` in
+  **Containers** enabled, and the zone the dispatcher routes (`lunora.run` in
   `dispatcher.wrangler.jsonc`) on that account.
 - `wrangler` logged in to that account (`npx wrangler whoami`).
 - Admin on `anolilab/lunora` (to create GitHub Environments and an App).
@@ -179,10 +179,10 @@ environment so every deploy is probed.
 
 ## 6. Box zone (customer servers)
 
-Pick a zone on the account for box hostnames, e.g. `boxes.lunora.app` as a
-subdomain of `lunora.app`. Then:
+Pick a zone on the account for box hostnames, e.g. `boxes.lunora.run` as a
+subdomain of `lunora.run`. Then:
 
-- Worker var `LUNORA_BOX_DOMAIN` = that name (defaults to `boxes.lunora.app`).
+- Worker var `LUNORA_BOX_DOMAIN` = that name (defaults to `boxes.lunora.run`).
 - Worker secret or var `LUNORA_BOX_ZONE_ID` = the zone's id.
 - Confirm the cell token has Zone → DNS:Edit on it (step 2).
 
@@ -197,11 +197,11 @@ to its address; the hourly box sweep logs no orphan deletions.
 
 Custom domains on `cloudflare-wfp` get their certificates as Cloudflare-for-SaaS
 custom hostnames on the zone tenants are served under (`LUNORA_APP_DOMAIN`,
-e.g. `lunora.app` — customers CNAME their hostnames to it). Once per cell:
+e.g. `lunora.run` — customers CNAME their hostnames to it). Once per cell:
 
 - Enable **SSL for SaaS** on that zone and set its **fallback origin** to a
   proxied hostname in it that the dispatcher Worker's route covers (e.g.
-  `fallback.lunora.app`), so a custom hostname's traffic reaches the
+  `fallback.lunora.run`), so a custom hostname's traffic reaches the
   dispatcher, which routes it by hostname (`domains.routeForHostname`).
 - Worker var or secret `LUNORA_SAAS_ZONE_ID` = that zone's id.
 - Give the cell token **Zone → SSL and Certificates:Edit** on it (step 2): the
@@ -237,7 +237,7 @@ modes (`src/domains/edge-block-mode.ts`), and the Domains tab says which:
   while suspended, or the re-create fails, the domain stays broken until the
   restore succeeds (retried hourly, shown on the domain). Turn it on only where
   the requests a 503 costs outweigh that risk. Platform hostnames
-  (`{alias}.lunora.app`) keep the 503. Turning the setting off later stops new
+  (`{alias}.lunora.run`) keep the 503. Turning the setting off later stops new
   deletions; domains it already blocked are still restored on recovery.
 - **`list`: the Enterprise suspended-hostnames list.** This covers platform
   hostnames too, and certificates stay as they are. Once per cell:

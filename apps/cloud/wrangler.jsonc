@@ -105,10 +105,10 @@
     },
     "vars": {
         // The Cloudflare account this cell provisions into.
-        "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
+        "CLOUDFLARE_ACCOUNT_ID": "71929d20992f1f7ec04e20047a737f24",
         // Cell id + the apex the dispatcher routes tenant scripts under.
         "LUNORA_CELL": "default",
-        "LUNORA_APP_DOMAIN": "lunora.app",
+        "LUNORA_APP_DOMAIN": "lunora.run",
         // The namespace DISPATCHER is bound to (below); every tenant deploy lands here.
         "LUNORA_DISPATCH_NAMESPACE": "lunora-production",
         // This Worker's own script name, forwarded to the provision box so it can
@@ -119,7 +119,7 @@
         // as `LUNORA_OTLP_ENDPOINT` (+ a scoped `LUNORA_OTLP_TOKEN` secret) so its
         // `otlpSink` ships traces/logs/metrics back here. Set to this cloud
         // worker's own reachable URL; when unset, tenants deploy untelemetered.
-        "LUNORA_OTLP_ENDPOINT": "https://cloud.lunora.app",
+        "LUNORA_OTLP_ENDPOINT": "https://lunora.cloud",
         // The origin `SchedulerDO` dispatches job callbacks back to. It reads
         // this from its OWN env rather than taking it from the caller (a
         // caller-supplied dispatch target is an SSRF vector), and refuses to
@@ -130,7 +130,7 @@
         // The apex customer boxes' hostnames live under: a box gets
         // `*.<slug>.<this>` at enrolment, so a celld-vps tenant answers on
         // `<alias>.<slug>.<this>` (plan 458 D9).
-        "LUNORA_BOX_DOMAIN": "boxes.lunora.app",
+        "LUNORA_BOX_DOMAIN": "boxes.lunora.run",
     },
     "analytics_engine_datasets": [
         {
@@ -297,22 +297,22 @@
                     "max_instances": 3,
                 },
             ],
-            "d1_databases": [{ "binding": "DB", "database_id": "<replace-with-staging-d1-id>", "database_name": "lunora-cloud-staging" }],
+            "d1_databases": [{ "binding": "DB", "database_id": "c69052e4-3d89-4693-a1e5-c042ef8df04e", "database_name": "lunora-cloud-staging" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-staging" }],
             "triggers": { "crons": ["0 */1 * * *", "*/1 * * * *", "0 */6 * * *"] },
             "vars": {
-                "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
-                "LUNORA_APP_DOMAIN": "staging.lunora.app",
-                "LUNORA_BOX_DOMAIN": "boxes.staging.lunora.app",
+                "CLOUDFLARE_ACCOUNT_ID": "71929d20992f1f7ec04e20047a737f24",
+                "LUNORA_APP_DOMAIN": "staging.lunora.run",
+                "LUNORA_BOX_DOMAIN": "boxes.staging.lunora.run",
                 "LUNORA_CELL": "staging",
                 "LUNORA_DISPATCH_NAMESPACE": "lunora-staging",
                 // The dataset `PLATFORM_METRICS` is bound to below, for the read-back.
                 "PLATFORM_METRICS_DATASET": "lunora_platform_metrics_staging",
                 "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-staging",
-                "LUNORA_OTLP_ENDPOINT": "<replace-with-staging-control-plane-url>",
+                "LUNORA_OTLP_ENDPOINT": "https://staging.lunora.cloud",
                 // Same origin as above — `SchedulerDO` dispatches its job
                 // callbacks here, and refuses to schedule at all without it.
-                "LUNORA_ORIGIN_URL": "<replace-with-staging-control-plane-url>",
+                "LUNORA_ORIGIN_URL": "https://staging.lunora.cloud",
                 // PostHog ingest host for the Worker's server-side capture.
                 // `POSTHOG_PROJECT_TOKEN` is a secret (`wrangler secret put`);
                 // absent, analytics is inert and the cell runs as before.
@@ -376,21 +376,21 @@
                     "max_instances": 3,
                 },
             ],
-            "d1_databases": [{ "binding": "DB", "database_id": "<replace-with-production-d1-id>", "database_name": "lunora-cloud" }],
+            "d1_databases": [{ "binding": "DB", "database_id": "6f92aaa9-23c5-4482-a9aa-a8d7b4bcdc2e", "database_name": "lunora-cloud" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
             "triggers": { "crons": ["0 */1 * * *", "*/1 * * * *", "0 */6 * * *"] },
             "vars": {
-                "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
-                "LUNORA_APP_DOMAIN": "lunora.app",
-                "LUNORA_BOX_DOMAIN": "boxes.lunora.app",
+                "CLOUDFLARE_ACCOUNT_ID": "71929d20992f1f7ec04e20047a737f24",
+                "LUNORA_APP_DOMAIN": "lunora.run",
+                "LUNORA_BOX_DOMAIN": "boxes.lunora.run",
                 "LUNORA_CELL": "default",
                 "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-production",
                 "LUNORA_DISPATCH_NAMESPACE": "lunora-production",
-                "LUNORA_OTLP_ENDPOINT": "<replace-with-production-control-plane-url>",
+                "LUNORA_OTLP_ENDPOINT": "https://lunora.cloud",
                 // Same origin as above — `SchedulerDO` dispatches its job
                 // callbacks here, and refuses to schedule at all without it.
                 // TODO: set AUTH_URL to the production control-plane URL (see apps/cloud/src/auth.ts). Until then, better-auth derives its origin from the first request per isolate.
-                "LUNORA_ORIGIN_URL": "<replace-with-production-control-plane-url>",
+                "LUNORA_ORIGIN_URL": "https://lunora.cloud",
                 // PostHog ingest host for the Worker's server-side capture.
                 // `POSTHOG_PROJECT_TOKEN` is a secret (`wrangler secret put`);
                 // absent, analytics is inert and the cell runs as before.

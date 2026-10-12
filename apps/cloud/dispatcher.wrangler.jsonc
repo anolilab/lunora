@@ -34,7 +34,7 @@
     // Top level is `wrangler dev` only (CI always deploys with `--env`), so it is the one
     // place `development` may appear: it serves the free tier without a control plane.
     "vars": {
-        "LUNORA_APP_DOMAIN": "lunora.app",
+        "LUNORA_APP_DOMAIN": "lunora.run",
         "LUNORA_ENVIRONMENT": "development",
         // Control-plane base URL is set per deployed environment below. Unset here on purpose:
         // the dispatcher refuses all traffic outside `development` when it is missing (plan 475).
@@ -65,14 +65,14 @@
                 { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics_staging" },
             ],
             "vars": {
-                "CONTROL_PLANE_URL": "<replace-with-staging-control-plane-url>",
-                "LUNORA_APP_DOMAIN": "staging.lunora.app",
+                "CONTROL_PLANE_URL": "https://staging.lunora.cloud",
+                "LUNORA_APP_DOMAIN": "staging.lunora.run",
                 "LUNORA_ENVIRONMENT": "staging",
                 "PLAN_MAX_STALE_HOURS": "48",
             },
         },
         "production": {
-            "routes": [{ "pattern": "*/*", "zone_name": "lunora.app" }],
+            "routes": [{ "pattern": "*/*", "zone_name": "lunora.run" }],
             "dispatch_namespaces": [
                 {
                     "binding": "DISPATCHER",
@@ -85,8 +85,8 @@
                 { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },
             ],
             "vars": {
-                "CONTROL_PLANE_URL": "<replace-with-production-control-plane-url>",
-                "LUNORA_APP_DOMAIN": "lunora.app",
+                "CONTROL_PLANE_URL": "https://lunora.cloud",
+                "LUNORA_APP_DOMAIN": "lunora.run",
                 "LUNORA_ENVIRONMENT": "production",
                 "PLAN_MAX_STALE_HOURS": "48",
             },
