@@ -30,6 +30,9 @@ const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
 /** The package's own extension key. Its tables are the only exemption: an app table named `privacy_*` is checked. */
 const PRIVACY_EXTENSION_KEY = "privacy";
 
+/** Built-in dataset factories. The app never declares them with `defineDataset`, so they are known, not unused. */
+const BUILTIN_DATASET_CALLS: ReadonlySet<string> = new Set(["actionCacheDataset", "authDataset", "documentHistoryDataset"]);
+
 /** The better-auth tables `authDataset()` covers by default. Mirrors `@lunora/privacy`. */
 const AUTH_DEFAULT_TABLES: ReadonlyArray<string> = ["account", "apikey", "member", "passkey", "session", "teamMember", "twoFactor", "user"];
 
@@ -213,17 +216,22 @@ const visitCall = (call: CallExpression, state: CoverageState): void => {
 const isDefineDatasetCall = (node: Node | undefined): node is CallExpression =>
     node !== undefined && Node.isCallExpression(node) && calleeName(node) === "defineDataset";
 
+/** `true` when the node is a call to a built-in dataset factory. */
+const isBuiltinDatasetCall = (node: Node | undefined): node is CallExpression =>
+    node !== undefined && Node.isCallExpression(node) && BUILTIN_DATASET_CALLS.has(calleeName(node) ?? "");
+
 /**
- * The `defineDataset` variable an identifier refers to, following an import alias to its source. Returns
- * `undefined` when the identifier does not resolve to such a variable, which makes the caller treat the
- * whole `datasets` literal as unresolvable.
+ * The variable an identifier refers to, following an import alias to its source, when that variable is a
+ * `defineDataset` or built-in dataset. Returns `undefined` otherwise, which makes the caller treat the whole
+ * `datasets` literal as unresolvable.
  */
 const datasetDeclarationOf = (identifier: Node): VariableDeclaration | undefined => {
     const symbol = identifier.getSymbol();
     const target = symbol?.isAlias() === true ? symbol.getAliasedSymbol() : symbol;
     const declaration = target?.getValueDeclaration();
+    const initializer = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
-    return Node.isVariableDeclaration(declaration) && isDefineDatasetCall(declaration.getInitializer()) ? declaration : undefined;
+    return Node.isVariableDeclaration(declaration) && (isDefineDatasetCall(initializer) || isBuiltinDatasetCall(initializer)) ? declaration : undefined;
 };
 
 /**
@@ -253,7 +261,7 @@ const passedDatasetsOf = (call: CallExpression): Set<VariableDeclaration> | unde
     const passed = new Set<VariableDeclaration>();
 
     for (const element of value.getElements()) {
-        if (isDefineDatasetCall(element)) {
+        if (isDefineDatasetCall(element) || isBuiltinDatasetCall(element)) {
             // An inline dataset is passed by construction, so nothing can be unused here.
             continue;
         }

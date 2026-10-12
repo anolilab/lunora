@@ -60,6 +60,15 @@ const generate = (): void => {
     runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 };
 
+/** The `notesData` declaration, shared by fixtures that need `notes` covered. */
+const COVERED_DATASET_BODY = `export const notesData = defineDataset("notes", {
+    legalBasis: "contract",
+    origin: "provided",
+    purpose: "Notes the user wrote",
+    tables: { notes: {} },
+});
+`;
+
 /** A `privacy.ts` that declares one dataset over `notes` and passes it to `definePrivacy`. */
 const COVERED_PRIVACY = `import { defineDataset, definePrivacy } from "@lunora/privacy";
 
@@ -238,14 +247,16 @@ describe("the privacy coverage lint", () => {
 
         writeApp({
             files: {
-                "datasets.ts": `import { defineDataset } from "@lunora/privacy";\n\nexport const notesData = defineDataset("notes", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Notes the user wrote",\n    tables: { notes: {} },\n});\n`,
+                "datasets.ts": `import { defineDataset } from "@lunora/privacy";\n\nexport const notesData = defineDataset("notes", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Notes the user wrote",\n    tables: { notes: {} },\n});\n\nexport const orphanData = defineDataset("orphan", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Never passed",\n    tables: {},\n});\n`,
                 "privacy.ts": `import { definePrivacy } from "@lunora/privacy";\n\nimport { notesData } from "./datasets";\n\nexport const privacy = definePrivacy({ datasets: [notesData] });\n`,
             },
         });
 
+        // Throwing about orphanData shows the alias resolved (otherwise the literal is unresolvable and nothing is
+        // reported) and that the imported notesData matched by identity (otherwise it would be reported too).
         expect(() => {
             generate();
-        }).not.toThrow();
+        }).toThrow(/privacy_dataset_unused: "orphanData"/u);
     });
 
     it("refuses an exclusion with a blank reason even when a dataset also covers the table", () => {
@@ -261,6 +272,21 @@ describe("the privacy coverage lint", () => {
         expect(() => {
             generate();
         }).toThrow(/excluded without a reason/u);
+    });
+
+    it("treats an inline or variable-bound built-in dataset as passed, so an orphan beside it is still reported", () => {
+        expect.assertions(1);
+
+        // notesData covers the user table, so the coverage check passes and only the orphan can fail the build.
+        writeApp({
+            files: {
+                "privacy.ts": `import { authDataset, defineDataset, definePrivacy } from "@lunora/privacy";\n\n${COVERED_DATASET_BODY}\nexport const auth = authDataset();\n\nexport const orphanData = defineDataset("orphan", {\n    legalBasis: "contract",\n    origin: "provided",\n    purpose: "Never passed",\n    tables: {},\n});\n\nexport const privacy = definePrivacy({ datasets: [authDataset(), auth, notesData] });\n`,
+            },
+        });
+
+        expect(() => {
+            generate();
+        }).toThrow(/privacy_dataset_unused: "orphanData"/u);
     });
 
     it("does not report an unused dataset when the datasets literal cannot be resolved", () => {
