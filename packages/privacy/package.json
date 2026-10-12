@@ -46,6 +46,10 @@
             "types": "./dist/de.d.ts",
             "import": "./dist/de.mjs"
         },
+        "./workflow": {
+            "types": "./dist/workflow.d.ts",
+            "import": "./dist/workflow.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
