@@ -17,7 +17,7 @@ import { cancelRequest, downloadUrl, myRequests, privacyPort, requestErasure } f
 import schema from "../lunora/schema";
 import { addTask, myTasks } from "../lunora/tasks";
 import type { RunHooks } from "./workflow-context";
-import { workflowContext } from "./workflow-context";
+import { tombstoneNamespace, workflowContext } from "./workflow-context";
 
 type Harness = ReturnType<typeof lunoraTest>;
 type Context = WorkflowRunContext<{ requestId: string }>;
@@ -30,19 +30,6 @@ const appCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
 
 const DOWNLOAD_PATH = /\/privacy\/files\//u;
 const NO_WORKFLOWS = /ctx\.workflows/u;
-
-/** An in-memory stand-in for the `PRIVACY_TOMBSTONES` Durable Object. The workerd suite runs the real one. */
-const tombstoneNamespace = () => {
-    const keys = new Map<string, number>();
-    const stub = {
-        add: async (key: string, erasedAt: number) => {
-            keys.set(key, erasedAt);
-        },
-        keys: async () => [...keys.keys()],
-    };
-
-    return { get: () => stub, idFromName: (name: string) => name, keys };
-};
 
 /**
  * A workflow context over the harness. `run` calls the app's internal `privacyPort` mutation,

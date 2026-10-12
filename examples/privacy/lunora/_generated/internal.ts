@@ -11,6 +11,7 @@ export interface InternalApiTypes {
     };
     requests: {
         privacyPort: FunctionReference<"mutation", { method: string; payload: string }, string>;
+        privacySweep: FunctionReference<"mutation", {}, { expired: string[]; purged: number; }>;
         privacyTick: FunctionReference<"mutation", {}, { approaching: string[]; overdue: string[]; }>;
     };
 }
@@ -22,6 +23,7 @@ export const internal: InternalApiTypes = {
     },
     requests: {
         privacyPort: { __lunoraRef: "requests:privacyPort" },
+        privacySweep: { __lunoraRef: "requests:privacySweep" },
         privacyTick: { __lunoraRef: "requests:privacyTick" },
     },
 };

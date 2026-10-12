@@ -90,6 +90,18 @@ export const privacyTick = internalMutation.mutation(async ({ ctx }) => {
     return { approaching: approaching.map((request) => request.id), overdue: overdue.map((request) => request.id) };
 });
 
+/**
+ * The daily housekeeping sweep. Internal: only the cron calls it. It expires every ready export past
+ * its download window, deleting its files first, and purges archived rows whose retention has ended.
+ */
+export const privacySweep = internalMutation.mutation(async ({ ctx }) => {
+    const { expired, purged } = await privacyFor(ctx).admin.sweep();
+
+    ctx.log.info("privacy housekeeping swept", { expired: expired.length, purged });
+
+    return { expired: expired.map((request) => request.id), purged };
+});
+
 /** The port the durable workflows call through `ctx.run`. Internal: never reachable from a client. */
 export const privacyPort = internalMutation
     .input({ method: v.string(), payload: v.string() })

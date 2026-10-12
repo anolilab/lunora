@@ -5,6 +5,26 @@
  */
 import type { WorkflowRunContext } from "@lunora/workflow";
 
+/** The in-memory tombstone store: the namespace surface the app's port reads, and the keys it holds. */
+interface TombstoneNamespaceDouble {
+    readonly get: () => { add: (key: string, erasedAt: number) => Promise<void>; keys: () => Promise<string[]> };
+    readonly idFromName: (name: string) => string;
+    readonly keys: Map<string, number>;
+}
+
+/** An in-memory stand-in for the `PRIVACY_TOMBSTONES` Durable Object. The workerd suite runs the real one. */
+const tombstoneNamespace = (): TombstoneNamespaceDouble => {
+    const keys = new Map<string, number>();
+    const stub = {
+        add: async (key: string, erasedAt: number) => {
+            keys.set(key, erasedAt);
+        },
+        keys: async () => [...keys.keys()],
+    };
+
+    return { get: () => stub, idFromName: (name: string) => name, keys };
+};
+
 /** What a test can observe of, and do during, a workflow run. */
 interface RunHooks {
     /** Runs while the workflow sleeps through the grace window, as a subject's cancel would. */
@@ -44,4 +64,4 @@ const workflowContext = <Params>({ env, params, run }: WorkflowContextOptions<Pa
 };
 
 export type { RunHooks };
-export { workflowContext };
+export { tombstoneNamespace, workflowContext };

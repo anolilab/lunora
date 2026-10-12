@@ -30,5 +30,6 @@ export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [
 export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {
     "0 6 * * *": [
         { name: "privacy deadlines", functionPath: "requests:privacyTick", args: {} },
+        { name: "privacy housekeeping", functionPath: "requests:privacySweep", args: {} },
     ],
 };

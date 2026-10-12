@@ -67,6 +67,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "requests:downloadUrl": lunora_requests_1.downloadUrl as unknown as RegisteredLunoraFunction,
     "requests:myRequests": lunora_requests_1.myRequests as unknown as RegisteredLunoraFunction,
     "requests:privacyPort": lunora_requests_1.privacyPort as unknown as RegisteredLunoraFunction,
+    "requests:privacySweep": lunora_requests_1.privacySweep as unknown as RegisteredLunoraFunction,
     "requests:privacyTick": lunora_requests_1.privacyTick as unknown as RegisteredLunoraFunction,
     "requests:requestErasure": lunora_requests_1.requestErasure as unknown as RegisteredLunoraFunction,
     "requests:requestExport": lunora_requests_1.requestExport as unknown as RegisteredLunoraFunction,
@@ -177,6 +178,7 @@ export interface Caller {
         downloadUrl: (args: { requestId: string }) => Promise<string>;
         myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; type: import("@lunora/privacy").RequestType }[]>;
         privacyPort: (args: { method: string; payload: string }) => Promise<string>;
+        privacySweep: (args?: {}) => Promise<{ expired: string[]; purged: number; }>;
         privacyTick: (args?: {}) => Promise<{ approaching: string[]; overdue: string[]; }>;
         requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; type: import("@lunora/privacy").RequestType }>;
         requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; type: import("@lunora/privacy").RequestType }>;
@@ -233,6 +235,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         downloadUrl: (args) => callRegistered(context, "requests:downloadUrl", args),
         myRequests: (args) => callRegistered(context, "requests:myRequests", args),
         privacyPort: (args) => callRegistered(context, "requests:privacyPort", args),
+        privacySweep: (args) => callRegistered(context, "requests:privacySweep", args),
         privacyTick: (args) => callRegistered(context, "requests:privacyTick", args),
         requestErasure: (args) => callRegistered(context, "requests:requestErasure", args),
         requestExport: (args) => callRegistered(context, "requests:requestExport", args),
