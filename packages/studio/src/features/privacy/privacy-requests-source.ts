@@ -27,21 +27,13 @@ type PrivacyRequestType = "erasure" | "export";
  * Lifecycle status of a request. Mirrors `RequestStatus` in
  * `packages/privacy/src/lifecycle.ts`. Only `failed` rows offer a Retry action.
  */
-type PrivacyRequestStatus = "cancelled" | "completed" | "failed" | "grace" | "processing" | "ready" | "received";
+type PrivacyRequestStatus = "cancelled" | "completed" | "expired" | "failed" | "grace" | "processing" | "ready" | "received";
 
 /**
- * Every {@link PrivacyRequestStatus}, for exhaustive iteration in tests. `satisfies`
- * rejects a value outside the union; the test's `Exclude` check rejects a missing one.
+ * Every {@link PrivacyRequestStatus}, for exhaustive iteration in tests. The test's
+ * `Exclude` check rejects a missing value, and its list comparison rejects an extra one.
  */
-const PRIVACY_REQUEST_STATUSES = [
-    "received",
-    "grace",
-    "processing",
-    "ready",
-    "completed",
-    "failed",
-    "cancelled",
-] as const satisfies ReadonlyArray<PrivacyRequestStatus>;
+const PRIVACY_REQUEST_STATUSES = ["received", "grace", "processing", "ready", "completed", "failed", "cancelled", "expired"] as const;
 
 /**
  * One open request as the Studio displays it. Timestamps are epoch milliseconds.

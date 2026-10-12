@@ -836,7 +836,7 @@ interface PrivacyRequestRow {
 ### `PrivacyRequestStatus` (type)
 
 ```ts
-type PrivacyRequestStatus = "cancelled" | "completed" | "failed" | "grace" | "processing" | "ready" | "received";
+type PrivacyRequestStatus = "cancelled" | "completed" | "expired" | "failed" | "grace" | "processing" | "ready" | "received";
 ```
 
 ### `PrivacyRequestType` (type)

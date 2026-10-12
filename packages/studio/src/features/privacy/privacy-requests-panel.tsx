@@ -36,6 +36,7 @@ type StatusBadgeVariant = "destructive" | "info" | "outline" | "secondary" | "su
 const STATUS_VARIANT: Readonly<Record<PrivacyRequestStatus, StatusBadgeVariant>> = {
     cancelled: "outline",
     completed: "success",
+    expired: "outline",
     failed: "destructive",
     grace: "secondary",
     processing: "warning",
