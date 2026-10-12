@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { isOverdue } from "../../../../../shared/privacy-deadlines";
+import { REQUEST_STATUSES } from "../../../../../shared/privacy-request-status";
 import type { PrivacyRequestRow } from "../../../src/features/privacy/privacy-requests-source";
-import { isPrivacyRequestOverdue, PRIVACY_REQUEST_STATUSES } from "../../../src/features/privacy/privacy-requests-source";
+import { isPrivacyRequestOverdue } from "../../../src/features/privacy/privacy-requests-source";
 
 const NOW = Date.parse("2026-10-11T00:00:00Z");
 const DAY = 86_400_000;
@@ -53,7 +54,7 @@ describe("isPrivacyRequestOverdue", () => {
     it("agrees with the shared rule the privacy package's sweep uses, for every status", () => {
         expect.assertions(8);
 
-        for (const status of PRIVACY_REQUEST_STATUSES) {
+        for (const status of REQUEST_STATUSES) {
             expect(isPrivacyRequestOverdue(row({ dueAt: NOW - DAY, status }), NOW)).toBe(isOverdue({ dueAt: new Date(NOW - DAY), status }, new Date(NOW)));
         }
     });

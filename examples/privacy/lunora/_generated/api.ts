@@ -8,11 +8,11 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     requests: {
-        cancelRequest: FunctionReference<"mutation", { requestId: string }, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
+        cancelRequest: FunctionReference<"mutation", { requestId: string }, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
         downloadUrl: FunctionReference<"query", { requestId: string }, string>;
-        myRequests: FunctionReference<"query", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }[]>;
-        requestErasure: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
-        requestExport: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
+        myRequests: FunctionReference<"query", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }[]>;
+        requestErasure: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
+        requestExport: FunctionReference<"mutation", {}, { dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
     };
     tasks: {
         addTask: FunctionReference<"mutation", { title: string }, Id<"tasks">>;

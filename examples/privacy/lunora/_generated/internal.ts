@@ -6,7 +6,7 @@ import type { FunctionReference } from "lunorash/client";
 /** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
 export interface InternalApiTypes {
     admin: {
-        listOpenPrivacyRequests: FunctionReference<"query", {}, { dueAt: number; extendedDueAt: number | null; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; subjectId: string; type: import("@lunora/privacy").RequestType }[]>;
+        listOpenPrivacyRequests: FunctionReference<"query", {}, import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
         retryPrivacyRequest: FunctionReference<"mutation", { requestId: string }, { requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
     };
     requests: {

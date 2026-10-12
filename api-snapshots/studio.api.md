@@ -827,22 +827,10 @@ interface PrivacyRequestRow {
     readonly extendedDueAt?: null | number;
     readonly id: string;
     readonly receivedAt: number;
-    readonly status: PrivacyRequestStatus;
+    readonly status: RequestStatus;
     readonly subjectId: string;
-    readonly type: PrivacyRequestType;
+    readonly type: RequestType;
 }
-```
-
-### `PrivacyRequestStatus` (type)
-
-```ts
-type PrivacyRequestStatus = RequestStatus;
-```
-
-### `PrivacyRequestType` (type)
-
-```ts
-type PrivacyRequestType = RequestType;
 ```
 
 ### `PrivacyRequestsSource` (interface)

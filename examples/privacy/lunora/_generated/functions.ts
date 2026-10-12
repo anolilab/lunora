@@ -169,17 +169,17 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     admin: {
-        listOpenPrivacyRequests: (args?: {}) => Promise<{ dueAt: number; extendedDueAt: number | null; id: string; receivedAt: number; status: import("@lunora/privacy").RequestStatus; subjectId: string; type: import("@lunora/privacy").RequestType }[]>;
+        listOpenPrivacyRequests: (args?: {}) => Promise<import("../../../../shared/privacy-request-row.js").PrivacyRequestRow[]>;
         retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; } | { requestId: string; status: import("@lunora/privacy").RequestStatus; }>;
     };
     requests: {
-        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
+        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
         downloadUrl: (args: { requestId: string }) => Promise<string>;
-        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }[]>;
+        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }[]>;
         privacyPort: (args: { method: string; payload: string }) => Promise<string>;
         privacyTick: (args?: {}) => Promise<{ approaching: string[]; overdue: string[]; }>;
-        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
-        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "export" | "erasure" }>;
+        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
+        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: "erasure" | "export" }>;
     };
     tasks: {
         addTask: (args: { title: string }) => Promise<Id<"tasks">>;

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
+import type { RequestStatus } from "../../../../../shared/privacy-request-status";
 import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -9,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useT } from "../../i18n/i18n-context";
 import { formatTimestamp } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-import type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus } from "./privacy-requests-source";
+import type { PrivacyRequestRow, PrivacyRequestsSource } from "./privacy-requests-source";
 import { isPrivacyRequestOverdue } from "./privacy-requests-source";
 
 /** Query key shared by the list read and the invalidation after a retry. */
@@ -29,11 +30,11 @@ interface PrivacyRequestsPanelProps {
 type StatusBadgeVariant = "destructive" | "info" | "outline" | "secondary" | "success" | "warning";
 
 /**
- * Badge variant per status. Exhaustive over {@link PrivacyRequestStatus}: a status
+ * Badge variant per status. Exhaustive over {@link RequestStatus}: a status
  * added to the union without a variant here fails to compile. A failed request is
  * the one an operator must act on, so it is the only destructive badge.
  */
-const STATUS_VARIANT: Readonly<Record<PrivacyRequestStatus, StatusBadgeVariant>> = {
+const STATUS_VARIANT: Readonly<Record<RequestStatus, StatusBadgeVariant>> = {
     cancelled: "outline",
     completed: "success",
     expired: "outline",

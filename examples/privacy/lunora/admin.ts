@@ -10,21 +10,12 @@ import type { RequestRecord } from "@lunora/privacy";
 import { LunoraError } from "lunorash/errors";
 import { v } from "lunorash/values";
 
+import type { PrivacyRequestRow } from "../../../shared/privacy-request-row";
 import { internalMutation, internalQuery } from "./_generated/server.js";
 import { privacyFor } from "./privacy";
 
-/** One open request as the Studio's page shows it. Dates are epoch milliseconds. */
-export interface OpenRequestRow {
-    dueAt: number;
-    extendedDueAt: number | null;
-    id: string;
-    receivedAt: number;
-    status: RequestRecord["status"];
-    subjectId: string;
-    type: RequestRecord["type"];
-}
-
-const rowOf = (record: RequestRecord): OpenRequestRow => {
+/** One open request in the row shape the Studio's page reads (`shared/privacy-request-row`). */
+const rowOf = (record: RequestRecord): PrivacyRequestRow => {
     return {
         dueAt: record.dueAt.getTime(),
         extendedDueAt: record.extendedDueAt?.getTime() ?? null,
@@ -37,7 +28,7 @@ const rowOf = (record: RequestRecord): OpenRequestRow => {
 };
 
 /** Every request that is not yet terminal: the package's `admin.open()`. */
-export const listOpenPrivacyRequests = internalQuery.query(async ({ ctx }): Promise<OpenRequestRow[]> => {
+export const listOpenPrivacyRequests = internalQuery.query(async ({ ctx }): Promise<PrivacyRequestRow[]> => {
     const open = await privacyFor(ctx).admin.open();
 
     return open.map((record) => rowOf(record));

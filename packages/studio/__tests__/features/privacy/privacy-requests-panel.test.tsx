@@ -3,9 +3,10 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { RequestStatus } from "../../../../../shared/privacy-request-status";
+import { REQUEST_STATUSES } from "../../../../../shared/privacy-request-status";
 import { PrivacyRequestsPanel } from "../../../src/features/privacy/privacy-requests-panel";
-import type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus } from "../../../src/features/privacy/privacy-requests-source";
-import { PRIVACY_REQUEST_STATUSES } from "../../../src/features/privacy/privacy-requests-source";
+import type { PrivacyRequestRow, PrivacyRequestsSource } from "../../../src/features/privacy/privacy-requests-source";
 import { formatTimestamp } from "../../../src/lib/internal";
 
 type ListFn = PrivacyRequestsSource["listOpenPrivacyRequests"];
@@ -159,7 +160,7 @@ describe("privacyRequestsPanel", () => {
     it("renders a badge with the status text for every status", async () => {
         expect.hasAssertions();
 
-        const rows: ReadonlyArray<PrivacyRequestRow> = PRIVACY_REQUEST_STATUSES.map((status: PrivacyRequestStatus) => {
+        const rows: ReadonlyArray<PrivacyRequestRow> = REQUEST_STATUSES.map((status: RequestStatus) => {
             return {
                 ...openRequest,
                 id: `req_${status}`,
@@ -172,18 +173,18 @@ describe("privacyRequestsPanel", () => {
         const renderedRows = await waitFor(() => {
             const found = screen.getAllByTestId("privacy-request-row");
 
-            expect(found).toHaveLength(PRIVACY_REQUEST_STATUSES.length);
+            expect(found).toHaveLength(REQUEST_STATUSES.length);
 
             return found;
         });
 
-        expect(renderedRows.map((row) => within(row).getAllByRole("cell")[3]?.textContent)).toEqual(PRIVACY_REQUEST_STATUSES);
+        expect(renderedRows.map((row) => within(row).getAllByRole("cell")[3]?.textContent)).toEqual(REQUEST_STATUSES);
     });
 
     it("offers Retry on the failed status only, across every status", async () => {
         expect.assertions(2);
 
-        const rows: ReadonlyArray<PrivacyRequestRow> = PRIVACY_REQUEST_STATUSES.map((status: PrivacyRequestStatus) => {
+        const rows: ReadonlyArray<PrivacyRequestRow> = REQUEST_STATUSES.map((status: RequestStatus) => {
             return {
                 ...openRequest,
                 id: `req_${status}`,

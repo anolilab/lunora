@@ -5,42 +5,19 @@
  * defines the only contract the page depends on. The host app builds a
  * {@link PrivacyRequestsSource} from its own operator functions and passes it to the
  * Studio as `privacyRequests`. Without one, the page renders a "not configured"
- * state and makes no request. `examples/privacy` wires both functions
- * (`lunora/admin.ts`): the open list is the privacy `admin.open()` API, and a retry
- * is its `admin.retry(requestId)`.
+ * state and makes no request. `examples/privacy` wires both functions in
+ * `lunora/admin.ts`: the open list is the package's `admin.open()`, and a retry is
+ * its `admin.retry(requestId)`, after which the example restarts a failed erasure's
+ * workflow, because only the workflow reaches the tombstone store.
  *
- * The status list and the overdue rule come from `shared/`, written for the privacy
- * package to read too, so the Studio neither mirrors them by hand nor depends on the
- * package. Both judge a request by the deadline it stored, so the page and the
- * package's deadline sweep cannot disagree about which request is overdue.
+ * The row shape, the status list and the overdue rule come from `shared/`, written for
+ * the example and the privacy package to read too, so the Studio neither mirrors them
+ * by hand nor depends on the package. Both judge a request by the deadline it stored,
+ * so the page and the package's deadline sweep cannot disagree about which request is
+ * overdue.
  */
 import { isOverdue } from "../../../../../shared/privacy-deadlines";
-import type { RequestStatus, RequestType } from "../../../../../shared/privacy-request-status";
-import { REQUEST_STATUSES } from "../../../../../shared/privacy-request-status";
-
-/** Kind of data-subject request. */
-type PrivacyRequestType = RequestType;
-
-/** Lifecycle status of a request. Only `failed` rows offer a Retry action. */
-type PrivacyRequestStatus = RequestStatus;
-
-/** Every {@link PrivacyRequestStatus}, for exhaustive iteration. */
-const PRIVACY_REQUEST_STATUSES: ReadonlyArray<PrivacyRequestStatus> = REQUEST_STATUSES;
-
-/**
- * One open request as the Studio displays it. Timestamps are epoch milliseconds.
- * `extendedDueAt` is set only when the deadline was extended, so the effective
- * deadline is `extendedDueAt ?? dueAt`.
- */
-interface PrivacyRequestRow {
-    readonly dueAt: number;
-    readonly extendedDueAt?: null | number;
-    readonly id: string;
-    readonly receivedAt: number;
-    readonly status: PrivacyRequestStatus;
-    readonly subjectId: string;
-    readonly type: PrivacyRequestType;
-}
+import type { PrivacyRequestRow } from "../../../../../shared/privacy-request-row";
 
 /** What the Studio's Privacy requests page reads and writes. */
 interface PrivacyRequestsSource {
@@ -65,5 +42,7 @@ const isPrivacyRequestOverdue = (row: PrivacyRequestRow, now: number): boolean =
         new Date(now),
     );
 
-export type { PrivacyRequestRow, PrivacyRequestsSource, PrivacyRequestStatus, PrivacyRequestType };
-export { isPrivacyRequestOverdue, PRIVACY_REQUEST_STATUSES };
+export type { PrivacyRequestsSource };
+export { isPrivacyRequestOverdue };
+
+export { type PrivacyRequestRow } from "../../../../../shared/privacy-request-row";
