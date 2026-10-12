@@ -10,7 +10,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { dueAt, extendedDueAt } from "./deadlines";
 import type { RequestStatus, RequestType } from "./lifecycle";
-import { canCancel, canExtend, erasureGraceUntil, isTerminal, transition } from "./lifecycle";
+import { canCancel, canExtend, erasureGraceUntil, isRequestStatus, isTerminal, transition } from "./lifecycle";
 
 /** A request as the service sees it. */
 interface RequestRecord {
@@ -31,28 +31,78 @@ interface RequestRecord {
 
 /**
  * A request as a workflow step returns it: every date as an ISO string, so the result survives
- * the JSON round trip a durable host stores it through.
+ * the JSON round trip a durable host stores it through. An unset field is left out, as JSON would.
  */
-type StepRequestRecord = {
-    readonly [K in keyof RequestRecord]: RequestRecord[K] extends Date | undefined ? Extract<RequestRecord[K], undefined> | string : RequestRecord[K];
+const toStepRecord = (record: RequestRecord): Readonly<Record<string, string>> => {
+    const step: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(record)) {
+        if (value !== undefined) {
+            step[key] = value instanceof Date ? value.toISOString() : String(value);
+        }
+    }
+
+    return step;
 };
 
-/** The request fields that hold a date. */
-const DATE_FIELDS: ReadonlySet<string> = new Set(["dueAt", "erasureGraceUntil", "expiresAt", "extendedDueAt", "receivedAt"]);
+const malformedStep = (field: string): LunoraError => new LunoraError("INTERNAL", `A workflow step returned a privacy request with a malformed "${field}".`);
 
-/** Copy a record with each date field mapped, and every absent field left out, as JSON would. */
-const mapDates = (record: object, map: (value: unknown) => unknown): Record<string, unknown> =>
-    Object.fromEntries(
-        Object.entries(record)
-            .filter(([, value]) => value !== undefined)
-            .map(([key, value]) => [key, DATE_FIELDS.has(key) ? map(value) : value]),
-    );
+/**
+ * Read a request back from its step form, with every date a `Date` again. The step store is
+ * outside the package, so every field is checked here and a malformed one throws.
+ */
+const fromStepRecord = (step: unknown): RequestRecord => {
+    if (typeof step !== "object" || step === null) {
+        throw malformedStep("record");
+    }
 
-/** Write a request into its JSON-safe step form. */
-const toStepRecord = (record: RequestRecord): StepRequestRecord => mapDates(record, (value) => (value as Date).toISOString()) as unknown as StepRequestRecord;
+    const fields = new Map<string, unknown>(Object.entries(step));
 
-/** Read a request back from its step form, with every date a `Date` again. */
-const fromStepRecord = (step: StepRequestRecord): RequestRecord => mapDates(step, (value) => new Date(value as string)) as unknown as RequestRecord;
+    const text = (key: string): string => {
+        const value = fields.get(key);
+
+        if (typeof value !== "string") {
+            throw malformedStep(key);
+        }
+
+        return value;
+    };
+    const date = (key: string): Date => {
+        const value = new Date(text(key));
+
+        if (Number.isNaN(value.getTime())) {
+            throw malformedStep(key);
+        }
+
+        return value;
+    };
+    const has = (key: string): boolean => fields.get(key) !== undefined;
+
+    const status = text("status");
+    const type = text("type");
+
+    if (!isRequestStatus(status)) {
+        throw malformedStep("status");
+    }
+
+    if (type !== "export" && type !== "erasure") {
+        throw malformedStep("type");
+    }
+
+    return {
+        dueAt: date("dueAt"),
+        id: text("id"),
+        receivedAt: date("receivedAt"),
+        status,
+        subjectId: text("subjectId"),
+        type,
+        ...(has("erasureGraceUntil") ? { erasureGraceUntil: date("erasureGraceUntil") } : {}),
+        ...(has("expiresAt") ? { expiresAt: date("expiresAt") } : {}),
+        ...(has("extendedDueAt") ? { extendedDueAt: date("extendedDueAt") } : {}),
+        ...(has("reason") ? { reason: text("reason") } : {}),
+        ...(has("storageKey") ? { storageKey: text("storageKey") } : {}),
+    };
+};
 
 /** The storage the service needs. The app implements it over `ctx.db`. */
 interface RequestStore {
@@ -155,15 +205,4 @@ const extendRequest = async (store: RequestStore, input: { id: string; now: Date
     return { ...record, extendedDueAt: extended, reason: input.reason };
 };
 
-export {
-    cancelRequest,
-    type ErasureSettings,
-    extendRequest,
-    fromStepRecord,
-    openRequest,
-    type RequestRecord,
-    type RequestStore,
-    requireRequest,
-    type StepRequestRecord,
-    toStepRecord,
-};
+export { cancelRequest, type ErasureSettings, extendRequest, fromStepRecord, openRequest, type RequestRecord, type RequestStore, requireRequest, toStepRecord };

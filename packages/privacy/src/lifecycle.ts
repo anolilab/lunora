@@ -43,6 +43,9 @@ class InvalidTransitionError extends LunoraError {
 
 const isTerminal = (status: RequestStatus): boolean => TERMINAL.has(status);
 
+/** Whether a value read from outside the package (a step result, a row) is a known status. */
+const isRequestStatus = (value: string): value is RequestStatus => Object.hasOwn(TRANSITIONS, value);
+
 /** Check a transition and return the new status, or throw {@link InvalidTransitionError}. */
 const transition = (from: RequestStatus, to: RequestStatus): RequestStatus => {
     if (!TRANSITIONS[from].includes(to)) {
@@ -108,6 +111,7 @@ export {
     erasureGraceUntil,
     InvalidTransitionError,
     isOverdue,
+    isRequestStatus,
     isTerminal,
     MIN_DRAIN_BUDGET_DAYS,
     type RequestStatus,
