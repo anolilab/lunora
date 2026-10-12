@@ -6,8 +6,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { CoverageProblem, TableClassification } from "./coverage";
-import { checkCoverage } from "./coverage";
+import type { CoverageProblem } from "../../../shared/privacy-coverage";
+import { checkCoverage, classifyTables } from "../../../shared/privacy-coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
 import type { DeadlinePolicy } from "./deadlines";
@@ -301,20 +301,9 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
 
 /** The coverage check: every table is in a dataset or excluded with a reason. Exclusions passed here override the app's. */
 const coverageOf = (scope: Scope, tables: ReadonlyArray<string>, exclusions: Readonly<Record<string, string>>): ReadonlyArray<CoverageProblem> => {
-    const allExclusions = { ...scope.exclude, ...exclusions };
-    const classifications: Record<string, TableClassification | undefined> = {};
+    const covered = scope.datasets.flatMap((dataset) => dataset.tableNames.map((table) => [table, dataset.id] as const));
 
-    for (const dataset of scope.datasets) {
-        for (const table of dataset.tableNames) {
-            classifications[table] = { dataset: dataset.id };
-        }
-    }
-
-    for (const [table, reason] of Object.entries(allExclusions)) {
-        classifications[table] = { excluded: reason };
-    }
-
-    return checkCoverage(tables, classifications);
+    return checkCoverage(tables, classifyTables(covered, Object.entries({ ...scope.exclude, ...exclusions })));
 };
 
 /**

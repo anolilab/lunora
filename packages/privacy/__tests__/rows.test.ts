@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { isTerminal, OPEN_STATUSES } from "../src/lifecycle";
+import { isOverdue as sharedIsOverdue } from "../../../shared/privacy-deadlines";
+import { isTerminal as sharedIsTerminal } from "../../../shared/privacy-request-status";
+import { isOverdue, isTerminal, OPEN_STATUSES } from "../src/lifecycle";
 import type { RequestRecord } from "../src/requests";
 import { fromRequestRow, toRequestPatch, toRequestRow } from "../src/rows";
 import { NOW, setup } from "./harness";
@@ -42,6 +44,11 @@ describe("the privacy_requests row mapping", () => {
     it("lists every status that is not terminal as open", () => {
         expect(OPEN_STATUSES.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["failed", "grace", "processing", "ready", "received"]);
         expect(OPEN_STATUSES.some((status) => isTerminal(status))).toBe(false);
+    });
+
+    it("reads the terminal and overdue rules the Studio reads, not a copy of them", () => {
+        expect(isTerminal).toBe(sharedIsTerminal);
+        expect(isOverdue).toBe(sharedIsOverdue);
     });
 });
 

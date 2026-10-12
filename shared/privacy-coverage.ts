@@ -20,7 +20,7 @@ interface CoverageProblem {
 }
 
 /** The better-auth tables `authDataset()` covers when no table is renamed. */
-const AUTH_DEFAULT_TABLES: ReadonlyArray<string> = ["account", "apikey", "member", "passkey", "session", "teamMember", "twoFactor", "user"];
+const AUTH_DEFAULT_TABLES = ["account", "apikey", "member", "passkey", "session", "teamMember", "twoFactor", "user"] as const;
 
 /**
  * The classification of every listed table. Datasets are applied first and exclusions

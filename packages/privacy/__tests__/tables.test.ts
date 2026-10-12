@@ -1,14 +1,12 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
+import { REQUEST_STATUSES } from "../../../shared/privacy-request-status";
 import { privacyExtension } from "../src/tables";
 
-const LIFECYCLE_SOURCE = new URL("../src/lifecycle.ts", import.meta.url);
-const TABLES_SOURCE = new URL("../src/tables.ts", import.meta.url);
-const STATUS_UNION = /type RequestStatus = ([^;]+);/u;
-const QUOTED_WORD = /"([a-z]+)"/gu;
-const LITERAL_WORD = /v\.literal\("([a-z]+)"\)/gu;
+/** The Standard Schema surface every Lunora validator carries. */
+interface StandardSchemaV1 {
+    readonly "~standard": { readonly validate: (value: unknown) => Promise<{ readonly issues?: unknown }> | { readonly issues?: unknown } };
+}
 
 describe("privacyExtension", () => {
     it("is keyed privacy so every table is prefixed privacy_", () => {
@@ -19,15 +17,15 @@ describe("privacyExtension", () => {
         expect(Object.keys(privacyExtension.tables).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["archive", "events", "requests"]);
     });
 
-    it("accepts every status the lifecycle can write to the requests table", () => {
-        expect.assertions(1);
+    it("accepts every status the lifecycle can write to the requests table, and nothing else", async () => {
+        const column = (privacyExtension.tables.requests as unknown as { shape: Record<string, StandardSchemaV1> }).shape.status;
+        const accepts = async (value: string): Promise<boolean> => {
+            const result = await column?.["~standard"].validate(value);
 
-        const lifecycle = STATUS_UNION.exec(readFileSync(LIFECYCLE_SOURCE, "utf8"))?.[1] ?? "";
-        const statuses = [...lifecycle.matchAll(QUOTED_WORD)].map((m) => m[1] ?? "");
-        const tables = readFileSync(TABLES_SOURCE, "utf8");
-        const columnStart = tables.indexOf("status: v.union(");
-        const literals = [...tables.slice(columnStart, tables.indexOf("storageKey", columnStart)).matchAll(LITERAL_WORD)].map((m) => m[1] ?? "");
+            return result?.issues === undefined;
+        };
 
-        expect(literals.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(statuses.toSorted((a, b) => a.localeCompare(b)));
+        await expect(Promise.all(REQUEST_STATUSES.map(async (status) => accepts(status)))).resolves.toStrictEqual(REQUEST_STATUSES.map(() => true));
+        await expect(accepts("archived")).resolves.toBe(false);
     });
 });

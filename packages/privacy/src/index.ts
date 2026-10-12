@@ -1,3 +1,4 @@
+export type { CoverageProblem } from "../../../shared/privacy-coverage";
 export type { DataOrigin, LegalBasis } from "./articles";
 
 /**
@@ -11,7 +12,6 @@ export type { DataOrigin, LegalBasis } from "./articles";
  */
 export type { AuthTableNames } from "./builtins";
 export { actionCacheDataset, authDataset, documentHistoryDataset, storageObjectsDataset } from "./builtins";
-export type { CoverageProblem } from "./coverage";
 export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
 export { defineDataset } from "./dataset";
 export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyIdentity, PrivacyPorts, PrivacyWorkflowContext, SweepResult } from "./define";

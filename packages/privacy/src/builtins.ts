@@ -4,20 +4,27 @@
  * plain `defineDataset` call, so an app that stores these differently overrides
  * the names rather than rewriting the description.
  */
+import { AUTH_DEFAULT_TABLES } from "../../../shared/privacy-coverage";
 import type { Dataset } from "./dataset";
 import { defineDataset } from "./dataset";
 
-/** The better-auth tables that hold a user's data, by their default names. */
-interface AuthTableNames {
-    readonly account?: string;
-    readonly apikey?: string;
-    readonly member?: string;
-    readonly passkey?: string;
-    readonly session?: string;
-    readonly teamMember?: string;
-    readonly twoFactor?: string;
-    readonly user?: string;
-}
+/** The better-auth table names `authDataset` covers by default. Codegen's coverage check reads the same list. */
+type AuthTable = (typeof AUTH_DEFAULT_TABLES)[number];
+
+/** The better-auth tables that hold a user's data, renamed. A table left out keeps its default name. */
+type AuthTableNames = { readonly [T in AuthTable]?: string };
+
+/** Columns the export leaves out of each auth table: credentials and tokens. */
+const AUTH_OMIT: Readonly<Record<AuthTable, ReadonlyArray<string>>> = {
+    account: ["password", "accessToken", "refreshToken", "idToken"],
+    apikey: ["key"],
+    member: [],
+    passkey: [],
+    session: ["token"],
+    teamMember: [],
+    twoFactor: ["secret", "backupCodes"],
+    user: [],
+};
 
 /**
  * The sign-in dataset. Table names default to better-auth's; `@lunora/auth` does
@@ -28,16 +35,13 @@ const authDataset = (names: AuthTableNames = {}): Dataset =>
         legalBasis: "contract",
         origin: "provided",
         purpose: "Sign-in identity: the account, its sessions, linked sign-in methods and second factors",
-        tables: {
-            [names.account ?? "account"]: { omit: ["password", "accessToken", "refreshToken", "idToken"] },
-            [names.apikey ?? "apikey"]: { omit: ["key"] },
-            [names.member ?? "member"]: {},
-            [names.passkey ?? "passkey"]: {},
-            [names.session ?? "session"]: { omit: ["token"] },
-            [names.teamMember ?? "teamMember"]: {},
-            [names.twoFactor ?? "twoFactor"]: { omit: ["secret", "backupCodes"] },
-            [names.user ?? "user"]: {},
-        },
+        tables: Object.fromEntries(
+            AUTH_DEFAULT_TABLES.map((table) => {
+                const omit = AUTH_OMIT[table];
+
+                return [names[table] ?? table, omit.length === 0 ? {} : { omit }];
+            }),
+        ),
     });
 
 /** The document history: an append-only record of past row versions, written by table triggers. */

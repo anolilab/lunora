@@ -6,9 +6,9 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import type { RequestStatus, RequestType } from "../../../shared/privacy-request-status";
+import { isTerminal, REQUEST_STATUSES } from "../../../shared/privacy-request-status";
 import { DAY_MS } from "./deadlines";
-
-type RequestType = "export" | "erasure";
 
 /** The deadlines a request stores when it is opened and extended. */
 interface RequestDeadlines {
@@ -16,13 +16,8 @@ interface RequestDeadlines {
     readonly extendedDueAt?: Date;
 }
 
-type RequestStatus = "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired";
-
-/** A request in a terminal state takes no further transitions. `expired` is a ready export whose files were removed. */
-const TERMINAL: ReadonlySet<RequestStatus> = new Set(["cancelled", "completed", "expired"]);
-
 /**
- * The transitions the package allows. `failed` is not terminal: an operator can
+ * The transitions the package allows, one entry per status in `REQUEST_STATUSES`. `failed` is not terminal: an operator can
  * retry the work, and the Art. 12(3) clock keeps running throughout. A run can fail before it
  * starts processing (a missing secret), so `received` and `grace` may move to `failed` too.
  */
@@ -48,8 +43,6 @@ class InvalidTransitionError extends LunoraError {
     }
 }
 
-const isTerminal = (status: RequestStatus): boolean => TERMINAL.has(status);
-
 /**
  * Whether the controller still owes the subject a response. A terminal request has had one, and so
  * has a `ready` export: its archive is handed over, so its deadline is met even though the request
@@ -58,12 +51,10 @@ const isTerminal = (status: RequestStatus): boolean => TERMINAL.has(status);
 const awaitsResponse = (status: RequestStatus): boolean => !isTerminal(status) && status !== "ready";
 
 /** Whether a value read from outside the package (a step result, a row) is a known status. */
-const isRequestStatus = (value: string): value is RequestStatus => Object.hasOwn(TRANSITIONS, value);
+const isRequestStatus = (value: string): value is RequestStatus => (REQUEST_STATUSES as ReadonlyArray<string>).includes(value);
 
 /** Every status that is not terminal, for a `listOpen` that reads a status index once per status. */
-const OPEN_STATUSES: ReadonlyArray<RequestStatus> = Object.keys(TRANSITIONS)
-    .filter((status) => isRequestStatus(status))
-    .filter((status) => !isTerminal(status));
+const OPEN_STATUSES: ReadonlyArray<RequestStatus> = REQUEST_STATUSES.filter((status) => !isTerminal(status));
 
 /** Whether {@link TRANSITIONS} allows the move. */
 const canTransition = (from: RequestStatus, to: RequestStatus): boolean => TRANSITIONS[from].includes(to);
@@ -99,16 +90,6 @@ const canCancel = (type: RequestType, status: RequestStatus): boolean => {
  */
 const canExtend = (request: RequestDeadlines, now: Date): boolean => request.extendedDueAt === undefined && now.getTime() < request.dueAt.getTime();
 
-/** The effective deadline: the extended one when an extension was granted, otherwise the original. Both are stored on the request. */
-const effectiveDueAt = (request: RequestDeadlines): Date => request.extendedDueAt ?? request.dueAt;
-
-/**
- * A request is overdue once its effective deadline has passed and the response is still owed. The deadline
- * is the extended one when `extendedDueAt` is set, and `dueAt` otherwise, as the request stored them.
- */
-const isOverdue = (request: RequestDeadlines & { readonly status: RequestStatus }, now: Date): boolean =>
-    awaitsResponse(request.status) && now.getTime() > effectiveDueAt(request).getTime();
-
 /** The smallest drain budget, in days. Enough for a batched erasure and its completion notice. */
 const MIN_DRAIN_BUDGET_DAYS = 3;
 
@@ -131,15 +112,18 @@ export {
     canCancel,
     canExtend,
     canTransition,
-    effectiveDueAt,
     erasureGraceUntil,
     InvalidTransitionError,
-    isOverdue,
     isRequestStatus,
-    isTerminal,
     MIN_DRAIN_BUDGET_DAYS,
     OPEN_STATUSES,
-    type RequestStatus,
-    type RequestType,
     transition,
 };
+
+/*
+ * The status list, the terminal set and the overdue rule are shared with the Studio, which must not
+ * depend on this package. They are re-exported here so the package reads one definition of each.
+ */
+export { effectiveDueAt, isOverdue } from "../../../shared/privacy-deadlines";
+export type { RequestStatus, RequestType } from "../../../shared/privacy-request-status";
+export { isTerminal } from "../../../shared/privacy-request-status";

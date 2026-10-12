@@ -7,6 +7,8 @@
 import type { SchemaExtension, TableDefinition } from "@lunora/server";
 import { defineSchemaExtension, defineTable, v } from "@lunora/server";
 
+import { REQUEST_STATUSES } from "../../../shared/privacy-request-status";
+
 /** The three table names, before the `privacy_` prefix. */
 export type PrivacyTableName = "archive" | "events" | "requests";
 
@@ -40,16 +42,7 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
             receivedAt: v.number(),
             /** The id the package hands out. Stored as a column so the app's table row id stays the app's own. */
             requestId: v.string(),
-            status: v.union(
-                v.literal("received"),
-                v.literal("grace"),
-                v.literal("processing"),
-                v.literal("ready"),
-                v.literal("completed"),
-                v.literal("failed"),
-                v.literal("cancelled"),
-                v.literal("expired"),
-            ),
+            status: v.union(...REQUEST_STATUSES.map((status) => v.literal(status))),
             storageKey: v.optional(v.string()),
             subjectId: v.string(),
             type: v.union(v.literal("export"), v.literal("erasure")),

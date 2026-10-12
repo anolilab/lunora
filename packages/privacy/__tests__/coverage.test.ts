@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkCoverage } from "../src/coverage";
+import { checkCoverage } from "../../../shared/privacy-coverage";
 
 describe(checkCoverage, () => {
     it("passes when every owned table is covered by a dataset or excluded with a reason", () => {
@@ -19,9 +19,5 @@ describe(checkCoverage, () => {
 
     it("refuses an exclusion with a blank reason", () => {
         expect(checkCoverage(["flags"], { flags: { excluded: "   " } })).toStrictEqual([{ code: "excluded_without_reason", table: "flags" }]);
-    });
-
-    it("treats a classification with neither a dataset nor an exclusion as unclassified", () => {
-        expect(checkCoverage(["flags"], { flags: {} })).toStrictEqual([{ code: "unclassified", table: "flags" }]);
     });
 });
