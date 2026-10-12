@@ -61,9 +61,7 @@ describe("privacy functions declared in the app (plan 468 §4.2)", () => {
     it("registers a mutation whose handler is a property of a package object", () => {
         expect.assertions(1);
 
-        writePackage(
-            `export declare const privacy: { handlers: { requestExport: (ctx: { params: { subjectId: string } }) => Promise<void> } };\n`,
-        );
+        writePackage(`export declare const privacy: { handlers: { requestExport: (ctx: { params: { subjectId: string } }) => Promise<void> } };\n`);
         writeFileSync(
             join(workdir, "lunora", "privacy-api.ts"),
             `import { mutation, v } from "@lunora/server";\nimport { privacy } from "@fixture/privacy";\n\nexport const requestExport = mutation({ args: { subjectId: v.string() }, handler: privacy.handlers.requestExport });\n`,
