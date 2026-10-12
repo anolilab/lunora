@@ -148,4 +148,23 @@ describe("unbounded_collect_on_open_range", () => {
         expect(findings).toHaveLength(1);
         expect(findings[0]?.detail).toContain('"ownerId", which the index does not cover');
     });
+
+    it("judges progress per caller: a write by another caller of a shared read does not hide a scheduled caller", () => {
+        expect.assertions(2);
+
+        // A helper reads the open range for `expire` and `archive`. `expire` deletes; `archive` is only scheduled and deletes nothing.
+        const shared = read({ scope: { callers: ["expire", "archive"], kind: "helper", name: "scan" }, visibility: "public" });
+        const deletesInExpire: AdvisorTableWrite = { file: "sweep", line: 9, method: "delete", scope: { kind: "export", name: "expire" }, table: "sessions" };
+        const schedulesArchive: AdvisorCallEdge = {
+            file: "kick",
+            kind: "schedule",
+            line: 3,
+            scope: { kind: "export", name: "start" },
+            target: "sweep:archive",
+        };
+
+        expect(unboundedCollectOnOpenRange.run(context({ callEdges: [schedulesArchive], queries: [shared], tableWrites: [deletesInExpire] }))).toHaveLength(1);
+        // With nothing scheduling `archive`, the read is only server-driven through `expire`, which does delete.
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [shared], tableWrites: [deletesInExpire] }))).toHaveLength(0);
+    });
 });

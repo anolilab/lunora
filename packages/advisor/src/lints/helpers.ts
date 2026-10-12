@@ -353,7 +353,16 @@ export const indexFieldsLookup = (schema: AdvisorSchema): ((read: Pick<AdvisorQu
  * function is every export that reaches the read's site. Index fields narrow a patch
  * to the writes that can change the range.
  */
-export const readRowsChanged = (changes: RowChanges, read: Pick<AdvisorQueryRead, "file" | "scope" | "table">, indexFields?: ReadonlyArray<string>): boolean =>
-    callSiteCallers(read.scope).some((caller) =>
-        (changes.get(`${read.file}:${caller}:${read.table}`) ?? []).some((change) => changeTouches(change, indexFields)),
-    );
+
+/**
+ * True when the given callers remove or move a row the read selects. The callers
+ * default to every export that reaches the read's site. Index fields narrow a patch to
+ * the writes that can change the range. A caller with no write of its own is not
+ * helped by another caller's write, so pass the one caller whose progress is at issue.
+ */
+export const readRowsChanged = (
+    changes: RowChanges,
+    read: Pick<AdvisorQueryRead, "file" | "scope" | "table">,
+    indexFields?: ReadonlyArray<string>,
+    callers: ReadonlyArray<string> = callSiteCallers(read.scope),
+): boolean => callers.some((caller) => (changes.get(`${read.file}:${caller}:${read.table}`) ?? []).some((change) => changeTouches(change, indexFields)));

@@ -1,6 +1,7 @@
+import { callSiteCallers } from "../call-site-scope";
 import type { AdvisorQueryRead } from "../queries";
 import type { LintContext } from "../types";
-import { functionKeysOf, indexFieldsLookup, readRowsChanged, rowChangesOf, scheduledFunctionKeys } from "./helpers";
+import { functionKey, indexFieldsLookup, readRowsChanged, rowChangesOf, scheduledFunctionKeys } from "./helpers";
 
 /**
  * The reads that are sweeps: a `.withIndex(…).collect()` on an open range, that the
@@ -34,10 +35,12 @@ export const openRangeSweepReads = (context: LintContext): AdvisorQueryRead[] =>
         }
 
         const lookup = bounds.length > 0 && bounds.every((bound) => bound === "eq");
-        const driven = functionKeysOf(read.file, read.scope).some((key) => scheduled.has(key));
-        const serverDriven = driven || (read.visibility === "internal" && !lookup);
+        // A caller is server-driven when a scheduler edge or a cron reaches it, or when the read is internal and not a lookup.
+        const serverDriven = (caller: string): boolean => scheduled.has(functionKey(read.file, caller)) || (read.visibility === "internal" && !lookup);
+        const indexFields = indexFieldsOf(read);
 
-        return serverDriven && !readRowsChanged(changes, read, indexFieldsOf(read));
+        // A sweep is a read that some server-driven caller makes no progress on. Another caller's write does not count for it.
+        return callSiteCallers(read.scope).some((caller) => serverDriven(caller) && !readRowsChanged(changes, read, indexFields, [caller]));
     });
 };
 

@@ -79,7 +79,7 @@ const selfRescheduleWithoutProgress: Lint = {
                 (read) => read.file === edge.file && read.table !== "" && callSiteCallers(read.scope).includes(name),
             );
 
-            if (selected.length === 0 || selected.some((read) => readRowsChanged(changes, read))) {
+            if (selected.length === 0 || selected.some((read) => readRowsChanged(changes, read, undefined, [name]))) {
                 continue;
             }
 

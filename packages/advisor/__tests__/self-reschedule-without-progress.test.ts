@@ -130,4 +130,21 @@ describe("self_reschedule_without_progress", () => {
 
         expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()], rowEffects: [effect] }))).toHaveLength(0);
     });
+
+    it("judges the rescheduling function's own progress when a shared helper read also serves another function that deletes", () => {
+        expect.assertions(1);
+
+        // `tick` reschedules over a helper read that `other` also reaches, and `other` deletes. `tick` removes nothing.
+        const shared: AdvisorQueryRead = {
+            file: "jobs/sweep",
+            hasFilter: false,
+            hasIndex: false,
+            line: 4,
+            scope: { callers: ["tick", "other"], kind: "helper", name: "scan" },
+            table: "jobs",
+        };
+        const deletesInOther: AdvisorTableWrite = { file: "jobs/sweep", line: 14, method: "delete", scope: { kind: "export", name: "other" }, table: "jobs" };
+
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()], queries: [shared], tableWrites: [deletesInOther] }))).toHaveLength(1);
+    });
 });

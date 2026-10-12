@@ -45,6 +45,33 @@ const FUNCTIONS = `
         args: {},
         handler: (ctx) => ctx.db.query("sessions").filter(isExpired).collect(),
     });
+
+    export const branchOpen = query({
+        args: { flip: v.boolean() },
+        handler: (ctx, args) => ctx.db.query("sessions").withIndex("by_expiry", (q) => (args.flip ? q.lt("expiresAt", 9) : q.gt("expiresAt", 0))).collect(),
+    });
+
+    export const branchBounded = query({
+        args: { flip: v.boolean() },
+        handler: (ctx, args) => ctx.db.query("sessions").withIndex("by_expiry", (q) => (args.flip ? q.lt("expiresAt", 9) : q.lt("expiresAt", 5))).collect(),
+    });
+
+    export const blockReturns = query({
+        args: { flip: v.boolean() },
+        handler: (ctx, args) =>
+            ctx.db
+                .query("sessions")
+                .withIndex("by_expiry", (q) => {
+                    if (args.flip) return q.lt("expiresAt", 1);
+                    return q.gt("expiresAt", 0).lt("expiresAt", 9);
+                })
+                .collect(),
+    });
+
+    export const literalKeyFilter = query({
+        args: {},
+        handler: (ctx) => ctx.db.query("sessions").filter((row) => row["status"] === "open").collect(),
+    });
 `;
 
 let workdir: string;
@@ -101,5 +128,20 @@ describe("discoverQueries index and filter evidence", () => {
         expect(readIn("computedIndex")?.index).toStrictEqual({ bounds: ["eq"], name: undefined });
         expect(readIn("bareFilter")?.filterFields).toBeUndefined();
         expect(readIn("openRange")?.filterFields).toBeUndefined();
+    });
+
+    it("bounds a range only by a comparator every branch applies", () => {
+        expect.assertions(3);
+
+        expect(readIn("branchOpen")?.index?.bounds).toStrictEqual([]);
+        expect(readIn("branchBounded")?.index?.bounds).toStrictEqual(["lt"]);
+        // Both returns carry `lt`, so every range the callback can return is bounded above.
+        expect(readIn("blockReturns")?.index?.bounds).toStrictEqual(["lt"]);
+    });
+
+    it("reads a field named with a literal element access, as well as a property access", () => {
+        expect.assertions(1);
+
+        expect(readIn("literalKeyFilter")?.filterFields).toStrictEqual(["status"]);
     });
 });

@@ -1,4 +1,4 @@
-import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import type { CallExpression, Expression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { FunctionIR, QueryReadIR } from "../ir";
@@ -110,14 +110,14 @@ const chainRoot = (node: TsNode): TsNode => {
     return current;
 };
 
-/**
- * The comparators an `.withIndex(…)` range callback calls on its index parameter
- * (`(q) => q.eq("a", x).lt("b", y)` → `eq`, `lt`), sorted and de-duplicated.
- */
-const indexBoundsOf = (callback: TsNode, parameter: string): string[] => {
-    const bounds = new Set<string>();
+/** The comparators a chain on `parameter` calls anywhere inside `expression`. */
+const comparatorsIn = (expression: TsNode, parameter: string): Set<string> => {
+    const comparators = new Set<string>();
 
-    for (const call of callback.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    // The expression itself can be the call (`(q) => q.gt(…)`), which its descendants never include.
+    const calls = [expression, ...expression.getDescendantsOfKind(SyntaxKind.CallExpression)].filter((node) => Node.isCallExpression(node));
+
+    for (const call of calls) {
         const callee = call.getExpression();
 
         // `q.gt(…).lt(…)` chains, so the root of a comparator is found by walking its receivers, not read one level down.
@@ -125,12 +125,77 @@ const indexBoundsOf = (callback: TsNode, parameter: string): string[] => {
             const root = chainRoot(callee);
 
             if (Node.isIdentifier(root) && root.getText() === parameter) {
-                bounds.add(callee.getName());
+                comparators.add(callee.getName());
             }
         }
     }
 
-    return [...bounds].toSorted((a, b) => a.localeCompare(b));
+    return comparators;
+};
+
+/**
+ * The comparators every range one expression can return applies. A conditional
+ * returns one of two ranges, so only a comparator present on both branches bounds it.
+ */
+const boundsOfExpression = (expression: TsNode, parameter: string): Set<string> => {
+    if (Node.isParenthesizedExpression(expression)) {
+        return boundsOfExpression(expression.getExpression(), parameter);
+    }
+
+    if (Node.isConditionalExpression(expression)) {
+        const whenFalse = boundsOfExpression(expression.getWhenFalse(), parameter);
+
+        return new Set([...boundsOfExpression(expression.getWhenTrue(), parameter)].filter((bound) => whenFalse.has(bound)));
+    }
+
+    return comparatorsIn(expression, parameter);
+};
+
+/**
+ * The expressions a range callback returns: its body when it is an expression, or the
+ * values of its `return` statements. `undefined` when the callback is not a function
+ * literal, or returns nothing the feeder can read.
+ */
+const returnedExpressionsOf = (callback: TsNode): Expression[] | undefined => {
+    if (!(Node.isArrowFunction(callback) || Node.isFunctionExpression(callback))) {
+        return undefined;
+    }
+
+    const body = callback.getBody();
+
+    if (!Node.isBlock(body)) {
+        return Node.isExpression(body) ? [body] : undefined;
+    }
+
+    const returned = body
+        .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+        .filter(
+            (statement) =>
+                statement.getFirstAncestor((ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor))?.compilerNode ===
+                callback.compilerNode,
+        )
+        .map((statement) => statement.getExpression())
+        .filter((expression): expression is Expression => expression !== undefined);
+
+    return returned.length === 0 ? undefined : returned;
+};
+
+/**
+ * The comparators an `.withIndex(…)` range callback applies on every range it can
+ * return, sorted and de-duplicated. `(q) => q.eq("a", x).lt("b", y)` gives `eq`, `lt`.
+ * `undefined` when the callback has no readable return.
+ */
+const indexBoundsOf = (callback: TsNode, parameter: string): string[] | undefined => {
+    const returned = returnedExpressionsOf(callback);
+
+    if (returned === undefined) {
+        return undefined;
+    }
+
+    const [first, ...rest] = returned.map((expression) => boundsOfExpression(expression, parameter));
+    const shared = [...(first ?? new Set<string>())].filter((bound) => rest.every((set) => set.has(bound)));
+
+    return shared.toSorted((a, b) => a.localeCompare(b));
 };
 
 /** The fields a `.filter(…)` predicate reads off its row parameter. */
@@ -142,6 +207,16 @@ const filterFieldsOf = (predicate: TsNode, parameter: string): string[] => {
 
         if (Node.isIdentifier(receiver) && receiver.getText() === parameter) {
             fields.add(access.getName());
+        }
+    }
+
+    // `row["status"]` reads the same field as `row.status`, when the key is a literal.
+    for (const access of predicate.getDescendantsOfKind(SyntaxKind.ElementAccessExpression)) {
+        const receiver = access.getExpression();
+        const key = access.getArgumentExpression();
+
+        if (Node.isIdentifier(receiver) && receiver.getText() === parameter && key !== undefined && Node.isStringLiteral(key)) {
+            fields.add(key.getLiteralText());
         }
     }
 
