@@ -20,7 +20,9 @@ export const privacyExtension: SchemaExtension<Record<PrivacyTableName, TableDef
             row: v.string(),
             subjectId: v.string(),
             table: v.string(),
-        }).index("bySubjectDataset", ["subjectId", "datasetId"]),
+        })
+            .index("bySubjectDataset", ["subjectId", "datasetId"])
+            .index("byRetainUntil", ["retainUntil"]),
 
         events: defineTable({
             at: v.number(),

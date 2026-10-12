@@ -15,11 +15,36 @@ const ERASE_BATCH = 100;
 /** What happens to a row when its table is erased. */
 type Disposition = { readonly kind: "delete" } | { readonly kind: "anonymise" } | { readonly kind: "keep"; readonly until: Date };
 
+/**
+ * The date that starts a row's retention period. Without `from`, the period starts at `now`
+ * (the erasure date). A named column must hold a valid `Date` or epoch milliseconds: any other
+ * value would silently restart the period at the erasure date, so it is refused.
+ */
+const periodStart = (directive: RetainDirective, row: { readonly [column: string]: unknown }, now: Date, where: string): Date => {
+    if (directive.from === undefined) {
+        return now;
+    }
+
+    const value = row[directive.from];
+    const start = value instanceof Date || typeof value === "number" ? new Date(value) : undefined;
+
+    if (start === undefined || Number.isNaN(start.getTime())) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `Retention for ${where} starts from column "${directive.from}", which must hold a Date or epoch milliseconds; got ${value === null ? "null" : typeof value}.`,
+        );
+    }
+
+    return start;
+};
+
+/** Keep a row while its rule's period is running, and delete it after. */
 const retainDisposition = (
     directive: RetainDirective,
     row: { readonly [column: string]: unknown },
     rules: ReadonlyMap<string, RetentionRule>,
     now: Date,
+    where: string,
 ): Disposition => {
     const rule = rules.get(directive.rule);
 
@@ -27,40 +52,30 @@ const retainDisposition = (
         throw new LunoraError("BAD_REQUEST", `Retention rule "${directive.rule}" is not in the preset set.`);
     }
 
-    const fromColumn = directive.from === undefined ? undefined : row[directive.from];
-    let start = now;
-
-    if (fromColumn instanceof Date) {
-        start = fromColumn;
-    } else if (typeof fromColumn === "number") {
-        start = new Date(fromColumn);
-    }
-    const until = retainUntil(rule, start);
+    const until = retainUntil(rule, periodStart(directive, row, now, where));
 
     return until.getTime() > now.getTime() ? { kind: "keep", until } : { kind: "delete" };
-};
-
-/**
- * Decide what happens to a row. A `retain` directive keeps the row while its rule's
- * period is running, and deletes it after. `from` names the date column that starts
- * the period; without it, the rule's period starts at `now` (the erasure date).
- */
-const dispositionOf = (erase: TableErasure, row: { readonly [column: string]: unknown }, rules: ReadonlyMap<string, RetentionRule>, now: Date): Disposition => {
-    if (erase === "delete" || erase === "anonymise") {
-        return { kind: erase };
-    }
-
-    return retainDisposition(erase, row, rules, now);
 };
 
 /** The package's verdict for one row, which the app's `eraseBatch` applies. */
 type RowDisposition = (dataset: Dataset, table: string, row: { readonly [column: string]: unknown }, now: Date) => Disposition;
 
-/** Bind the presets' retention rules into the verdict `eraseBatch` receives. A table with no `erase` is deleted. */
+/**
+ * Bind the presets' retention rules into the verdict `eraseBatch` receives. A table with no
+ * `erase` is deleted, `delete` and `anonymise` apply as written, and a `retain` directive keeps
+ * the row while its rule's period is running.
+ */
 const dispositionFor =
     (rules: ReadonlyMap<string, RetentionRule>): RowDisposition =>
-    (dataset, table, row, now) =>
-        dispositionOf(dataset.tables[table]?.erase ?? "delete", row, rules, now);
+    (dataset, table, row, now) => {
+        const erase: TableErasure = dataset.tables[table]?.erase ?? "delete";
+
+        if (erase === "delete" || erase === "anonymise") {
+            return { kind: erase };
+        }
+
+        return retainDisposition(erase, row, rules, now, `${dataset.id}.${table}`);
+    };
 
 /**
  * Run a batched step until it reports there is nothing left. A step that never
@@ -100,4 +115,4 @@ const verifyErasure = (remaining: Readonly<Record<string, number>>, kept: Readon
     return { complete: leftover.length === 0, leftover };
 };
 
-export { type Disposition, dispositionFor, dispositionOf, drainUntilEmpty, ERASE_BATCH, type RowDisposition, verifyErasure, type VerifyResult };
+export { type Disposition, dispositionFor, drainUntilEmpty, ERASE_BATCH, type RowDisposition, verifyErasure, type VerifyResult };

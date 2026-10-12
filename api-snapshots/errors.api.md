@@ -247,10 +247,6 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Privacy coverage check failed";
     };
-    readonly PRIVACY_EXPORT_TOO_LARGE: {
-        readonly status: 422;
-        readonly title: "Export too large";
-    };
     readonly PRIVACY_REQUEST_OPEN: {
         readonly status: 409;
         readonly title: "A privacy request is already open";

@@ -1,7 +1,9 @@
 /**
- * The export and erasure runs, as host-free steps. A host (the Workflow binding on
- * Cloudflare, or a test double) calls these; they call the data, store and request
- * ports, so the order and the outcome are tested without a runtime.
+ * The export and erasure runs, each written once as a list of named steps over a
+ * {@link StepRunner}. The durable workflow passes its `step`, so each step is memoised and a
+ * retry resumes at the step that failed; the one-call entries pass {@link inlineSteps}, which
+ * runs each step at once. Both paths therefore share one set of lifecycle rules: the request is
+ * read again before every step, so a cancel is respected wherever it lands.
  *
  * The export is written as one part per dataset. Each part goes to storage as it is
  * collected, so a step's result is a receipt, not the rows: a heavy subject's data
@@ -14,12 +16,15 @@ import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
+import { DAY_MS } from "./deadlines";
 import type { RowDisposition, VerifyResult } from "./erasure";
-import { dispositionFor, drainUntilEmpty, verifyErasure } from "./erasure";
+import { drainUntilEmpty, verifyErasure } from "./erasure";
 import type { RequestStatus } from "./lifecycle";
-import { transition } from "./lifecycle";
+import { canTransition, isTerminal, transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
-import type { RetentionRule } from "./rules";
+import { fromStepRecord, requireRequest, toStepRecord } from "./requests";
+import type { TombstonePort } from "./tombstones";
+import { tombstoneKeyOf } from "./tombstones";
 
 /** The app's data, one dataset at a time. The app implements it over its tables. */
 interface DataPort {
@@ -35,8 +40,11 @@ interface DataPort {
     readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date, disposition: RowDisposition) => Promise<{ readonly hasMore: boolean }>;
 
     /**
-     * Rows still present per table after erasure, for the verify step. A row a retention rule
-     * still keeps may be counted: verify checks each one against `disposition` through `collect`.
+     * Rows still present per table after erasure, for the verify step. Two kinds of row may be
+     * counted and are excluded from the verdict by the package: a row a retention rule still keeps
+     * (verify judges each one again through `collect`), and every row of an `anonymise` table, which
+     * stays in place once anonymised. Prefer not to count anonymised rows at all; the package cannot
+     * tell an anonymised row from one `eraseBatch` missed, so it does not hold them against the erasure.
      */
     readonly remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
 }
@@ -57,15 +65,57 @@ interface StorePort {
     readonly signedUrl: (key: string, ttlSeconds: number) => Promise<string>;
 }
 
-/** The run's shared inputs. */
-interface RunContext {
+/**
+ * The archive of rows erasure kept under a retention rule (`privacy_archive`, or the app's own
+ * table). The app writes a `keep` row into it with the `until` its disposition carries as
+ * `retainUntil`; the sweep purges it once that date has passed.
+ */
+interface ArchivePort {
+    /**
+     * Delete up to `ERASE_BATCH` archived rows whose `retainUntil` is before `before`, and say how
+     * many it deleted and whether more may remain.
+     */
+    readonly purgeBatch: (before: Date) => Promise<{ readonly hasMore: boolean; readonly purged: number }>;
+}
+
+/** The ports one invocation binds: the app's data, storage, requests and clock. */
+interface PrivacyPorts {
+    /** Where kept rows wait out their retention period. Required for `admin.sweep` once a dataset uses `retain`. */
+    readonly archive?: ArchivePort;
     readonly data: DataPort;
     readonly files: StorePort;
+    readonly newId: () => string;
     readonly now: () => Date;
-    readonly rules: ReadonlyMap<string, RetentionRule>;
     readonly store: RequestStore;
-    readonly subjectKey: string;
+
+    /**
+     * Where erased subjects are tombstoned, so a restored backup can be erased again. An erasure and
+     * `restore` refuse to run without it; a call that only exports or reads may leave it out.
+     */
+    readonly tombstones?: TombstonePort;
 }
+
+/** What a run reads: the app's resolved settings and the ports of the invocation that runs it. */
+interface RunScope {
+    readonly datasets: ReadonlyArray<Dataset>;
+    readonly disposition: RowDisposition;
+    readonly ports: PrivacyPorts;
+    readonly subjectKey: (subjectId: string) => string;
+    readonly tombstoneSecret: string | undefined;
+}
+
+/**
+ * How a run executes its named steps. A durable host memoises each `do` by name and retries a step
+ * that throws, so every step result is JSON-safe. `sleepUntil` is the host's durable sleep; the
+ * one-call path has none, so it refuses an erasure that is still inside its grace window.
+ */
+interface StepRunner {
+    readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+    readonly sleepUntil?: (name: string, when: Date) => Promise<void>;
+}
+
+/** The one-call path: every step runs at once, in order. */
+const inlineSteps: StepRunner = { do: async (_name, run) => run() };
 
 /** The outcome of an export run. */
 interface ExportOutcome {
@@ -112,12 +162,12 @@ const filesPrefixOf = (dataset: Dataset, subjectId: string): string | undefined 
  * and the files agree. The files go first: a failed delete leaves the export ready, so the next
  * sweep or erasure retries it.
  */
-const expireRequestFiles = async (context: Pick<RunContext, "files" | "now" | "store">, request: RequestRecord): Promise<void> => {
-    await deleteRequestFiles(context.files, request);
+const expireRequestFiles = async (ports: PrivacyPorts, request: RequestRecord): Promise<void> => {
+    await deleteRequestFiles(ports.files, request);
 
     if (request.status === "ready") {
-        await context.store.update(request.id, { status: transition("ready", "expired") });
-        await context.store.addEvent(request.id, context.now(), "expired");
+        await ports.store.update(request.id, { status: transition("ready", "expired") });
+        await ports.store.addEvent(request.id, ports.now(), "expired");
     }
 };
 
@@ -126,45 +176,51 @@ const expireRequestFiles = async (context: Pick<RunContext, "files" | "now" | "s
  * and every object under each dataset's files prefix for the subject. A ready export loses its
  * files here too, so it is expired rather than left pointing at nothing.
  */
-const eraseSubjectFiles = async (context: Pick<RunContext, "files" | "now" | "store">, datasets: ReadonlyArray<Dataset>, subjectId: string): Promise<void> => {
-    const requests = await context.store.listForSubject(subjectId);
+const eraseSubjectFiles = async (ports: PrivacyPorts, datasets: ReadonlyArray<Dataset>, subjectId: string): Promise<void> => {
+    const requests = await ports.store.listForSubject(subjectId);
 
-    await Promise.all(requests.map(async (request) => expireRequestFiles(context, request)));
+    await Promise.all(requests.map(async (request) => expireRequestFiles(ports, request)));
 
     const prefixes = datasets.map((dataset) => filesPrefixOf(dataset, subjectId)).filter((prefix): prefix is string => prefix !== undefined);
 
     await Promise.all(
         prefixes.map(async (prefix) => {
-            const keys = await context.files.list(prefix);
+            const keys = await ports.files.list(prefix);
 
-            await Promise.all(keys.map(async (key) => context.files.delete(key)));
+            await Promise.all(keys.map(async (key) => ports.files.delete(key)));
         }),
     );
 };
 
 /**
- * For each retained table that still has rows, how many of them a retention rule still keeps.
- * Each row is judged again, so a row whose period has run out counts as a leftover.
+ * For each table that may keep rows after erasure, how many of its remaining rows are allowed.
+ * An `anonymise` table keeps every row, since an anonymised row stays in place and the package
+ * cannot tell it from the original. A retained table keeps only the rows a rule still holds: each
+ * row is judged again, so a row whose period has run out counts as a leftover.
  */
-const keptRows = async (
-    context: Pick<RunContext, "data" | "now" | "rules">,
+const allowedRows = async (
+    scope: Pick<RunScope, "disposition" | "ports">,
     dataset: Dataset,
     subjectId: string,
     counts: Readonly<Record<string, number>>,
 ): Promise<Record<string, number>> => {
-    const retained = dataset.tableNames.filter((table) => typeof dataset.tables[table]?.erase === "object" && (counts[table] ?? 0) > 0);
+    const present = dataset.tableNames.filter((table) => (counts[table] ?? 0) > 0);
+    const anonymised = present.filter((table) => dataset.tables[table]?.erase === "anonymise");
+    const retained = present.filter((table) => typeof dataset.tables[table]?.erase === "object");
+    const allowed: Record<string, number> = Object.fromEntries(anonymised.map((table) => [table, counts[table] ?? 0]));
 
     if (retained.length === 0) {
-        return {};
+        return allowed;
     }
 
-    const disposition = dispositionFor(context.rules);
-    const rows = await context.data.collect(dataset, subjectId);
-    const now = context.now();
+    const rows = await scope.ports.data.collect(dataset, subjectId);
+    const now = scope.ports.now();
 
-    return Object.fromEntries(
-        retained.map((table) => [table, (rows[table] ?? []).filter((row) => disposition(dataset, table, row, now).kind === "keep").length]),
-    );
+    for (const table of retained) {
+        allowed[table] = (rows[table] ?? []).filter((row) => scope.disposition(dataset, table, row, now).kind === "keep").length;
+    }
+
+    return allowed;
 };
 
 /**
@@ -172,7 +228,7 @@ const keptRows = async (
  * `files:` and the dataset id). The erasure is complete only when every count is zero.
  */
 const verifySubjectErased = async (
-    context: Pick<RunContext, "data" | "files" | "now" | "rules">,
+    scope: Pick<RunScope, "disposition" | "ports">,
     datasets: ReadonlyArray<Dataset>,
     subjectId: string,
 ): Promise<VerifyResult> => {
@@ -181,18 +237,18 @@ const verifySubjectErased = async (
 
     for (const dataset of datasets) {
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
-        const counts = await context.data.remaining(dataset, subjectId);
+        const counts = await scope.ports.data.remaining(dataset, subjectId);
 
         Object.assign(remaining, counts);
 
         // eslint-disable-next-line no-await-in-loop -- one read per dataset, in order
-        Object.assign(kept, await keptRows(context, dataset, subjectId, counts));
+        Object.assign(kept, await allowedRows(scope, dataset, subjectId, counts));
 
         const prefix = filesPrefixOf(dataset, subjectId);
 
         if (prefix !== undefined) {
             // eslint-disable-next-line no-await-in-loop -- one listing per dataset, in order
-            const keys = await context.files.list(prefix);
+            const keys = await scope.ports.files.list(prefix);
 
             remaining[`files:${dataset.id}`] = keys.length;
         }
@@ -202,7 +258,7 @@ const verifySubjectErased = async (
 };
 
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
-const EXPORT_EXPIRY_MS: number = 7 * 24 * 60 * 60 * 1000;
+const EXPORT_EXPIRY_MS: number = 7 * DAY_MS;
 
 /** A dataset is restricted (Art. 18) when a retention rule may keep any of its tables after erasure. */
 const isRestricted = (dataset: Dataset): boolean => dataset.tableNames.some((table) => typeof dataset.tables[table]?.erase === "object");
@@ -233,23 +289,23 @@ const withoutColumns = (
 };
 
 /** Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent. */
-const collectPart = async (context: RunContext, dataset: Dataset, request: RequestRecord): Promise<void> => {
-    const rows = await context.data.collect(dataset, request.subjectId);
+const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord): Promise<void> => {
+    const rows = await ports.data.collect(dataset, request.subjectId);
     // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
     const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
 
-    await context.files.put(request.id, { data: JSON.stringify({ tables }), name: partName(dataset) });
+    await ports.files.put(request.id, { data: JSON.stringify({ tables }), name: partName(dataset) });
 };
 
 /** Assemble the archive and the summary from the stored parts, then store both. */
-const assembleExport = async (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord): Promise<string> => {
+const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Dataset>, request: RequestRecord, subjectKey: string): Promise<string> => {
     const files: { data: string; path: string }[] = [];
     const manifestDatasets: ManifestDataset[] = [];
 
     for (const dataset of datasets) {
         // Parts are read in order, so the archive lists datasets in the order they were declared.
         // eslint-disable-next-line no-await-in-loop -- sequential by design, see the comment above
-        const text = await context.files.read(request.id, partName(dataset));
+        const text = await ports.files.read(request.id, partName(dataset));
 
         if (text === undefined) {
             throw new Error(`Export part for "${dataset.id}" is missing; collect it again.`);
@@ -274,20 +330,20 @@ const assembleExport = async (context: RunContext, datasets: ReadonlyArray<Datas
         });
     }
 
-    const generatedAt = context.now();
-    const manifest = buildManifest({ datasets: manifestDatasets, generatedAt, subjectKey: context.subjectKey });
+    const generatedAt = ports.now();
+    const manifest = buildManifest({ datasets: manifestDatasets, generatedAt, subjectKey });
     const zip = buildArchive([...files, { data: JSON.stringify(manifest, undefined, 2), path: "manifest.json" }], generatedAt);
     const pdf = await buildSummaryPdf({
         datasets: manifestDatasets.map((dataset) => {
             return { articles: dataset.articles, id: dataset.id, purpose: dataset.purpose, retention: dataset.retention };
         }),
         generatedAt,
-        subjectKey: context.subjectKey,
+        subjectKey,
         title: "Your data",
     });
-    const archiveKey = await context.files.put(request.id, { data: zip, name: "export.zip" });
+    const archiveKey = await ports.files.put(request.id, { data: zip, name: "export.zip" });
 
-    await context.files.put(request.id, { data: pdf, name: "summary.pdf" });
+    await ports.files.put(request.id, { data: pdf, name: "summary.pdf" });
 
     return archiveKey;
 };
@@ -295,98 +351,259 @@ const assembleExport = async (context: RunContext, datasets: ReadonlyArray<Datas
 /** The text a failed run records: the error message, or the value thrown when it is not an `Error`. */
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** Move a request into `processing` and record the event that names the run. Returns the status it now holds. */
-const beginRun = async (context: Pick<RunContext, "now" | "store">, request: RequestRecord, event: string): Promise<RequestStatus> => {
-    const status = transition(request.status, "processing");
+/**
+ * Record a status change and its event. Every phase writes one event, named after the status it
+ * moves to, whichever path runs it.
+ */
+const setStatus = async (
+    ports: PrivacyPorts,
+    requestId: string,
+    change: {
+        readonly detail?: string;
+        readonly from: RequestStatus;
+        readonly patch?: Partial<Omit<RequestRecord, "id" | "status">>;
+        readonly to: RequestStatus;
+    },
+): Promise<void> => {
+    const status = transition(change.from, change.to);
 
-    await context.store.update(request.id, { status });
-    await context.store.addEvent(request.id, context.now(), event);
-
-    return status;
+    await ports.store.update(requestId, { ...change.patch, status });
+    await ports.store.addEvent(requestId, ports.now(), status, change.detail);
 };
 
-/** Mark a run failed and keep the error on the event. A failed request stays retryable. */
-const failRun = async (context: Pick<RunContext, "now" | "store">, request: RequestRecord, status: RequestStatus, error: unknown): Promise<RequestStatus> => {
-    const failed = transition(status, "failed");
-
-    await context.store.update(request.id, { status: failed });
-    await context.store.addEvent(request.id, context.now(), "failed", messageOf(error));
-
-    return failed;
-};
+/** The request as the run starts, through a step, so a replay sees the record the first run saw. */
+const loadStep = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<RequestRecord> =>
+    fromStepRecord(await steps.do("load", async () => toStepRecord(await requireRequest(scope.ports.store, requestId))));
 
 /**
- * Export the subject's data in one call: collect each dataset, assemble, and mark
- * the request ready. A failure marks it `failed` for an operator to retry; the
- * Art. 12(3) clock keeps running.
+ * Move the request into `processing`, from the status it holds now, so a cancel that landed during
+ * the grace or before the run is respected. A request already processing is a replayed start and
+ * goes on. Returns the status the run continues from: anything but `processing` stops it.
  */
-const runExport = async (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord): Promise<ExportOutcome> => {
-    let status = await beginRun(context, request, "processing");
+const startStep = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<RequestStatus> =>
+    steps.do("start", async () => {
+        const { status } = await requireRequest(scope.ports.store, requestId);
 
-    try {
-        for (const dataset of datasets) {
-            // Datasets are collected one at a time so a failure names the dataset that broke.
-            // eslint-disable-next-line no-await-in-loop -- sequential by design, see the comment above
-            await collectPart(context, dataset, request);
+        if (status === "processing" || !canTransition(status, "processing") || status === "ready") {
+            return status;
         }
 
-        const archiveKey = await assembleExport(context, datasets, request);
+        await setStatus(scope.ports, requestId, { from: status, to: "processing" });
 
-        status = transition(status, "ready");
-        await context.store.update(request.id, { expiresAt: new Date(context.now().getTime() + EXPORT_EXPIRY_MS), status, storageKey: archiveKey });
-        await context.store.addEvent(request.id, context.now(), "ready");
+        return "processing" as const;
+    });
 
-        return { archiveKey, status };
+/** A step's answer: the status the request held when the step ran, and the step's value when it ran. */
+interface Checked<T> {
+    readonly status: RequestStatus;
+    readonly value?: T;
+}
+
+/** Run one named step only while the request is still `processing`. A request that left it stops the run. */
+const whileProcessing = async <T>(scope: RunScope, steps: StepRunner, requestId: string, name: string, run: () => Promise<T>): Promise<Checked<T>> =>
+    steps.do(name, async () => {
+        const { status } = await requireRequest(scope.ports.store, requestId);
+
+        if (status !== "processing") {
+            return { status };
+        }
+
+        const value: T | undefined = await run();
+
+        // A step result is stored as JSON, so an absent value is left out rather than kept as `undefined`.
+        return value === undefined ? { status } : { status, value };
+    });
+
+/** Mark the run failed and keep why on the event. A request already terminal, or failed, is left as it is. */
+const failStep = async (scope: RunScope, steps: StepRunner, requestId: string, detail: string): Promise<RequestStatus> =>
+    steps.do("fail", async () => {
+        const { status } = await requireRequest(scope.ports.store, requestId);
+
+        if (isTerminal(status) || !canTransition(status, "failed")) {
+            return status;
+        }
+
+        await setStatus(scope.ports, requestId, { detail, from: status, to: "failed" });
+
+        return "failed" as const;
+    });
+
+/**
+ * Export the subject's data: collect each dataset as its own step, assemble, and mark the request
+ * ready. A failure marks it `failed` for an operator to retry; the Art. 12(3) clock keeps running.
+ */
+const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ExportOutcome> => {
+    const record = await loadStep(scope, steps, requestId);
+
+    try {
+        const started = await startStep(scope, steps, requestId);
+
+        if (started !== "processing") {
+            return { status: started };
+        }
+
+        for (const dataset of scope.datasets) {
+            // Each dataset is one step: its rows go to storage, so the step returns nothing large.
+            // eslint-disable-next-line no-await-in-loop -- steps run in order by design
+            const collected = await whileProcessing(scope, steps, requestId, `collect:${dataset.id}`, async () => collectPart(scope.ports, dataset, record));
+
+            if (collected.status !== "processing") {
+                return { status: collected.status };
+            }
+        }
+
+        const assembled = await whileProcessing(scope, steps, requestId, "assemble", async () =>
+            assembleExport(scope.ports, scope.datasets, record, scope.subjectKey(record.subjectId)), );
+        const archiveKey = assembled.value;
+
+        if (archiveKey === undefined) {
+            return { status: assembled.status };
+        }
+
+        const ready = await whileProcessing(scope, steps, requestId, "ready", async () =>
+            setStatus(scope.ports, requestId, {
+                detail: archiveKey,
+                from: "processing",
+                patch: { expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS), storageKey: archiveKey },
+                to: "ready",
+            }), );
+
+        return ready.status === "processing" ? { archiveKey, status: "ready" } : { status: ready.status };
     } catch (error) {
-        return { status: await failRun(context, request, status, error) };
+        return { status: await failStep(scope, steps, requestId, messageOf(error)) };
     }
 };
 
-/**
- * Erase the subject's data in dataset order, then verify. The request completes
- * only when every table reads zero afterwards; otherwise it is `failed` and names
- * the leftover tables.
- */
-const runErasure = async (context: RunContext, datasets: ReadonlyArray<Dataset>, request: RequestRecord): Promise<ErasureOutcome> => {
-    let status = await beginRun(context, request, "erasing");
-    const disposition = dispositionFor(context.rules);
+/** The HMAC secret tombstone keys are derived with. A missing or empty secret is refused. */
+const requireTombstoneSecret = (secret: string | undefined): string => {
+    if (secret === undefined || secret === "") {
+        throw new LunoraError("BAD_REQUEST", "Tombstones need a secret: pass `tombstoneSecret` to definePrivacy.");
+    }
 
-    try {
-        for (const dataset of erasureOrder(datasets)) {
-            // Datasets erase in order, and each drain finishes before the next starts.
-            // eslint-disable-next-line no-await-in-loop -- sequential by design, see the comment above
-            await drainUntilEmpty(() => context.data.eraseBatch(dataset, request.subjectId, context.now(), disposition));
+    return secret;
+};
+
+/**
+ * The tombstone store and its secret. Every erasure needs both, and they are checked before anything
+ * is erased: an erasure that could not record its tombstone would be undone by the next restore.
+ */
+const requireTombstones = (scope: Pick<RunScope, "ports" | "tombstoneSecret">): { readonly port: TombstonePort; readonly secret: string } => {
+    const port = scope.ports.tombstones;
+
+    if (port === undefined) {
+        throw new LunoraError("BAD_REQUEST", "An erasure needs a tombstone store: pass `tombstones` in the privacy ports.");
+    }
+
+    return { port, secret: requireTombstoneSecret(scope.tombstoneSecret) };
+};
+
+/** Erase one dataset's rows for the subject, one batch at a time, until the drain finishes. */
+const eraseDataset = async (scope: Pick<RunScope, "disposition" | "ports">, dataset: Dataset, subjectId: string): Promise<void> => {
+    await drainUntilEmpty(() => scope.ports.data.eraseBatch(dataset, subjectId, scope.ports.now(), scope.disposition));
+};
+
+/**
+ * Complete an erasure and drop the raw subject id from the request log: every request of the subject,
+ * this one last, takes the tombstone key as its `subjectId`, so the log keeps the link the tombstone
+ * keeps and nothing more. A retry finds the requests already rewritten and only completes this one.
+ * The subject's own lookups by their id stop finding these requests, which is the point.
+ */
+const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId: string, key: string): Promise<void> => {
+    const requests = await ports.store.listForSubject(subjectId);
+    const others = requests.filter((request) => request.id !== requestId);
+
+    await Promise.all(others.map(async (request) => ports.store.update(request.id, { subjectId: key })));
+    await setStatus(ports, requestId, { from: "processing", patch: { subjectId: key }, to: "completed" });
+};
+
+/**
+ * Erase the subject's data: wait out the grace, then erase each dataset in erasure order, then the
+ * stored files, then verify. The request completes only when verify finds nothing left but rows a
+ * rule still keeps; otherwise it is `failed` and names the leftover tables.
+ */
+const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string): Promise<ErasureOutcome> => {
+    const record = await loadStep(scope, steps, requestId);
+
+    if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
+        // The grace window is the subject's cancellation period: only a host that can sleep through it may run it.
+        if (steps.sleepUntil === undefined) {
+            throw new LunoraError("UNPROCESSABLE", "This erasure is inside its grace window. The erasure workflow runs it when the window ends.");
         }
 
-        await eraseSubjectFiles(context, datasets, request.subjectId);
+        await steps.sleepUntil("grace", record.erasureGraceUntil);
+    }
 
-        const verdict = await verifySubjectErased(context, datasets, request.subjectId);
+    try {
+        const tombstones = requireTombstones(scope);
+        const started = await startStep(scope, steps, requestId);
 
-        status = transition(status, verdict.complete ? "completed" : "failed");
-        await context.store.update(request.id, { status });
-        await context.store.addEvent(request.id, context.now(), verdict.complete ? "completed" : "failed", verdict.leftover.join(","));
+        if (started !== "processing") {
+            return { leftover: [], status: started };
+        }
 
-        return { leftover: verdict.leftover, status };
+        for (const dataset of erasureOrder(scope.datasets)) {
+            // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
+            // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
+            const erased = await whileProcessing(scope, steps, requestId, `erase:${dataset.id}`, async () => eraseDataset(scope, dataset, record.subjectId));
+
+            if (erased.status !== "processing") {
+                return { leftover: [], status: erased.status };
+            }
+        }
+
+        const filesErased = await whileProcessing(scope, steps, requestId, "erase:files", async () =>
+            eraseSubjectFiles(scope.ports, scope.datasets, record.subjectId), );
+
+        if (filesErased.status !== "processing") {
+            return { leftover: [], status: filesErased.status };
+        }
+
+        const verified = await whileProcessing(scope, steps, requestId, "verify", async () => verifySubjectErased(scope, scope.datasets, record.subjectId));
+        const verdict = verified.value;
+
+        if (verdict === undefined) {
+            return { leftover: [], status: verified.status };
+        }
+
+        if (!verdict.complete) {
+            return { leftover: verdict.leftover, status: await failStep(scope, steps, requestId, verdict.leftover.join(",")) };
+        }
+
+        // The tombstone is written before the request completes, so a completed erasure always has one.
+        // A retried step writes it again, which the port's upsert absorbs.
+        const tombstoned = await whileProcessing(scope, steps, requestId, "tombstone", async () =>
+            tombstones.port.add(tombstoneKeyOf(record.subjectId, tombstones.secret), scope.ports.now()), );
+
+        if (tombstoned.status !== "processing") {
+            return { leftover: [], status: tombstoned.status };
+        }
+
+        const completed = await whileProcessing(scope, steps, requestId, "complete", async () =>
+            completeErasure(scope.ports, requestId, record.subjectId, tombstoneKeyOf(record.subjectId, tombstones.secret)), );
+
+        return { leftover: [], status: completed.status === "processing" ? "completed" : completed.status };
     } catch (error) {
-        return { leftover: [], status: await failRun(context, request, status, error) };
+        return { leftover: [], status: await failStep(scope, steps, requestId, messageOf(error)) };
     }
 };
 
 export {
-    assembleExport,
+    type ArchivePort,
     collectPart,
     type DataPort,
-    deleteRequestFiles,
+    eraseDataset,
     eraseSubjectFiles,
     type ErasureOutcome,
+    erasureRun,
     expireRequestFiles,
     type ExportOutcome,
-    messageOf,
-    type RunContext,
-    runErasure,
-    runExport,
+    exportRun,
+    inlineSteps,
+    type PrivacyPorts,
+    requireTombstones,
+    type RunScope,
+    type StepRunner,
     type StorePort,
-    verifySubjectErased,
 };
 
 export { EXPORT_EXPIRY_MS };

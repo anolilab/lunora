@@ -3,15 +3,11 @@ import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
-import type { PrivacyWorkflowContext } from "../src/define";
-import { definePrivacy } from "../src/define";
 import { retain } from "../src/rules";
 import type { DataPort } from "../src/run";
-import { memoryFiles, memoryRequests } from "./memory-ports";
+import { setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;
-
-const now = new Date("2026-10-11T10:00:00.000Z");
 
 const billing = defineDataset("billing", {
     legalBasis: "legal_obligation",
@@ -73,41 +69,15 @@ const rowData = (options: { archive?: boolean; ignoreDelete?: boolean } = {}) =>
     return { archive, port, tables };
 };
 
-const inline: PrivacyWorkflowContext["step"] = {
-    do: async (_name, run) => run(),
-    sleepUntil: async () => undefined,
-};
-
-const build = (data: DataPort, datasets = [billing]) => {
-    const store = memoryRequests();
-    const files = memoryFiles();
-    const privacy = definePrivacy({
-        datasets,
-        ports: () => {
-            return {
-                data,
-                files,
-                identity: () => {
-                    return { sessionAgeMs: 0, subjectId: "u1" };
-                },
-                newId: () => "r1",
-                now: () => now,
-                store,
-            };
-        },
-        presets: [germany()],
-    })(undefined);
-
-    return { files, privacy, store };
-};
+const build = (data: DataPort, datasets = [billing]) => setup({ data, datasets, presets: [germany()] });
 
 describe("retention during erasure", () => {
     it("deletes a row whose period has ended and archives one whose period is running", async () => {
         const { archive, port, tables } = rowData();
-        const { privacy, store } = build(port);
+        const { privacy, runErasureWorkflow, store } = build(port);
         const erasure = await privacy.requestErasure();
 
-        await privacy.workflows.erasureHandler({ params: { requestId: erasure.id }, step: inline });
+        await runErasureWorkflow(erasure.id);
 
         expect(store.rows.get(erasure.id)?.status).toBe("completed");
         expect(tables).toStrictEqual({ invoices: [], notes: [], tasks: [{ id: "t1" }] });
@@ -116,10 +86,10 @@ describe("retention during erasure", () => {
 
     it("completes when a kept row is still counted in its table", async () => {
         const { port, tables } = rowData({ archive: false });
-        const { privacy, store } = build(port);
+        const { privacy, runErasureWorkflow, store } = build(port);
         const erasure = await privacy.requestErasure();
 
-        await privacy.workflows.erasureHandler({ params: { requestId: erasure.id }, step: inline });
+        await runErasureWorkflow(erasure.id);
 
         expect(store.rows.get(erasure.id)?.status).toBe("completed");
         expect(tables.invoices).toStrictEqual([RECENT]);
@@ -149,5 +119,47 @@ describe("retention during erasure", () => {
             ["billing", true],
             ["tasks", false],
         ]);
+    });
+
+    it("completes a full erasure that anonymises a table, though the anonymised rows are still counted", async () => {
+        const comments = defineDataset("comments", {
+            legalBasis: "legitimate_interest",
+            origin: "provided",
+            purpose: "Comments the user wrote on shared tasks",
+            tables: { comments: { erase: "anonymise" }, reactions: {} },
+        });
+        const rows: Record<string, Row[]> = {
+            comments: [
+                { author: "Ada", body: "looks good", id: "c1" },
+                { author: "Ada", body: "done", id: "c2" },
+            ],
+            reactions: [{ id: "x1" }],
+        };
+        const data: DataPort = {
+            collect: async (dataset) => Object.fromEntries(dataset.tableNames.map((table) => [table, [...(rows[table] ?? [])]])),
+            eraseBatch: async (dataset, _subjectId, at, disposition) => {
+                for (const table of dataset.tableNames) {
+                    rows[table] = (rows[table] ?? []).flatMap((row) => {
+                        const verdict = disposition(dataset, table, row, at);
+
+                        // An anonymised row stays, without the fields that identify the subject.
+                        return verdict.kind === "anonymise" ? [{ ...row, author: undefined, anonymised: true }] : [];
+                    });
+                }
+
+                return { hasMore: false };
+            },
+            // This port still counts the anonymised rows under the subject, as a port that keeps the owner column would.
+            remaining: async (dataset) => Object.fromEntries(dataset.tableNames.map((table) => [table, (rows[table] ?? []).length])),
+        };
+        const { privacy, runErasureWorkflow, store } = setup({ data, datasets: [comments] });
+        const erasure = await privacy.requestErasure();
+
+        await runErasureWorkflow(erasure.id);
+
+        expect(store.rows.get(erasure.id)?.status).toBe("completed");
+        expect(rows.comments).toHaveLength(2);
+        expect(rows.comments?.every((row) => row.author === undefined)).toBe(true);
+        expect(rows.reactions).toStrictEqual([]);
     });
 });

@@ -10,28 +10,18 @@ import type { CoverageProblem, TableClassification } from "./coverage";
 import { checkCoverage } from "./coverage";
 import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
-import type { RowDisposition } from "./erasure";
+import type { DeadlinePolicy } from "./deadlines";
+import { DAY_MS, DEFAULT_DEADLINES } from "./deadlines";
 import { dispositionFor, drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
-import type { RequestStatus } from "./lifecycle";
-import { effectiveDueAt, isOverdue, isTerminal, transition } from "./lifecycle";
+import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
-import { cancelRequest, extendRequest, fromStepRecord, openRequest, requireRequest, toStepRecord } from "./requests";
-import type { PrivacyPreset, RetentionRule } from "./rules";
-import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
-import {
-    assembleExport,
-    collectPart,
-    eraseSubjectFiles,
-    expireRequestFiles,
-    EXPORT_EXPIRY_MS,
-    messageOf,
-    runErasure,
-    runExport,
-    verifySubjectErased,
-} from "./run";
-import type { TombstonePort } from "./tombstones";
-import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
+import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
+import type { PrivacyPolicy, PrivacyPreset } from "./rules";
+import { retentionRulesOf } from "./rules";
+import type { ErasureOutcome, ExportOutcome, PrivacyPorts, RunScope, StepRunner } from "./run";
+import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
+import { subjectsToReerase } from "./tombstones";
 
 /**
  * Load a request the caller may act on. A request that belongs to someone else reads as
@@ -51,25 +41,13 @@ const requireOwnedRequest = async (store: RequestStore, requestId: string, subje
 type ErasureOptions = Partial<ErasureSettings>;
 
 /**
- * The authenticated subject of an invocation. The app binds it from its session, never from a
- * request argument, so a caller cannot act on another subject's data by naming them.
+ * The authenticated subject of a call. The app resolves it from its session, never from a request
+ * argument, and passes it as the second argument of `privacyFor(ctx, identity)`, so a caller cannot
+ * act on another subject's data by naming them. An operator call, a cron or a workflow passes none.
  */
 interface PrivacyIdentity {
     readonly sessionAgeMs: number;
     readonly subjectId: string;
-}
-
-/** The ports one invocation binds: the app's data, storage, requests, clock and authenticated subject. */
-interface PrivacyPorts {
-    readonly data: DataPort;
-    readonly files: StorePort;
-    /** The authenticated subject. Throws when the invocation has none (a workflow step, a cron). */
-    readonly identity: () => PrivacyIdentity;
-    readonly newId: () => string;
-    readonly now: () => Date;
-    readonly store: RequestStore;
-    /** Where erased subjects are tombstoned, so a restored backup can be erased again. Optional; `restore` needs it. */
-    readonly tombstones?: TombstonePort;
 }
 
 /**
@@ -88,45 +66,53 @@ interface PrivacyConfig<C> {
     readonly subjectKey?: (subjectId: string) => string;
 
     /**
-     * The HMAC secret tombstone keys are derived with. Required once the ports pass `tombstones`:
-     * an erasure and `restore` refuse to run without it. Keep it in a secret binding, and keep it
-     * stable, because a new secret no longer matches the tombstones already written.
+     * The HMAC secret tombstone keys are derived with. Every erasure and `restore` refuse to run
+     * without it and without a `tombstones` port. Keep it in a secret binding, and keep it stable,
+     * because a new secret no longer matches the tombstones already written.
      */
     readonly tombstoneSecret?: string;
 }
 
-/** Binds an invocation's context into the API. Call it once per invocation: `privacyFor(ctx).requestExport(...)`. */
-type PrivacyFor<C> = (context: C) => Privacy;
+/**
+ * Binds an invocation's context, and the caller's identity when the caller is a data subject, into
+ * the API: `privacyFor(ctx, identity).requestExport()`. The subject methods refuse a call bound
+ * without an identity; the operator methods and the workflows never read it.
+ */
+type PrivacyFor<C> = (context: C, identity?: PrivacyIdentity) => Privacy;
 
 /** The step surface a Workflow handler receives. Matches the native `WorkflowStep` methods the package uses. */
 interface PrivacyWorkflowContext {
     readonly params: { readonly requestId: string };
-    readonly step: {
-        readonly do: <T>(name: string, run: () => Promise<T>) => Promise<T>;
-        readonly sleepUntil: (name: string, when: Date) => Promise<void>;
-    };
+    readonly step: Required<StepRunner>;
 }
 
 /** The bound API. */
 interface Privacy {
     /** Operator views and actions. Each one is for the operator's own console, not the subject. */
     readonly admin: {
+        /**
+         * Extend a request's deadline by the policy's further months (Art. 12(3) sentence 2). Extension
+         * is the controller's decision, so it is an operator action: once per request, within the first
+         * period, with the reasons the controller must give the subject.
+         */
+        readonly extend: (requestId: string, reason: string) => Promise<RequestRecord>;
         /** Every request that is not yet terminal. */
         readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
         /** Re-run a failed export or erasure. The Art. 12(3) clock keeps running throughout. */
         readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
 
         /**
-         * Expire every ready export past its download window: delete its files, then mark it
-         * `expired`. Returns the requests it expired. Run it from a cron.
+         * The housekeeping sweep. Run it from a cron. It expires every ready export past its download
+         * window (its files go first, then it is marked `expired`), and it purges every archived row
+         * whose retention period has ended through the `archive` port. Returns the expired requests
+         * and how many archived rows it purged.
          */
-        readonly sweep: () => Promise<ReadonlyArray<RequestRecord>>;
+        readonly sweep: () => Promise<SweepResult>;
     };
     readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
     /** The subject's download link for a finished export. Refused for anyone but the subject, and once expired. */
     readonly downloadUrl: (input: { requestId: string }) => Promise<string>;
-    readonly extendRequest: (input: { reason: string; requestId: string }) => Promise<RequestRecord>;
     /** The subject's own requests that are still open. */
     readonly myRequests: () => Promise<ReadonlyArray<RequestRecord>>;
     readonly requestErasure: () => Promise<RequestRecord>;
@@ -147,42 +133,29 @@ interface Privacy {
 /** A download link lives fifteen minutes (the plan's D5). */
 const DOWNLOAD_TTL_SECONDS = 15 * 60;
 
-const DEFAULT_GRACE_DAYS = DEFAULT_ERASURE_GRACE_DAYS;
-const DEFAULT_DRAIN_BUDGET_DAYS = 3;
-const DEFAULT_FRESH_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_FRESH_AGE_MS = DAY_MS;
 /** Warn an operator this long before a request's deadline. */
-const DEADLINE_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+const DEADLINE_WARNING_MS = 7 * DAY_MS;
 
 /** The app's settings, resolved once by `definePrivacy` and shared by every invocation. */
-interface Settings {
-    readonly datasets: ReadonlyArray<Dataset>;
-    readonly disposition: RowDisposition;
+interface Settings extends Omit<RunScope, "ports"> {
+    readonly deadlines: DeadlinePolicy;
     readonly erasure: ErasureSettings;
     readonly exclude: Readonly<Record<string, string>>;
-    readonly rules: ReadonlyMap<string, RetentionRule>;
-    readonly subjectKey: (subjectId: string) => string;
-    readonly tombstoneSecret: string | undefined;
 }
 
-/** One invocation's view of the settings: the ports that call binds. */
-interface Scope extends Settings {
-    readonly ports: PrivacyPorts;
+/** One invocation's view of the settings: the ports that call binds, and the caller when it is a subject. */
+interface Scope extends RunScope, Settings {
+    readonly identity: PrivacyIdentity | undefined;
 }
 
-/** The run context without the subject key: the sweep and the verify step need no more than this. */
-const portsContext = (scope: Scope): Omit<RunContext, "subjectKey"> => {
-    return {
-        data: scope.ports.data,
-        files: scope.ports.files,
-        now: scope.ports.now,
-        rules: scope.rules,
-        store: scope.ports.store,
-    };
-};
+/** The subject the call is bound to. A call bound without one (an operator, a cron) cannot use the subject methods. */
+const callerOf = (scope: Scope): PrivacyIdentity => {
+    if (scope.identity === undefined) {
+        throw new LunoraError("UNAUTHENTICATED", "This privacy call is not bound to a subject: pass the caller's identity to privacyFor.");
+    }
 
-/** The run context for one request: the ports plus the subject's key in the archive. */
-const contextFor = (scope: Scope, record: RequestRecord): RunContext => {
-    return { ...portsContext(scope), subjectKey: scope.subjectKey(record.subjectId) };
+    return scope.identity;
 };
 
 /** The app's `listOpen` is filtered again, so a terminal request never reaches a sweep or a report. */
@@ -192,61 +165,14 @@ const listOpen = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => 
     return listed.filter((record) => !isTerminal(record.status));
 };
 
-const setStatus = async (scope: Scope, record: RequestRecord, status: RequestStatus, detail?: string): Promise<void> => {
-    await scope.ports.store.update(record.id, { status });
-    await scope.ports.store.addEvent(record.id, scope.ports.now(), status, detail);
-};
-
-/** A failure never overwrites a request that is already terminal (cancelled or completed). */
-const markFailed = async (scope: Scope, record: RequestRecord, message: string): Promise<void> => {
-    const current = await requireRequest(scope.ports.store, record.id);
-
-    if (!isTerminal(current.status)) {
-        await setStatus(scope, record, "failed", message);
-    }
-};
-
-/** The run starts from the status it finds now, so a cancel that lands during the load step is respected. */
-const startRun = async (scope: Scope, record: RequestRecord): Promise<void> => {
-    const current = await requireRequest(scope.ports.store, record.id);
-
-    await setStatus(scope, record, transition(current.status, "processing"));
-};
-
-/** Checked before anything is erased, so a missing secret never leaves an erasure completed without its tombstone. */
-const requireTombstoneSecret = (secret: string | undefined): string => {
-    if (secret === undefined || secret === "") {
-        throw new LunoraError("BAD_REQUEST", "Tombstones need a secret: pass `tombstoneSecret` to definePrivacy.");
-    }
-
-    return secret;
-};
-
-/** Tombstone a completed erasure, so a restored backup is erased again. Does nothing without a tombstone store. */
-const addTombstone = async (scope: Scope, subjectId: string, secret: string | undefined): Promise<void> => {
-    if (scope.ports.tombstones !== undefined && secret !== undefined) {
-        await scope.ports.tombstones.add(tombstoneKeyOf(subjectId, secret), scope.ports.now());
-    }
-};
-
-/** Erase one dataset's rows for the subject, one batch at a time, until the drain finishes. */
-const eraseDataset = async (scope: Scope, dataset: Dataset, subjectId: string): Promise<void> => {
-    await drainUntilEmpty(() => scope.ports.data.eraseBatch(dataset, subjectId, scope.ports.now(), scope.disposition));
-};
-
 /**
- * One erasure path for the workflow, the public entry and the operator retry: the tombstone is
- * written in every case, so a restored backup is erased again whichever path ran it.
+ * The one-call erasure. The tombstone store and secret are checked before anything runs, so a call
+ * without them is refused outright and leaves the request as it was.
  */
-const eraseAndTombstone = async (scope: Scope, record: RequestRecord): Promise<ErasureOutcome> => {
-    const secret = scope.ports.tombstones === undefined ? undefined : requireTombstoneSecret(scope.tombstoneSecret);
-    const outcome = await runErasure(contextFor(scope, record), scope.datasets, record);
+const runErasureNow = async (scope: Scope, requestId: string): Promise<ErasureOutcome> => {
+    requireTombstones(scope);
 
-    if (outcome.status === "completed") {
-        await addTombstone(scope, record.subjectId, secret);
-    }
-
-    return outcome;
+    return erasureRun(scope, inlineSteps, requestId);
 };
 
 /** Re-run a failed export or erasure from the operator console. Only a failed request may be retried. */
@@ -257,20 +183,68 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<ExportOutc
         throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
     }
 
-    return record.type === "export" ? runExport(contextFor(scope, record), scope.datasets, record) : eraseAndTombstone(scope, record);
+    return record.type === "export" ? exportRun(scope, inlineSteps, requestId) : runErasureNow(scope, requestId);
 };
 
+/** What `admin.sweep` did. */
+interface SweepResult {
+    readonly expired: ReadonlyArray<RequestRecord>;
+    /** Archived rows deleted because their retention period has ended. */
+    readonly purged: number;
+}
+
 /** Expire every ready export past its window. Each export's files go before its status changes, so a failed delete leaves it ready. */
-const sweepExpired = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => {
+const expireExports = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => {
     const now = scope.ports.now().getTime();
     const open = await listOpen(scope);
     const due = open.filter((record) => record.status === "ready" && record.expiresAt !== undefined && record.expiresAt.getTime() < now);
 
-    await Promise.all(due.map(async (record) => expireRequestFiles(portsContext(scope), record)));
+    await Promise.all(due.map(async (record) => expireRequestFiles(scope.ports, record)));
 
     return due.map((record) => {
         return { ...record, status: "expired" as const };
     });
+};
+
+/** Whether any dataset keeps rows under a retention rule, so erasure moves rows into the archive. */
+const keepsArchivedRows = (datasets: ReadonlyArray<Dataset>): boolean =>
+    datasets.some((dataset) => dataset.tableNames.some((table) => typeof dataset.tables[table]?.erase === "object"));
+
+/**
+ * Delete every archived row whose retention period has ended, one batch at a time. An app with a
+ * retention rule must pass the `archive` port: without it the rows erasure kept would never go.
+ */
+const purgeArchive = async (scope: Scope): Promise<number> => {
+    const { archive } = scope.ports;
+
+    if (archive === undefined) {
+        if (keepsArchivedRows(scope.datasets)) {
+            throw new LunoraError("BAD_REQUEST", "A dataset retains rows, so the sweep needs an `archive` port to purge them once their period ends.");
+        }
+
+        return 0;
+    }
+
+    const before = scope.ports.now();
+    let purged = 0;
+
+    await drainUntilEmpty(async () => {
+        const batch = await archive.purgeBatch(before);
+
+        purged += batch.purged;
+
+        return batch;
+    });
+
+    return purged;
+};
+
+/** Expire the finished exports, then purge the archive. An expiry is not held back by a purge failure. */
+const sweep = async (scope: Scope): Promise<SweepResult> => {
+    const expired = await expireExports(scope);
+    const purged = await purgeArchive(scope);
+
+    return { expired, purged };
 };
 
 /** The deadline sweep: requests due within the warning window, and those already overdue. */
@@ -279,7 +253,11 @@ const tickRequests = async (scope: Scope): Promise<{ readonly approaching: Reado
     const open = await listOpen(scope);
     const overdue = open.filter((record) => isOverdue(record, at));
     const approaching = open.filter((record) => {
-        const due = effectiveDueAt(record.receivedAt, record.extendedDueAt !== undefined).getTime();
+        if (!awaitsResponse(record.status)) {
+            return false;
+        }
+
+        const due = effectiveDueAt(record).getTime();
 
         return due - at.getTime() <= DEADLINE_WARNING_MS && due >= at.getTime();
     });
@@ -289,7 +267,7 @@ const tickRequests = async (scope: Scope): Promise<{ readonly approaching: Reado
 
 /** The subject's download link. A request for someone else reads as not found, and the link is refused once expired. */
 const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> => {
-    const { subjectId } = scope.ports.identity();
+    const { subjectId } = callerOf(scope);
     const record = await requireRequest(scope.ports.store, requestId);
 
     if (record.subjectId !== subjectId || record.type !== "export") {
@@ -309,13 +287,8 @@ const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> 
 
 /** Erase again the subjects a restore brought back, each in the same dataset order as a first erasure. */
 const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<string>): Promise<ReadonlyArray<string>> => {
-    const { tombstones } = scope.ports;
-
-    if (tombstones === undefined) {
-        throw new LunoraError("BAD_REQUEST", "restore needs a tombstone store: pass `tombstones` to definePrivacy.");
-    }
-
-    const subjects = await subjectsToReerase(restoredSubjectIds, tombstones, requireTombstoneSecret(scope.tombstoneSecret));
+    const tombstones = requireTombstones(scope);
+    const subjects = await subjectsToReerase(restoredSubjectIds, tombstones.port, tombstones.secret);
 
     for (const subjectId of subjects) {
         for (const dataset of erasureOrder(scope.datasets)) {
@@ -325,86 +298,6 @@ const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<s
     }
 
     return subjects;
-};
-
-/** The export workflow: each dataset is one durable step, so a retry resumes at the step that failed. */
-const exportWorkflow = async (scope: Scope, context: PrivacyWorkflowContext): Promise<void> => {
-    const { requestId } = context.params;
-    // Step results are stored as JSON, so the record crosses the step as ISO strings and is rehydrated here.
-    const record = fromStepRecord(await context.step.do("load", async () => toStepRecord(await requireRequest(scope.ports.store, requestId))));
-    const runContext = contextFor(scope, record);
-
-    try {
-        await context.step.do("start", async () => startRun(scope, record));
-
-        for (const dataset of scope.datasets) {
-            // Each dataset is one step: its rows go to storage, so the step returns nothing large.
-            // eslint-disable-next-line no-await-in-loop -- durable steps run in order by design
-            await context.step.do(`collect:${dataset.id}`, async () => collectPart(runContext, dataset, record));
-        }
-
-        const archiveKey = await context.step.do("assemble", async () => assembleExport(runContext, scope.datasets, record));
-
-        await context.step.do("ready", async () => {
-            await scope.ports.store.update(record.id, {
-                expiresAt: new Date(scope.ports.now().getTime() + EXPORT_EXPIRY_MS),
-                status: transition("processing", "ready"),
-                storageKey: archiveKey,
-            });
-            await scope.ports.store.addEvent(record.id, scope.ports.now(), "ready", archiveKey);
-        });
-    } catch (error) {
-        await context.step.do("fail", async () => markFailed(scope, record, messageOf(error)));
-    }
-};
-
-/**
- * The erasure workflow. A subject who cancelled during the grace leaves the request cancelled,
- * so the erasure stops after the grace window.
- */
-const erasureWorkflow = async (scope: Scope, context: PrivacyWorkflowContext): Promise<void> => {
-    const { requestId } = context.params;
-    const record = fromStepRecord(await context.step.do("load", async () => toStepRecord(await requireRequest(scope.ports.store, requestId))));
-
-    if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
-        await context.step.sleepUntil("grace", record.erasureGraceUntil);
-
-        const status = await context.step.do("recheck", async () => {
-            const current = await requireRequest(scope.ports.store, requestId);
-
-            return current.status;
-        });
-
-        if (status !== "grace") {
-            return;
-        }
-    }
-
-    try {
-        const secret = scope.ports.tombstones === undefined ? undefined : requireTombstoneSecret(scope.tombstoneSecret);
-
-        await context.step.do("start", async () => startRun(scope, record));
-
-        for (const dataset of erasureOrder(scope.datasets)) {
-            // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
-            // eslint-disable-next-line no-await-in-loop -- drains run one after another by design
-            await context.step.do(`erase:${dataset.id}`, async () => eraseDataset(scope, dataset, record.subjectId));
-        }
-
-        await context.step.do("erase:files", async () => eraseSubjectFiles(scope.ports, scope.datasets, record.subjectId));
-
-        await context.step.do("verify", async () => {
-            const verdict = await verifySubjectErased(portsContext(scope), scope.datasets, record.subjectId);
-
-            await setStatus(scope, record, transition("processing", verdict.complete ? "completed" : "failed"), verdict.leftover.join(","));
-
-            if (verdict.complete) {
-                await addTombstone(scope, record.subjectId, secret);
-            }
-        });
-    } catch (error) {
-        await context.step.do("fail", async () => markFailed(scope, record, messageOf(error)));
-    }
 };
 
 /** The coverage check: every table is in a dataset or excluded with a reason. Exclusions passed here override the app's. */
@@ -429,18 +322,19 @@ const coverageOf = (scope: Scope, tables: ReadonlyArray<string>, exclusions: Rea
  * Bind one invocation's ports into the API. Each method is a thin call into the module-level
  * helpers above, which take the same `scope`.
  */
-const bind = (settings: Settings, ports: PrivacyPorts): Privacy => {
-    const scope: Scope = { ...settings, ports };
+const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity | undefined): Privacy => {
+    const scope: Scope = { ...settings, identity, ports };
 
     return {
         admin: {
+            extend: async (requestId, reason) => extendRequest(ports.store, { deadlines: settings.deadlines, id: requestId, now: ports.now(), reason }),
             open: async () => listOpen(scope),
             retry: async (requestId) => retryRequest(scope, requestId),
-            sweep: async () => sweepExpired(scope),
+            sweep: async () => sweep(scope),
         },
 
         cancelRequest: async ({ requestId }) => {
-            await requireOwnedRequest(ports.store, requestId, ports.identity().subjectId);
+            await requireOwnedRequest(ports.store, requestId, callerOf(scope).subjectId);
 
             return cancelRequest(ports.store, { id: requestId, now: ports.now() });
         },
@@ -449,53 +343,69 @@ const bind = (settings: Settings, ports: PrivacyPorts): Privacy => {
 
         downloadUrl: async ({ requestId }) => downloadUrlFor(scope, requestId),
 
-        extendRequest: async ({ reason, requestId }) => {
-            await requireOwnedRequest(ports.store, requestId, ports.identity().subjectId);
-
-            return extendRequest(ports.store, { id: requestId, now: ports.now(), reason });
-        },
-
         myRequests: async () => {
-            const { subjectId } = ports.identity();
+            const { subjectId } = callerOf(scope);
             const open = await listOpen(scope);
 
             return open.filter((record) => record.subjectId === subjectId);
         },
 
         requestErasure: async () => {
-            const { sessionAgeMs, subjectId } = ports.identity();
+            const { sessionAgeMs, subjectId } = callerOf(scope);
 
-            return openRequest(ports.store, { erasure: settings.erasure, id: ports.newId(), now: ports.now(), sessionAgeMs, subjectId, type: "erasure" });
+            return openRequest(ports.store, {
+                deadlines: settings.deadlines,
+                erasure: settings.erasure,
+                id: ports.newId(),
+                now: ports.now(),
+                sessionAgeMs,
+                subjectId,
+                type: "erasure",
+            });
         },
 
-        requestExport: async () => openRequest(ports.store, { id: ports.newId(), now: ports.now(), subjectId: ports.identity().subjectId, type: "export" }),
+        requestExport: async () =>
+            openRequest(ports.store, {
+                deadlines: settings.deadlines,
+                id: ports.newId(),
+                now: ports.now(),
+                subjectId: callerOf(scope).subjectId,
+                type: "export",
+            }),
 
         restore: async ({ restoredSubjectIds }) => restoreSubjects(scope, restoredSubjectIds),
 
-        runErasure: async (requestId) => {
-            const record = await requireRequest(ports.store, requestId);
+        runErasure: async (requestId) => runErasureNow(scope, requestId),
 
-            // The grace window is the subject's cancellation period. The erasure workflow waits it out; this entry must not skip it.
-            if (record.status === "grace") {
-                throw new LunoraError("UNPROCESSABLE", "This erasure is inside its grace window. The erasure workflow runs it when the window ends.");
-            }
-
-            return eraseAndTombstone(scope, record);
-        },
-
-        runExport: async (requestId) => {
-            const record = await requireRequest(ports.store, requestId);
-
-            return runExport(contextFor(scope, record), settings.datasets, record);
-        },
+        runExport: async (requestId) => exportRun(scope, inlineSteps, requestId),
 
         tick: async () => tickRequests(scope),
 
         workflows: {
-            erasureHandler: async (context) => erasureWorkflow(scope, context),
-            exportHandler: async (context) => exportWorkflow(scope, context),
+            erasureHandler: async (context) => {
+                await erasureRun(scope, context.step, context.params.requestId);
+            },
+            exportHandler: async (context) => {
+                await exportRun(scope, context.step, context.params.requestId);
+            },
         },
     };
+};
+
+/** The value the last preset that sets `key` gives it. */
+const policyValue = (presets: ReadonlyArray<PrivacyPreset> | undefined, key: keyof PrivacyPolicy): number | undefined => {
+    const value = [...(presets ?? [])].toReversed().find((preset) => typeof preset.policy?.[key] === "number")?.policy?.[key];
+
+    return typeof value === "number" ? value : undefined;
+};
+
+/** Refuse a response period that is not a whole number of months at or above `min`. */
+const checkMonths = (key: string, months: number, min: number): number => {
+    if (!Number.isInteger(months) || months < min) {
+        throw new LunoraError("BAD_REQUEST", `The preset's ${key} must be a whole number of months, at least ${String(min)}; got ${String(months)}.`);
+    }
+
+    return months;
 };
 
 /**
@@ -503,32 +413,41 @@ const bind = (settings: Settings, ports: PrivacyPorts): Privacy => {
  * called, and each call of the factory binds the ports for that invocation.
  */
 const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
-    const rules = new Map<string, RetentionRule>();
+    const rules = retentionRulesOf(config.presets ?? []);
 
-    for (const preset of config.presets ?? []) {
-        for (const rule of preset.retention) {
-            rules.set(rule.id, rule);
-        }
-    }
-
-    // The grace comes from the preset that sets one, unless the app sets it directly.
-    const presetGraceDays = [...(config.presets ?? [])].toReversed().find((preset) => preset.policy?.erasureGraceDays !== undefined)?.policy?.erasureGraceDays;
+    // Each policy value comes from the last preset that sets it; the grace may be set by the app directly.
+    const presetGraceDays = policyValue(config.presets, "erasureGraceDays");
+    const deadlines: DeadlinePolicy = {
+        extensionMonths: checkMonths("extensionMonths", policyValue(config.presets, "extensionMonths") ?? DEFAULT_DEADLINES.extensionMonths, 0),
+        responseMonths: checkMonths("responseMonths", policyValue(config.presets, "responseMonths") ?? DEFAULT_DEADLINES.responseMonths, 1),
+    };
 
     const settings: Settings = {
         datasets: config.datasets,
+        deadlines,
         disposition: dispositionFor(rules),
         erasure: {
-            drainBudgetDays: config.erasure?.drainBudgetDays ?? DEFAULT_DRAIN_BUDGET_DAYS,
+            drainBudgetDays: config.erasure?.drainBudgetDays ?? MIN_DRAIN_BUDGET_DAYS,
             freshAgeMs: config.erasure?.freshAgeMs ?? DEFAULT_FRESH_AGE_MS,
-            graceDays: checkErasureGraceDays(config.erasure?.graceDays ?? presetGraceDays ?? DEFAULT_GRACE_DAYS),
+            graceDays: checkErasureGraceDays(config.erasure?.graceDays ?? presetGraceDays ?? DEFAULT_ERASURE_GRACE_DAYS),
         },
         exclude: config.exclude ?? {},
-        rules,
         subjectKey: config.subjectKey ?? ((subjectId: string) => subjectId),
         tombstoneSecret: config.tombstoneSecret,
     };
 
-    return (context) => bind(settings, config.ports(context));
+    return (context, identity) => bind(settings, config.ports(context), identity);
 };
 
-export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig, type PrivacyFor, type PrivacyPorts, type PrivacyWorkflowContext };
+export {
+    definePrivacy,
+    type ErasureOptions,
+    type Privacy,
+    type PrivacyConfig,
+    type PrivacyFor,
+    type PrivacyIdentity,
+    type PrivacyWorkflowContext,
+    type SweepResult,
+};
+
+export { type PrivacyPorts } from "./run";

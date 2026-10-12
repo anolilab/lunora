@@ -62,6 +62,10 @@ export const retain = (rule: string, options: { from?: string } = {}): RetainDir
     };
 };
 
+/** The presets' retention rules by id. A later preset's rule replaces an earlier one with the same id. */
+export const retentionRulesOf = (presets: ReadonlyArray<PrivacyPreset>): ReadonlyMap<string, RetentionRule> =>
+    new Map(presets.flatMap((preset) => preset.retention).map((rule) => [rule.id, rule] as const));
+
 /**
  * The instant until which a record must be kept. For `endOfCalendarYear` the
  * period runs to 31 December of the year of `from`, plus the years. Erasure may
