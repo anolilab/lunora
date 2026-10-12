@@ -15,6 +15,8 @@ import { LunoraError } from "@lunora/errors";
 import type { CallExpression, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import type { CoverageProblem, TableClassification } from "../../../../shared/privacy-coverage";
+import { AUTH_DEFAULT_TABLES, checkCoverage, classifyTables } from "../../../../shared/privacy-coverage";
 import type { TableIR } from "../ir";
 import { listLunoraSourceFiles } from "./ast";
 
@@ -33,23 +35,6 @@ const PRIVACY_EXTENSION_KEY = "privacy";
 /** Built-in dataset factories. The app never declares them with `defineDataset`, so they are known, not unused. */
 const BUILTIN_DATASET_CALLS: ReadonlySet<string> = new Set(["actionCacheDataset", "authDataset", "documentHistoryDataset"]);
 
-/** The better-auth tables `authDataset()` covers by default. Mirrors `@lunora/privacy`. */
-const AUTH_DEFAULT_TABLES: ReadonlyArray<string> = ["account", "apikey", "member", "passkey", "session", "teamMember", "twoFactor", "user"];
-
-/** How one table is accounted for. Mirrors `TableClassification` in `packages/privacy/src/coverage.ts`. */
-interface TableClassification {
-    /** The dataset that exports and erases the table. */
-    readonly dataset?: string;
-    /** Why the table is left out of the export and erasure. */
-    readonly excluded?: string;
-}
-
-/** One problem the coverage check found. Mirrors `CoverageProblem` in `packages/privacy/src/coverage.ts`. */
-interface CoverageProblem {
-    readonly code: "excluded_without_reason" | "unclassified";
-    readonly table: string;
-}
-
 /**
  * What the lint learned from the app's `lunora/` files. `classifications` is built the way
  * `definePrivacy().coverage` builds it at runtime: datasets first, then exclusions overwrite them.
@@ -62,35 +47,6 @@ interface PrivacyCoverage {
     /** Names of `defineDataset` constants that no `definePrivacy` passes. Empty when the `datasets` literal cannot be resolved. */
     readonly unusedDatasets: ReadonlyArray<string>;
 }
-
-/**
- * The coverage check. This is a copy of `checkCoverage` in `packages/privacy/src/coverage.ts`: codegen
- * does not import `@lunora/privacy`, because that would make the build tool depend on the runtime
- * package. The two must stay in lockstep. `__tests__/privacy-coverage.test.ts` runs both on the same
- * fixtures and asserts they agree.
- */
-const checkPrivacyCoverage = (
-    tables: ReadonlyArray<string>,
-    classifications: Readonly<Record<string, TableClassification | undefined>>,
-): ReadonlyArray<CoverageProblem> => {
-    const problems: CoverageProblem[] = [];
-
-    for (const table of tables) {
-        const classification = classifications[table];
-
-        if (classification === undefined || (classification.dataset === undefined && classification.excluded === undefined)) {
-            problems.push({ code: "unclassified", table });
-
-            continue;
-        }
-
-        if (classification.dataset === undefined && (classification.excluded ?? "").trim() === "") {
-            problems.push({ code: "excluded_without_reason", table });
-        }
-    }
-
-    return problems;
-};
 
 /** A named `defineDataset` variable found in a lunora file. */
 interface DatasetDeclaration {
@@ -363,16 +319,8 @@ const discoverPrivacyCoverage = (project: Project, lunoraDirectory: string, decl
     const resolvable = privacyCalls.every((call) => call !== undefined);
     const unusedDatasets = resolvable ? declared.filter((entry) => !passed.has(entry.declaration)).map((entry) => entry.name) : [];
 
-    const classifications: Record<string, TableClassification> = {};
-
-    for (const [table, dataset] of state.datasets) {
-        classifications[table] = { dataset };
-    }
-
     // An exclusion overwrites a dataset, as it does in `definePrivacy().coverage`.
-    for (const [table, reason] of state.excluded) {
-        classifications[table] = { excluded: reason };
-    }
+    const classifications = classifyTables(state.datasets, state.excluded);
 
     return { classifications, enabled: privacyCalls.length > 0, unusedDatasets };
 };
@@ -383,7 +331,7 @@ const holdsUserData = (table: TableIR): boolean => table.extensionKey !== PRIVAC
 /** The message for one coverage problem. Names the table, so the reviewer knows which one to fix. */
 const messageFor = (problem: CoverageProblem): string =>
     problem.code === "excluded_without_reason"
-        ? `privacy_table_unclassified: "${problem.table}" is excluded without a reason. Give one in definePrivacy({ exclude }).`
+        ? `privacy_exclusion_unexplained: "${problem.table}" is excluded without a reason. Give one in definePrivacy({ exclude }).`
         : `privacy_table_unclassified: "${problem.table}" holds user data (it has a "${OWNER_COLUMN}" column) but no dataset exports it. Add it to a defineDataset, or exclude it in definePrivacy({ exclude }) with a reason.`;
 
 /**
@@ -397,7 +345,7 @@ const assertPrivacyCoverage = (tables: ReadonlyArray<TableIR>, coverage: Privacy
     }
 
     const owned = tables.filter((candidate) => holdsUserData(candidate)).map((table) => table.name);
-    const [problem] = checkPrivacyCoverage(owned, coverage.classifications);
+    const [problem] = checkCoverage(owned, coverage.classifications);
 
     if (problem !== undefined) {
         throw new LunoraError("PRIVACY_COVERAGE", messageFor(problem));
@@ -413,4 +361,4 @@ const assertPrivacyCoverage = (tables: ReadonlyArray<TableIR>, coverage: Privacy
     }
 };
 
-export { assertPrivacyCoverage, checkPrivacyCoverage, type CoverageProblem, discoverPrivacyCoverage, type PrivacyCoverage, type TableClassification };
+export { assertPrivacyCoverage, discoverPrivacyCoverage, type PrivacyCoverage };

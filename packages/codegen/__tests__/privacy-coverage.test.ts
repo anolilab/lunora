@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { checkCoverage as packageCheckCoverage } from "../../privacy/src/coverage";
+import { checkCoverage, classifyTables } from "../../../shared/privacy-coverage";
 import readPackageDependencies from "../src/discover/package-dependencies";
-import { checkPrivacyCoverage, discoverPrivacyCoverage } from "../src/discover/privacy-coverage";
+import { discoverPrivacyCoverage } from "../src/discover/privacy-coverage";
 import { runCodegen } from "../src/index";
 
 /**
@@ -211,7 +211,7 @@ describe("the privacy coverage lint", () => {
 
         expect(() => {
             generate();
-        }).toThrow(/excluded without a reason/u);
+        }).toThrow(/privacy_exclusion_unexplained: "notes" is excluded without a reason/u);
     });
 
     it("treats a renamed auth dataset as covering the table names it was given", () => {
@@ -271,7 +271,7 @@ describe("the privacy coverage lint", () => {
 
         expect(() => {
             generate();
-        }).toThrow(/excluded without a reason/u);
+        }).toThrow(/privacy_exclusion_unexplained: "notes" is excluded without a reason/u);
     });
 
     it("treats an inline or variable-bound built-in dataset as passed, so an orphan beside it is still reported", () => {
@@ -305,28 +305,20 @@ describe("the privacy coverage lint", () => {
     });
 });
 
-describe("checkPrivacyCoverage", () => {
-    it("agrees with the privacy package's checkCoverage on the same fixtures", () => {
-        expect.assertions(3);
+describe("checkCoverage", () => {
+    it("reports an unlisted table as unclassified and accepts a dataset or a reasoned exclusion", () => {
+        expect.assertions(1);
 
-        const fixtures: ReadonlyArray<{
-            classifications: Record<string, { dataset?: string; excluded?: string } | undefined>;
-            tables: ReadonlyArray<string>;
-        }> = [
-            {
-                classifications: {
-                    featureFlags: { excluded: "Operator configuration; no personal data" },
-                    goals: { dataset: "tasks" },
-                    tasks: { dataset: "tasks" },
-                },
-                tables: ["tasks", "goals", "featureFlags"],
-            },
-            { classifications: { tasks: { dataset: "tasks" } }, tables: ["tasks", "notes"] },
-            { classifications: { flags: { excluded: "   " } }, tables: ["flags"] },
-        ];
+        const classifications = classifyTables([["tasks", "tasks"]], [["featureFlags", "Operator configuration; no personal data"]]);
 
-        for (const { classifications, tables } of fixtures) {
-            expect(checkPrivacyCoverage(tables, classifications)).toStrictEqual(packageCheckCoverage(tables, classifications));
-        }
+        expect(checkCoverage(["tasks", "featureFlags", "notes"], classifications)).toStrictEqual([{ code: "unclassified", table: "notes" }]);
+    });
+
+    it("reports a blank exclusion reason under its own code, even over a dataset", () => {
+        expect.assertions(1);
+
+        const classifications = classifyTables([["flags", "flags"]], [["flags", "   "]]);
+
+        expect(checkCoverage(["flags"], classifications)).toStrictEqual([{ code: "excluded_without_reason", table: "flags" }]);
     });
 });
