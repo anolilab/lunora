@@ -55,6 +55,26 @@ const codeOf = async (promise: Promise<unknown>): Promise<string> => {
     return "no-error";
 };
 
+/** Run the erasure workflow to the end, with each step run inline. The grace sleep is skipped for the test. */
+const runErasureWorkflow = (
+    privacy: {
+        workflows: {
+            erasureHandler: (context: {
+                params: { requestId: string };
+                step: { do: <T>(name: string, run: () => Promise<T>) => Promise<T>; sleepUntil: (name: string, when: Date) => Promise<void> };
+            }) => Promise<void>;
+        };
+    },
+    requestId: string,
+): Promise<void> =>
+    privacy.workflows.erasureHandler({
+        params: { requestId },
+        step: {
+            do: async (_name, run) => run(),
+            sleepUntil: async () => undefined,
+        },
+    });
+
 describe("definePrivacy coverage", () => {
     it("reports a table that no dataset and no exclusion covers", () => {
         const { privacy } = build();
@@ -115,11 +135,12 @@ describe("definePrivacy erasure", () => {
     });
 
     it("erases the rows and completes once the grace has run", async () => {
-        const { data, privacy } = build({ goals: 150, tasks: 40 });
+        const { data, privacy, store } = build({ goals: 150, tasks: 40 });
         const opened = await privacy.requestErasure({ sessionAgeMs: 60_000, subjectId: "u1" });
-        const outcome = await privacy.runErasure(opened.id);
 
-        expect(outcome).toStrictEqual({ leftover: [], status: "completed" });
+        await runErasureWorkflow(privacy, opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("completed");
         expect(data.rows).toStrictEqual({ goals: 0, tasks: 0 });
     });
 

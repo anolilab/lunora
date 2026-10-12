@@ -13,7 +13,7 @@ import { erasureOrder } from "./dataset";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import type { RequestStatus } from "./lifecycle";
-import { effectiveDueAt, isOverdue, transition } from "./lifecycle";
+import { effectiveDueAt, isOverdue, isTerminal, transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
@@ -169,8 +169,32 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             await ports.store.addEvent(record.id, ports.now(), status, detail);
         };
 
+        // A failure never overwrites a request that is already terminal (cancelled or completed).
         const markFailed = async (record: RequestRecord, message: string): Promise<void> => {
-            await setStatus(record, "failed", message);
+            const current = await requireRequest(record.id);
+
+            if (!isTerminal(current.status)) {
+                await setStatus(record, "failed", message);
+            }
+        };
+
+        // The run starts from the status it finds now, so a cancel that lands during the load step is respected.
+        const startRun = async (record: RequestRecord): Promise<void> => {
+            const current = await requireRequest(record.id);
+
+            await setStatus(record, transition(current.status, "processing"));
+        };
+
+        // One erasure path for the workflow, the public entry and the operator retry: the tombstone is
+        // written in every case, so a restored backup is erased again whichever path ran it.
+        const eraseAndTombstone = async (record: RequestRecord): Promise<ErasureOutcome> => {
+            const outcome = await runErasure(contextFor(record), config.datasets, record);
+
+            if (outcome.status === "completed" && ports.tombstones !== undefined) {
+                await ports.tombstones.add(tombstoneKeyOf(record.subjectId), ports.now());
+            }
+
+            return outcome;
         };
 
         const exportHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
@@ -179,7 +203,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             const runContext = contextFor(record);
 
             try {
-                await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
+                await context.step.do("start", async () => startRun(record));
 
                 for (const dataset of config.datasets) {
                     // Each dataset is one step: its rows go to storage, so the step returns nothing large.
@@ -218,7 +242,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
             }
 
             try {
-                await context.step.do("start", async () => setStatus(record, transition(record.status, "processing")));
+                await context.step.do("start", async () => startRun(record));
 
                 for (const dataset of erasureOrder(config.datasets)) {
                     // One drain per dataset, in erasure order. Each drain is idempotent, so a retry resumes it.
@@ -309,13 +333,13 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
 
             runErasure: async (requestId) => {
                 const record = await requireRequest(requestId);
-                const outcome = await runErasure(contextFor(record), config.datasets, record);
 
-                if (outcome.status === "completed" && ports.tombstones !== undefined) {
-                    await ports.tombstones.add(tombstoneKeyOf(record.subjectId), ports.now());
+                // The grace window is the subject's cancellation period. The erasure workflow waits it out; this entry must not skip it.
+                if (record.status === "grace") {
+                    throw new LunoraError("UNPROCESSABLE", "This erasure is inside its grace window. The erasure workflow runs it when the window ends.");
                 }
 
-                return outcome;
+                return eraseAndTombstone(record);
             },
 
             runExport: async (requestId) => {
@@ -334,9 +358,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                         throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
                     }
 
-                    return record.type === "export"
-                        ? runExport(contextFor(record), config.datasets, record)
-                        : runErasure(contextFor(record), config.datasets, record);
+                    return record.type === "export" ? runExport(contextFor(record), config.datasets, record) : eraseAndTombstone(record);
                 },
             },
 

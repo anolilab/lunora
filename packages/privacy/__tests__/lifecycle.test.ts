@@ -34,8 +34,9 @@ describe(isTerminal, () => {
 
 describe(canCancel, () => {
     it("lets a subject cancel an export until it is handed over", () => {
-        expect(canCancel("export", "ready")).toBe(true);
-        expect(canCancel("export", "completed")).toBe(false);
+        expect(canCancel("export", "received")).toBe(true);
+        expect(canCancel("export", "processing")).toBe(false);
+        expect(canCancel("export", "ready")).toBe(false);
     });
 
     it("lets a subject cancel an erasure only inside its grace window", () => {

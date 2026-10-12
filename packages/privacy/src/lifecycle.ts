@@ -59,7 +59,9 @@ const canCancel = (type: RequestType, status: RequestStatus): boolean => {
         return status === "grace";
     }
 
-    return status === "received" || status === "processing" || status === "ready";
+    // Only before the run starts: a processing or ready export is not cancelled, because the run
+    // would otherwise write over the cancellation. Plan §4.5 says "before ready".
+    return status === "received";
 };
 
 /**

@@ -49,13 +49,33 @@ const build = (tombstones?: TombstonePort) => {
     return { data, privacy };
 };
 
+/** Run the erasure workflow to the end, with each step run inline. The grace sleep is skipped for the test. */
+const runErasureWorkflow = (
+    privacy: {
+        workflows: {
+            erasureHandler: (context: {
+                params: { requestId: string };
+                step: { do: <T>(name: string, run: () => Promise<T>) => Promise<T>; sleepUntil: (name: string, when: Date) => Promise<void> };
+            }) => Promise<void>;
+        };
+    },
+    requestId: string,
+): Promise<void> =>
+    privacy.workflows.erasureHandler({
+        params: { requestId },
+        step: {
+            do: async (_name, run) => run(),
+            sleepUntil: async () => undefined,
+        },
+    });
+
 describe("restore", () => {
     it("tombstones a subject once their erasure completes", async () => {
         const tombstones = memoryTombstones();
         const { privacy } = build(tombstones);
         const opened = await privacy.requestErasure({ sessionAgeMs: 1000, subjectId: "u1" });
 
-        await privacy.runErasure(opened.id);
+        await runErasureWorkflow(privacy, opened.id);
 
         expect(tombstones.stored.has(tombstoneKeyOf("u1"))).toBe(true);
     });
@@ -65,7 +85,7 @@ describe("restore", () => {
         const { data, privacy } = build(tombstones);
         const opened = await privacy.requestErasure({ sessionAgeMs: 1000, subjectId: "u1" });
 
-        await privacy.runErasure(opened.id);
+        await runErasureWorkflow(privacy, opened.id);
         // The backup brings the rows back.
         data.rows.tasks = 150;
 
