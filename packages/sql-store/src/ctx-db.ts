@@ -1490,6 +1490,16 @@ const throwIfRowTooBig = (dialect: SqlDialect, error: unknown, table: string): v
 };
 
 /**
+ * Reads-and-decides a `patchIf` makes before giving up with `ConflictError`.
+ * Each miss means another writer changed the row in between, so a run of this
+ * length is sustained contention on one row, not bad luck.
+ */
+const PATCH_IF_ATTEMPTS = 16;
+
+/** The column `patchIf`'s read evaluates its `where` into; double-underscored so no schema field can take the name. */
+const PATCH_IF_MATCH_COLUMN = "__lunora_patch_if_match__";
+
+/**
  * Remap a write's raw engine error to the coded one a caller can act on, then
  * rethrow — the single `catch` body every write path shares.
  *
@@ -2490,6 +2500,53 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * The statement behind {@link runGuardedWrite}, reporting a CAS miss as
+     * `false` instead of throwing. `condition`, when given, is ANDed into the
+     * same `WHERE`, so the write applies only while the stored row both still
+     * holds the snapshot's version and matches it — one statement, decided by
+     * the engine (`patchIf`).
+     */
+    const tryGuardedWrite = async (
+        table: string,
+        verb: "DELETE" | "UPDATE",
+        setClause: SQL | undefined,
+        snapshot: Record<string, unknown>,
+        condition?: SQL,
+    ): Promise<boolean> => {
+        const versionRef = sql`${sql.identifier(OCC_VERSION_COLUMN)}`;
+        const guardClause = sql.join(
+            [
+                nullSafeEquals(sql`${sql.identifier("id")}`, snapshot["id"]),
+                // eslint-disable-next-line unicorn/no-null -- SQL bind value: `?? null` so a row written before this column existed (or a driver that omits it) compares against SQL NULL.
+                nullSafeEquals(versionRef, snapshot[OCC_VERSION_COLUMN] ?? null),
+                ...(condition === undefined ? [] : [sql`(${condition})`]),
+            ],
+            sql` AND `,
+        );
+        const base =
+            verb === "UPDATE"
+                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause}, ${versionRef} = ${nextRowVersion.sql(versionRef)} WHERE ${guardClause}`
+                : sql`DELETE FROM ${sql.identifier(table)} WHERE ${guardClause}`;
+
+        try {
+            if (dialect.supportsReturning) {
+                // SQLite/Postgres: a `RETURNING "id"` row proves the CAS matched;
+                // an empty set means a concurrent write changed the row.
+                const returned = await queryAll(exec, dialect, sql`${base} RETURNING ${sql.identifier("id")}`);
+
+                return returned.length > 0;
+            }
+
+            // MySQL: no RETURNING — the affected-row count is the CAS signal.
+            const result = await queryRun(exec, dialect, base);
+
+            return (dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0) > 0;
+        } catch (error) {
+            return mapWriteError(dialect, error, table);
+        }
+    };
+
+    /**
      * Run an optimistic-concurrency-guarded write — the D1 twin of the DO
      * dialect's `runGuardedWrite`. D1 stores rows as real columns (no `__doc__`
      * blob) and `SqlCtxExec.run` returns no rows-affected count, so the CAS is
@@ -2528,44 +2585,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return;
         }
 
-        const versionRef = sql`${sql.identifier(OCC_VERSION_COLUMN)}`;
-        const guardClause = sql.join(
-            [
-                nullSafeEquals(sql`${sql.identifier("id")}`, snapshot["id"]),
-                // eslint-disable-next-line unicorn/no-null -- SQL bind value: `?? null` so a row written before this column existed (or a driver that omits it) compares against SQL NULL.
-                nullSafeEquals(versionRef, snapshot[OCC_VERSION_COLUMN] ?? null),
-            ],
-            sql` AND `,
-        );
-        const base =
-            verb === "UPDATE"
-                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause}, ${versionRef} = ${nextRowVersion.sql(versionRef)} WHERE ${guardClause}`
-                : sql`DELETE FROM ${sql.identifier(table)} WHERE ${guardClause}`;
-
-        const occConflict = (): never => {
+        if (!(await tryGuardedWrite(table, verb, setClause, snapshot))) {
             throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`, "occ");
-        };
-
-        try {
-            if (dialect.supportsReturning) {
-                // SQLite/Postgres: a `RETURNING "id"` row proves the CAS matched;
-                // an empty set means a concurrent write changed the row.
-                const returned = await queryAll(exec, dialect, sql`${base} RETURNING ${sql.identifier("id")}`);
-
-                if (returned.length === 0) {
-                    occConflict();
-                }
-            } else {
-                // MySQL: no RETURNING — the affected-row count is the CAS signal.
-                const result = await queryRun(exec, dialect, base);
-                const affected = dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0;
-
-                if (affected === 0) {
-                    occConflict();
-                }
-            }
-        } catch (error) {
-            mapWriteError(dialect, error, table);
         }
     };
 
@@ -2577,6 +2598,66 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      */
     const writtenBy = (snapshot: Record<string, unknown> | undefined, creationTime: unknown = snapshot?.["_creationTime"]): Record<string, unknown> => {
         return { _creationTime: creationTime, [OCC_VERSION_COLUMN]: nextRowVersion.value(snapshot?.[OCC_VERSION_COLUMN]) };
+    };
+
+    /**
+     * The update pipeline `patch` and `patchIf` share, applied to the RAW
+     * `snapshot` read just before: merge, `onUpdate`, refinements, the
+     * before-update trigger, one guarded UPDATE (with `condition` ANDed in when
+     * given), then companions, CDC and the after-update trigger. Returns the
+     * written document, or `undefined` when the guarded UPDATE matched no row —
+     * the row moved since `snapshot`, or no longer matches `condition`.
+     */
+    const writePatch = async (
+        tableName: string,
+        definition: TableDefinitionLike,
+        id: string,
+        patch: Record<string, unknown>,
+        snapshot: Record<string, unknown> | undefined,
+        condition?: SQL,
+    ): Promise<Record<string, unknown> | undefined> => {
+        const existing = decodeRow(definition, snapshot);
+
+        if (!existing || snapshot === undefined) {
+            throw new LunoraError("INTERNAL", `document not found: ${id}`);
+        }
+
+        const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(patch), _id: id };
+
+        applyOnUpdate(definition, patch, merged, auth);
+
+        // Refinement checks fire on the merged row so a patch that flips
+        // a field to an invalid value is rejected before D1 sees it.
+        runRowValidators(definition, merged, true);
+
+        if (hasMatchingTrigger(tableName, "before", "update")) {
+            await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+        }
+
+        await ensureBackfilledForTable(tableName);
+        await ensureRankBackfilledForTable(tableName);
+
+        const fields = Object.keys(definition.shape);
+        const assignments = sql.join(
+            // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
+            fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`),
+            sql`, `,
+        );
+
+        if (!(await tryGuardedWrite(tableName, "UPDATE", assignments, snapshot, condition))) {
+            return undefined;
+        }
+
+        await syncAggregates(tableName, existing, merged);
+        await syncRanks(tableName, id, existing, merged);
+        await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
+        await recordCdc(tableName, id, "update", merged);
+
+        if (hasMatchingTrigger(tableName, "after", "update")) {
+            await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+        }
+
+        return merged;
     };
 
     /** Serialize a document into the ordered `[id, _creationTime, ...fields]` column tuple. */
@@ -3522,44 +3603,66 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // before-update trigger's `await` window can let a concurrent write
             // slip in.
             const snapshot = await rawRow(tableName, id);
-            const existing = decodeRow(definition, snapshot);
 
-            if (!existing) {
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+            if (!(await writePatch(tableName, definition, id, patch, snapshot))) {
+                throw new ConflictError(`optimistic concurrency conflict on "${tableName}" — the row changed during this mutation; refetch and retry`, "occ");
+            }
+        },
+
+        /**
+         * Conditional patch — see `DatabaseWriterLike.patchIf`. One statement
+         * decides: `UPDATE … WHERE id = ? AND _version IS ? AND (<where>)`, on D1,
+         * Postgres and MySQL alike (MySQL reads the affected-row count).
+         *
+         * The read before it fetches the row and evaluates `where` in the same
+         * `SELECT`, so a non-matching row returns without firing a trigger. When
+         * the UPDATE then misses, the row moved after that read: it is read and
+         * decided again, a bounded number of times, then `ConflictError`.
+         */
+        async patchIf(tableName, id, args) {
+            assertNoExplicitUndefined("patchIf", args.patch);
+            assertStorableStrings(dialect.name, args.patch);
+
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
-            const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(patch), _id: id };
+            const condition = compileWhereSql(args.where, whereSqlStrategyFor(definition)) ?? sql`1 = 1`;
 
-            applyOnUpdate(definition, patch, merged, auth);
+            for (let attempt = 0; attempt < PATCH_IF_ATTEMPTS; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row a lost race moved
+                const [read] = await queryAll(
+                    exec,
+                    dialect,
+                    sql`SELECT *, CASE WHEN (${condition}) THEN 1 ELSE 0 END AS ${sql.identifier(PATCH_IF_MATCH_COLUMN)} FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id}`,
+                );
 
-            // Refinement checks fire on the merged row so a patch that flips
-            // a field to an invalid value is rejected before D1 sees it.
-            runRowValidators(definition, merged, true);
+                if (read === undefined) {
+                    // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
+                    return { applied: false, doc: null };
+                }
 
-            if (hasMatchingTrigger(tableName, "before", "update")) {
-                await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+                const { [PATCH_IF_MATCH_COLUMN]: match, ...snapshot } = read;
+
+                if (Number(match) !== 1) {
+                    // eslint-disable-next-line unicorn/no-null -- `doc` is `Record | null`, matching `get`
+                    return { applied: false, doc: decodeRow(definition, snapshot) ?? null };
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                const merged = await writePatch(tableName, definition, id, args.patch, snapshot, condition);
+
+                if (merged) {
+                    return { applied: true, doc: merged };
+                }
             }
 
-            await ensureBackfilledForTable(tableName);
-            await ensureRankBackfilledForTable(tableName);
-
-            const fields = Object.keys(definition.shape);
-            const assignments = sql.join(
-                // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`),
-                sql`, `,
+            throw new ConflictError(
+                `patchIf on "${tableName}" lost the row to concurrent writes ${String(PATCH_IF_ATTEMPTS)} times in a row; retry the operation`,
+                "occ",
             );
-
-            await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
-
-            await syncAggregates(tableName, existing, merged);
-            await syncRanks(tableName, id, existing, merged);
-            await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
-            await recordCdc(tableName, id, "update", merged);
-
-            if (hasMatchingTrigger(tableName, "after", "update")) {
-                await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
-            }
         },
 
         async restore(id, expectedTable) {

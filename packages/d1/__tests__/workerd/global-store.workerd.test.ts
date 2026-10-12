@@ -12,6 +12,12 @@
  * watermark is read from — outlives a `DELETE` of every row on workerd's SQLite
  * build. The whole rewind witness rests on that, and on `MAX(seq)` going NULL
  * where the sequence does not.
+ *
+ * Whether `patchIf` stays atomic when its callers really interleave. D1 calls do
+ * not hold a Durable Object's input gate, so concurrent writers reach D1 between
+ * each other's read and write; `node:sqlite`'s synchronous calls never do. And
+ * whether D1's primary-key refusal for a pinned `clientId` is one the dialect
+ * maps to `CONFLICT`, which callers that key a row deterministically rely on.
  */
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -56,5 +62,23 @@ describe("global store (workerd)", () => {
         expect(result.afterSweep).toBe("served");
         // And one holding a cursor the rewound timeline never issued is refused.
         expect(result.afterRestore).toBe("threw:CDC_TIMELINE_FORKED");
+    });
+
+    it("lets exactly one of ten interleaved conditional patches apply, on real D1", async () => {
+        expect.assertions(2);
+
+        const result = await post<{ applied: number[]; values: unknown[] }>("/patch-if-race");
+
+        expect(result.applied).toStrictEqual(Array.from<number>({ length: 20 }).fill(1));
+        expect(result.values).toStrictEqual(Array.from<number>({ length: 20 }).fill(1));
+    });
+
+    it("surfaces a primary-key collision on a pinned clientId as CONFLICT", async () => {
+        expect.assertions(2);
+
+        const result = await post<{ codes: (null | string)[]; inserted: number }>("/client-id-collision");
+
+        expect(result.inserted).toBe(1);
+        expect(result.codes).toStrictEqual(["CONFLICT"]);
     });
 });

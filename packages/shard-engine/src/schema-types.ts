@@ -769,6 +769,31 @@ export interface DatabaseWriterLike {
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     normalizeId: (tableName: string, id: string) => null | string;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Conditional patch: apply `patch` to row `id` of `tableName` only while the
+     * CURRENT row matches `where`, decided atomically with the write. Returns
+     * whether it applied and the row as it stands afterwards (`null` when there
+     * is no such row). A row that does not match is left untouched and reported
+     * with `applied: false`.
+     *
+     * Every implementation decides in one step against the stored row, never by
+     * reading first and writing later. A shard-local table (DO `storage.sql`,
+     * `better-sqlite3`, celld's SQLite) checks the predicate and writes the row
+     * in one synchronous run, CAS-guarded on the row image. A `.global()` table
+     * (`@lunora/sql-store` over D1, Postgres, MySQL) runs one
+     * `UPDATE … WHERE id = ? AND <version> AND (<where>)`, re-reading and
+     * re-deciding when the version moved underneath.
+     *
+     * Optional because a writer that cannot decide atomically must not offer a
+     * read-then-write substitute; callers raise an explicit unsupported error
+     * when it is absent.
+     */
+    patchIf?: (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; where: WhereInput },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
     patchMany?: (
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },

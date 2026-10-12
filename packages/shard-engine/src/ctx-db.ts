@@ -1731,7 +1731,7 @@ const applyOnUpdate = (
  * omitted key (not an own-enumerable property) stays a no-op, so callers who
  * never set a key keep their existing behaviour.
  */
-const assertNoExplicitUndefined = (op: "patch" | "replace", document: Record<string, unknown>): void => {
+const assertNoExplicitUndefined = (op: "patch" | "patchIf" | "replace", document: Record<string, unknown>): void => {
     for (const field of Object.keys(document)) {
         if (document[field] === undefined) {
             throw new LunoraError(
@@ -4044,6 +4044,59 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             await onWrite({ doc: merged, id, op: "update", table: tableName });
+        },
+
+        /**
+         * Conditional patch — see `DatabaseWriterLike.patchIf`.
+         *
+         * Shard-local (Cloudflare `storage.sql`, Node `better-sqlite3`, celld's
+         * SQLite): the predicate SELECT and `patch`'s locate + guarded UPDATE run
+         * in one synchronous stretch with no `await` between them, so no other
+         * call can change the row in between. `patch`'s CAS on the row image
+         * still raises `ConflictError` should a before-update trigger's `await`
+         * let a write in. `.global()`: forwarded to the backend's own `patchIf`,
+         * and a backend without one is refused rather than emulated.
+         */
+        async patchIf(tableName, id, args) {
+            const global = globalWriterFor(tableName, "patchIf");
+
+            if (global) {
+                if (global.patchIf === undefined) {
+                    throw new LunoraError("INTERNAL", `ctx.db.patchIf on global table '${tableName}' is unsupported: its backend has no conditional write`);
+                }
+
+                // Same metering as the global `patch` branch: the delta is charged.
+                meterWrite(args.patch);
+
+                return global.patchIf(tableName, id, args);
+            }
+
+            if (!schema.tables[tableName]) {
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+            }
+
+            const located = locateRowById(id, tableName);
+
+            if (!located) {
+                // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
+                return { applied: false, doc: null };
+            }
+
+            onRead(tableName, id);
+
+            const condition = compileWhereSql(args.where, doWhereSqlStrategy);
+            const matched =
+                condition === undefined ||
+                runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${dsql.identifier("id")} = ${id} AND ${condition}`).toArray().length > 0;
+
+            if (!matched) {
+                return { applied: false, doc: located.row };
+            }
+
+            await writer.patch(id, args.patch, tableName);
+
+            // eslint-disable-next-line unicorn/no-null -- the row can only be gone if an after-update trigger deleted it
+            return { applied: true, doc: locateRowById(id, tableName)?.row ?? null };
         },
 
         async patchMany(patches, batchOptions, expectedTable) {

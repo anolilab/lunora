@@ -146,6 +146,67 @@ const cdcRewind = async (database: D1Database): Promise<Record<string, unknown>>
     };
 };
 
+/** The `.global()` table the conditional-write routes write. */
+const counterSchema: SchemaLike = {
+    tables: {
+        counters: {
+            indexes: [],
+            shape: { value: col("number") },
+            shardMode: { kind: "global" },
+        },
+    },
+};
+
+/** A fresh `.global()` writer per caller, as each request builds its own `ctx.db`. */
+const counterWriter = (database: D1Database): ReturnType<typeof createD1CtxDb> =>
+    createD1CtxDb({ exec: d1CtxExec(database), idGenerator: () => crypto.randomUUID(), schema: counterSchema });
+
+/**
+ * Ten writers race one compare-and-set on the same row per round: each saw
+ * `value: 0` and asks to move it to 1. D1 calls do not hold the input gate, so the
+ * ten genuinely interleave; `patchIf` must still let exactly one apply.
+ */
+const patchIfRace = async (database: D1Database, rounds: number): Promise<{ applied: number[]; values: unknown[] }> => {
+    const applied: number[] = [];
+    const values: unknown[] = [];
+
+    for (let round = 0; round < rounds; round += 1) {
+        // eslint-disable-next-line no-await-in-loop -- rounds are sequential; the race is inside one
+        const id = await counterWriter(database).insert("counters", { value: 0 });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const results = await Promise.all(
+            Array.from({ length: 10 }, async () => counterWriter(database).patchIf?.("counters", id, { patch: { value: 1 }, where: { value: 0 } })),
+        );
+
+        applied.push(results.filter((result) => result?.applied === true).length);
+        // eslint-disable-next-line no-await-in-loop -- read back after the round settles
+        const row = await counterWriter(database).get(id);
+
+        values.push(row?.["value"]);
+    }
+
+    return { applied, values };
+};
+
+/** Two concurrent inserts pinned to one `clientId`: the primary key admits one, the other must surface as `CONFLICT`. */
+const clientIdCollision = async (database: D1Database): Promise<{ codes: (null | string)[]; inserted: number }> => {
+    const clientId = crypto.randomUUID();
+    const outcomes = await Promise.allSettled([0, 1].map(async () => counterWriter(database).insert("counters", { value: 0 }, { clientId })));
+
+    return {
+        codes: outcomes.filter((outcome) => outcome.status === "rejected").map((outcome) => (outcome.reason as { code?: string }).code ?? null),
+        inserted: outcomes.filter((outcome) => outcome.status === "fulfilled").length,
+    };
+};
+
+/** POST routes that take only the database and answer with JSON. */
+const DATABASE_ROUTES: Record<string, ((database: D1Database) => Promise<unknown>) | undefined> = {
+    "/cdc-rewind": cdcRewind,
+    "/client-id-collision": clientIdCollision,
+    "/patch-if-race": async (database) => patchIfRace(database, 20),
+    "/unique-over-duplicates": uniqueOverDuplicates,
+};
+
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
@@ -203,12 +264,10 @@ export default {
             });
         }
 
-        if (url.pathname === "/unique-over-duplicates" && request.method === "POST") {
-            return json(await uniqueOverDuplicates(env.DB));
-        }
+        const route = request.method === "POST" ? DATABASE_ROUTES[url.pathname] : undefined;
 
-        if (url.pathname === "/cdc-rewind" && request.method === "POST") {
-            return json(await cdcRewind(env.DB));
+        if (route) {
+            return json(await route(env.DB));
         }
 
         if (url.pathname === "/list" && request.method === "GET") {

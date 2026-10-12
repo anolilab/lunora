@@ -277,6 +277,13 @@ interface DatabaseWriterLike {
      */
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+
+    /** Conditional patch. Optional: a writer without an atomic conditional write omits it, and the wrapper refuses. */
+    patchIf?: (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; where: WhereInput },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
     patchMany: (
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
@@ -1472,6 +1479,27 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                     return { ...preRow, ...patch };
                 },
                 expectedTable,
+            ),
+
+        // The update gate of a single patch, against the row as it stands, with the
+        // patch's post-image as WITH CHECK. Overriding is mandatory: the `...base`
+        // spread would otherwise expose the guard's version, which checks only the
+        // table, and a policy-denied row could be written through it.
+        patchIf: (tableName, id, args) =>
+            gateById(
+                id,
+                "update",
+                async (writer) => {
+                    if (writer.patchIf === undefined) {
+                        throw new LunoraError("INTERNAL", `ctx.db.patchIf on "${tableName}" is unsupported: this writer has no conditional write`);
+                    }
+
+                    return writer.patchIf(tableName, id, args);
+                },
+                (preRow) => {
+                    return { ...preRow, ...args.patch };
+                },
+                tableName,
             ),
 
         async patchMany(patches, options, expectedTable) {

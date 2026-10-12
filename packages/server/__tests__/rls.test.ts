@@ -59,6 +59,11 @@ interface FakeDatabase {
         ) => Promise<string[]>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+        patchIf: (
+            tableName: string,
+            id: string,
+            args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
         patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
         patchWhere: (
             tableName: string,
@@ -182,6 +187,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             async patch(id, patchValue) {
                 calls.push({ args: patchValue, method: "patch", tableOrId: id });
+            },
+            async patchIf(tableName, id, args) {
+                calls.push({ args, method: "patchIf", tableOrId: id });
+
+                return { applied: true, doc: { _id: id, table: tableName, ...args.patch } };
             },
             async patchMany(patches) {
                 calls.push({ args: patches, method: "patchMany", tableOrId: "" });
@@ -886,6 +896,44 @@ describe("rls — write path", () => {
         });
 
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it("update policy denies a conditional patch with FORBIDDEN before it reaches the writer", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch: { title: "new" }, where: { title: "old" } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+
+        expect(database.calls.some((call) => call.method === "patchIf")).toBe(false);
+    });
+
+    it("update policy checks a conditional patch's post-image and forwards it when allowed", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const run = async (patch: Record<string, unknown>) =>
+            lunora.mutation
+                .use(rlsForTest<TestContext>([policy]))
+                .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch, where: { ownerId: "u1" } }))
+                .handler(makeContext(database, "u1"), {});
+
+        await expect(run({ ownerId: "u2" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(run({ title: "new" })).resolves.toMatchObject({ applied: true });
     });
 
     it("update policy allows patch when the row matches", async () => {
