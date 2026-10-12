@@ -61,6 +61,35 @@ describe("restore", () => {
         expect(rows.tasks).toBe(150);
     });
 
+    it("leaves the erasure not completed when the tombstone write fails", async () => {
+        const failing: TombstonePort = {
+            add: async () => {
+                throw new Error("tombstone store unavailable");
+            },
+            keys: async () => new Set(),
+        };
+        const { privacy, runErasureWorkflow, store } = build(failing);
+        const opened = await privacy.requestErasure();
+
+        await runErasureWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+        expect(store.events).not.toContain(`${opened.id}:completed`);
+    });
+
+    it("refuses an erasure when the ports have no tombstone store, through either entry", async () => {
+        const { privacy, rows, runErasureWorkflow, store } = setup({ erasure: { graceDays: 0 }, rows: { tasks: 150 }, tombstones: null });
+        const direct = await privacy.requestErasure();
+
+        await expect(privacy.runErasure(direct.id)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(store.rows.get(direct.id)?.status).toBe("received");
+
+        await runErasureWorkflow(direct.id);
+
+        expect(store.rows.get(direct.id)?.status).toBe("failed");
+        expect(rows.tasks).toBe(150);
+    });
+
     it("refuses to restore without a tombstone store", async () => {
         const { operator } = build();
 

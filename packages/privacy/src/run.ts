@@ -69,7 +69,11 @@ interface PrivacyPorts {
     readonly newId: () => string;
     readonly now: () => Date;
     readonly store: RequestStore;
-    /** Where erased subjects are tombstoned, so a restored backup can be erased again. Optional; `restore` needs it. */
+
+    /**
+     * Where erased subjects are tombstoned, so a restored backup can be erased again. An erasure and
+     * `restore` refuse to run without it; a call that only exports or reads may leave it out.
+     */
     readonly tombstones?: TombstonePort;
 }
 
@@ -445,13 +449,27 @@ const exportRun = async (scope: RunScope, steps: StepRunner, requestId: string):
     }
 };
 
-/** The tombstone store and its secret. Checked before anything is erased, so an erasure never completes without its tombstone. */
+/** The HMAC secret tombstone keys are derived with. A missing or empty secret is refused. */
 const requireTombstoneSecret = (secret: string | undefined): string => {
     if (secret === undefined || secret === "") {
         throw new LunoraError("BAD_REQUEST", "Tombstones need a secret: pass `tombstoneSecret` to definePrivacy.");
     }
 
     return secret;
+};
+
+/**
+ * The tombstone store and its secret. Every erasure needs both, and they are checked before anything
+ * is erased: an erasure that could not record its tombstone would be undone by the next restore.
+ */
+const requireTombstones = (scope: Pick<RunScope, "ports" | "tombstoneSecret">): { readonly port: TombstonePort; readonly secret: string } => {
+    const port = scope.ports.tombstones;
+
+    if (port === undefined) {
+        throw new LunoraError("BAD_REQUEST", "An erasure needs a tombstone store: pass `tombstones` in the privacy ports.");
+    }
+
+    return { port, secret: requireTombstoneSecret(scope.tombstoneSecret) };
 };
 
 /** Erase one dataset's rows for the subject, one batch at a time, until the drain finishes. */
@@ -477,7 +495,7 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
     }
 
     try {
-        const secret = scope.ports.tombstones === undefined ? undefined : requireTombstoneSecret(scope.tombstoneSecret);
+        const tombstones = requireTombstones(scope);
         const started = await startStep(scope, steps, requestId);
 
         if (started !== "processing") {
@@ -512,13 +530,17 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
             return { leftover: verdict.leftover, status: await failStep(scope, steps, requestId, verdict.leftover.join(",")) };
         }
 
-        const completed = await whileProcessing(scope, steps, requestId, "complete", async () => {
-            await setStatus(scope.ports, requestId, { from: "processing", to: "completed" });
+        // The tombstone is written before the request completes, so a completed erasure always has one.
+        // A retried step writes it again, which the port's upsert absorbs.
+        const tombstoned = await whileProcessing(scope, steps, requestId, "tombstone", async () =>
+            tombstones.port.add(tombstoneKeyOf(record.subjectId, tombstones.secret), scope.ports.now()), );
 
-            if (scope.ports.tombstones !== undefined && secret !== undefined) {
-                await scope.ports.tombstones.add(tombstoneKeyOf(record.subjectId, secret), scope.ports.now());
-            }
-        });
+        if (tombstoned.status !== "processing") {
+            return { leftover: [], status: tombstoned.status };
+        }
+
+        const completed = await whileProcessing(scope, steps, requestId, "complete", async () =>
+            setStatus(scope.ports, requestId, { from: "processing", to: "completed" }), );
 
         return { leftover: [], status: completed.status === "processing" ? "completed" : completed.status };
     } catch (error) {
@@ -538,7 +560,7 @@ export {
     exportRun,
     inlineSteps,
     type PrivacyPorts,
-    requireTombstoneSecret,
+    requireTombstones,
     type RunScope,
     type StepRunner,
     type StorePort,

@@ -18,7 +18,7 @@ import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
 import type { ErasureOutcome, ExportOutcome, PrivacyPorts, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstoneSecret } from "./run";
+import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
 import { subjectsToReerase } from "./tombstones";
 
 /**
@@ -64,9 +64,9 @@ interface PrivacyConfig<C> {
     readonly subjectKey?: (subjectId: string) => string;
 
     /**
-     * The HMAC secret tombstone keys are derived with. Required once the ports pass `tombstones`:
-     * an erasure and `restore` refuse to run without it. Keep it in a secret binding, and keep it
-     * stable, because a new secret no longer matches the tombstones already written.
+     * The HMAC secret tombstone keys are derived with. Every erasure and `restore` refuse to run
+     * without it and without a `tombstones` port. Keep it in a secret binding, and keep it stable,
+     * because a new secret no longer matches the tombstones already written.
      */
     readonly tombstoneSecret?: string;
 }
@@ -161,13 +161,11 @@ const listOpen = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => 
 };
 
 /**
- * The one-call erasure. The tombstone secret is checked before anything runs, so a call without it
- * is refused outright and leaves the request as it was.
+ * The one-call erasure. The tombstone store and secret are checked before anything runs, so a call
+ * without them is refused outright and leaves the request as it was.
  */
 const runErasureNow = async (scope: Scope, requestId: string): Promise<ErasureOutcome> => {
-    if (scope.ports.tombstones !== undefined) {
-        requireTombstoneSecret(scope.tombstoneSecret);
-    }
+    requireTombstones(scope);
 
     return erasureRun(scope, inlineSteps, requestId);
 };
@@ -232,13 +230,8 @@ const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> 
 
 /** Erase again the subjects a restore brought back, each in the same dataset order as a first erasure. */
 const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<string>): Promise<ReadonlyArray<string>> => {
-    const { tombstones } = scope.ports;
-
-    if (tombstones === undefined) {
-        throw new LunoraError("BAD_REQUEST", "restore needs a tombstone store: pass `tombstones` to definePrivacy.");
-    }
-
-    const subjects = await subjectsToReerase(restoredSubjectIds, tombstones, requireTombstoneSecret(scope.tombstoneSecret));
+    const tombstones = requireTombstones(scope);
+    const subjects = await subjectsToReerase(restoredSubjectIds, tombstones.port, tombstones.secret);
 
     for (const subjectId of subjects) {
         for (const dataset of erasureOrder(scope.datasets)) {

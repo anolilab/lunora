@@ -18,7 +18,11 @@ const tombstoneKeyOf = (subjectId: string, secret: string): string => createHmac
 
 /** The storage the tombstones need. The app implements it over its `privacy_tombstones` table. */
 interface TombstonePort {
-    /** Record that the subject was erased at this time. */
+    /**
+     * Record that the subject was erased at this time. Must be an idempotent upsert keyed by `key`:
+     * a workflow step that fails after the write is retried and writes the same tombstone again, and a
+     * second row for one key must not appear.
+     */
     readonly add: (key: string, erasedAt: Date) => Promise<void>;
     /** Every tombstone key on record. */
     readonly keys: () => Promise<ReadonlySet<string>>;
