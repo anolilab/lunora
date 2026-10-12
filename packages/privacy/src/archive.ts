@@ -73,6 +73,15 @@ interface SummaryDataset {
     readonly retention: string;
 }
 
+/**
+ * The standard PDF fonts cover WinAnsi only; drawing any other character throws, which would fail every
+ * retry of the export. Characters outside WinAnsi are replaced by "?", so the summary always renders.
+ */
+const WIN_ANSI_EXCLUDED =
+    /[^\u0020-\u007E\u00A0-\u00FF\u20AC\u201A\u0192\u201E\u2026\u2020\u2021\u02C6\u2030\u0160\u2039\u0152\u017D\u2018\u2019\u201C\u201D\u2022\u2013\u2014\u02DC\u2122\u0161\u203A\u0153\u017E\u0178]/gu;
+
+const toWinAnsi = (text: string): string => text.replaceAll(WIN_ANSI_EXCLUDED, "?");
+
 const LINE_HEIGHT = 14;
 const TOP = 780;
 const LEFT = 40;
@@ -114,7 +123,7 @@ const buildSummaryPdf = async (input: {
         const page = pdf.addPage();
 
         lines.slice(start, start + MAX_LINES_PER_PAGE).forEach((text, index) => {
-            page.drawText(text, { font, size: 10, x: LEFT, y: TOP - index * LINE_HEIGHT });
+            page.drawText(toWinAnsi(text), { font, size: 10, x: LEFT, y: TOP - index * LINE_HEIGHT });
         });
     }
 

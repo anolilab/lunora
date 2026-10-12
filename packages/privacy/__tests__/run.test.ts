@@ -207,3 +207,37 @@ describe(runErasure, () => {
         expect(outcome).toStrictEqual({ leftover: ["goals"], status: "failed" });
     });
 });
+
+describe("omitted columns", () => {
+    it("never writes a column the dataset omits into the archive", async () => {
+        const requests = memoryRequests();
+        const files = memoryFiles();
+        const secretDataset = defineDataset("auth", {
+            legalBasis: "contract",
+            origin: "provided",
+            purpose: "Sign-in",
+            tables: { session: { omit: ["token"] } },
+        });
+        const data: DataPort = {
+            collect: async () => {
+                return { session: [{ id: "s1", token: "live-secret" }] };
+            },
+            eraseBatch: async () => {
+                return { hasMore: false };
+            },
+            remaining: async () => {
+                return { session: 0 };
+            },
+        };
+        const opened = request({ id: "r9" });
+
+        requests.rows.set("r9", opened);
+        await runExport(contextFor(data, requests, files), [secretDataset], opened);
+
+        const archive = unzipSync(files.files.get("r9/export.zip") as Uint8Array);
+        const session = new TextDecoder().decode(archive["data/auth/session.json"]);
+
+        expect(session).not.toContain("live-secret");
+        expect(session).toContain("s1");
+    });
+});

@@ -78,9 +78,22 @@ const retentionText = (dataset: Dataset): string => {
 };
 
 /** Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent. */
+/** Rows with the named columns removed, so credential columns never reach the archive. */
+const withoutColumns = (
+    rows: ReadonlyArray<Readonly<Record<string, unknown>>>,
+    omit: ReadonlyArray<string>,
+): ReadonlyArray<Readonly<Record<string, unknown>>> => {
+    if (omit.length === 0) {
+        return rows;
+    }
+
+    return rows.map((row) => Object.fromEntries(Object.entries(row).filter(([column]) => !omit.includes(column))));
+};
+
 const collectPart = async (context: RunContext, dataset: Dataset, request: RequestRecord): Promise<void> => {
     const rows = await context.data.collect(dataset, request.subjectId);
-    const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, rows[table] ?? []]));
+    // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
+    const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
 
     await context.files.put(request.id, { data: JSON.stringify({ tables }), name: partName(dataset) });
 };

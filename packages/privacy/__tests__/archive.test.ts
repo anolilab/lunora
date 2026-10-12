@@ -97,3 +97,16 @@ describe(buildSummaryPdf, () => {
         expect(document.getPageCount()).toBe(8);
     });
 });
+
+describe("buildSummaryPdf with characters outside the standard font", () => {
+    it("renders a subject's CJK and emoji text instead of throwing", async () => {
+        const bytes = await buildSummaryPdf({
+            datasets: [{ articles: ["15"] as const, id: "notes", purpose: "笔记 📝 Notizen", retention: "until erasure" }],
+            generatedAt: new Date("2026-10-11T10:00:00.000Z"),
+            subjectKey: "用户-1",
+            title: "Your data",
+        });
+
+        expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe("%PDF-");
+    });
+});
