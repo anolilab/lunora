@@ -20,7 +20,11 @@ containers, log drains) live in [Deployment](/docs/deployment).
       and runs `tsc --noEmit` without writing files; a stale `_generated/` or
       a mistyped binding fails here instead of at runtime.
 - [ ] `lunora doctor` is clean: it preflights the project's wrangler bindings,
-      placeholder values, and dev secrets.
+      placeholder values, and dev secrets. `lunora doctor --fix` creates the D1
+      databases the config names (reusing any that already exist) and writes
+      their ids in, and mints the local `.dev.vars` secrets. It refuses to write
+      `.dev.vars` unless git ignores it. `--fix --dry-run` prints the same
+      changes without making them. R2 buckets and queues are not created by it.
 
 ## Secrets
 

@@ -36,6 +36,7 @@ import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import checkAi from "./ai-checks";
 import checkCimdFetchFlag from "./cimd-checks";
+import { applyDoctorFixes, isD1PlaceholderId } from "./fix";
 import type { DoctorOptions } from "./index";
 import checkObservabilitySampling from "./observability-checks";
 import checkServices from "./service-checks";
@@ -136,19 +137,6 @@ interface RunDoctorOptions {
     fetch?: typeof globalThis.fetch;
     logger: Logger;
 }
-
-/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
-const isD1PlaceholderId = (databaseId: string): boolean => {
-    const value = databaseId.trim();
-
-    if (value === "") {
-        return true;
-    }
-
-    const lower = value.toLowerCase();
-
-    return lower.includes("replace") || (lower.startsWith("<") && lower.endsWith(">"));
-};
 
 /**
  * Read + parse the wrangler config for the project, or `undefined` when absent
@@ -996,7 +984,20 @@ const runDoctorCommand = async (options: DoctorCommandOptions): Promise<DoctorRe
 };
 
 /** `lunora doctor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions, DoctorData>(async ({ cwd, format, logger }) => {
+const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions, DoctorData>(async ({ cwd, format, logger, options }) => {
+    if (options.fix === true) {
+        const { path } = readWrangler(cwd);
+        const fixes = await applyDoctorFixes({ configPath: path, cwd, dryRun: options.dryRun === true, logger });
+
+        for (const line of fixes.applied) {
+            logger.info(`fix: ${line}`);
+        }
+
+        for (const line of fixes.skipped) {
+            logger.warn(`not fixed: ${line}`);
+        }
+    }
+
     const result = await runDoctorCommand({ cwd, format, logger });
 
     // `ok` is not in the document: the envelope's `code` already says whether
