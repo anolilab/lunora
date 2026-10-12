@@ -1,4 +1,5 @@
 import { limitsForPlan } from "../billing/plans";
+import { egressOutbound } from "../egress/policy";
 import type { PlanFacts } from "../plans/plan-facts";
 import { SERVABLE_PLANS } from "../plans/plan-facts";
 import { createPlanResolver, parsePlanMaxStaleHours } from "../plans/plan-resolver";
@@ -30,8 +31,19 @@ interface UserWorkerStub {
 }
 
 interface DispatchNamespace {
-    get: (name: string, args?: unknown, options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: { lineage: string } }) => UserWorkerStub;
+    get: (
+        name: string,
+        args?: unknown,
+        options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: { egress?: string; lineage: string } },
+    ) => UserWorkerStub;
 }
+
+/**
+ * The `outbound` options for one dispatch. With no egress decision this is exactly `{ lineage }`, as
+ * before; `egress` is added only when `egressOutbound` sends a parameter (plan 477 §4).
+ */
+const outboundOptionsFor = (lineage: string, egress: { parameter?: string }): { egress?: string; lineage: string } =>
+    egress.parameter === undefined ? { lineage } : { egress: egress.parameter, lineage };
 
 interface DispatcherEnv {
     /** Bearer for the control-plane plan lookup. */
@@ -39,7 +51,10 @@ interface DispatcherEnv {
     /** Control-plane base URL; when set, runtime limits scale per the tenant's plan. */
     CONTROL_PLANE_URL?: string;
     DISPATCHER: DispatchNamespace;
+    /** The AI proxy base; its origin is a platform origin every egress policy allows (plan 477 §4.5). */
+    LUNORA_AI_PROXY_URL?: string;
     LUNORA_APP_DOMAIN?: string;
+
     /** Cell name stamped into the `X-Lunora-Id` debug header (GAPS.md B3). */
     LUNORA_CELL?: string;
 
@@ -54,6 +69,9 @@ interface DispatcherEnv {
      * and refused elsewhere (plan 475 §4.3). A secret.
      */
     LUNORA_LINEAGE_SECRET?: string;
+
+    /** OTLP ingest base; its origin is a platform origin every egress policy allows (plan 477 §4.5). */
+    LUNORA_OTLP_ENDPOINT?: string;
     /** Last-verified plans the control plane persists (plan 476). Read only. Absent ⇒ a control-plane outage refuses every cold lookup. */
     PLAN_KV?: Pick<KvNamespaceLike, "get">;
     /** Maximum age in hours of a persisted non-suspended plan (plan 476 §4.2). Absent or invalid ⇒ 48. */
@@ -462,7 +480,12 @@ interface Inbound {
  * Dispatch one admitted request to its tenant and meter the outcome, a failed dispatch included.
  * The timing starts here, after admission, so the duration is the tenant's own work.
  */
-const dispatchTo = async (route: { plan?: string; scriptName: string }, admitted: AdmittedRequest, inbound: Inbound): Promise<Response> => {
+const dispatchTo = async (
+    route: { plan?: string; scriptName: string },
+    admitted: AdmittedRequest,
+    inbound: Inbound,
+    egress: { parameter?: string },
+): Promise<Response> => {
     const { env, request, url } = inbound;
     // Captured outside the `try` so the catch can still measure how long the
     // failing dispatch took.
@@ -474,7 +497,10 @@ const dispatchTo = async (route: { plan?: string; scriptName: string }, admitted
         // lineage rides to the Outbound Worker as a binding parameter, which
         // tenant code can neither read nor set.
         const limits = limitsForPlan(route.plan);
-        const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits, outbound: { lineage: formatLineageParameter(admitted.lineage) } });
+        const userWorker = env.DISPATCHER.get(route.scriptName, undefined, {
+            limits,
+            outbound: outboundOptionsFor(formatLineageParameter(admitted.lineage), egress),
+        });
         // A WebSocket upgrade returns a 101 response carrying `webSocket`;
         // returning it verbatim hands the hibernatable socket back to the
         // eyeball (Lunora's `/_lunora/ws` subscription path). Post-upgrade
@@ -559,6 +585,15 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
         return refused;
     }
 
+    // Egress (plan 477 §4.5): the one decision for this dispatch. An enforcing policy is refused when the
+    // platform's own origins are not configured, rather than sent and silently blocking telemetry;
+    // otherwise its parameter goes to the Outbound Worker.
+    const egress = egressOutbound(route.egress, env);
+
+    if ("refuse" in egress) {
+        return Response.json({ error: "egress_policy_unenforceable", reason: egress.refuse }, { status: 503 });
+    }
+
     // Deployment protection. A preview URL is publicly addressable the moment
     // it exists — that is what makes it shareable, and also what serves
     // unreleased work to anyone forwarded the link. When the project has a
@@ -585,7 +620,7 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
         return admitted;
     }
 
-    return dispatchTo(route, admitted, { env, request, url });
+    return dispatchTo(route, admitted, { env, request, url }, egress);
 };
 
 /**
@@ -607,7 +642,7 @@ const serveUnverified = async (request: Request, env: DispatcherEnv): Promise<Re
         return admitted;
     }
 
-    return dispatchTo({ ...route, plan: "free" }, admitted, { env, request, url });
+    return dispatchTo({ ...route, plan: "free" }, admitted, { env, request, url }, {});
 };
 
 /** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
