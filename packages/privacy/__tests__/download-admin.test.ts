@@ -74,8 +74,40 @@ describe("admin", () => {
 
         failing = false;
 
-        await expect(operator.admin.retry(opened.id)).resolves.toMatchObject({ status: "ready" });
+        await expect(operator.admin.retry(opened.id)).resolves.toMatchObject({ kind: "ran", outcome: { status: "ready" } });
         expect(store.rows.get(opened.id)?.status).toBe("ready");
+    });
+
+    it("hands a failed erasure back for its workflow to restart, once, and the workflow finishes it", async () => {
+        const healthy = memoryData({ goals: 0, tasks: 0 });
+        let failing = true;
+        const flaky: DataPort = {
+            ...healthy,
+            eraseBatch: async (...args) => {
+                if (failing) {
+                    throw new Error("shard unavailable");
+                }
+
+                return healthy.eraseBatch(...args);
+            },
+        };
+        const { operator, privacy, runErasureWorkflow, store } = setup({ data: flaky, erasure: { graceDays: 0 } });
+        const opened = await privacy.requestErasure();
+
+        await runErasureWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("failed");
+
+        failing = false;
+
+        // Each retry is its own mutation, so the second one reads the status the first one wrote.
+        await expect(operator.admin.retry(opened.id)).resolves.toStrictEqual({ kind: "restart", requestId: opened.id });
+        await expect(codeOf(operator.admin.retry(opened.id))).resolves.toBe("UNPROCESSABLE");
+        expect(store.rows.get(opened.id)?.status).toBe("processing");
+
+        await runErasureWorkflow(opened.id);
+
+        expect(store.rows.get(opened.id)?.status).toBe("completed");
     });
 
     it("refuses to retry a request that has not failed", async () => {

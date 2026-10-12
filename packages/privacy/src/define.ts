@@ -20,7 +20,7 @@ import { cancelRequest, extendRequest, openRequest, requireRequest } from "./req
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, PrivacyPorts, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
+import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, setStatus } from "./run";
 import { subjectsToReerase } from "./tombstones";
 
 /**
@@ -98,8 +98,15 @@ interface Privacy {
         readonly extend: (requestId: string, reason: string) => Promise<RequestRecord>;
         /** Every request that is not yet terminal. */
         readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
-        /** Re-run a failed export or erasure. The Art. 12(3) clock keeps running throughout. */
-        readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
+
+        /**
+         * Retry a failed export or erasure; any other status is refused. The Art. 12(3) clock keeps
+         * running throughout. An export runs again in this call and returns `ran` with its outcome. An
+         * erasure is moved to `processing` in this call and returns `restart`: the app then starts its
+         * erasure workflow for the request, in the same mutation, and the workflow resumes it. Because
+         * the request leaves `failed` here, a second retry is refused rather than starting a second run.
+         */
+        readonly retry: (requestId: string) => Promise<RetryResult>;
 
         /**
          * The housekeeping sweep. Run it from a cron. It expires every ready export past its download
@@ -175,15 +182,31 @@ const runErasureNow = async (scope: Scope, requestId: string): Promise<ErasureOu
     return erasureRun(scope, inlineSteps, requestId);
 };
 
-/** Re-run a failed export or erasure from the operator console. Only a failed request may be retried. */
-const retryRequest = async (scope: Scope, requestId: string): Promise<ExportOutcome | ErasureOutcome> => {
+/**
+ * What `admin.retry` did: an export ran again (`ran`), or an erasure was moved out of `failed` and the
+ * app must now start its erasure workflow for `requestId` (`restart`).
+ */
+type RetryResult = { readonly kind: "ran"; readonly outcome: ExportOutcome } | { readonly kind: "restart"; readonly requestId: string };
+
+/**
+ * Retry a failed request from the operator console. Only a failed request may be retried. An erasure
+ * reaches the tombstone store only from its workflow, so it is not run here: it moves to `processing`,
+ * which the workflow's start step continues from, and the move is what refuses a second retry.
+ */
+const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResult> => {
     const record = await requireRequest(scope.ports.store, requestId);
 
     if (record.status !== "failed") {
         throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
     }
 
-    return record.type === "export" ? exportRun(scope, inlineSteps, requestId) : runErasureNow(scope, requestId);
+    if (record.type === "erasure") {
+        await setStatus(scope.ports, requestId, { detail: "retry", from: "failed", to: "processing" });
+
+        return { kind: "restart", requestId };
+    }
+
+    return { kind: "ran", outcome: await exportRun(scope, inlineSteps, requestId) };
 };
 
 /** What `admin.sweep` did. */
@@ -433,6 +456,7 @@ export {
     type PrivacyFor,
     type PrivacyIdentity,
     type PrivacyWorkflowContext,
+    type RetryResult,
     type SweepResult,
 };
 

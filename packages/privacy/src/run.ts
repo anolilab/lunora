@@ -602,6 +602,7 @@ export {
     type PrivacyPorts,
     requireTombstones,
     type RunScope,
+    setStatus,
     type StepRunner,
     type StorePort,
 };

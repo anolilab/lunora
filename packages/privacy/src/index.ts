@@ -14,7 +14,17 @@ export type { AuthTableNames } from "./builtins";
 export { actionCacheDataset, authDataset, documentHistoryDataset, storageObjectsDataset } from "./builtins";
 export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
 export { defineDataset } from "./dataset";
-export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyIdentity, PrivacyPorts, PrivacyWorkflowContext, SweepResult } from "./define";
+export type {
+    ErasureOptions,
+    Privacy,
+    PrivacyConfig,
+    PrivacyFor,
+    PrivacyIdentity,
+    PrivacyPorts,
+    PrivacyWorkflowContext,
+    RetryResult,
+    SweepResult,
+} from "./define";
 export { definePrivacy } from "./define";
 export type { Disposition, RowDisposition } from "./erasure";
 export { dispositionFor, ERASE_BATCH } from "./erasure";
