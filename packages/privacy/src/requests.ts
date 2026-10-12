@@ -29,6 +29,31 @@ interface RequestRecord {
     readonly type: RequestType;
 }
 
+/**
+ * A request as a workflow step returns it: every date as an ISO string, so the result survives
+ * the JSON round trip a durable host stores it through.
+ */
+type StepRequestRecord = {
+    readonly [K in keyof RequestRecord]: RequestRecord[K] extends Date | undefined ? Extract<RequestRecord[K], undefined> | string : RequestRecord[K];
+};
+
+/** The request fields that hold a date. */
+const DATE_FIELDS: ReadonlySet<string> = new Set(["dueAt", "erasureGraceUntil", "expiresAt", "extendedDueAt", "receivedAt"]);
+
+/** Copy a record with each date field mapped, and every absent field left out, as JSON would. */
+const mapDates = (record: object, map: (value: unknown) => unknown): Record<string, unknown> =>
+    Object.fromEntries(
+        Object.entries(record)
+            .filter(([, value]) => value !== undefined)
+            .map(([key, value]) => [key, DATE_FIELDS.has(key) ? map(value) : value]),
+    );
+
+/** Write a request into its JSON-safe step form. */
+const toStepRecord = (record: RequestRecord): StepRequestRecord => mapDates(record, (value) => (value as Date).toISOString()) as unknown as StepRequestRecord;
+
+/** Read a request back from its step form, with every date a `Date` again. */
+const fromStepRecord = (step: StepRequestRecord): RequestRecord => mapDates(step, (value) => new Date(value as string)) as unknown as RequestRecord;
+
 /** The storage the service needs. The app implements it over `ctx.db`. */
 interface RequestStore {
     addEvent: (requestId: string, at: Date, kind: string, detail?: string) => Promise<void>;
@@ -129,4 +154,14 @@ const extendRequest = async (store: RequestStore, input: { id: string; now: Date
     return { ...record, extendedDueAt: extended, reason: input.reason };
 };
 
-export { cancelRequest, type ErasureSettings, extendRequest, openRequest, type RequestRecord, type RequestStore };
+export {
+    cancelRequest,
+    type ErasureSettings,
+    extendRequest,
+    fromStepRecord,
+    openRequest,
+    type RequestRecord,
+    type RequestStore,
+    type StepRequestRecord,
+    toStepRecord,
+};

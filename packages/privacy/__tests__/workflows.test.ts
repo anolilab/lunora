@@ -125,3 +125,78 @@ describe("erasureHandler", () => {
         expect(store.rows.get(opened.id)?.status).toBe("cancelled");
     });
 });
+
+/** A value after a JSON round trip. `structuredClone` would keep a `Date`, which is the point of the test. */
+const throughJson = (value: unknown): unknown => {
+    const text = JSON.stringify(value) as string | undefined;
+
+    return text === undefined ? undefined : JSON.parse(text);
+};
+
+/** A step runner that stores each result as JSON, as a durable host does, and hands back the parsed copy. */
+const jsonStep = () => {
+    const sleeps: unknown[] = [];
+    const step: PrivacyWorkflowContext["step"] = {
+        do: async (_name, run) => {
+            const result = await run();
+
+            return throughJson(result) as typeof result;
+        },
+        sleepUntil: async (_name, when) => {
+            sleeps.push(when);
+        },
+    };
+
+    return { sleeps, step };
+};
+
+describe("step results survive a JSON round trip", () => {
+    it("sleeps until the grace end as a Date and still completes the erasure", async () => {
+        const { data, privacy, store } = setup({ goals: 150, tasks: 40 });
+        const opened = await privacy.requestErasure();
+        const { sleeps, step } = jsonStep();
+
+        await privacy.workflows.erasureHandler({ params: { requestId: opened.id }, step });
+
+        expect(sleeps).toHaveLength(1);
+        expect(sleeps[0]).toBeInstanceOf(Date);
+        expect((sleeps[0] as Date).getTime()).toBe(opened.erasureGraceUntil?.getTime());
+        expect(data.rows).toStrictEqual({ goals: 0, tasks: 0 });
+        expect(store.rows.get(opened.id)?.status).toBe("completed");
+    });
+
+    it("returns a load result that is plain JSON, with dates as ISO strings", async () => {
+        const { privacy } = setup();
+        const opened = await privacy.requestErasure();
+        const results: unknown[] = [];
+
+        await privacy.workflows.erasureHandler({
+            params: { requestId: opened.id },
+            step: {
+                do: async (name, run) => {
+                    const result = await run();
+
+                    if (name === "load") {
+                        results.push(result);
+                    }
+
+                    return result;
+                },
+                sleepUntil: async () => undefined,
+            },
+        });
+
+        expect(results[0]).toStrictEqual(throughJson(results[0]));
+        expect(results[0]).toMatchObject({ erasureGraceUntil: opened.erasureGraceUntil?.toISOString(), receivedAt: now.toISOString() });
+    });
+
+    it("runs the export handler to ready", async () => {
+        const { privacy, store } = setup();
+        const opened = await privacy.requestExport();
+        const { step } = jsonStep();
+
+        await privacy.workflows.exportHandler({ params: { requestId: opened.id }, step });
+
+        expect(store.rows.get(opened.id)?.status).toBe("ready");
+    });
+});

@@ -15,7 +15,7 @@ import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import type { RequestStatus } from "./lifecycle";
 import { effectiveDueAt, isOverdue, isTerminal, transition } from "./lifecycle";
 import type { RequestRecord, RequestStore } from "./requests";
-import { cancelRequest, extendRequest, openRequest } from "./requests";
+import { cancelRequest, extendRequest, fromStepRecord, openRequest, toStepRecord } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
 import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
 import { assembleExport, collectPart, deleteRequestFiles, eraseSubjectFiles, EXPORT_EXPIRY_MS, runErasure, runExport, verifySubjectErased } from "./run";
@@ -243,7 +243,8 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
 
         const exportHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
             const { requestId } = context.params;
-            const record = await context.step.do("load", async () => requireRequest(requestId));
+            // Step results are stored as JSON, so the record crosses the step as ISO strings and is rehydrated here.
+            const record = fromStepRecord(await context.step.do("load", async () => toStepRecord(await requireRequest(requestId))));
             const runContext = contextFor(record);
 
             try {
@@ -272,15 +273,19 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
 
         const erasureHandler = async (context: PrivacyWorkflowContext): Promise<void> => {
             const { requestId } = context.params;
-            const record = await context.step.do("load", async () => requireRequest(requestId));
+            const record = fromStepRecord(await context.step.do("load", async () => toStepRecord(await requireRequest(requestId))));
 
             if (record.status === "grace" && record.erasureGraceUntil !== undefined) {
                 await context.step.sleepUntil("grace", record.erasureGraceUntil);
 
                 // A subject who cancelled during the grace leaves the request cancelled, so the erasure stops here.
-                const current = await context.step.do("recheck", async () => requireRequest(requestId));
+                const status = await context.step.do("recheck", async () => {
+                    const current = await requireRequest(requestId);
 
-                if (current.status !== "grace") {
+                    return current.status;
+                });
+
+                if (status !== "grace") {
                     return;
                 }
             }
