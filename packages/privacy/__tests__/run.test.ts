@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { decodeWire } from "../../../shared/wire-codec";
 import { defineDataset } from "../src/dataset";
-import type { DataPort } from "../src/run";
+import type { DataPort } from "../src/ports";
 import { setup } from "./harness";
 
 const tasks = defineDataset("tasks", {

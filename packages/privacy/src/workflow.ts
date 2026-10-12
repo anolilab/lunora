@@ -21,8 +21,8 @@ import type { Dataset } from "./dataset";
 import type { PrivacyConfig } from "./define";
 import type { RowDisposition } from "./erasure";
 import { dispositionFor } from "./erasure";
+import type { PrivacyPorts } from "./ports";
 import { retentionRulesOf } from "./rules";
-import type { PrivacyPorts } from "./run";
 
 /** The ports a workflow reaches over the wire. The clock and the id source stay on the caller's side. */
 type RemotePort = Exclude<keyof PrivacyPorts, "newId" | "now">;

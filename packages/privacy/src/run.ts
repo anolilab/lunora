@@ -5,96 +5,25 @@
  * runs each step at once. Both paths therefore share one set of lifecycle rules: the request is
  * read again before every step, so a cancel is respected wherever it lands.
  *
- * The export is written as one part per dataset. Each part goes to storage as it is
- * collected, so a step's result is a receipt, not the rows: a heavy subject's data
- * never has to fit in a single step result.
+ * The export is written as one part per dataset (`export.ts`). Each part goes to storage as it
+ * is collected, so a step's result is a receipt, not the rows: a heavy subject's data never has to
+ * fit in a single step result. The ports the runs call are declared in `ports.ts`.
  */
 import { LunoraError } from "@lunora/errors";
 
-import { encodeWire } from "../../../shared/wire-codec";
-import type { ManifestDataset } from "./archive";
-import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
-import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
 import { erasureOrder, retainedTables } from "./dataset";
 import { DAY_MS } from "./deadlines";
 import type { RowDisposition, VerifyResult } from "./erasure";
 import { drainUntilEmpty, verifyErasure } from "./erasure";
+import { assembleExport, collectPart } from "./export";
 import type { RequestStatus } from "./lifecycle";
 import { canTransition, transition } from "./lifecycle";
-import type { RequestRecord, RequestStore } from "./requests";
+import type { PrivacyPorts, StorePort } from "./ports";
+import type { RequestRecord } from "./requests";
 import { fromStepRecord, requireRequest, toStepRecord } from "./requests";
 import type { TombstonePort } from "./tombstones";
 import { tombstoneKeyOf } from "./tombstones";
-
-/** The app's data, one dataset at a time. The app implements it over its tables. */
-interface DataPort {
-    /** The subject's rows for each table of the dataset, keyed by table name. */
-    readonly collect: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, ReadonlyArray<Readonly<Record<string, unknown>>>>>>;
-
-    /**
-     * Erase one batch of the dataset's rows for the subject. The package decides and the app
-     * writes: call `disposition` for each row, then delete a `delete` row, anonymise an
-     * `anonymise` row, and move a `keep` row into the archive table. A kept row must not be
-     * selected again, or the drain never finishes.
-     */
-    readonly eraseBatch: (dataset: Dataset, subjectId: string, now: Date, disposition: RowDisposition) => Promise<{ readonly hasMore: boolean }>;
-
-    /**
-     * Rows still present per table after erasure, for the verify step. Two kinds of row may be
-     * counted and are excluded from the verdict by the package: a row a retention rule still keeps
-     * (verify judges each one again through `collect`), and every row of an `anonymise` table, which
-     * stays in place once anonymised. Prefer not to count anonymised rows at all; the package cannot
-     * tell an anonymised row from one `eraseBatch` missed, so it does not hold them against the erasure.
-     */
-    readonly remaining: (dataset: Dataset, subjectId: string) => Promise<Readonly<Record<string, number>>>;
-}
-
-/**
- * Where a request's files are kept between steps and in the end. `put` must key a request's
- * files under `${requestId}/`, so listing that prefix finds every file the request wrote.
- */
-interface StorePort {
-    /** Remove one stored object. Removing a key that is not there is not an error. */
-    readonly delete: (key: string) => Promise<void>;
-    /** The keys of every stored object whose key starts with the prefix. */
-    readonly list: (prefix: string) => Promise<ReadonlyArray<string>>;
-    readonly put: (requestId: string, file: { readonly data: Uint8Array | string; readonly name: string }) => Promise<string>;
-    /** The text of a file written earlier in the same request, or `undefined` if it is not there. */
-    readonly read: (requestId: string, name: string) => Promise<string | undefined>;
-    /** A short-lived link to a stored file. The caller decides the lifetime, and the link is checked by the host. */
-    readonly signedUrl: (key: string, ttlSeconds: number) => Promise<string>;
-}
-
-/**
- * The archive of rows erasure kept under a retention rule (`privacy_archive`, or the app's own
- * table). The app writes a `keep` row into it with the `until` its disposition carries as
- * `retainUntil`; the sweep purges it once that date has passed.
- */
-interface ArchivePort {
-    /**
-     * Delete up to `ERASE_BATCH` archived rows whose `retainUntil` is before `before`, and say how
-     * many it deleted and whether more may remain.
-     */
-    readonly purgeBatch: (before: Date) => Promise<{ readonly hasMore: boolean; readonly purged: number }>;
-}
-
-/** The ports one invocation binds: the app's data, storage, requests and clock. */
-interface PrivacyPorts {
-    /** Where kept rows wait out their retention period. Required for `admin.sweep` once a dataset uses `retain`. */
-    readonly archive?: ArchivePort;
-    readonly data: DataPort;
-    readonly files: StorePort;
-    readonly newId: () => string;
-    readonly now: () => Date;
-    readonly store: RequestStore;
-
-    /**
-     * Where erased subjects are tombstoned, so a restored backup can be erased again. An erasure and
-     * `restore` refuse to run without it; a call that only exports or reads may leave it out.
-     */
-    readonly tombstones?: TombstonePort;
-}
 
 /** What a run reads: the app's resolved settings and the ports of the invocation that runs it. */
 interface RunScope {
@@ -129,8 +58,6 @@ interface ErasureOutcome {
     readonly leftover: ReadonlyArray<string>;
     readonly status: RequestStatus;
 }
-
-const partName = (dataset: Dataset): string => `parts/${dataset.id}.json`;
 
 /** Delete every file a request wrote: its parts, the archive and the summary. */
 const deleteRequestFiles = async (files: StorePort, request: RequestRecord): Promise<void> => {
@@ -262,93 +189,6 @@ const verifySubjectErased = async (
 
 /** How long a finished export stays downloadable: seven days (decided, the plan's D5). */
 const EXPORT_EXPIRY_MS: number = 7 * DAY_MS;
-
-/** A dataset is restricted (Art. 18) when a retention rule may keep any of its tables after erasure. */
-const isRestricted = (dataset: Dataset): boolean => retainedTables(dataset).length > 0;
-
-const retentionText = (dataset: Dataset): string => {
-    const names = [...new Set(retainedTables(dataset).map(({ directive }) => directive.rule))];
-
-    return names.length === 0 ? "until erasure" : `kept under ${names.join(", ")}`;
-};
-
-/** Rows with the named columns removed, so credential columns never reach the archive. */
-const withoutColumns = (
-    rows: ReadonlyArray<Readonly<Record<string, unknown>>>,
-    omit: ReadonlyArray<string>,
-): ReadonlyArray<Readonly<Record<string, unknown>>> => {
-    if (omit.length === 0) {
-        return rows;
-    }
-
-    return rows.map((row) => Object.fromEntries(Object.entries(row).filter(([column]) => !omit.includes(column))));
-};
-
-/**
- * Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent.
- * The rows go through the Lunora wire codec, which plain JSON cannot replace: a `bigint` column would
- * throw and a bytes column would be written as `{}`. The codec writes them as tagged leaves, a bigint
- * as its decimal string and bytes as base64, and the archive keeps that form.
- */
-const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord): Promise<void> => {
-    const rows = await ports.data.collect(dataset, request.subjectId);
-    // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
-    const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
-
-    await ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(dataset) });
-};
-
-/** Assemble the archive and the summary from the stored parts, then store both. */
-const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Dataset>, request: RequestRecord, subjectKey: string): Promise<string> => {
-    const files: { data: string; path: string }[] = [];
-    const manifestDatasets: ManifestDataset[] = [];
-
-    for (const dataset of datasets) {
-        // Parts are read in order, so the archive lists datasets in the order they were declared.
-        // eslint-disable-next-line no-await-in-loop -- sequential by design, see the comment above
-        const text = await ports.files.read(request.id, partName(dataset));
-
-        if (text === undefined) {
-            throw new Error(`Export part for "${dataset.id}" is missing; collect it again.`);
-        }
-
-        // The part stays in its encoded form: decoding it would bring back the bigint JSON cannot write.
-        const { tables } = JSON.parse(text) as { tables: Record<string, unknown[]> };
-
-        for (const table of dataset.tableNames) {
-            files.push({ data: JSON.stringify(tables[table] ?? []), path: `data/${dataset.id}/${table}.json` });
-        }
-
-        manifestDatasets.push({
-            articles: articlesFor(dataset.origin, dataset.legalBasis),
-            files: dataset.tableNames.map((table) => `data/${dataset.id}/${table}.json`),
-            id: dataset.id,
-            legalBasis: dataset.legalBasis,
-            origin: dataset.origin,
-            purpose: dataset.purpose,
-            recipients: dataset.recipients,
-            restricted: isRestricted(dataset),
-            retention: retentionText(dataset),
-        });
-    }
-
-    const generatedAt = ports.now();
-    const manifest = buildManifest({ datasets: manifestDatasets, generatedAt, subjectKey });
-    const zip = buildArchive([...files, { data: JSON.stringify(manifest, undefined, 2), path: "manifest.json" }], generatedAt);
-    const pdf = await buildSummaryPdf({
-        datasets: manifestDatasets.map((dataset) => {
-            return { articles: dataset.articles, id: dataset.id, purpose: dataset.purpose, retention: dataset.retention };
-        }),
-        generatedAt,
-        subjectKey,
-        title: "Your data",
-    });
-    const archiveKey = await ports.files.put(request.id, { data: zip, name: "export.zip" });
-
-    await ports.files.put(request.id, { data: pdf, name: "summary.pdf" });
-
-    return archiveKey;
-};
 
 /** The text a failed run records: the error message, or the value thrown when it is not an `Error`. */
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -590,8 +430,6 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 };
 
 export {
-    type ArchivePort,
-    type DataPort,
     eraseDataset,
     type ErasureOutcome,
     erasureRun,
@@ -599,10 +437,8 @@ export {
     type ExportOutcome,
     exportRun,
     inlineSteps,
-    type PrivacyPorts,
     requireTombstones,
     type RunScope,
     setStatus,
     type StepRunner,
-    type StorePort,
 };

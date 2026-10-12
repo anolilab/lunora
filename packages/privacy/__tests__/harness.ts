@@ -10,9 +10,9 @@ import { DAY_MS } from "../src/deadlines";
 import type { ErasureOptions, Privacy, PrivacyIdentity, PrivacyWorkflowContext } from "../src/define";
 import { definePrivacy } from "../src/define";
 import { isTerminal } from "../src/lifecycle";
+import type { ArchivePort, DataPort, StorePort } from "../src/ports";
 import type { RequestRecord, RequestStore } from "../src/requests";
 import type { PrivacyPreset } from "../src/rules";
-import type { ArchivePort, DataPort, StorePort } from "../src/run";
 import type { TombstonePort } from "../src/tombstones";
 
 export const NOW = new Date("2026-10-11T10:00:00.000Z");

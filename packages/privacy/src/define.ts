@@ -15,11 +15,12 @@ import { DAY_MS, DEFAULT_DEADLINES } from "./deadlines";
 import { dispositionFor, drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
+import type { PrivacyPorts } from "./ports";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
 import { retentionRulesOf } from "./rules";
-import type { ErasureOutcome, ExportOutcome, PrivacyPorts, RunScope, StepRunner } from "./run";
+import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
 import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones, setStatus } from "./run";
 import { subjectsToReerase } from "./tombstones";
 
@@ -460,4 +461,4 @@ export {
     type SweepResult,
 };
 
-export { type PrivacyPorts } from "./run";
+export { type PrivacyPorts } from "./ports";

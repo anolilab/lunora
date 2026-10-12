@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
+import type { DataPort } from "../src/ports";
 import { retain } from "../src/rules";
-import type { DataPort } from "../src/run";
 import { setup } from "./harness";
 
 type Row = Readonly<Record<string, unknown>>;

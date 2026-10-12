@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { eu } from "../src/eu";
-import type { DataPort } from "../src/run";
+import type { DataPort } from "../src/ports";
 import { durableStep, memoryData, NOW, setup, throughJson } from "./harness";
 
 const failingCollect = (): DataPort => {

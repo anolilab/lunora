@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ErasureOptions } from "../src/define";
-import type { DataPort } from "../src/run";
+import type { DataPort } from "../src/ports";
 import { codeOf, memoryData, setup } from "./harness";
 
 describe("downloadUrl", () => {
