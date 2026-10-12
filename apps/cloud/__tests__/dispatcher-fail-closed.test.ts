@@ -204,6 +204,19 @@ describe("dispatcher refuses a lineage header it cannot verify outside developme
         expect(error).toHaveBeenCalledWith(expect.stringContaining("LUNORA_LINEAGE_SECRET"));
     });
 
+    it("refuses a lineage header before routing, so an unknown host answers 503 and not 404", async () => {
+        const dispatcher = await loadDispatcher();
+        silenceErrorLog();
+        const response = await dispatcher.fetch(
+            withLineage("nobody.unknown.example"),
+            environment(configured({ LUNORA_ENVIRONMENT: "staging", LUNORA_LINEAGE_SECRET: undefined })),
+        );
+
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toMatchObject({ error: "lineage_unverifiable" });
+        expect(tenantFetch).not.toHaveBeenCalled();
+    });
+
     it("counts a missing secret as a misconfiguration, not a forged header, and logs it once per isolate", async () => {
         const dispatcher = await loadDispatcher();
         const error = silenceErrorLog();

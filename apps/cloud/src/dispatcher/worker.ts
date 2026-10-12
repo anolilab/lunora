@@ -340,6 +340,23 @@ interface AdmittedRequest {
 }
 
 /**
+ * The refusal for a lineage header that cannot be verified, or `undefined` when the request may proceed.
+ *
+ * A header with no secret to check it against is refused outside `development`
+ * (plan 475 §4.3). Ordinary traffic carries no header, so it is unaffected;
+ * refusing all traffic on a missing secret would turn a typo into an outage.
+ */
+const unverifiableLineageRefusal = (request: Request, env: DispatcherEnv): Response | undefined => {
+    if (request.headers.get(LINEAGE_HEADER) === null || env.LUNORA_LINEAGE_SECRET || !enforced(env)) {
+        return undefined;
+    }
+
+    refuseMisconfigured(env, "lineage_secret", "refusing a lineage header: LUNORA_LINEAGE_SECRET not set");
+
+    return refuse("lineage_unverifiable", "LUNORA_LINEAGE_SECRET not set for this environment", { retryAfter: "30" });
+};
+
+/**
  * Decide an invocation's lineage before the tenant runs: the verified depth (0
  * for a request from outside), and the request with the lineage header
  * stripped so the tenant never sees it. A forged or stale header answers 400;
@@ -355,16 +372,6 @@ const admitLineage = async (
 ): Promise<AdmittedRequest | Response> => {
     const cell = cellOf(env);
     const header = request.headers.get(LINEAGE_HEADER);
-
-    // A lineage header that cannot be verified is refused outside `development`
-    // (plan 475 §4.3). Ordinary traffic carries no header, so it is unaffected;
-    // refusing all traffic on a missing secret would turn a typo into an outage.
-    if (header !== null && !env.LUNORA_LINEAGE_SECRET && enforced(env)) {
-        refuseMisconfigured(env, "lineage_secret", "refusing a lineage header: LUNORA_LINEAGE_SECRET not set");
-
-        return refuse("lineage_unverifiable", "LUNORA_LINEAGE_SECRET not set for this environment", { retryAfter: "30" });
-    }
-
     const inbound = await readLineage(header, env.LUNORA_LINEAGE_SECRET, Date.now());
 
     if (inbound.status === "invalid") {
@@ -587,6 +594,13 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
     const control = controlPlaneFor(env);
 
     if (control.kind === "configured") {
+        // Before routing: a redirect or a not-found must not answer a lineage header that cannot be verified.
+        const refusal = unverifiableLineageRefusal(request, env);
+
+        if (refusal) {
+            return refusal;
+        }
+
         return serveVerified(request, env, context, control);
     }
 
