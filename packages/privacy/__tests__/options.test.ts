@@ -1,16 +1,9 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { defineDataset } from "../src/dataset";
 import { germany } from "../src/de";
-import { definePrivacy } from "../src/define";
 import { eu } from "../src/eu";
-import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
-
-const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const now = new Date("2026-10-11T10:00:00.000Z");
+import { DAY_MS, NOW, setup } from "./harness";
 
 const voucherYearsOf = (preset: ReturnType<typeof germany>): number | undefined => preset.retention.find((rule) => rule.id === "de.voucher")?.years;
 
@@ -69,29 +62,10 @@ describe("the erasure grace option", () => {
     });
 
     it("applies the preset's grace when the app does not set one in definePrivacy", async () => {
-        const tasks = defineDataset("tasks", {
-            legalBasis: "contract",
-            origin: "provided",
-            purpose: "Tasks",
-            tables: { tasks: {} },
-        });
-        const privacy = definePrivacy({
-            datasets: [tasks],
-            ports: () => {
-                return {
-                    identity: () => SUBJECT,
-                    data: memoryData({ tasks: 0 }),
-                    files: memoryFiles(),
-                    newId: () => "r1",
-                    now: () => now,
-                    store: memoryRequests(),
-                };
-            },
-            presets: [eu({ erasureGraceDays: 3 })],
-        })(undefined);
+        const { privacy } = setup({ presets: [eu({ erasureGraceDays: 3 })] });
 
         const opened = await privacy.requestErasure();
 
-        expect(opened.erasureGraceUntil?.getTime()).toBe(now.getTime() + 3 * DAY_MS);
+        expect(opened.erasureGraceUntil?.getTime()).toBe(NOW.getTime() + 3 * DAY_MS);
     });
 });

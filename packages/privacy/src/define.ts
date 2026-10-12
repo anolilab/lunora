@@ -52,20 +52,19 @@ const requireOwnedRequest = async (store: RequestStore, requestId: string, subje
 type ErasureOptions = Partial<ErasureSettings>;
 
 /**
- * The authenticated subject of an invocation. The app binds it from its session, never from a
- * request argument, so a caller cannot act on another subject's data by naming them.
+ * The authenticated subject of a call. The app resolves it from its session, never from a request
+ * argument, and passes it as the second argument of `privacyFor(ctx, identity)`, so a caller cannot
+ * act on another subject's data by naming them. An operator call, a cron or a workflow passes none.
  */
 interface PrivacyIdentity {
     readonly sessionAgeMs: number;
     readonly subjectId: string;
 }
 
-/** The ports one invocation binds: the app's data, storage, requests, clock and authenticated subject. */
+/** The ports one invocation binds: the app's data, storage, requests and clock. */
 interface PrivacyPorts {
     readonly data: DataPort;
     readonly files: StorePort;
-    /** The authenticated subject. Throws when the invocation has none (a workflow step, a cron). */
-    readonly identity: () => PrivacyIdentity;
     readonly newId: () => string;
     readonly now: () => Date;
     readonly store: RequestStore;
@@ -96,8 +95,12 @@ interface PrivacyConfig<C> {
     readonly tombstoneSecret?: string;
 }
 
-/** Binds an invocation's context into the API. Call it once per invocation: `privacyFor(ctx).requestExport(...)`. */
-type PrivacyFor<C> = (context: C) => Privacy;
+/**
+ * Binds an invocation's context, and the caller's identity when the caller is a data subject, into
+ * the API: `privacyFor(ctx, identity).requestExport()`. The subject methods refuse a call bound
+ * without an identity; the operator methods and the workflows never read it.
+ */
+type PrivacyFor<C> = (context: C, identity?: PrivacyIdentity) => Privacy;
 
 /** The step surface a Workflow handler receives. Matches the native `WorkflowStep` methods the package uses. */
 interface PrivacyWorkflowContext {
@@ -112,6 +115,12 @@ interface PrivacyWorkflowContext {
 interface Privacy {
     /** Operator views and actions. Each one is for the operator's own console, not the subject. */
     readonly admin: {
+        /**
+         * Extend a request's deadline by the policy's further months (Art. 12(3) sentence 2). Extension
+         * is the controller's decision, so it is an operator action: once per request, within the first
+         * period, with the reasons the controller must give the subject.
+         */
+        readonly extend: (requestId: string, reason: string) => Promise<RequestRecord>;
         /** Every request that is not yet terminal. */
         readonly open: () => Promise<ReadonlyArray<RequestRecord>>;
         /** Re-run a failed export or erasure. The Art. 12(3) clock keeps running throughout. */
@@ -127,7 +136,6 @@ interface Privacy {
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
     /** The subject's download link for a finished export. Refused for anyone but the subject, and once expired. */
     readonly downloadUrl: (input: { requestId: string }) => Promise<string>;
-    readonly extendRequest: (input: { reason: string; requestId: string }) => Promise<RequestRecord>;
     /** The subject's own requests that are still open. */
     readonly myRequests: () => Promise<ReadonlyArray<RequestRecord>>;
     readonly requestErasure: () => Promise<RequestRecord>;
@@ -163,10 +171,20 @@ interface Settings {
     readonly tombstoneSecret: string | undefined;
 }
 
-/** One invocation's view of the settings: the ports that call binds. */
+/** One invocation's view of the settings: the ports that call binds, and the caller when it is a subject. */
 interface Scope extends Settings {
+    readonly identity: PrivacyIdentity | undefined;
     readonly ports: PrivacyPorts;
 }
+
+/** The subject the call is bound to. A call bound without one (an operator, a cron) cannot use the subject methods. */
+const callerOf = (scope: Scope): PrivacyIdentity => {
+    if (scope.identity === undefined) {
+        throw new LunoraError("UNAUTHENTICATED", "This privacy call is not bound to a subject: pass the caller's identity to privacyFor.");
+    }
+
+    return scope.identity;
+};
 
 /** The run context without the subject key: the sweep and the verify step need no more than this. */
 const portsContext = (scope: Scope): Omit<RunContext, "subjectKey"> => {
@@ -288,7 +306,7 @@ const tickRequests = async (scope: Scope): Promise<{ readonly approaching: Reado
 
 /** The subject's download link. A request for someone else reads as not found, and the link is refused once expired. */
 const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> => {
-    const { subjectId } = scope.ports.identity();
+    const { subjectId } = callerOf(scope);
     const record = await requireRequest(scope.ports.store, requestId);
 
     if (record.subjectId !== subjectId || record.type !== "export") {
@@ -428,18 +446,19 @@ const coverageOf = (scope: Scope, tables: ReadonlyArray<string>, exclusions: Rea
  * Bind one invocation's ports into the API. Each method is a thin call into the module-level
  * helpers above, which take the same `scope`.
  */
-const bind = (settings: Settings, ports: PrivacyPorts): Privacy => {
-    const scope: Scope = { ...settings, ports };
+const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity | undefined): Privacy => {
+    const scope: Scope = { ...settings, identity, ports };
 
     return {
         admin: {
+            extend: async (requestId, reason) => extendRequest(ports.store, { id: requestId, now: ports.now(), reason }),
             open: async () => listOpen(scope),
             retry: async (requestId) => retryRequest(scope, requestId),
             sweep: async () => sweepExpired(scope),
         },
 
         cancelRequest: async ({ requestId }) => {
-            await requireOwnedRequest(ports.store, requestId, ports.identity().subjectId);
+            await requireOwnedRequest(ports.store, requestId, callerOf(scope).subjectId);
 
             return cancelRequest(ports.store, { id: requestId, now: ports.now() });
         },
@@ -448,26 +467,20 @@ const bind = (settings: Settings, ports: PrivacyPorts): Privacy => {
 
         downloadUrl: async ({ requestId }) => downloadUrlFor(scope, requestId),
 
-        extendRequest: async ({ reason, requestId }) => {
-            await requireOwnedRequest(ports.store, requestId, ports.identity().subjectId);
-
-            return extendRequest(ports.store, { id: requestId, now: ports.now(), reason });
-        },
-
         myRequests: async () => {
-            const { subjectId } = ports.identity();
+            const { subjectId } = callerOf(scope);
             const open = await listOpen(scope);
 
             return open.filter((record) => record.subjectId === subjectId);
         },
 
         requestErasure: async () => {
-            const { sessionAgeMs, subjectId } = ports.identity();
+            const { sessionAgeMs, subjectId } = callerOf(scope);
 
             return openRequest(ports.store, { erasure: settings.erasure, id: ports.newId(), now: ports.now(), sessionAgeMs, subjectId, type: "erasure" });
         },
 
-        requestExport: async () => openRequest(ports.store, { id: ports.newId(), now: ports.now(), subjectId: ports.identity().subjectId, type: "export" }),
+        requestExport: async () => openRequest(ports.store, { id: ports.newId(), now: ports.now(), subjectId: callerOf(scope).subjectId, type: "export" }),
 
         restore: async ({ restoredSubjectIds }) => restoreSubjects(scope, restoredSubjectIds),
 
@@ -527,7 +540,16 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
         tombstoneSecret: config.tombstoneSecret,
     };
 
-    return (context) => bind(settings, config.ports(context));
+    return (context, identity) => bind(settings, config.ports(context), identity);
 };
 
-export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig, type PrivacyFor, type PrivacyPorts, type PrivacyWorkflowContext };
+export {
+    definePrivacy,
+    type ErasureOptions,
+    type Privacy,
+    type PrivacyConfig,
+    type PrivacyFor,
+    type PrivacyIdentity,
+    type PrivacyPorts,
+    type PrivacyWorkflowContext,
+};

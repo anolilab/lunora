@@ -14,7 +14,7 @@ export { actionCacheDataset, authDataset, documentHistoryDataset, storageObjects
 export type { CoverageProblem } from "./coverage";
 export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
 export { defineDataset } from "./dataset";
-export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyPorts, PrivacyWorkflowContext } from "./define";
+export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyIdentity, PrivacyPorts, PrivacyWorkflowContext } from "./define";
 export { definePrivacy } from "./define";
 export type { Disposition, RowDisposition } from "./erasure";
 export { dispositionFor, ERASE_BATCH } from "./erasure";

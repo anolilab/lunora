@@ -1,64 +1,8 @@
-import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { defineDataset } from "../src/dataset";
 import type { ErasureOptions } from "../src/define";
-import { definePrivacy } from "../src/define";
 import type { DataPort } from "../src/run";
-import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
-
-const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
-
-const tasks = defineDataset("tasks", {
-    legalBasis: "contract",
-    origin: "provided",
-    purpose: "Tasks the user schedules",
-    tables: { tasks: {} },
-});
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-const codeOf = async (promise: Promise<unknown>): Promise<string> => {
-    try {
-        await promise;
-    } catch (error) {
-        return error instanceof LunoraError ? error.code : "not-lunora";
-    }
-
-    return "no-error";
-};
-
-const setup = (data: DataPort = memoryData({ tasks: 0 }), identity = SUBJECT, store = memoryRequests(), erasure?: ErasureOptions) => {
-    const files = memoryFiles();
-    let clock = new Date("2026-10-11T10:00:00.000Z");
-    let counter = 0;
-    const privacy = definePrivacy({
-        datasets: [tasks],
-        erasure,
-        ports: () => {
-            return {
-                identity: () => identity,
-                data,
-                files,
-                newId: () => {
-                    counter += 1;
-                    return `r${String(counter)}`;
-                },
-                now: () => clock,
-                store,
-            };
-        },
-    })(undefined);
-
-    return {
-        advance: (days: number) => {
-            clock = new Date(clock.getTime() + days * DAY_MS);
-        },
-        files,
-        privacy,
-        store,
-    };
-};
+import { codeOf, memoryData, setup } from "./harness";
 
 describe("downloadUrl", () => {
     it("returns a fifteen-minute link to a finished export for its subject", async () => {
@@ -71,8 +15,8 @@ describe("downloadUrl", () => {
     });
 
     it("answers not found for another subject, so a caller cannot probe ids", async () => {
-        const { privacy, store } = setup();
-        const other = setup(undefined, { sessionAgeMs: 0, subjectId: "u2" }, store).privacy;
+        const { as, privacy } = setup();
+        const other = as({ sessionAgeMs: 0, subjectId: "u2" });
         const opened = await privacy.requestExport();
 
         await privacy.runExport(opened.id);
@@ -110,7 +54,7 @@ describe("admin", () => {
 
     it("re-runs a failed export, and the export then becomes ready", async () => {
         let failing = true;
-        const healthy = memoryData({ tasks: 0 });
+        const healthy = memoryData();
         const flaky: DataPort = {
             ...healthy,
             collect: async (dataset) => {
@@ -121,7 +65,7 @@ describe("admin", () => {
                 return healthy.collect(dataset, "u1");
             },
         };
-        const { privacy, store } = setup(flaky);
+        const { operator, privacy, store } = setup({ data: flaky });
         const opened = await privacy.requestExport();
 
         const first = await privacy.runExport(opened.id);
@@ -130,7 +74,7 @@ describe("admin", () => {
 
         failing = false;
 
-        await expect(privacy.admin.retry(opened.id)).resolves.toMatchObject({ status: "ready" });
+        await expect(operator.admin.retry(opened.id)).resolves.toMatchObject({ status: "ready" });
         expect(store.rows.get(opened.id)?.status).toBe("ready");
     });
 
@@ -187,7 +131,7 @@ describe("erasing a subject with a ready export", () => {
     const NO_GRACE: ErasureOptions = { graceDays: 0 };
 
     it("expires the export and deletes its files when the erasure runs", async () => {
-        const { files, privacy, store } = setup(undefined, SUBJECT, memoryRequests(), NO_GRACE);
+        const { files, privacy, store } = setup({ erasure: NO_GRACE });
         const exported = await privacy.requestExport();
 
         await privacy.runExport(exported.id);
@@ -202,15 +146,14 @@ describe("erasing a subject with a ready export", () => {
     });
 
     it("does the same when the erasure workflow runs", async () => {
-        const { files, privacy, store } = setup(undefined, SUBJECT, memoryRequests(), NO_GRACE);
+        const { files, privacy, runErasureWorkflow, store } = setup({ erasure: NO_GRACE });
         const exported = await privacy.requestExport();
 
         await privacy.runExport(exported.id);
 
         const erasure = await privacy.requestErasure();
-        const step = { do: async <T>(_name: string, run: () => Promise<T>) => run(), sleepUntil: async () => undefined };
 
-        await privacy.workflows.erasureHandler({ params: { requestId: erasure.id }, step });
+        await runErasureWorkflow(erasure.id);
 
         expect(store.rows.get(erasure.id)?.status).toBe("completed");
         expect(store.rows.get(exported.id)?.status).toBe("expired");

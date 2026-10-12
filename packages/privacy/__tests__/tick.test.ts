@@ -1,93 +1,38 @@
 import { describe, expect, it } from "vitest";
 
-import { defineDataset } from "../src/dataset";
-import { definePrivacy } from "../src/define";
-import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
-
-const SUBJECT = { sessionAgeMs: 60_000, subjectId: "u1" };
-
-const tasks = defineDataset("tasks", {
-    legalBasis: "contract",
-    origin: "provided",
-    purpose: "Tasks the user schedules",
-    tables: { tasks: {} },
-});
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { DAY_MS, setup } from "./harness";
 
 describe("tick", () => {
     it("lists a request within seven days of its deadline as approaching", async () => {
-        const store = memoryRequests();
-        let clock = new Date("2026-04-10T00:00:00.000Z");
-        const privacy = definePrivacy({
-            datasets: [tasks],
-            ports: () => {
-                return {
-                    identity: () => SUBJECT,
-                    data: memoryData({ tasks: 0 }),
-                    files: memoryFiles(),
-                    newId: () => "r1",
-                    now: () => clock,
-                    store,
-                };
-            },
-        })(undefined);
+        const { operator, privacy, setClock } = setup({ now: new Date("2026-04-10T00:00:00.000Z") });
 
         await privacy.requestExport();
         // Deadline is 10 May; seven days before it is 3 May.
-        clock = new Date(new Date("2026-05-04T00:00:00.000Z"));
+        setClock(new Date("2026-05-04T00:00:00.000Z"));
 
-        const result = await privacy.tick();
+        const result = await operator.tick();
 
         expect(result.approaching.map((record) => record.id)).toStrictEqual(["r1"]);
         expect(result.overdue).toStrictEqual([]);
     });
 
     it("lists an unfinished request past its deadline as overdue", async () => {
-        const store = memoryRequests();
-        let clock = new Date("2026-04-10T00:00:00.000Z");
-        const privacy = definePrivacy({
-            datasets: [tasks],
-            ports: () => {
-                return {
-                    identity: () => SUBJECT,
-                    data: memoryData({ tasks: 0 }),
-                    files: memoryFiles(),
-                    newId: () => "r2",
-                    now: () => clock,
-                    store,
-                };
-            },
-        })(undefined);
+        const { operator, privacy, setClock } = setup({ now: new Date("2026-04-10T00:00:00.000Z") });
 
         await privacy.requestExport();
-        clock = new Date(new Date("2026-05-10T00:00:00.000Z").getTime() + DAY_MS);
+        setClock(new Date(new Date("2026-05-10T00:00:00.000Z").getTime() + DAY_MS));
 
-        const result = await privacy.tick();
+        const result = await operator.tick();
 
-        expect(result.overdue.map((record) => record.id)).toStrictEqual(["r2"]);
+        expect(result.overdue.map((record) => record.id)).toStrictEqual(["r1"]);
     });
 
     it("does not list a finished request", async () => {
-        const store = memoryRequests();
-        const clock = new Date("2026-04-10T00:00:00.000Z");
-        const privacy = definePrivacy({
-            datasets: [tasks],
-            ports: () => {
-                return {
-                    identity: () => SUBJECT,
-                    data: memoryData({ tasks: 0 }),
-                    files: memoryFiles(),
-                    newId: () => "r3",
-                    now: () => clock,
-                    store,
-                };
-            },
-        })(undefined);
+        const { operator, privacy, store } = setup({ now: new Date("2026-04-10T00:00:00.000Z") });
 
         await privacy.requestExport();
-        store.rows.set("r3", { ...store.rows.get("r3")!, status: "completed" });
+        store.rows.set("r1", { ...store.rows.get("r1")!, status: "completed" });
 
-        await expect(privacy.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });
+        await expect(operator.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });
     });
 });
