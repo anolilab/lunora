@@ -219,7 +219,7 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                                                     <span className="text-muted-foreground truncate font-mono text-xs">→ {domain.redirectTo}</span>
                                                 ) : null}
                                                 <span className={cn(COLUMN_LABEL, "text-muted-foreground truncate")}>
-                                                    {domain.lastCheckedAt === undefined ? "not checked yet" : `checked ${formatDateTime(domain.lastCheckedAt)}`}
+                                                    {domain.lastCheckedAt == null ? "not checked yet" : `checked ${formatDateTime(domain.lastCheckedAt)}`}
                                                     {domain.failedChecks
                                                         ? ` · ${String(domain.failedChecks)} of ${String(FAILURES_BEFORE_UNVERIFIED)} checks failed`
                                                         : ""}

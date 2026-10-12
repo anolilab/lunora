@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import type { DashboardPanel } from "../src/telemetry/dashboards";
 import { validatePanels } from "../src/telemetry/dashboards";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
@@ -81,14 +81,7 @@ const toView = (row: DashboardRow): DashboardView => {
 };
 
 /** The stored dashboard row shape (the columns `findMany`/`get` return). */
-interface DashboardRow {
-    _id: Id<"dashboards">;
-    createdAt: number;
-    name: string;
-    organizationId: Id<"organizations">;
-    panels: DashboardPanel[];
-    updatedAt: number;
-}
+type DashboardRow = Document_<"dashboards">;
 
 /** Reject a blank dashboard name up front (shared by create/update). */
 const requireName = (name: string): string => {
@@ -127,7 +120,7 @@ export const get = query
     .query(async ({ ctx: context, args: { id, organizationId } }): Promise<DashboardView | null> => {
         await assertMember(context, organizationId);
 
-        const row = (await context.db.get(id)) as DashboardRow | null;
+        const row = await context.db.get(id);
 
         if (row?.organizationId !== organizationId) {
             return null;

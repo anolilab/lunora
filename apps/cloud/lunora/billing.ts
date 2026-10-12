@@ -1,7 +1,7 @@
 import { evaluateDunning } from "../src/billing/dunning";
 import type { QuotaResource } from "../src/billing/plans";
 import { effectiveLimit } from "../src/billing/plans";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { action, internalMutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { orgEntitlements } from "./entitlements";
@@ -25,14 +25,7 @@ import { boundedString, LIMITS } from "./validators";
 
 const QUOTA_RESOURCES: QuotaResource[] = ["projects", "members", "previewDeployments", "boxes"];
 
-interface SubscriptionRow {
-    cancelAtPeriodEnd?: boolean;
-    currentPeriodEnd?: number;
-    priceId: string;
-    provider: string;
-    referenceId: string;
-    state: string;
-}
+type SubscriptionRow = Document_<"payment_subscriptions">;
 
 /**
  * Start a provider Checkout session for the org's subscription. Owners/admins

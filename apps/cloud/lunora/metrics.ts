@@ -4,6 +4,7 @@ import { foldMetricSeries } from "../src/telemetry/metric-series";
 import type { MetricSeries } from "../src/telemetry/metrics-read";
 import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
 import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -177,7 +178,7 @@ export const series = query
             where: { organizationId: args.organizationId },
         });
 
-        const points = page.filter((row) => row.at >= from && row.at <= to);
+        const points = page.map((row) => absentForNull(row)).filter((row) => row.at >= from && row.at <= to);
 
         return foldMetricSeries(points).map((point) => toView(point));
     });

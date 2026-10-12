@@ -6,6 +6,7 @@ import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { assertRowInOrg, authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -295,7 +296,7 @@ export const ingest = mutation
                 });
             }
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
-            const enabledRules = rulePage.filter((rule) => rule.enabled);
+            const enabledRules = rulePage.map((row) => absentForNull(row)).filter((rule) => rule.enabled);
             // Count-crossing rules (issue/incident) evaluated per upserted group below.
             const rules: FiringRule[] = enabledRules
                 .filter((rule) => COUNT_TARGETS.has(rule.target))
@@ -391,11 +392,12 @@ export const ingest = mutation
             // (shared with the periodic sweep in `src/telemetry/sweep.ts`) makes a
             // sustained breach alert once and lets a quiet window still clear + re-arm.
             if (metricRules.length > 0) {
-                const { page: windowObservations } = await context.db.observations.findMany({
+                const { page: storedWindow } = await context.db.observations.findMany({
                     limit: METRIC_SCAN_LIMIT,
                     orderBy: [{ startedAt: "desc" }],
                     where: { organizationId: args.organizationId },
                 });
+                const windowObservations = storedWindow.map((row) => absentForNull(row));
                 const { page: statePage } = await context.db.alertRuleState.findMany({ where: { organizationId: args.organizationId } });
                 const stateByRule = new Map(statePage.map((row) => [row.ruleId as string, row]));
 

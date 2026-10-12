@@ -1,6 +1,7 @@
 import { summarizeUptime } from "../src/uptime/probe";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
 
 /**
@@ -29,14 +30,7 @@ const CHECK_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
  */
 const PRUNE_SCAN_LIMIT = 2000;
 
-interface UptimeCheckRow {
-    _id: Id<"uptimeChecks">;
-    createdAt: number;
-    error?: string;
-    latencyMs?: number;
-    ok: boolean;
-    statusCode?: number;
-}
+type UptimeCheckRow = Document_<"uptimeChecks">;
 
 /** One deployment's current uptime status + rolling figure, for the dashboard grid. */
 interface UptimeSummaryRow {
@@ -64,7 +58,7 @@ export const summary = query
                     orderBy: [{ createdAt: "desc" }],
                     where: { deploymentId: state.deploymentId, organizationId },
                 });
-                const summarized = summarizeUptime(checkPage);
+                const summarized = summarizeUptime(checkPage.map((row) => absentForNull(row)));
 
                 return {
                     ...(summarized.avgLatencyMs === undefined ? {} : { avgLatencyMs: summarized.avgLatencyMs }),

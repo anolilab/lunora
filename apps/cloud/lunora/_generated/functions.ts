@@ -1237,17 +1237,17 @@ export interface Caller {
         createSilence: (args: { endsAt: number; organizationId: Id<"organizations">; reason: unknown; startsAt?: number; target: "usage_anomaly" | "error_anomaly" | "storage_anomaly" }) => Promise<Id<"anomalySilences">>;
         deleteRule: (args: { id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
         deleteSilence: (args: { id: Id<"anomalySilences">; organizationId: Id<"organizations"> }) => Promise<Id<"anomalySilences">>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: import("../../src/telemetry/alerts.js").AlertTarget }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_alerts[]>;
         markDelivered: (args: { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
         prepareTestAlert: (args: { organizationId: Id<"organizations">; ruleId: Id<"alertRules"> }) => Promise<{ body: string; channel: import("../../src/telemetry/alerts.js").AlertChannel; destination: string; organizationId: string; subject: string }>;
-        rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alertRules">; channel: "email" | "pagerduty" | "slack" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; meter?: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten"; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; target: import("../../src/telemetry/alerts.js").AlertTarget; threshold: number; windowMinutes?: number }[]>;
+        rules: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_alertRules[]>;
         setRuleEnabled: (args: { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
-        silences: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"anomalySilences">; createdAt: number; createdBy: string; endsAt: number; reason: string; startsAt: number; target: "error_anomaly" | "storage_anomaly" | "usage_anomaly" }[]>;
+        silences: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_anomalySilences[]>;
         suggestUsageThreshold: (args: { meter: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten"; organizationId: Id<"organizations"> }) => Promise<import("../../src/telemetry/usage-alerts.js").UsageThresholdSuggestion>;
         usageProgress: (args: { organizationId: Id<"organizations"> }) => Promise<{ complete: boolean; monthToDate: number; ruleId: Id<"alertRules"> }[]>;
     };
     audit_log: {
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"auditLog">; action: string; actorUserId: string; createdAt: number; organizationId: Id<"organizations">; target?: string }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_auditLog[]>;
         record: (args: { action: unknown; organizationId: Id<"organizations">; target?: unknown }) => Promise<Id<"auditLog">>;
     };
     billing: {
@@ -1256,21 +1256,21 @@ export interface Caller {
         entitlements: (args: { organizationId: Id<"organizations"> }) => Promise<{ features: string[]; limits: Record<"boxes" | "members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
         portal: (args: { organizationId: Id<"organizations">; returnUrl: unknown }) => Promise<{ url: string; }>;
         processWebhook: (args: { body: unknown; signature: unknown }) => Promise<{ applied: boolean; status: number; }>;
-        subscription: (args: { organizationId: Id<"organizations"> }) => Promise<{ cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
+        subscription: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_payment_subscriptions[]>;
     };
     boxes: {
         authorizeDiagnose: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ slug: string; }>;
         createEnrolment: (args: { name: unknown; organizationId: Id<"organizations"> }) => Promise<{ expiresAt: number; installCommand: string; token: string; }>;
         domain: (args: { organizationId: Id<"organizations"> }) => Promise<string>;
         enrol: (args: { hashedToken: unknown; ipv4?: unknown; ipv6?: unknown; publicKey: unknown; singleTrust: boolean; versions: { caddy: unknown; celld: unknown; hostd: unknown } }) => Promise<{ boxId: Id<"boxes">; created: boolean; ipv4?: string; ipv6?: string; organizationId: Id<"organizations">; slug: string }>;
-        get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("../../src/hostd/protocol.js").BoxVersions }>;
+        get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "offline" | "online" | "pending" | "revoked"; versions?: import("../../src/hostd/protocol.js").BoxVersions }>;
         identity: (args: { boxId: Id<"boxes"> }) => Promise<{ organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("../../src/hostd/protocol.js").BoxVersions }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("../../src/hostd/protocol.js").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "offline" | "online" | "pending" | "revoked"; versions?: import("../../src/hostd/protocol.js").BoxVersions }[]>;
         ownsDeployment: (args: { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }) => Promise<boolean>;
         recordDns: (args: { boxId: Id<"boxes">; dnsError: null | unknown }) => Promise<void>;
         rename: (args: { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         revoke: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ ipv4?: string; ipv6?: string; slug: string; }>;
-        setDesiredRelease: (args: { allowDowngrade?: boolean; boxIds?: Array<Id<"boxes">>; releaseId: unknown }) => Promise<{ boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("../../src/hostd/protocol.js").BoxVersions }[]>;
+        setDesiredRelease: (args: { allowDowngrade?: boolean; boxIds?: Array<Id<"boxes">>; releaseId: unknown }) => Promise<{ boxId: Id<"boxes">; status: "offline" | "online" | "pending" | "revoked"; versions?: import("../../src/hostd/protocol.js").BoxVersions }[]>;
     };
     builds: {
         advisories: (args: { buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<import("../../src/builds/runner.js").BuildAdvisory[]>;
@@ -1279,7 +1279,7 @@ export interface Caller {
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string; workspacePackages?: Array<unknown> }) => Promise<void>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<({ organizationId: Id<"organizations">; createdAt: number; deploymentId?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; projectId: Id<"projects">; branch: string; commitSha: string; fromFork?: false | true; pullRequest?: number; trigger?: "push" | "pull_request"; bundleHash?: string; _id: Id<"builds">; pathFiltered?: false | true; processingBy?: string; processingStartedAt?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; runtime?: null | "worker"; skipReason?: string } & { advisoryNotes: number; advisoryWarnings: number; })[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<(Omit<import("./dataModel.js").Doc_builds, "advisories"> & { advisoryNotes: number; advisoryWarnings: number; })[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
         recordAdvisory: (args: { advisory: { cacheKey: unknown; detail: unknown; file: unknown; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: unknown; remediation: unknown; title: unknown }; buildId: Id<"builds">; runnerId: string }) => Promise<void>;
         recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<({ buildId: Id<"builds">; pathFiltered?: true; projectId: Id<"projects">; reused: boolean; skipped?: string; } | { duplicate: true; pathFiltered?: true; projectId: Id<"projects">; skipped?: string; })[]>;
@@ -1309,7 +1309,7 @@ export interface Caller {
     cloudflare_alerts: {
         apply: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; products: Array<{ id: unknown; limit: number }>; recipients: Array<unknown> }) => Promise<{ results: { action: "created" | "failed" | "updated"; duplicates: number; keptDestinations: number; keptRecipients: string[]; kind: "missing-scope" | "not-eligible" | "transient" | "validation" | null; message: null | string; productId: string; stored: { destinations: number; enabled: boolean; limit: null | string; policyId: string; recipients: string[]; }[]; }[] }>;
         assertAlertsManager: (args: { organizationId: Id<"organizations"> }) => Promise<null>;
-        overview: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "no-data" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; proposedLimit: number | null }[]; productSource: "listed" | "published"; state: "unavailable" | "unconfigured" | "missing-scope" | "not-eligible" | "ready" }>;
+        overview: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ dashboard: { budgetAlert: string; notifications: string; }; historyPeriodStart: number; message: string | null; products: { basis: "floor" | "history" | "no-data" | "unmapped"; covered: { enabled: boolean; limit: null | string; managed: boolean; name: string; policyId: string; }[]; description: string; id: string; lastMonth: number | null; proposedLimit: number | null }[]; productSource: "listed" | "published"; state: "unconfigured" | "missing-scope" | "not-eligible" | "ready" | "unavailable" }>;
         remove: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ failed: { message: string; policyId: string; }[]; removed: string[] }>;
     };
     dashboards: {
@@ -1338,7 +1338,7 @@ export interface Caller {
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; allowDeleteClasses?: Array<unknown>; deployKey?: unknown; durableObjectClasses?: Array<unknown>; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtime?: "worker"; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<(Pick<import("./dataModel.js").Doc_deployments, "organizationId" | "createdAt" | "status" | "updatedAt" | "projectId" | "branch" | "bundleHash" | "_id" | "version" | "kind" | "scriptName" | "alias" | "bindings" | "createdBy" | "expiresAt" | "url"> & { cronSpecs?: null | string[]; durableObjectClasses?: null | string[]; runtime?: "worker" | null; target?: string; verifyingAt?: null | number; })[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<(Pick<import("./dataModel.js").Doc_deployments, "organizationId" | "createdAt" | "projectId" | "updatedAt" | "branch" | "bundleHash" | "_id" | "status" | "version" | "kind" | "scriptName" | "alias" | "bindings" | "createdBy" | "expiresAt" | "url"> & { cronSpecs?: null | string[]; durableObjectClasses?: null | string[]; runtime?: "worker" | null; target?: string; verifyingAt?: null | number; })[]>;
         planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; recursion?: "allow"; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         releaseTarget: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; runtime?: "worker"; target?: string }>;
@@ -1348,20 +1348,20 @@ export interface Caller {
     domains: {
         add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
         edgeBlockMode: (args: { organizationId: Id<"organizations"> }) => Promise<import("../../src/domains/edge-block-mode.js").EdgeBlockMode>;
-        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; failedChecks?: number; hostname: string; lastCheckedAt?: number; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; failedChecks?: number; hostname: string; lastCheckedAt?: number; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_domains | null>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<import("./dataModel.js").Doc_domains[]>;
         markVerified: (args: { id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
         recordCertificate: (args: { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; issuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; organizationId: Id<"organizations">; scope?: unknown; sslStatus: unknown }) => Promise<void>;
         removalTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
         routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; suspended?: true; } | null>;
-        verifyTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ domain: { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; failedChecks?: number; hostname: string; lastCheckedAt?: number; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }; organizationId: Id<"organizations"> }>;
+        verifyTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ domain: import("./dataModel.js").Doc_domains; organizationId: Id<"organizations"> }>;
     };
     edge: {
-        firewall: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "unavailable" | "ok" | "unconfigured"; unsupported: { name: string; reason: string; target: string; }[] }>;
+        firewall: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "ok" | "unconfigured" | "unavailable"; unsupported: { name: string; reason: string; target: string; }[] }>;
         recordRecursionStop: (args: { depth: number; scriptName: unknown }) => Promise<{ recorded: boolean; }>;
         recursionPolicy: (args: { organizationId: Id<"organizations"> }) => Promise<"allow" | "terminate">;
-        rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ applied: boolean; armed?: false | true; engaged?: false | true; hostnames: string[]; kind: "ddos_l7" | "rate_limit"; lastError?: string; periodSeconds?: 60 | 10; requestsPerPeriod?: number; sensitivity?: "default" | "low" | "medium"; status: "pending" | "failed" | "applied" | "removed" | "unavailable"; updatedAt: number }[]>;
+        rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ applied: boolean; armed?: false | true; engaged?: false | true; hostnames: string[]; kind: "ddos_l7" | "rate_limit"; lastError?: string; periodSeconds?: 60 | 10; requestsPerPeriod?: number; sensitivity?: "default" | "low" | "medium"; status: "failed" | "pending" | "unavailable" | "applied" | "removed"; updatedAt: number }[]>;
         setAnomalyRateLimit: (args: { enabled: boolean; organizationId: Id<"organizations">; periodSeconds?: 10 | 60; requestsPerPeriod?: number }) => Promise<null>;
         setDdosSensitivity: (args: { organizationId: Id<"organizations">; sensitivity: "default" | "medium" | "low" }) => Promise<null>;
         setRecursionPolicy: (args: { organizationId: Id<"organizations">; policy: "terminate" | "allow" }) => Promise<null>;
@@ -1371,7 +1371,7 @@ export interface Caller {
     };
     github_installations: {
         bind: (args: { installationId: number; organizationId: Id<"organizations">; userId: string }) => Promise<void>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; installedByGithubId?: number; installedByLogin?: string; organizationId?: Id<"organizations"> }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_githubInstallations[]>;
         record: (args: { accountLogin: string; installationId: number; installedByGithubId?: number; installedByLogin?: string }) => Promise<Id<"githubInstallations">>;
         remove: (args: { installationId: number }) => Promise<void>;
         stagedInstaller: (args: { installationId: number }) => Promise<{ installedByGithubId?: number; } | null>;
@@ -1394,18 +1394,18 @@ export interface Caller {
     };
     incidents: {
         investigate: (args: { id: Id<"incidents">; organizationId: Id<"organizations"> }) => Promise<{ by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_incidents[]>;
         setStatus: (args: { id: Id<"incidents">; organizationId: Id<"organizations">; status: "open" | "resolved" }) => Promise<Id<"incidents">>;
         triage: (args: { id: Id<"incidents">; organizationId: Id<"organizations"> }) => Promise<{ summary: string; }>;
     };
     invitations: {
         accept: (args: { token: unknown }) => Promise<{ organizationId: Id<"organizations">; }>;
         invite: (args: { email: unknown; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }) => Promise<{ id: Id<"invitations">; token: string; }>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ organizationId: Id<"organizations">; email: string; createdAt: number; status: "pending" | "accepted" | "revoked"; _id: Id<"invitations">; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ organizationId: Id<"organizations">; email: string; createdAt: number; _id: Id<"invitations">; _creationTime: number; status: "pending" | "revoked" | "accepted"; expiresAt: number; invitedBy: string; role: "owner" | "admin" | "member" | "viewer" }[]>;
         revoke: (args: { id: Id<"invitations">; organizationId: Id<"organizations"> }) => Promise<void>;
     };
     issues: {
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"issues">; count: number; culprit: string; firstSeen: number; hash: string; lastSeen: number; organizationId: Id<"organizations">; sampleMessage: string; sampleTraceId?: string; status: "open" | "resolved"; title: string }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_issues[]>;
         setStatus: (args: { id: Id<"issues">; organizationId: Id<"organizations">; status: "open" | "resolved" }) => Promise<Id<"issues">>;
     };
     logs: {
@@ -1416,10 +1416,10 @@ export interface Caller {
         prune: (args?: {}) => Promise<{ pruned: number; }>;
     };
     members: {
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_members[]>;
         operatorPromoteOwner: (args: { organizationId: Id<"organizations">; userId: unknown }) => Promise<{ memberId: string; promoted: boolean; }>;
         remove: (args: { id: Id<"members">; organizationId: Id<"organizations"> }) => Promise<void>;
-        roleForUser: (args: { allowedRoles: Array<"admin" | "member" | "owner" | "viewer">; organizationId: Id<"organizations">; userId: unknown }) => Promise<"admin" | "member" | "owner" | "viewer">;
+        roleForUser: (args: { allowedRoles: Array<"admin" | "member" | "owner" | "viewer">; organizationId: Id<"organizations">; userId: unknown }) => Promise<"owner" | "admin" | "member" | "viewer">;
         setRole: (args: { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }) => Promise<void>;
     };
     metrics: {
@@ -1429,22 +1429,22 @@ export interface Caller {
         series: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
     };
     notifications: {
-        channels: (args: { organizationId: Id<"organizations"> }) => Promise<{ canManage: boolean; channels: { _id: Id<"notificationChannels">; createdAt: number; destination: string; enabled: boolean; events: ("deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired")[]; hasSecret: boolean; kind: "slack" | "webhook" | "discord" | "telegram"; name: string }[] }>;
+        channels: (args: { organizationId: Id<"organizations"> }) => Promise<{ canManage: boolean; channels: { _id: Id<"notificationChannels">; createdAt: number; destination: string; enabled: boolean; events: ("deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired")[]; hasSecret: boolean; kind: "webhook" | "slack" | "discord" | "telegram"; name: string }[] }>;
         createChannel: (args: { destination: unknown; events?: Array<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired">; kind: "discord" | "slack" | "telegram" | "webhook"; name: unknown; organizationId: Id<"organizations">; secretCiphertext?: unknown; secretIv?: unknown }) => Promise<Id<"notificationChannels">>;
         deleteChannel: (args: { id: Id<"notificationChannels">; organizationId: Id<"organizations"> }) => Promise<Id<"notificationChannels">>;
-        deliveries: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"notificationDeliveries">; channelId: Id<"notificationChannels">; channelName: string; createdAt: number; deliveredAt?: number; error?: string; event: "deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired" | "test"; kind: "slack" | "webhook" | "discord" | "telegram"; status: "pending" | "failed" | "delivered"; subject: string }[]>;
+        deliveries: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"notificationDeliveries">; channelId: Id<"notificationChannels">; channelName: string; createdAt: number; deliveredAt?: number; error?: string; event: "deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired" | "test"; kind: "webhook" | "slack" | "discord" | "telegram"; status: "delivered" | "failed" | "pending"; subject: string }[]>;
         sendTest: (args: { id: Id<"notificationChannels">; organizationId: Id<"organizations"> }) => Promise<Id<"notificationDeliveries">>;
         updateChannel: (args: { enabled?: boolean; events?: Array<"deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired">; id: Id<"notificationChannels">; name?: unknown; organizationId: Id<"organizations"> }) => Promise<Id<"notificationChannels">>;
     };
     onboarding: {
-        checklist: (args: { organizationId: Id<"organizations"> }) => Promise<{ complete: boolean; steps: { done: boolean; id: "deploy" | "live" | "key" | "project" }[] }>;
+        checklist: (args: { organizationId: Id<"organizations"> }) => Promise<{ complete: boolean; steps: { done: boolean; id: "deploy" | "key" | "live" | "project" }[] }>;
     };
     organizations: {
         cancelDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
         create: (args: { cellId?: Id<"cells">; jurisdiction?: unknown; name: unknown; slug: unknown }) => Promise<Id<"organizations">>;
-        getBySlug: (args: { slug: unknown }) => Promise<null | { _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; deletionRequestedAt?: null | number; name: string; plan: "enterprise" | "free" | "pro"; slug: string; suspendedAt?: null | number; suspendedReason?: null | string }>;
+        getBySlug: (args: { slug: unknown }) => Promise<import("./dataModel.js").Doc_organizations | null>;
         linkCreditsAccount: (args: { creditsAccountId: string; organizationId: Id<"organizations"> }) => Promise<void>;
-        list: (args?: {}) => Promise<{ _id: Id<"organizations">; cellId: Id<"cells">; createdAt: number; deletionRequestedAt?: null | number; name: string; plan: "enterprise" | "free" | "pro"; slug: string; suspendedAt?: null | number; suspendedReason?: null | string }[]>;
+        list: (args?: {}) => Promise<import("./dataModel.js").Doc_organizations[]>;
         purgeDeleted: (args?: {}) => Promise<{ purged: number; }>;
         rename: (args: { name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         requestDeletion: (args: { organizationId: Id<"organizations"> }) => Promise<void>;
@@ -1490,7 +1490,7 @@ export interface Caller {
         beginBackup: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
         beginRestore: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
         finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; offsiteError?: unknown; offsiteStatus?: "succeeded" | "failed"; organizationId: Id<"organizations">; restoreConflicts?: number; restoreDeleted?: Record<string, number>; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: Id<"organizations">; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; projectId: Id<"projects">; trigger: "manual" | "scheduled" | "pre-restore"; error?: string; _id: Id<"tenantBackups">; alias: string; completedAt?: number; offsiteError?: string; offsiteStatus?: "failed" | "succeeded"; operation: "backup" | "restore"; restoredFrom?: Id<"tenantBackups">; restoreConflicts?: number; restoreDeleted?: Record<string, number>; restoreInserted?: number; restoreRowErrors?: number }[]>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: null | number; organizationId: Id<"organizations">; createdAt: number; projectId: Id<"projects">; deploymentId: Id<"deployments">; trigger: "manual" | "scheduled" | "pre-restore"; error?: null | string; _id: Id<"tenantBackups">; status: "failed" | "running" | "succeeded"; alias: string; completedAt?: null | number; offsiteError?: null | string; offsiteStatus?: null | "failed" | "succeeded"; operation: "backup" | "restore"; restoredFrom?: null | Id<"tenantBackups">; restoreConflicts?: null | number; restoreDeleted?: null | Record<string, number>; restoreInserted?: null | number; restoreRowErrors?: null | number }[]>;
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "worker" | "container" | "generation"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -1504,7 +1504,7 @@ export interface Caller {
     };
     uptime: {
         prune: (args?: {}) => Promise<{ pruned: number; }>;
-        recent: (args: { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"uptimeChecks">; createdAt: number; error?: string; latencyMs?: number; ok: boolean; statusCode?: number }[]>;
+        recent: (args: { deploymentId: Id<"deployments">; limit?: number; organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_uptimeChecks[]>;
         summary: (args: { organizationId: Id<"organizations"> }) => Promise<{ avgLatencyMs?: number; consecutiveFailures: number; deploymentId: Id<"deployments">; lastCheckedAt: number; ok: boolean; sampleCount: number; upFraction: number }[]>;
     };
     usage: {

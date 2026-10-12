@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { hashDeployKey } from "../src/deploy/keys";
-import type { Id, TableName } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id, TableName } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 
 /**
@@ -19,13 +19,7 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
 
 export type MemberRole = "admin" | "member" | "owner" | "viewer";
 
-interface DeployKeyRow {
-    _id: Id<"deployKeys">;
-    capability?: "deploy" | "ingest";
-    organizationId: Id<"organizations">;
-    projectId?: Id<"projects">;
-    revokedAt?: number;
-}
+type DeployKeyRow = Document_<"deployKeys">;
 
 /**
  * The membership rule every organization check shares: the user must be a member of

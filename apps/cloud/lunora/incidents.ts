@@ -5,9 +5,10 @@ import type { EvidenceLogRow, GeneratePort, InvestigationIncident, Investigation
 import { buildEvidenceBundle, resolveInvestigationRunner } from "../src/telemetry/investigation";
 import type { TriageIncident, TriageIssue } from "../src/telemetry/triage";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { ActionCtx as ActionContext } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -37,21 +38,7 @@ interface InvestigationView {
 }
 
 /** An incident row as the dashboard consumes it. */
-interface IncidentRow {
-    _id: Id<"incidents">;
-    closedAt?: number;
-    container?: string;
-    count: number;
-    instance?: string;
-    investigatedAt?: number;
-    investigation?: InvestigationView;
-    kind: "crash_loop" | "error_spike" | "oom";
-    lastSeen: number;
-    openedAt: number;
-    organizationId: Id<"organizations">;
-    status: "open" | "resolved";
-    title: string;
-}
+type IncidentRow = Document_<"incidents">;
 
 /** An org's incidents, most-recently-seen first (any member). */
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<IncidentRow[]> => {
@@ -188,11 +175,12 @@ interface LogRow extends EvidenceLogRow {
  * fetched logs) to produce the bundle the runner reasons over.
  */
 const gatherEvidence = async (context: ActionContext, organizationId: Id<"organizations">, incident: InvestigationIncident) => {
-    const { page: spans } = await context.db.observations.findMany({
+    const { page: storedSpans } = await context.db.observations.findMany({
         limit: EVIDENCE_SPAN_SCAN,
         orderBy: [{ startedAt: "desc" }],
         where: { organizationId },
     });
+    const spans = storedSpans.map((row) => absentForNull(row));
 
     // First pass: correlate spans → related trace ids (no logs yet).
     const preliminary = buildEvidenceBundle({ incident, logs: [], spans });
@@ -207,7 +195,7 @@ const gatherEvidence = async (context: ActionContext, organizationId: Id<"organi
             where: { organizationId, traceId },
         });
 
-        logs.push(...logPage);
+        logs.push(...logPage.map((row) => absentForNull(row)));
     }
 
     return buildEvidenceBundle({ incident, logs, spans });

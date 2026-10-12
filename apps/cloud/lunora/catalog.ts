@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import { RELEASE_LEASE_MS } from "../src/deploy/lease";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { collectAll } from "./paginate";
@@ -28,18 +28,7 @@ export interface CatalogInstallView {
     version: string;
 }
 
-interface InstallRow {
-    _id: Id<"catalogInstalls">;
-    activeKey?: string;
-    createdAt: number;
-    deploymentId?: string;
-    installedBy: string;
-    organizationId: Id<"organizations">;
-    projectId: Id<"projects">;
-    slug: string;
-    status: "installing" | "live";
-    version: string;
-}
+type InstallRow = Document_<"catalogInstalls">;
 
 /** The org's live catalog installs, newest first. Any member may read them. */
 export const installs = query
@@ -124,7 +113,7 @@ export const claimInstall = internalMutation
 export const finishInstall = internalMutation
     .input({ deploymentId: boundedString(LIMITS.id), installId: v.id("catalogInstalls") })
     .mutation(async ({ ctx: context, args: { deploymentId, installId } }): Promise<void> => {
-        const row = (await context.db.get(installId)) as InstallRow | null;
+        const row = await context.db.get(installId);
 
         if (row?.status !== "installing") {
             throw new LunoraError("CONFLICT", "no install is in progress for this claim");
@@ -164,18 +153,12 @@ const CLAIM_FENCE_MARGIN_MS = 5 * 60 * 1000;
  * within the fence margin of its lease's end is treated as lost.
  */
 export const holdsClaim = internalQuery.input({ installId: v.id("catalogInstalls") }).query(async ({ ctx: context, args: { installId } }): Promise<boolean> => {
-    const row = (await context.db.get(installId)) as InstallRow | null;
+    const row = await context.db.get(installId);
 
     return row?.status === "installing" && context.now - row.createdAt < RELEASE_LEASE_MS - CLAIM_FENCE_MARGIN_MS;
 });
 
-interface IndexStateRow {
-    _id: Id<"catalogIndexState">;
-    indexUrl: string;
-    issuedAt: number;
-    keyId: string;
-    updatedAt: number;
-}
+type IndexStateRow = Document_<"catalogIndexState">;
 
 /**
  * Record a verified catalog index for its URL, and say whether it may be served (SYSTEM).
@@ -234,7 +217,7 @@ export const advanceIndexState = internalMutation
 export const abandonInstall = internalMutation
     .input({ installId: v.id("catalogInstalls") })
     .mutation(async ({ ctx: context, args: { installId } }): Promise<void> => {
-        const row = (await context.db.get(installId)) as InstallRow | null;
+        const row = await context.db.get(installId);
 
         if (row?.status === "installing") {
             await context.db.delete(installId);

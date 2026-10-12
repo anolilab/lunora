@@ -1,7 +1,7 @@
-import type { NotificationEvent, NotificationFacts, NotificationKind, NotificationMessage } from "../src/notifications/events";
+import type { NotificationEvent, NotificationFacts, NotificationMessage } from "../src/notifications/events";
 import { channelsForEvent, renderNotification } from "../src/notifications/events";
 import { pendingDeliveryRow } from "../src/notifications/outbox";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 
 /**
@@ -12,12 +12,7 @@ import type { MutationCtx as MutationContext } from "./_generated/server.js";
  * (`src/notifications/sweep.ts`) delivers the rows and stamps the outcome.
  */
 
-interface ChannelRow {
-    _id: Id<"notificationChannels">;
-    enabled: boolean;
-    events: NotificationEvent[];
-    kind: NotificationKind;
-}
+type ChannelRow = Document_<"notificationChannels">;
 
 /** Insert one pending delivery for a channel. */
 export const queueDelivery = (

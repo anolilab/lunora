@@ -634,7 +634,7 @@ export const rollback = internalMutation
             project: await projectNameOf(context, target.projectId),
         });
 
-        return { scriptName: target.scriptName, version: target.version };
+        return { scriptName: target.scriptName, version: target.version ?? undefined };
     });
 
 /**

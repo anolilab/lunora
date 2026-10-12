@@ -26,13 +26,13 @@ export interface Doc_cells {
     _id: Id<"cells">;
     _creationTime: number;
     cloudflareAccountId: string;
-    config?: Record<string, string>;
+    config?: Record<string, string> | null;
     createdAt: number;
     dispatchNamespacePrefix: string;
-    jurisdiction?: string;
+    jurisdiction?: string | null;
     name: string;
     status: "active" | "draining" | "suspended";
-    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" | null;
 }
 
 export interface Doc_organizations {
@@ -43,19 +43,19 @@ export interface Doc_organizations {
     name: string;
     plan: "free" | "pro" | "enterprise";
     slug: string;
-    spendCapMinor?: number;
-    spendWarnMinor?: number;
-    spendWarnedPeriod?: number;
-    spendNanoCents?: number;
-    spendPeriod?: number;
-    suspendedAt?: number;
-    suspendedReason?: string;
-    paymentFailedAt?: number;
-    creditsAccountId?: string;
-    deletionRequestedAt?: number;
-    recursionPolicy?: "terminate" | "allow";
-    haltOnSuspension?: boolean;
-    supportHaltedAt?: number;
+    spendCapMinor?: number | null;
+    spendWarnMinor?: number | null;
+    spendWarnedPeriod?: number | null;
+    spendNanoCents?: number | null;
+    spendPeriod?: number | null;
+    suspendedAt?: number | null;
+    suspendedReason?: string | null;
+    paymentFailedAt?: number | null;
+    creditsAccountId?: string | null;
+    deletionRequestedAt?: number | null;
+    recursionPolicy?: "terminate" | "allow" | null;
+    haltOnSuspension?: boolean | null;
+    supportHaltedAt?: number | null;
 }
 
 export interface Doc_members {
@@ -70,23 +70,23 @@ export interface Doc_members {
 export interface Doc_projects {
     _id: Id<"projects">;
     _creationTime: number;
-    activeDeploymentId?: string;
-    activeScriptName?: string;
+    activeDeploymentId?: string | null;
+    activeScriptName?: string | null;
     createdAt: number;
-    framework?: string;
-    githubRepo?: string;
+    framework?: string | null;
+    githubRepo?: string | null;
     name: string;
     organizationId: Id<"organizations">;
-    previewPasswordHash?: string;
-    previewPasswordSalt?: string;
-    productionAlias?: string;
-    rootDirectory?: string;
-    runtime?: "worker";
+    previewPasswordHash?: string | null;
+    previewPasswordSalt?: string | null;
+    productionAlias?: string | null;
+    rootDirectory?: string | null;
+    runtime?: "worker" | null;
     slug: string;
-    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
-    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
-    watchPaths?: Array<string>;
-    workspacePackages?: { builtAt: number; paths: Array<string>; rootDirectory: string };
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" | null;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
+    watchPaths?: Array<string> | null;
+    workspacePackages?: { builtAt: number; paths: Array<string>; rootDirectory: string } | null;
 }
 
 export interface Doc_invitations {
@@ -109,19 +109,19 @@ export interface Doc_auditLog {
     actorUserId: string;
     createdAt: number;
     organizationId: Id<"organizations">;
-    target?: string;
+    target?: string | null;
 }
 
 export interface Doc_githubInstallations {
     _id: Id<"githubInstallations">;
     _creationTime: number;
     accountLogin: string;
-    claimedAt?: number;
+    claimedAt?: number | null;
     createdAt: number;
     installationId: number;
-    installedByGithubId?: number;
-    installedByLogin?: string;
-    organizationId?: Id<"organizations">;
+    installedByGithubId?: number | null;
+    installedByLogin?: string | null;
+    organizationId?: Id<"organizations"> | null;
 }
 
 export interface Doc_rateLimits {
@@ -136,66 +136,66 @@ export interface Doc_rateLimits {
 export interface Doc_deployments {
     _id: Id<"deployments">;
     _creationTime: number;
-    adminToken?: string;
-    adminTokenCiphertext?: string;
-    adminTokenIv?: string;
-    alias?: string;
-    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
-    branch?: string;
-    cronSpecs?: Array<string>;
-    bindings?: Array<{ name: string; target?: string; type: string }>;
-    bundleHash?: string;
+    adminToken?: string | null;
+    adminTokenCiphertext?: string | null;
+    adminTokenIv?: string | null;
+    alias?: string | null;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
+    branch?: string | null;
+    cronSpecs?: Array<string> | null;
+    bindings?: Array<{ name: string; target?: string; type: string }> | null;
+    bundleHash?: string | null;
     createdAt: number;
     createdBy: string;
-    expiresAt?: number;
+    expiresAt?: number | null;
     kind: "production" | "preview" | "dev";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
-    resourceRef?: string;
-    durableObjectClasses?: Array<string>;
-    runtime?: "worker";
+    resourceRef?: string | null;
+    durableObjectClasses?: Array<string> | null;
+    runtime?: "worker" | null;
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
-    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" | null;
     updatedAt: number;
-    url?: string;
-    version?: number;
-    runtimeVersion?: string;
-    queuedAt?: number;
-    provisioningAt?: number;
-    verifyingAt?: number;
-    liveAt?: number;
-    supersededAt?: number;
-    failedAt?: number;
-    destroyedAt?: number;
-    teardownAt?: number;
-    catalogInstalledBy?: string;
-    catalogSlug?: string;
-    catalogVersion?: string;
+    url?: string | null;
+    version?: number | null;
+    runtimeVersion?: string | null;
+    queuedAt?: number | null;
+    provisioningAt?: number | null;
+    verifyingAt?: number | null;
+    liveAt?: number | null;
+    supersededAt?: number | null;
+    failedAt?: number | null;
+    destroyedAt?: number | null;
+    teardownAt?: number | null;
+    catalogInstalledBy?: string | null;
+    catalogSlug?: string | null;
+    catalogVersion?: string | null;
 }
 
 export interface Doc_halts {
     _id: Id<"halts">;
     _creationTime: number;
     alias: string;
-    attempts?: number;
-    convergingAt?: number;
+    attempts?: number | null;
+    convergingAt?: number | null;
     createdAt: number;
-    deploymentId?: string;
-    convergingBy?: string;
-    haltedAt?: number;
+    deploymentId?: string | null;
+    convergingBy?: string | null;
+    haltedAt?: number | null;
     haltedBy: string;
     kind: "production" | "preview" | "dev";
-    lastError?: string;
-    nextAttemptAt?: number;
+    lastError?: string | null;
+    nextAttemptAt?: number | null;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     reason: string;
-    resumeDeploymentId?: string;
+    resumeDeploymentId?: string | null;
     source: "manual" | "suspension" | "support";
-    stubClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>;
+    stubClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }> | null;
     state: "halting" | "halted" | "resuming";
-    stubStartedAt?: number;
+    stubStartedAt?: number | null;
     target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     updatedAt: number;
 }
@@ -206,24 +206,24 @@ export interface Doc_aliasOwnership {
     alias: string;
     createdAt: number;
     organizationId: Id<"organizations">;
-    pendingClasses?: Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }>;
+    pendingClasses?: Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }> | null;
     projectId: Id<"projects">;
-    workerClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>;
+    workerClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }> | null;
 }
 
 export interface Doc_deployKeys {
     _id: Id<"deployKeys">;
     _creationTime: number;
-    capability?: "deploy" | "ingest";
+    capability?: "deploy" | "ingest" | null;
     createdAt: number;
-    encryptedSecret?: { ciphertext: string; iv: string };
-    expiresAt?: number;
+    encryptedSecret?: { ciphertext: string; iv: string } | null;
+    expiresAt?: number | null;
     hashedKey: string;
-    lastUsedAt?: number;
+    lastUsedAt?: number | null;
     name: string;
     organizationId: Id<"organizations">;
-    projectId?: Id<"projects">;
-    revokedAt?: number;
+    projectId?: Id<"projects"> | null;
+    revokedAt?: number | null;
     type: "production" | "dev" | "preview";
 }
 
@@ -237,30 +237,30 @@ export interface Doc_githubDeliveries {
 export interface Doc_builds {
     _id: Id<"builds">;
     _creationTime: number;
-    advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>;
+    advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }> | null;
     branch: string;
-    bundleHash?: string;
+    bundleHash?: string | null;
     commitSha: string;
     createdAt: number;
-    deploymentId?: string;
-    error?: string;
-    fromFork?: boolean;
+    deploymentId?: string | null;
+    error?: string | null;
+    fromFork?: boolean | null;
     organizationId: Id<"organizations">;
-    processingBy?: string;
-    processingStartedAt?: number;
+    processingBy?: string | null;
+    processingStartedAt?: number | null;
     projectId: Id<"projects">;
-    pullRequest?: number;
-    reusesBuildId?: Id<"builds">;
-    rootDirectory?: string;
-    runtime?: "worker";
-    pathFiltered?: boolean;
-    skipReason?: string;
+    pullRequest?: number | null;
+    reusesBuildId?: Id<"builds"> | null;
+    rootDirectory?: string | null;
+    runtime?: "worker" | null;
+    pathFiltered?: boolean | null;
+    skipReason?: string | null;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
-    trigger?: "push" | "pull_request";
+    trigger?: "push" | "pull_request" | null;
     updatedAt: number;
-    buildingAt?: number;
-    successfulAt?: number;
-    failedAt?: number;
+    buildingAt?: number | null;
+    successfulAt?: number | null;
+    failedAt?: number | null;
 }
 
 export interface Doc_buildLogs {
@@ -276,35 +276,35 @@ export interface Doc_buildLogs {
 export interface Doc_domains {
     _id: Id<"domains">;
     _creationTime: number;
-    certificateError?: string;
-    certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
-    certificateScope?: string;
-    certificateStatus?: string;
-    customHostnameId?: string;
+    certificateError?: string | null;
+    certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" | null;
+    certificateScope?: string | null;
+    certificateStatus?: string | null;
+    customHostnameId?: string | null;
     createdAt: number;
-    edgeBlockedAt?: number;
-    edgeBlockError?: string;
-    failedChecks?: number;
+    edgeBlockedAt?: number | null;
+    edgeBlockError?: string | null;
+    failedChecks?: number | null;
     hostname: string;
-    lastCheckedAt?: number;
+    lastCheckedAt?: number | null;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
-    redirectStatusCode?: number;
-    redirectTo?: string;
+    redirectStatusCode?: number | null;
+    redirectTo?: string | null;
     txtToken: string;
     updatedAt: number;
-    verifiedAt?: number;
+    verifiedAt?: number | null;
 }
 
 export interface Doc_certificateReleases {
     _id: Id<"certificateReleases">;
     _creationTime: number;
-    attempts?: number;
+    attempts?: number | null;
     certificateIssuer: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     certificateScope: string;
     customHostnameId: string;
     hostname: string;
-    lastError?: string;
+    lastError?: string | null;
     queuedAt: number;
 }
 
@@ -325,22 +325,22 @@ export interface Doc_tenantBackups {
     _id: Id<"tenantBackups">;
     _creationTime: number;
     alias: string;
-    bytes?: number;
-    completedAt?: number;
+    bytes?: number | null;
+    completedAt?: number | null;
     createdAt: number;
     deploymentId: Id<"deployments">;
-    error?: string;
+    error?: string | null;
     key: string;
-    offsiteError?: string;
-    offsiteStatus?: "succeeded" | "failed";
+    offsiteError?: string | null;
+    offsiteStatus?: "succeeded" | "failed" | null;
     operation: "backup" | "restore";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
-    restoredFrom?: Id<"tenantBackups">;
-    restoreConflicts?: number;
-    restoreDeleted?: Record<string, number>;
-    restoreInserted?: number;
-    restoreRowErrors?: number;
+    restoredFrom?: Id<"tenantBackups"> | null;
+    restoreConflicts?: number | null;
+    restoreDeleted?: Record<string, number> | null;
+    restoreInserted?: number | null;
+    restoreRowErrors?: number | null;
     status: "running" | "succeeded" | "failed";
     trigger: "scheduled" | "manual" | "pre-restore";
 }
@@ -348,45 +348,45 @@ export interface Doc_tenantBackups {
 export interface Doc_boxes {
     _id: Id<"boxes">;
     _creationTime: number;
-    allowDowngrade?: boolean;
+    allowDowngrade?: boolean | null;
     createdAt: number;
-    desiredReleaseId?: string;
-    dnsError?: string;
-    enrolledAt?: number;
-    fleets?: Array<{ alias: string; deploymentId?: string; state: "running" | "stopped" | "starting" | "failed" }>;
-    ipv4?: string;
-    ipv6?: string;
-    lastSeenAt?: number;
+    desiredReleaseId?: string | null;
+    dnsError?: string | null;
+    enrolledAt?: number | null;
+    fleets?: Array<{ alias: string; deploymentId?: string; state: "running" | "stopped" | "starting" | "failed" }> | null;
+    ipv4?: string | null;
+    ipv6?: string | null;
+    lastSeenAt?: number | null;
     name: string;
     organizationId: Id<"organizations">;
     publicKey: string;
-    resources?: { diskFreeMb: number; memMb: number };
-    revokedAt?: number;
-    routesWithheld?: Array<string>;
-    routesStale?: boolean;
+    resources?: { diskFreeMb: number; memMb: number } | null;
+    revokedAt?: number | null;
+    routesWithheld?: Array<string> | null;
+    routesStale?: boolean | null;
     singleTrust: boolean;
     slug: string;
     status: "pending" | "online" | "offline" | "revoked";
-    versions?: { caddy: string; celld: string; hostd: string };
+    versions?: { caddy: string; celld: string; hostd: string } | null;
 }
 
 export interface Doc_boxEnrolments {
     _id: Id<"boxEnrolments">;
     _creationTime: number;
-    boxId?: Id<"boxes">;
+    boxId?: Id<"boxes"> | null;
     createdAt: number;
     createdBy: string;
     expiresAt: number;
     hashedToken: string;
     name: string;
     organizationId: Id<"organizations">;
-    usedAt?: number;
+    usedAt?: number | null;
 }
 
 export interface Doc_hostdReleases {
     _id: Id<"hostdReleases">;
     _creationTime: number;
-    channel?: "stable" | "canary";
+    channel?: "stable" | "canary" | null;
     createdAt: number;
     envelope: string;
     keyId: string;
@@ -402,12 +402,12 @@ export interface Doc_cloudflareAccounts {
     ciphertext: string;
     createdAt: number;
     createdBy: string;
-    displayName?: string;
+    displayName?: string | null;
     iv: string;
     label: string;
     organizationId: Id<"organizations">;
     permissions: Array<string>;
-    tokenExpiresAt?: number;
+    tokenExpiresAt?: number | null;
     updatedAt: number;
     verifiedAt: number;
     workersSubdomain: string;
@@ -418,12 +418,12 @@ export interface Doc_metricPoints {
     _creationTime: number;
     at: number;
     createdAt: number;
-    deploymentId?: Id<"deployments">;
-    functionPath?: string;
+    deploymentId?: Id<"deployments"> | null;
+    functionPath?: string | null;
     kind: string;
     name: string;
     organizationId: Id<"organizations">;
-    serviceName?: string;
+    serviceName?: string | null;
     value: number;
 }
 
@@ -431,43 +431,43 @@ export interface Doc_tenantLogs {
     _id: Id<"tenantLogs">;
     _creationTime: number;
     createdAt: number;
-    fields?: Record<string, unknown>;
-    functionPath?: string;
+    fields?: Record<string, unknown> | null;
+    functionPath?: string | null;
     level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal";
     message: string;
     organizationId: Id<"organizations">;
     scriptName: string;
-    shardKey?: string;
-    spanId?: string;
-    traceId?: string;
-    userId?: string;
+    shardKey?: string | null;
+    spanId?: string | null;
+    traceId?: string | null;
+    userId?: string | null;
 }
 
 export interface Doc_observations {
     _id: Id<"observations">;
     _creationTime: number;
-    attributes?: Record<string, string>;
-    completionTokens?: number;
+    attributes?: Record<string, string> | null;
+    completionTokens?: number | null;
     createdAt: number;
-    deploymentId?: Id<"deployments">;
+    deploymentId?: Id<"deployments"> | null;
     durationMs: number;
     endedAt: number;
-    evaluations?: Array<{ label?: string; name: string; score: number }>;
-    functionPath?: string;
-    input?: string;
+    evaluations?: Array<{ label?: string; name: string; score: number }> | null;
+    functionPath?: string | null;
+    input?: string | null;
     kind: "container" | "generation" | "worker";
     level: "error" | "info";
-    model?: string;
+    model?: string | null;
     name: string;
     organizationId: Id<"organizations">;
-    output?: string;
-    parentSpanId?: string;
-    promptTokens?: number;
-    serviceName?: string;
-    sessionId?: string;
+    output?: string | null;
+    parentSpanId?: string | null;
+    promptTokens?: number | null;
+    serviceName?: string | null;
+    sessionId?: string | null;
     spanId: string;
     startedAt: number;
-    statusMessage?: string;
+    statusMessage?: string | null;
     traceId: string;
 }
 
@@ -477,13 +477,13 @@ export interface Doc_issues {
     count: number;
     createdAt: number;
     culprit: string;
-    deploymentId?: Id<"deployments">;
+    deploymentId?: Id<"deployments"> | null;
     firstSeen: number;
     hash: string;
     lastSeen: number;
     organizationId: Id<"organizations">;
     sampleMessage: string;
-    sampleTraceId?: string;
+    sampleTraceId?: string | null;
     status: "open" | "resolved";
     title: string;
     updatedAt: number;
@@ -492,15 +492,15 @@ export interface Doc_issues {
 export interface Doc_incidents {
     _id: Id<"incidents">;
     _creationTime: number;
-    closedAt?: number;
-    container?: string;
+    closedAt?: number | null;
+    container?: string | null;
     count: number;
     createdAt: number;
-    deploymentId?: Id<"deployments">;
+    deploymentId?: Id<"deployments"> | null;
     hash: string;
-    instance?: string;
-    investigatedAt?: number;
-    investigation?: { by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string };
+    instance?: string | null;
+    investigatedAt?: number | null;
+    investigation?: { by: "deterministic" | "llm"; confidence: "high" | "medium" | "low"; evidenceNote: string; relatedTraceIds: Array<string>; rootCauseHypothesis: string; suggestedRemediation: string; summary: string } | null;
     kind: "crash_loop" | "oom" | "error_spike";
     lastSeen: number;
     openedAt: number;
@@ -513,30 +513,30 @@ export interface Doc_incidents {
 export interface Doc_alertRules {
     _id: Id<"alertRules">;
     _creationTime: number;
-    baselineWindows?: number;
+    baselineWindows?: number | null;
     channel: "email" | "webhook" | "slack" | "pagerduty";
-    comparator?: "gt" | "lt";
+    comparator?: "gt" | "lt" | null;
     createdAt: number;
     destination: string;
     enabled: boolean;
-    functionPath?: string;
-    lastTestedAt?: number;
-    meter?: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten";
-    mode?: "threshold" | "deviation";
+    functionPath?: string | null;
+    lastTestedAt?: number | null;
+    meter?: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten" | null;
+    mode?: "threshold" | "deviation" | null;
     name: string;
     organizationId: Id<"organizations">;
-    projectId?: Id<"projects">;
+    projectId?: Id<"projects"> | null;
     target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly" | "usage_threshold";
     threshold: number;
     updatedAt: number;
-    windowMinutes?: number;
+    windowMinutes?: number | null;
 }
 
 export interface Doc_alertRuleState {
     _id: Id<"alertRuleState">;
     _creationTime: number;
     createdAt: number;
-    firedPeriod?: number;
+    firedPeriod?: number | null;
     firing: boolean;
     lastEvaluatedAt: number;
     lastValue: number;
@@ -551,7 +551,7 @@ export interface Doc_alerts {
     body: string;
     channel: "email" | "webhook" | "slack" | "pagerduty";
     createdAt: number;
-    deliveredAt?: number;
+    deliveredAt?: number | null;
     destination: string;
     hash: string;
     organizationId: Id<"organizations">;
@@ -582,19 +582,19 @@ export interface Doc_edgeRules {
     _id: Id<"edgeRules">;
     _creationTime: number;
     applied: boolean;
-    appliedAt?: number;
-    armed?: boolean;
+    appliedAt?: number | null;
+    armed?: boolean | null;
     attempts: number;
-    cloudflareRuleId?: string;
+    cloudflareRuleId?: string | null;
     createdAt: number;
-    engaged?: boolean;
+    engaged?: boolean | null;
     targets: Array<{ hostname: string; projectId: string; rowId: string; source: "deployment" | "domain" }>;
     kind: "ddos_l7" | "rate_limit";
-    lastError?: string;
+    lastError?: string | null;
     organizationId: Id<"organizations">;
-    periodSeconds?: 10 | 60;
-    requestsPerPeriod?: number;
-    sensitivity?: "default" | "medium" | "low";
+    periodSeconds?: 10 | 60 | null;
+    requestsPerPeriod?: number | null;
+    sensitivity?: "default" | "medium" | "low" | null;
     status: "pending" | "applied" | "removed" | "failed" | "unavailable";
     updatedAt: number;
 }
@@ -616,11 +616,11 @@ export interface Doc_uptimeChecks {
     _creationTime: number;
     createdAt: number;
     deploymentId: Id<"deployments">;
-    error?: string;
-    latencyMs?: number;
+    error?: string | null;
+    latencyMs?: number | null;
     ok: boolean;
     organizationId: Id<"organizations">;
-    statusCode?: number;
+    statusCode?: number | null;
 }
 
 export interface Doc_uptimeState {
@@ -655,8 +655,8 @@ export interface Doc_notificationChannels {
     kind: "discord" | "slack" | "telegram" | "webhook";
     name: string;
     organizationId: Id<"organizations">;
-    secretCiphertext?: string;
-    secretIv?: string;
+    secretCiphertext?: string | null;
+    secretIv?: string | null;
     updatedAt: number;
 }
 
@@ -667,8 +667,8 @@ export interface Doc_notificationDeliveries {
     body: string;
     channelId: Id<"notificationChannels">;
     createdAt: number;
-    deliveredAt?: number;
-    error?: string;
+    deliveredAt?: number | null;
+    error?: string | null;
     event: "deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired" | "test";
     kind: "discord" | "slack" | "telegram" | "webhook";
     nextAttemptAt: number;
@@ -690,16 +690,16 @@ export interface Doc_overageDebits {
 export interface Doc_platformUsage {
     _id: Id<"platformUsage">;
     _creationTime: number;
-    billable?: boolean;
+    billable?: boolean | null;
     createdAt: number;
-    deploymentId?: Id<"deployments">;
+    deploymentId?: Id<"deployments"> | null;
     kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths";
     organizationId: Id<"organizations">;
     periodStart: number;
-    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
     quantity: number;
-    windowEnd?: number;
-    windowStart?: number;
+    windowEnd?: number | null;
+    windowStart?: number | null;
 }
 
 export interface Doc_usageCheckpoints {
@@ -714,14 +714,14 @@ export interface Doc_usageCheckpoints {
 export interface Doc_usageSourceStatus {
     _id: Id<"usageSourceStatus">;
     _creationTime: number;
-    failingSince?: number;
-    gapNote?: string;
-    gapRecordedAt?: number;
-    lastError?: string;
+    failingSince?: number | null;
+    gapNote?: string | null;
+    gapRecordedAt?: number | null;
+    lastError?: string | null;
     scopeKey: string;
     target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
-    unattributedQuantity?: number;
-    unavailableReason?: string;
+    unattributedQuantity?: number | null;
+    unavailableReason?: string | null;
     updatedAt: number;
 }
 
@@ -729,7 +729,7 @@ export interface Doc_payment_customers {
     _id: Id<"payment_customers">;
     _creationTime: number;
     createdAt: number;
-    email?: string;
+    email?: string | null;
     provider: string;
     providerCustomerId: string;
     referenceId: string;
@@ -756,7 +756,7 @@ export interface Doc_payment_sessions {
     referenceId: string;
     refundedMinor: number;
     state: string;
-    subscriptionId?: string;
+    subscriptionId?: string | null;
     updatedAt: number;
 }
 
@@ -765,11 +765,11 @@ export interface Doc_payment_subscriptions {
     _creationTime: number;
     cancelAtPeriodEnd: boolean;
     createdAt: number;
-    currentPeriodEnd?: number;
-    currentPeriodStart?: number;
-    lastEventAt?: number;
+    currentPeriodEnd?: number | null;
+    currentPeriodStart?: number | null;
+    lastEventAt?: number | null;
     priceId: string;
-    priceIds?: Array<string>;
+    priceIds?: Array<string> | null;
     provider: string;
     providerSubscriptionId: string;
     quantity: number;
@@ -784,7 +784,7 @@ export interface Doc_payment_usageEvents {
     createdAt: number;
     featureId: string;
     idempotencyKey: string;
-    mode?: string;
+    mode?: string | null;
     provider: string;
     quantity: number;
     referenceId: string;
@@ -795,8 +795,8 @@ export interface Doc_catalogInstalls {
     _id: Id<"catalogInstalls">;
     _creationTime: number;
     createdAt: number;
-    activeKey?: string;
-    deploymentId?: string;
+    activeKey?: string | null;
+    deploymentId?: string | null;
     installedBy: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;

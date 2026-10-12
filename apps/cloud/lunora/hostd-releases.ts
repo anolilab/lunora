@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import type { Doc as Document_ } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, v } from "./_generated/server.js";
 import { boundedString, LIMITS } from "./validators";
 
@@ -13,15 +14,7 @@ import { boundedString, LIMITS } from "./validators";
 /** A verified envelope is at most a few KiB; this bounds a row, not a release. */
 const MAX_ENVELOPE = 65_536;
 
-interface ReleaseRow {
-    _id: string;
-    channel?: "canary" | "stable" | null;
-    createdAt: number;
-    envelope: string;
-    keyId: string;
-    releaseId: string;
-    versions: { caddy: string; celld: string; hostd: string };
-}
+type ReleaseRow = Document_<"hostdReleases">;
 
 /** A stored release, without its envelope. */
 export interface HostdReleaseView {

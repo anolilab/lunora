@@ -33,7 +33,7 @@ export const list = query.query(async ({ ctx: context }): Promise<CellSummary[]>
     return page.map((cell) => {
         return {
             _id: cell._id,
-            jurisdiction: cell.jurisdiction,
+            jurisdiction: cell.jurisdiction ?? undefined,
             name: cell.name,
             status: cell.status,
         };

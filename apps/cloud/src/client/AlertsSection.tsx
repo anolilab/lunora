@@ -123,7 +123,7 @@ const RuleCondition = ({ progress, rule }: { progress: UsageProgress[number] | u
 
     return (
         <>
-            {rule.target} {comparatorGlyph(rule.target, rule.comparator)} {rule.threshold}
+            {rule.target} {comparatorGlyph(rule.target, rule.comparator ?? undefined)} {rule.threshold}
             {rule.windowMinutes ? ` / ${String(rule.windowMinutes)}m` : ""}
         </>
     );

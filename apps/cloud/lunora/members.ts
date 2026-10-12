@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc as Document_ } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRoleForUser, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
@@ -25,15 +25,7 @@ export const roleForUser = internalQuery
         return member.role;
     });
 
-interface MemberRow {
-    _id: Id<"members">;
-    createdAt: number;
-    organizationId: Id<"organizations">;
-    // Inlined literal union (not the MemberRole alias) so codegen serializes the
-    // return type without an unresolved type reference.
-    role: "admin" | "member" | "owner" | "viewer";
-    userId: string;
-}
+type MemberRow = Document_<"members">;
 
 /** List an organization's members. Any member may view the roster. */
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<MemberRow[]> => {
@@ -53,7 +45,7 @@ export const remove = mutation
 
         await assertRowInOrg(context, id, organizationId, "member");
 
-        const target = (await context.db.get(id)) as MemberRow | null;
+        const target = await context.db.get(id);
 
         // Removing an owner is an owner's decision, and the org must keep one owner.
         if (target?.role === "owner") {
@@ -109,7 +101,7 @@ export const setRole = mutation
     })
     .mutation(async ({ ctx: context, args: { id, organizationId, role: newRole } }): Promise<void> => {
         const caller = await assertMember(context, organizationId, ["owner"]);
-        const target = (await context.db.get(id)) as MemberRow | null;
+        const target = await context.db.get(id);
 
         if (target?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "member not found in this organization");

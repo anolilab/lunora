@@ -96,7 +96,7 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                                                     {build.advisoryNotes} {build.advisoryNotes === 1 ? "note" : "notes"}
                                                 </StatusBadge>
                                             ) : null}
-                                            {build.skipReason === undefined ? null : (
+                                            {build.skipReason == null ? null : (
                                                 <span className="text-muted-foreground truncate text-xs" title={build.skipReason}>
                                                     {build.skipReason}
                                                 </span>

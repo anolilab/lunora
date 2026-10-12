@@ -39,13 +39,13 @@ export const list = query
         return page.map((row) => {
             return {
                 _id: row._id,
-                capability: row.capability,
+                capability: row.capability ?? undefined,
                 createdAt: row.createdAt,
-                lastUsedAt: row.lastUsedAt,
+                lastUsedAt: row.lastUsedAt ?? undefined,
                 name: row.name,
                 organizationId: row.organizationId,
-                projectId: row.projectId,
-                revokedAt: row.revokedAt,
+                projectId: row.projectId ?? undefined,
+                revokedAt: row.revokedAt ?? undefined,
                 type: row.type,
             };
         });
@@ -261,7 +261,7 @@ export const verify = mutation
 
             await context.db.patch(row._id, { lastUsedAt: context.now });
 
-            return { deployKeyId: row._id, organizationId: row.organizationId, projectId: row.projectId, type: row.type };
+            return { deployKeyId: row._id, organizationId: row.organizationId, projectId: row.projectId ?? undefined, type: row.type };
         },
     );
 
