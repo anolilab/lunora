@@ -64,6 +64,8 @@
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/server": "1.0.0-alpha.191",
         "@lunora/values": "1.0.0-alpha.62",
@@ -73,7 +75,8 @@
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
         "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
