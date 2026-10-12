@@ -30,7 +30,19 @@ const database = controlPlaneDatabase(env.DB);
 const context = (): MutationCtx => {
     const facades = database as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
 
-    for (const table of ["auditLog", "members", "organizations"]) {
+    // Every table the erasure walks: its own rows, plus the ones a user authored (`AUTHORED_COLUMNS` in lunora/account.ts).
+    for (const table of [
+        "auditLog",
+        "members",
+        "organizations",
+        "deployments",
+        "catalogInstalls",
+        "halts",
+        "boxEnrolments",
+        "cloudflareAccounts",
+        "anomalySilences",
+        "invitations",
+    ]) {
         facades[table] = bindTableFacade(database as never, table);
     }
 
