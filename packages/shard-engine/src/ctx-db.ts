@@ -4093,6 +4093,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return { applied: false, doc: located.row };
             }
 
+            // `.dropStalePatches()` would make `patch` drop this write as a no-op;
+            // decided here so the result says it did not apply.
+            if (isStalePatch(tableName, id, args.patch, located.row)) {
+                onStalePatchDropped?.({ fields: Object.keys(stripReservedPatchFields(args.patch)), id, table: tableName });
+
+                return { applied: false, doc: located.row };
+            }
+
             await writer.patch(id, args.patch, tableName);
 
             // eslint-disable-next-line unicorn/no-null -- the row can only be gone if an after-update trigger deleted it
