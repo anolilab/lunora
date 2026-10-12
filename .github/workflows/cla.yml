@@ -1,5 +1,7 @@
-"name": "Check CLA in PR description"
+"name": "CLA"
 
+# The check is the shared `cla` workflow: it reads the event payload and checks
+# nothing out. Bots and collaborators with write access are exempt.
 "on": # yamllint disable-line rule:truthy
     "pull_request_target":
         "types":
@@ -7,63 +9,20 @@
             - "reopened"
             - "synchronize"
             - "edited"
+    # So the check can be required in a merge queue; the workflow skips it there.
+    "merge_group": # yamllint disable-line rule:empty-values
 
-"permissions":
-    "contents": "read"
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+    "cancel-in-progress": true
+
+"permissions": {}
 
 "jobs":
-    "check-cla":
+    "cla":
         "permissions":
+            "contents": "read"
             "pull-requests": "write" # to post the sticky comment with instructions
-        "runs-on": "ubuntu-latest"
-        "timeout-minutes": 10
-        "name": "Check CLA in PR description"
-        # Bot PRs (dependabot/renovate) need no CLA.
-        "if": "${{ (startsWith(github.head_ref, 'dependabot') || startsWith(github.head_ref, 'renovate')) == false }}"
-        "steps":
-            - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
-              "with":
-                  "egress-policy": "audit"
-
-            # pull_request_target runs against the base ref; check out the base
-            # repo's scripts (never the PR's), which is the safe default.
-            # persist-credentials defaults to false in the composite.
-            - "name": "Checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
-
-            - "name": "Validate PR has CLA confirmation"
-              "id": "check_cla"
-              "env":
-                  "PR_DESCRIPTION": "${{ github.event.pull_request.body }}"
-                  "PR_AUTHOR": "${{ github.event.pull_request.user.login }}"
-                  "ORGANIZATION": "${{ github.repository_owner }}"
-                  "GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
-              "run": "node ./scripts/check-cla.js"
-
-            - "name": "Comment with CLA instructions"
-              "if": "failure() && steps.check_cla.outcome == 'failure'"
-              "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
-              "with":
-                  "header": "cla-check"
-                  "message": |
-                      Hey there and thank you for your contribution! 👋🏼
-
-                      Before we can merge this pull request, we need you to confirm the
-                      Contributor License Agreement (CLA). Please add the following line
-                      to your **pull request description** and we'll re-run the check
-                      automatically:
-
-                      > By submitting this pull request, I confirm that my contribution is made under the terms of the project's license and that you can use, modify, copy, and redistribute this contribution under those terms.
-
-            - "name": "Clear CLA comment"
-              "if": "success()"
-              "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
-              # Clearing a stale comment must never fail an already-passing check —
-              # an unreachable comment API would turn a green CLA check red. The
-              # failure path above needs no guard; the job is red by then anyway.
-              "continue-on-error": true
-              "with":
-                  "header": "cla-check"
-                  "message": |
-                      Thank you for confirming the Contributor License Agreement! 🙏
+        "uses": "anolilab/workflows/.github/workflows/cla.yml@fb7a881926480723026a1deaa587ceaaaee7bf12" # v24.2.0
+        "with":
+            "target-repo": "anolilab/lunora"
