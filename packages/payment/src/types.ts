@@ -15,7 +15,8 @@ export type CurrencyCode = string;
  * Money as integer minor units + currency. Always carry the two together.
  *
  * `minorUnits` is a `bigint`, which is **not** JSON-serializable — cross the RPC/wire boundary
- * with the `toMoneyJSON` / `fromMoneyJSON` helpers (see `./money`).
+ * with the `toMoneyJSON` / `fromMoneyJSON` helpers (see `./money`). The database store persists it
+ * as a `number` column and rejects an amount outside the safe-integer range (±(2^53 − 1)).
  */
 export interface Money {
     readonly currency: CurrencyCode;
@@ -452,5 +453,5 @@ export interface WebhookAction {
  */
 export interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled";
+    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
 }

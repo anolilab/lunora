@@ -11,7 +11,6 @@ export { entitlementsForReference, featureNames, hasActivePrice, resolveEntitlem
 export type { PaymentErrorCode } from "./errors";
 export { LunoraPaymentError } from "./errors";
 export { idempotencyKey } from "./idempotency";
-export { default as migrateLegacyPaymentTables } from "./migrate-legacy-tables";
 export type { MoneyJSON } from "./money";
 export {
     addMoney,
