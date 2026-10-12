@@ -14,6 +14,7 @@ import type { PrivacyRequestRow, PrivacyRequestsSource } from "./privacy-request
 import { isPrivacyRequestOverdue } from "./privacy-requests-source";
 
 /** Query key shared by the list read and the invalidation after a retry. */
+// ponytail: one panel per QueryClient. Key by source when a host mounts several panels under one client.
 const QUERY_KEY = ["studio", "privacy-requests"] as const;
 
 /** The rows plus the clock read when they were fetched, so overdue is pure at render. */
@@ -108,6 +109,8 @@ const PrivacyRequestsView = ({ source }: PrivacyRequestsViewProps): ReactElement
 
     const list = useQuery<PrivacySnapshot>({
         queryKey: QUERY_KEY,
+        // Refetch so `asOf` moves on and a deadline that passes while the page is open shows as overdue.
+        refetchInterval: 60_000,
         queryFn: async () => {
             return { asOf: Date.now(), requests: await source.listOpenPrivacyRequests() };
         },
