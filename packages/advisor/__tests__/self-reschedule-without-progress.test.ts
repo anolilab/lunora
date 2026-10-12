@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorCallEdge, AdvisorQueryRead, AdvisorTableWrite, LintContext } from "../src";
+import type { AdvisorCallEdge, AdvisorQueryRead, AdvisorRowEffect, AdvisorTableWrite, LintContext } from "../src";
 import { fromServerSchema } from "../src";
 import dispatchCycle from "../src/lints/static/dispatch-cycle";
 import selfRescheduleWithoutProgress from "../src/lints/static/self-reschedule-without-progress";
@@ -121,5 +121,13 @@ describe("self_reschedule_without_progress", () => {
         expect.assertions(1);
 
         expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ target: "jobs_other:tick" })] }))).toHaveLength(0);
+    });
+
+    it("says nothing when a helper in another file deletes the rows the function reads", () => {
+        expect.assertions(1);
+
+        const effect: AdvisorRowEffect = { exportName: "tick", file: "jobs/sweep", method: "delete", table: "jobs" };
+
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()], rowEffects: [effect] }))).toHaveLength(0);
     });
 });

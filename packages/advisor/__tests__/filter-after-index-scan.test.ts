@@ -72,4 +72,13 @@ describe("filter_after_index_scan", () => {
 
         expect(filterAfterIndexScan.run(context([read({ index: { bounds: ["eq"], name: "by_nothing" } })]))).toHaveLength(0);
     });
+
+    it("leaves a server-driven open-range sweep to unbounded_collect_on_open_range, so the read gets one finding", () => {
+        expect.assertions(1);
+
+        // An internal open range with an uncovered filter: the sweep rule reports it, naming the same field.
+        const sweep = read({ filterFields: ["expiresAt"], index: { bounds: [], name: "by_owner" }, terminal: "collect", visibility: "internal" });
+
+        expect(filterAfterIndexScan.run(context([sweep]))).toHaveLength(0);
+    });
 });

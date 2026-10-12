@@ -1,7 +1,7 @@
 import { callSiteCallers } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { functionKey, readRowsChanged, rowChangingWriteKeys } from "../helpers";
+import { functionKey, readRowsChanged, rowChangesOf } from "../helpers";
 
 /** A delay under this many milliseconds re-runs the function before a previous run's work could have settled. */
 const SHORT_DELAY_MS = 1000;
@@ -18,7 +18,8 @@ const CURSOR_KEY = /^(?:continue|next|page)?_?cursor$/iu;
  * start the same work again, as often as the delay allows.
  *
  * A finding is suppressed when the dispatch carries a cursor arg key (see `CURSOR_KEY`),
- * when the function removes a row it reads in its own file, when it has no reads at all
+ * when the function removes a row it reads, itself or through a function it calls (a
+ * delete or replace, or a patch of an index field), when it has no reads at all
  * (nothing is re-read), when it calls out to another function (`ctx.run*`, where the
  * progress may happen and this rule cannot see it), and when the args are not an object
  * literal (no evidence either way, so no finding).
@@ -44,7 +45,7 @@ const selfRescheduleWithoutProgress: Lint = {
         }
 
         const { callEdges } = context;
-        const rowChanged = rowChangingWriteKeys(context.tableWrites);
+        const changes = rowChangesOf(context.tableWrites, context.rowEffects);
         const findings = [];
 
         for (const edge of callEdges) {
@@ -78,7 +79,7 @@ const selfRescheduleWithoutProgress: Lint = {
                 (read) => read.file === edge.file && read.table !== "" && callSiteCallers(read.scope).includes(name),
             );
 
-            if (selected.length === 0 || selected.some((read) => readRowsChanged(rowChanged, read))) {
+            if (selected.length === 0 || selected.some((read) => readRowsChanged(changes, read))) {
                 continue;
             }
 

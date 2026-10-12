@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorCallEdge, AdvisorQueryRead, AdvisorTableWrite, LintContext } from "../src";
+import type { AdvisorCallEdge, AdvisorQueryRead, AdvisorRowEffect, AdvisorTableWrite, LintContext } from "../src";
 import { fromServerSchema } from "../src";
 import unboundedCollectOnOpenRange from "../src/lints/static/unbounded-collect-on-open-range";
 
@@ -107,5 +107,45 @@ describe("unbounded_collect_on_open_range", () => {
         expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ index: { name: "by_expiry" } })] }))).toHaveLength(0);
         expect(unboundedCollectOnOpenRange.run(context({ queries: [read({ index: undefined })] }))).toHaveLength(0);
         expect(unboundedCollectOnOpenRange.run(context())).toHaveLength(0);
+    });
+
+    it("holds its verdict when a helper in another file deletes the rows the function reads", () => {
+        expect.assertions(1);
+
+        // The export calls a helper in `lib/purge.ts` that deletes; the feeder reports that as an effect of the export.
+        const effect: AdvisorRowEffect = { exportName: "expire", file: "sweep", method: "delete", table: "sessions" };
+
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read()], rowEffects: [effect] }))).toHaveLength(0);
+    });
+
+    it("counts a patch as progress only when it writes an index field of the range", () => {
+        expect.assertions(3);
+
+        const patch = (fields: string[] | undefined): AdvisorTableWrite => {
+            return {
+                fields,
+                file: "sweep",
+                line: 9,
+                method: "patch",
+                scope: { kind: "export", name: "expire" },
+                table: "sessions",
+            };
+        };
+
+        // `expiresAt` is the range's index field: setting it moves the row out of the range.
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read()], tableWrites: [patch(["expiresAt"])] }))).toHaveLength(0);
+        // Setting an unrelated field leaves the row in range, so the sweep still re-reads it.
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read()], tableWrites: [patch(["title"])] }))).toHaveLength(1);
+        // Fields the feeder could not read are treated as a possible move.
+        expect(unboundedCollectOnOpenRange.run(context({ queries: [read()], tableWrites: [patch(undefined)] }))).toHaveLength(0);
+    });
+
+    it("names the filtered fields the index does not cover in the one finding for the read", () => {
+        expect.assertions(2);
+
+        const findings = unboundedCollectOnOpenRange.run(context({ queries: [read({ filterFields: ["expiresAt", "ownerId"], hasFilter: true })] }));
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.detail).toContain('"ownerId", which the index does not cover');
     });
 });

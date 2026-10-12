@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteFields, queryReadLocation } from "../helpers";
+import { callSiteFields, indexFieldsLookup, queryReadLocation } from "../helpers";
+import { openRangeSweepReads, uncoveredFilterFields } from "../sweeps";
 
 /**
  * Flags a `.withIndex(…)` read whose `.filter(…)` tests a field the index does not
@@ -15,9 +16,9 @@ import { callSiteFields, queryReadLocation } from "../helpers";
  *
  * Reported at INFO: a filter is sometimes the right tool, for a predicate an index
  * cannot express (a comparison on a second column, a computed value). The finding
- * asks the author to decide, rather than assuming the index is wrong. A read with an
- * open range can also be reported by `unbounded_collect_on_open_range`, which asks
- * for a bound instead. The two findings have different fixes, so both stay.
+ * asks the author to decide, rather than assuming the index is wrong. A read that is
+ * a server-driven open-range sweep is left to `unbounded_collect_on_open_range`, which
+ * reports the same fields, so each read gets one finding.
  *
  * Runs only when the codegen feeder supplied reads (`context.queries` present).
  */
@@ -32,29 +33,23 @@ const filterAfterIndexScan: Lint = {
         "Add the filtered field to the index the read uses, so the range covers it, or confirm the predicate cannot be expressed as an index range and keep the filter.",
     run: (context) => {
         const findings = [];
-
-        // The declared btree indexes of each table, built once rather than searched per read.
-        const indexesByTable = new Map(
-            context.schema.tables.map((table) => [
-                table.name,
-                new Map(table.indexes.filter((index) => index.kind === "index").map((index) => [index.name, index.fields])),
-            ]),
-        );
+        const indexFieldsOf = indexFieldsLookup(context.schema);
+        // A read that is a sweep is reported by `unbounded_collect_on_open_range`, which names these fields too.
+        const sweeps = new Set(openRangeSweepReads(context));
 
         for (const read of context.queries ?? []) {
-            if (!read.hasFilter || read.table === "" || read.index?.name === undefined || read.filterFields === undefined) {
+            if (!read.hasFilter || read.table === "" || read.index?.name === undefined || read.filterFields === undefined || sweeps.has(read)) {
                 continue;
             }
 
-            // An index this schema does not declare is `index_references_unknown_field`'s business, not this rule's.
-            const fields = indexesByTable.get(read.table)?.get(read.index.name);
+            const fields = indexFieldsOf(read);
 
+            // An index this schema does not declare is `index_references_unknown_field`'s business, not this rule's.
             if (fields === undefined) {
                 continue;
             }
 
-            const covered = new Set(fields);
-            const uncovered = read.filterFields.filter((field) => field !== "_id" && !covered.has(field));
+            const uncovered = uncoveredFilterFields(read, fields);
 
             if (uncovered.length === 0) {
                 continue;

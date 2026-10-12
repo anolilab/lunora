@@ -71,9 +71,40 @@ const UNREADABLE_TABLE = "";
 
 /** One table write: the method, and the tables it targets — `[UNREADABLE_TABLE]` when they cannot be read. */
 interface Write {
+    /** See {@link TableWriteIR.fields}. */
+    fields?: string[];
     method: string;
     tables: ReadonlyArray<string>;
 }
+
+/**
+ * The fields a `patch` / `patchMany` writes: the keys of its object-literal
+ * argument (the second). `undefined` for any other method, and when the argument
+ * is not an object literal or spreads one, since then the keys cannot be read.
+ */
+const patchedFieldsOf = (call: CallExpression, method: string): string[] | undefined => {
+    if (method !== "patch" && method !== "patchMany") {
+        return undefined;
+    }
+
+    const patch = call.getArguments()[1];
+
+    if (patch === undefined || !Node.isObjectLiteralExpression(patch)) {
+        return undefined;
+    }
+
+    const keys: string[] = [];
+
+    for (const property of patch.getProperties()) {
+        if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
+            return undefined;
+        }
+
+        keys.push(property.getName());
+    }
+
+    return keys;
+};
 
 /** The tables a `ctx.db.<method>(first, …)` write names, or `undefined` when `method` is not a write. */
 const databaseWrite = (method: string, first: TsNode | undefined): Write | undefined => {
@@ -90,6 +121,10 @@ const databaseWrite = (method: string, first: TsNode | undefined): Write | undef
     return undefined;
 };
 
+/** `write` with the fields its call writes, or `undefined` when the call is not a table write. */
+const withFields = (write: Write | undefined, call: CallExpression): Write | undefined =>
+    write === undefined ? undefined : { ...write, fields: patchedFieldsOf(call, write.method) };
+
 /** The {@link Write} one call makes, or `undefined` when it is not a table write. */
 const writeOf = (call: CallExpression): Write | undefined => {
     const callee = call.getExpression();
@@ -102,12 +137,12 @@ const writeOf = (call: CallExpression): Write | undefined => {
     const receiver = callee.getExpression();
 
     if (isDatabaseAccessor(receiver)) {
-        return databaseWrite(method, call.getArguments()[0]);
+        return withFields(databaseWrite(method, call.getArguments()[0]), call);
     }
 
     // `ctx.db.<table>.<method>(…)` — the facade puts the table in the receiver.
     if (FACADE_WRITES.has(method) && Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression())) {
-        return { method, tables: [receiver.getName()] };
+        return withFields({ method, tables: [receiver.getName()] }, call);
     }
 
     return undefined;
@@ -133,7 +168,7 @@ const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWr
         const line = call.getStartLineNumber();
 
         return write.tables.map((table) => {
-            return { file, line, method: write.method, scope, table };
+            return { ...(write.fields === undefined ? {} : { fields: write.fields }), file, line, method: write.method, scope, table };
         });
     });
 

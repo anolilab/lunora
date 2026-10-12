@@ -474,6 +474,7 @@ interface LintSchemaOptions {
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
     relationLoads?: ReadonlyArray<RelationLoadIR>;
     rlsProcedures?: ReadonlyArray<RlsProcedureIR>;
+    rowEffects?: ReadonlyArray<RowEffectIR>;
     schema: SchemaIR;
     secretLiterals?: ReadonlyArray<SecretLiteralIR>;
     shapes?: ReadonlyArray<ShapeIR>;
@@ -2868,6 +2869,18 @@ interface RelationLoadIR {
 }
 ```
 
+### `RowEffectIR` (interface)
+
+```ts
+interface RowEffectIR {
+    exportName: string;
+    fields?: string[];
+    file: string;
+    method: string;
+    table: string;
+}
+```
+
 ### `SchemaPath` (type)
 
 ```ts
@@ -2972,6 +2985,7 @@ interface StorageUploadIR {
 
 ```ts
 interface TableWriteIR {
+    fields?: string[];
     file: string;
     line: number;
     method: string;

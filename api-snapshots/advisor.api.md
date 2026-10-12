@@ -689,6 +689,18 @@ interface AdvisorRlsProcedure {
 }
 ```
 
+### `AdvisorRowEffect` (interface)
+
+```ts
+interface AdvisorRowEffect {
+    exportName: string;
+    fields?: string[];
+    file: string;
+    method: string;
+    table: string;
+}
+```
+
 ### `AdvisorSchema` (interface)
 
 ```ts
@@ -827,6 +839,7 @@ interface AdvisorTableScan {
 
 ```ts
 interface AdvisorTableWrite extends AdvisorInsertWrite {
+    fields?: string[];
     method: string;
 }
 ```
@@ -1074,6 +1087,7 @@ interface LintContext {
     rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
     relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
     rlsProcedures?: ReadonlyArray<AdvisorRlsProcedure>;
+    rowEffects?: ReadonlyArray<AdvisorRowEffect>;
     schema: AdvisorSchema;
     secretLiterals?: ReadonlyArray<AdvisorSecretLiteral>;
     shapes?: ReadonlyArray<AdvisorShape>;
