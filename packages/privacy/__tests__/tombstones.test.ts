@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import type { TombstonePort } from "../src/tombstones";
-import { assertSubjectId, subjectsToReerase, tombstoneKeyOf } from "../src/tombstones";
+import { subjectsToReerase, tombstoneKeyOf } from "../src/tombstones";
 
 const HEX_DIGEST = /^[0-9a-f]{64}$/u;
 const SECRET = "test-tombstone-secret";
@@ -49,16 +49,8 @@ describe(subjectsToReerase, () => {
     });
 });
 
-describe(assertSubjectId, () => {
-    it("refuses an empty subject id", () => {
-        expect(() => {
-            assertSubjectId("  ");
-        }).toThrow(LunoraError);
-    });
-
-    it("accepts a real id", () => {
-        expect(() => {
-            assertSubjectId("u1");
-        }).not.toThrow();
+describe("tombstoneKeyOf on an empty id", () => {
+    it("refuses an empty subject id rather than keying every empty id alike", () => {
+        expect(() => tombstoneKeyOf("  ", SECRET)).toThrow(LunoraError);
     });
 });

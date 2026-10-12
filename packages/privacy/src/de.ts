@@ -88,4 +88,4 @@ const legalClaimsHold: RetentionRule = {
     years: 3,
 };
 
-export { DEFAULT_VOUCHER_YEARS, germany, type GermanyOptions, legalClaimsHold };
+export { germany, type GermanyOptions, legalClaimsHold };

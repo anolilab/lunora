@@ -30,7 +30,7 @@ export const tasksData = defineDataset("tasks", {
 });
 ```
 
-Then bind the datasets, the presets and the ports into one object. The app supplies the data, storage and request ports, and the clock. The storage port must key a request's files under `<requestId>/`, and lists and deletes them as well as writing them.
+Then bind the datasets, the presets and the ports into one object. The app supplies the data, storage and request ports, the tombstone store, and the clock. The storage port must key a request's files under `<requestId>/`, and lists and deletes them as well as writing them. Keep the config in a const of its own: the workflow dispatcher reads the same object.
 
 ```ts
 // lunora/privacy.ts
@@ -41,27 +41,53 @@ import { germany } from "@lunora/privacy/de";
 import { tasksData } from "./tasks/privacy";
 
 // The settings are fixed; the ports depend on the call, because `ctx.db` exists only inside one.
-export const privacyFor = definePrivacy({
+export const privacyConfig = {
     datasets: [tasksData],
     presets: [eu(), germany()],
     // Tables that hold a user's data but are not exported, each with the reason a reviewer reads.
     exclude: { featureFlags: "Operator configuration; contains no personal data" },
-    // Derives the tombstone keys. Required once the ports pass `tombstones`; keep it in a secret binding.
+    // Derives the tombstone keys. Every erasure needs it; keep it in a secret binding.
     tombstoneSecret: process.env.PRIVACY_TOMBSTONE_SECRET,
-    ports: (ctx) => ({
-        // Your ports: the data, the files, the request store, and the clock.
-        data: dataPortOver(ctx),
-        files: filePortOver(ctx),
-        store: requestStoreOver(ctx),
-        now: () => new Date(),
-        newId: () => crypto.randomUUID(),
-    }),
-});
+    ports: (ctx) =>
+        "db" in ctx
+            ? {
+                  // Your ports: the data, the files, the request store, the archive, the tombstones, and the clock.
+                  data: dataPortOver(ctx),
+                  files: filePortOver(ctx),
+                  store: requestStoreOver(ctx),
+                  archive: archivePortOver(ctx),
+                  tombstones: tombstonePortOutsideTheDatabase(ctx),
+                  now: () => new Date(),
+                  newId: () => crypto.randomUUID(),
+              }
+            : // A workflow step has no `ctx.db`: every port call goes through the internal `privacyPort` mutation.
+              remotePorts((call) => ctx.run(internal.privacy.privacyPort, call)),
+};
+
+export const privacyFor = definePrivacy(privacyConfig);
 ```
 
-Call it from a mutation with that mutation's context: `await privacyFor(ctx).requestExport()`. The subject comes from the context's authenticated identity (the `identity` port), never from an argument, so a caller cannot act on another subject's data.
+Call it with the caller's context, and with the caller's identity when the caller is the data subject: `await privacyFor(ctx, identity).requestExport()`. Resolve `identity` (`{ subjectId, sessionAgeMs }`) from the session, never from an argument, so a caller cannot act on another subject's data. An operator call, a cron or a workflow passes no identity, and the subject methods (`requestExport`, `requestErasure`, `cancelRequest`, `downloadUrl`, `myRequests`) refuse such a call with `UNAUTHENTICATED`.
 
-Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically. Each handler binds the ports from its own context, since a workflow step has no `ctx.db`: it reaches the data through `ctx.run`.
+The request store implements the package's own `privacy_requests` table. `fromRequestRow`, `toRequestRow`, `toRequestPatch` and `OPEN_STATUSES` map its rows, so the column layout is not written again in the app. The patch includes `subjectId`, which a completed erasure rewrites.
+
+### The workflow port
+
+A workflow step reaches the ports through one internal mutation. `@lunora/privacy/workflow` holds both ends of that hop, so the app writes neither a method table nor a codec:
+
+```ts
+// lunora/privacy.ts
+import { dispatchPort, remotePorts } from "@lunora/privacy/workflow";
+
+/** The port the durable workflows call through `ctx.run`. Internal: never reachable from a client. */
+export const privacyPort = internalMutation
+    .input({ method: v.string(), payload: v.string() })
+    .mutation(async ({ args, ctx }) => dispatchPort(privacyConfig, localPorts(ctx), args.method, args.payload));
+```
+
+`dispatchPort(config, ports, method, payload)` refuses a method that `PORT_METHODS` does not list. A dataset crosses the wire by id, and the erasure disposition never crosses it: the dispatcher rebuilds both from `config`. `remotePorts(send)` returns plain ports, so an app may spread it and replace one it reaches another way (a tombstone store in its own Durable Object, say). The codec, `encodeWire` and `decodeWire`, keeps a `Date`, a `Set`, a `Uint8Array` and `undefined`.
+
+Register the durable handlers with `defineWorkflow`. The config must be an object literal in your `workflows.ts`, because codegen reads it statically. Each handler binds the ports from its own context.
 
 :::caution[Not yet verified]
 Codegen has been checked only with a handler that is a property of a module-level object. The handlers here sit on the per-call `privacyFor(ctx)` result, which codegen has not been checked against yet. Plan §4.2 tracks this. Do not ship the registration on the strength of this page alone.
@@ -91,15 +117,18 @@ export const privacyErasure = defineWorkflow<{ requestId: string }>({
 });
 ```
 
-A mutation opens the request with `privacyFor(ctx).requestExport(...)` and then starts the workflow with `ctx.workflows.get("privacyExport").create(...)`. The worked example is `examples/privacy`.
+A mutation opens the request with `privacyFor(ctx, identity).requestExport()` and then starts the workflow with `ctx.workflows.get("privacyExport").create(...)`. The worked example is `examples/privacy`.
 
 ## What it does
 
-- **Export (Art. 15 and 20).** Every dataset is collected, then written to a ZIP with a manifest and a readable PDF copy. The manifest says which article each dataset falls under. The download link lasts fifteen minutes, and the export expires after seven days. Run `admin.sweep()` from a cron: it deletes each expired export's files and marks the request `expired`.
-- **Erasure (Art. 17).** A request enters a 14-day grace window, during which the subject can cancel. Erasure then runs one dataset at a time and deletes the subject's stored files: every file their requests wrote, and everything under each dataset's `files.prefix(subjectId)`. The request completes only after a verify step finds every table empty and every files prefix listing nothing, apart from rows a retention rule still keeps.
-- **Retention.** The package decides and the app writes. `eraseBatch` receives a `disposition(dataset, table, row, now)` function bound to the presets' rules. Delete a `delete` row, anonymise an `anonymise` row, and move a `keep` row into your archive table so the next batch does not select it again. A dataset with a retained table is marked `restricted` in the export manifest.
-- **Deadlines (Art. 12(3)).** The response is due one calendar month after receipt. `tick` lists requests within seven days of their deadline and those already overdue, so an operator sees a missed one.
-- **Restores.** A completed erasure records a tombstone keyed by an HMAC of the subject id under `tombstoneSecret`. An erasure or a restore refuses to run without the secret once tombstones are configured. If a backup taken before the erasure is restored, `restore` erases those subjects again.
+- **One run, two paths.** Export and erasure are each written once, as named steps. The workflow memoises each step, so a retry resumes at the step that failed; `runExport`, `runErasure` and `admin.retry` run the same steps at once. Before each step the request is read again, so a status change during a run stops it in both paths, and each phase writes one event named after its status.
+- **Export (Art. 15 and 20).** Every dataset is collected, then written to a ZIP with a manifest and a readable PDF copy. The manifest says which article each dataset falls under. The download link lasts fifteen minutes, and the export expires after seven days.
+- **Erasure (Art. 17).** A request enters a 14-day grace window, during which the subject can cancel. Erasure then runs one dataset at a time and deletes the subject's stored files: every file their requests wrote, and everything under each dataset's `files.prefix(subjectId)`. A verify step must then find every table empty and every files prefix listing nothing, apart from rows a retention rule still keeps and the rows of an `anonymise` table, which stay in place once anonymised. Next the tombstone is written, and only then is the request marked `completed`.
+- **The request log after an erasure.** When an erasure completes, every request of the subject, the erasure included, has its `subjectId` replaced by the tombstone key. The log keeps the link the tombstone keeps and no raw id, and the subject's own lookups by their id stop finding those requests. A failed erasure keeps the raw id, so an operator can retry it.
+- **Retention.** The package decides and the app writes. `eraseBatch` receives a `disposition(dataset, table, row, now)` function bound to the presets' rules. Delete a `delete` row, anonymise an `anonymise` row, and move a `keep` row into your archive table with the `until` the verdict carries as `retainUntil`, so the next batch does not select it again. A `retain(rule, { from })` column must hold a `Date` or epoch milliseconds; anything else is refused rather than starting the period at the erasure date. A dataset with a retained table is marked `restricted` in the export manifest.
+- **The sweep.** Run `admin.sweep()` from a cron. It deletes each expired export's files and marks the request `expired`, then purges every archived row whose `retainUntil` has passed through the `archive` port (`purgeBatch(before)`, one batch per call). Once a dataset uses `retain`, the sweep refuses to run without that port. It returns `{ expired, purged }`.
+- **Deadlines (Art. 12(3)).** The response is due `responseMonths` calendar months after receipt (one by default), and an operator may extend it once, within that first period, by `extensionMonths` (two by default) with `admin.extend(requestId, reason)`. Extension is the controller's decision, so the subject has no way to extend. `tick` lists requests within seven days of their deadline and those already overdue; a `ready` export has had its response and is listed as neither.
+- **Restores.** Every erasure records a tombstone keyed by an HMAC of the subject id under `tombstoneSecret`, and refuses to run without the `tombstones` port and the secret. `TombstonePort.add` must be an idempotent upsert, because a retried step writes the same key again. Keep the tombstones outside the database a point-in-time restore rolls back, or the restore takes them too. If a backup taken before the erasure is restored, `restore` erases those subjects again.
 
 ## Coverage
 

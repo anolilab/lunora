@@ -15,14 +15,8 @@ describe("privacyExtension", () => {
         expect(privacyExtension.key).toBe("privacy");
     });
 
-    it("declares the five tables the lifecycle and the archive need", () => {
-        expect(Object.keys(privacyExtension.tables).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
-            "archive",
-            "events",
-            "holds",
-            "requests",
-            "tombstones",
-        ]);
+    it("declares the three tables the lifecycle and the archive need", () => {
+        expect(Object.keys(privacyExtension.tables).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["archive", "events", "requests"]);
     });
 
     it("accepts every status the lifecycle can write to the requests table", () => {
