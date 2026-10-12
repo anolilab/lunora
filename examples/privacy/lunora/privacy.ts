@@ -1,15 +1,17 @@
 /**
- * The app's privacy configuration. The settings are fixed; the ports are bound per call
- * from the caller's context, because `ctx.db` exists only inside one.
+ * The app's privacy configuration, defined once. The ports are bound per call from the
+ * caller's context, because `ctx.db` exists only inside one; a subject's call also passes
+ * the identity its handler resolved from the session.
  *
- *   await privacyFor(ctx).requestExport({ subjectId });
+ *   await privacyFor(ctx, await identityOf(ctx)).requestExport();
  */
 import { defineDataset, definePrivacy } from "@lunora/privacy";
+import { remotePorts } from "@lunora/privacy/workflow";
 import type { WorkflowRunContext } from "@lunora/workflow";
 
+import { internal } from "./_generated/internal.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
-import type { CallIdentity } from "./privacy-ports";
-import { localPorts, remotePorts } from "./privacy-ports";
+import { localPorts } from "./privacy-ports";
 import { presets } from "./privacy-presets";
 import { tombstonesFrom } from "./privacy-tombstones";
 
@@ -25,31 +27,34 @@ export const tasksData = defineDataset("tasks", {
 export type PrivacyContext = MutationCtx | QueryCtx | WorkflowRunContext<{ requestId: string }>;
 
 /**
+ * What the workflow's port dispatcher reads (`dispatchPort` in `requests.ts`): the same datasets
+ * and presets `definePrivacy` reads, so both sides look a dataset up and judge a row the same way.
+ */
+export const privacyConfig = {
+    datasets: [tasksData],
+    presets,
+};
+
+/**
  * The HMAC secret that keys the erasure tombstones. Set `PRIVACY_TOMBSTONE_SECRET` as a Worker
  * secret (`wrangler secret put`) or in `.dev.vars`. With it unset, an erasure fails with a clear
  * message rather than writing unkeyed tombstones.
  */
 const tombstoneSecret = process.env.PRIVACY_TOMBSTONE_SECRET;
 
-export const privacyFor = definePrivacy<PrivacyContext>({
-    datasets: [tasksData],
-    presets,
-    tombstoneSecret,
-    // A workflow step reaches the shard through `ctx.run`, and the tombstones, which live outside it, through `ctx.env`.
-    ports: (context) => ("db" in context ? localPorts(context) : { ...remotePorts(context.run), tombstones: tombstonesFrom(context.env) }),
-});
+/** A workflow step's ports: the shard through `ctx.run`, and the tombstones, which live outside it, through `ctx.env`. */
+const workflowPorts = (context: WorkflowRunContext<{ requestId: string }>) => {
+    return {
+        ...remotePorts(async (call) => context.run(internal.requests.privacyPort, call)),
+        tombstones: tombstonesFrom(context.env),
+    };
+};
 
-/**
- * The privacy API bound to a subject's own call. The handler resolves `identity` from
- * its session first, so the subject methods can only act for that caller.
- */
-export const privacyAs = (ctx: MutationCtx | QueryCtx, identity: CallIdentity): ReturnType<typeof privacyFor> =>
-    definePrivacy<MutationCtx | QueryCtx>({
-        datasets: [tasksData],
-        presets,
-        tombstoneSecret,
-        ports: () => localPorts(ctx, identity),
-    })(ctx);
+export const privacyFor = definePrivacy<PrivacyContext>({
+    ...privacyConfig,
+    ports: (context) => ("db" in context ? localPorts(context) : workflowPorts(context)),
+    tombstoneSecret,
+});
 
 /**
  * The durable handlers. Each one binds the ports from its own context, so the step

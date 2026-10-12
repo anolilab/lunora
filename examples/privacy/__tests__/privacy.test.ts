@@ -1,7 +1,7 @@
 /**
  * The export and erasure paths, through the generated functions on the in-memory harness.
  *
- * A request opens through `privacyAs(appCtx(ctx), identity)`, the call the mutations make. The mutations
+ * A request opens through `privacyFor(appCtx(ctx), identity)`, the call the mutations make. The mutations
  * then start a Workflow instance through `ctx.workflows`, which the harness stubs, so the
  * workflow handlers run here directly. Their steps reach the database through the same
  * dispatcher a deployed workflow reaches with `ctx.run`.
@@ -12,9 +12,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server.js";
 import { listOpenPrivacyRequests, retryPrivacyRequest } from "../lunora/admin";
-import { privacyAs, privacyWorkflows } from "../lunora/privacy";
-import { dispatchPort } from "../lunora/privacy-ports";
-import { cancelRequest, downloadUrl, myRequests, requestErasure } from "../lunora/requests";
+import { privacyFor, privacyWorkflows } from "../lunora/privacy";
+import { cancelRequest, downloadUrl, myRequests, privacyPort, requestErasure } from "../lunora/requests";
 import schema from "../lunora/schema";
 import { addTask, myTasks } from "../lunora/tasks";
 
@@ -47,17 +46,16 @@ const tombstoneNamespace = () => {
 interface RunHooks {
     /** Runs while the workflow sleeps through the grace window, as a subject's cancel would. */
     readonly duringSleep?: () => Promise<void>;
-    /** Every step name the run reached, in order. */
+    /** Every step the run reached, in order; a durable sleep reads as `sleep:<name>`. */
     readonly steps?: string[];
 }
 
 /**
- * A workflow context over the harness. `run` is the dispatcher the internal `privacyPort`
- * mutation runs. `step.do` runs its callback at once, since the test has no durable replay.
+ * A workflow context over the harness. `run` calls the app's internal `privacyPort` mutation,
+ * as a deployed workflow does through `ctx.run`. `step.do` runs its callback at once, since the test has no durable replay.
  */
 const workflowContext = (t: Harness, requestId: string, tombstones: ReturnType<typeof tombstoneNamespace>, hooks: RunHooks = {}): Context => {
-    const run = async (_reference: unknown, args: { method: string; payload: string }) =>
-        t.run(async (ctx) => dispatchPort(appCtx(ctx), args.method, args.payload));
+    const run = async (_reference: unknown, args: { method: string; payload: string }) => t.run(async (ctx) => appCtx(ctx).runMutation(privacyPort, args));
 
     const step = {
         do: async (name: string, callback: () => Promise<unknown>) => {
@@ -65,7 +63,8 @@ const workflowContext = (t: Harness, requestId: string, tombstones: ReturnType<t
 
             return callback();
         },
-        sleepUntil: async () => {
+        sleepUntil: async (name: string) => {
+            hooks.steps?.push(`sleep:${name}`);
             await hooks.duringSleep?.();
         },
     };
@@ -79,7 +78,8 @@ const workflowContext = (t: Harness, requestId: string, tombstones: ReturnType<t
  * then starts the workflow, which the harness stubs, so the test calls the package directly.
  * The session check stays in the mutation, and a test below covers it.
  */
-const openErasure = async (t: Harness, subjectId: string) => t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId }).requestErasure());
+const openErasure = async (t: Harness, subjectId: string) =>
+    t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId }).requestErasure());
 
 const SUBJECT = { userId: "u1" };
 const OTHER = { userId: "u2" };
@@ -106,7 +106,7 @@ describe("privacy example", () => {
     it("exports the subject's own rows and leaves other subjects out", async () => {
         expect.assertions(4);
 
-        const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+        const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
         await privacyWorkflows.exportHandler(workflowContext(t, request.id, tombstones));
 
@@ -143,7 +143,7 @@ describe("privacy example", () => {
     it("gives the subject a download link for their export, and refuses anyone else", async () => {
         expect.assertions(2);
 
-        const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+        const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
         await privacyWorkflows.exportHandler(workflowContext(t, request.id, tombstones));
 
@@ -181,7 +181,8 @@ describe("privacy example", () => {
         const request = await openErasure(t, SUBJECT.userId);
         const steps: string[] = [];
 
-        // The workflow loads the request in its grace, and the subject cancels while it sleeps.
+        // The workflow loads the request in its grace, and the subject cancels while it sleeps, so the
+        // run sleeps the grace out and its start step finds the cancel.
         await privacyWorkflows.erasureHandler(
             workflowContext(t, request.id, tombstones, {
                 duringSleep: async () => {
@@ -191,7 +192,7 @@ describe("privacy example", () => {
             }),
         );
 
-        expect(steps).toStrictEqual(["load", "recheck"]);
+        expect(steps).toStrictEqual(["load", "sleep:grace", "start"]);
         await expect(t.withIdentity(SUBJECT).query(myTasks, {})).resolves.toHaveLength(2);
         await expect(t.withIdentity(OTHER).mutation(cancelRequest, { requestId: request.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
@@ -222,7 +223,7 @@ describe("privacy example", () => {
         it("lists the open requests in the shape the Studio's page reads", async () => {
             expect.assertions(1);
 
-            const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+            const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
             await expect(listOpen()).resolves.toStrictEqual([
                 {
@@ -240,7 +241,7 @@ describe("privacy example", () => {
         it("re-runs a failed export through the package's retry", async () => {
             expect.assertions(2);
 
-            const request = await t.run(async (ctx) => privacyAs(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
+            const request = await t.run(async (ctx) => privacyFor(appCtx(ctx), { sessionAgeMs: 60_000, subjectId: SUBJECT.userId }).requestExport());
 
             await fail(request.id);
 

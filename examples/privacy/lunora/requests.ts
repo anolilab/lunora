@@ -4,17 +4,16 @@
  * session, so a caller cannot open a request for someone else.
  */
 import type { RequestRecord } from "@lunora/privacy";
-import { LunoraError } from "lunorash/errors";
+import { dispatchPort } from "@lunora/privacy/workflow";
 import { rateLimit } from "lunorash/ratelimit";
 import { v } from "lunorash/values";
 
 import type { Doc as Document_ } from "./_generated/dataModel.js";
-import type { MutationCtx } from "./_generated/server.js";
 import { internalMutation, mutation, query } from "./_generated/server.js";
 import { byCaller, limiter } from "./limits";
-import { privacyAs, privacyFor } from "./privacy";
-import { dispatchPort } from "./privacy-ports";
-import { identityOf, subjectOf } from "./subject";
+import { privacyConfig, privacyFor } from "./privacy";
+import { localPorts } from "./privacy-ports";
+import { identityOf } from "./subject";
 
 /** A request as the caller's own list shows it. Dates are epoch milliseconds. */
 export interface RequestSummary {
@@ -28,7 +27,7 @@ export interface RequestSummary {
 
 const millis = (date: Date | undefined): number | undefined => date?.getTime();
 
-/** What a client sees of a request it has just opened. */
+/** What a client sees of a request. */
 const view = (request: RequestRecord): RequestSummary => {
     return {
         dueAt: millis(request.dueAt) ?? 0,
@@ -40,20 +39,8 @@ const view = (request: RequestRecord): RequestSummary => {
     };
 };
 
-/** Fails unless the request exists and belongs to the caller. The same answer for both, so ids cannot be probed. */
-const requireOwnRequest = async (ctx: MutationCtx, requestId: string): Promise<void> => {
-    const row = await ctx.db
-        .query("privacy_requests")
-        .withIndex("byRequestId", (q) => q.eq("requestId", requestId))
-        .first();
-
-    if (row?.subjectId !== subjectOf(ctx)) {
-        throw new LunoraError("NOT_FOUND", `No privacy request with id ${requestId}.`);
-    }
-};
-
 export const requestExport = mutation.use(rateLimit(limiter, "write", byCaller)).mutation(async ({ ctx }): Promise<RequestSummary> => {
-    const request = await privacyAs(ctx, await identityOf(ctx)).requestExport();
+    const request = await privacyFor(ctx, await identityOf(ctx)).requestExport();
 
     await ctx.workflows.get("privacyExport").create({ id: request.id, params: { requestId: request.id } });
     ctx.log.info("privacy export requested", { requestId: request.id });
@@ -62,7 +49,7 @@ export const requestExport = mutation.use(rateLimit(limiter, "write", byCaller))
 });
 
 export const requestErasure = mutation.use(rateLimit(limiter, "write", byCaller)).mutation(async ({ ctx }): Promise<RequestSummary> => {
-    const request = await privacyAs(ctx, await identityOf(ctx)).requestErasure();
+    const request = await privacyFor(ctx, await identityOf(ctx)).requestErasure();
 
     await ctx.workflows.get("privacyErasure").create({ id: request.id, params: { requestId: request.id } });
     ctx.log.info("privacy erasure requested", { requestId: request.id });
@@ -74,40 +61,25 @@ export const cancelRequest = mutation
     .use(rateLimit(limiter, "write", byCaller))
     .input({ requestId: v.string().max(64) })
     .mutation(async ({ args: { requestId }, ctx }): Promise<RequestSummary> => {
-        await requireOwnRequest(ctx, requestId);
-
-        const request = await privacyAs(ctx, await identityOf(ctx)).cancelRequest({ requestId });
+        // The package refuses a request that is not the caller's, with the same answer as a missing one.
+        const request = await privacyFor(ctx, await identityOf(ctx)).cancelRequest({ requestId });
 
         ctx.log.info("privacy request cancelled", { requestId });
 
         return view(request);
     });
 
-/** The caller's own requests, newest first. */
+/** The caller's own open requests, newest first. */
 export const myRequests = query.query(async ({ ctx }): Promise<RequestSummary[]> => {
-    const rows = await ctx.db
-        .query("privacy_requests")
-        .withIndex("bySubject", (q) => q.eq("subjectId", subjectOf(ctx)))
-        .collect();
+    const requests = await privacyFor(ctx, await identityOf(ctx)).myRequests();
 
-    return rows
-        .toSorted((a, b) => b.receivedAt - a.receivedAt)
-        .map((row) => {
-            return {
-                dueAt: row.dueAt,
-                expiresAt: row.expiresAt,
-                id: row.requestId,
-                receivedAt: row.receivedAt,
-                status: row.status,
-                type: row.type,
-            };
-        });
+    return requests.toSorted((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime()).map((request) => view(request));
 });
 
 /** A link to a finished export. Refused for anyone but the subject, and once the export has expired. */
 export const downloadUrl = query
     .input({ requestId: v.string().max(64) })
-    .query(async ({ args: { requestId }, ctx }) => privacyAs(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
+    .query(async ({ args: { requestId }, ctx }) => privacyFor(ctx, await identityOf(ctx)).downloadUrl({ requestId }));
 
 /** The daily deadline sweep. Internal: only the cron calls it. */
 export const privacyTick = internalMutation.mutation(async ({ ctx }) => {
@@ -121,4 +93,4 @@ export const privacyTick = internalMutation.mutation(async ({ ctx }) => {
 /** The port the durable workflows call through `ctx.run`. Internal: never reachable from a client. */
 export const privacyPort = internalMutation
     .input({ method: v.string(), payload: v.string() })
-    .mutation(async ({ args: { method, payload }, ctx }) => dispatchPort(ctx, method, payload));
+    .mutation(async ({ args: { method, payload }, ctx }) => dispatchPort(privacyConfig, localPorts(ctx), method, payload));

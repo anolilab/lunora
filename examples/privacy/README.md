@@ -12,10 +12,11 @@ data, erases it, cancels a pending erasure, and sees the requests they have open
   covered by the `tasks` dataset in `lunora/privacy.ts`. Drop that dataset and
   `lunora codegen` fails with `privacy_table_unclassified`; an exclusion with a blank
   reason fails with `privacy_exclusion_unexplained`.
-- **Per-call ports.** `privacyFor(ctx)` binds the package's ports from the caller's
-  context, because `ctx.db` exists only inside a call. Mutations pass their own
-  `ctx`; the durable workflows pass theirs, and reach the database through `ctx.run`
-  into the internal `privacyPort` mutation (`lunora/privacy-ports.ts`).
+- **Per-call ports and identity.** `privacyFor(ctx, identity)` binds the package's
+  ports from the caller's context, because `ctx.db` exists only inside a call, and the
+  subject's identity from its session. The durable workflows bind theirs and reach the
+  database through `ctx.run` into the internal `privacyPort` mutation, which runs the
+  package's dispatcher (`@lunora/privacy/workflow`) over the app's own ports.
 - **Export.** `requestExport` opens a request and starts `privacyExport`. The workflow
   collects each dataset as its own step, then writes a ZIP and a PDF summary.
 - **Erasure.** `requestErasure` opens a request in a 14-day grace and starts
@@ -45,7 +46,7 @@ data, erases it, cancels a pending erasure, and sees the requests they have open
 | `lunora/schema.ts`                    | `tasks`, the export parts table, rate limits, and `privacyExtension`       |
 | `lunora/tasks.ts`                     | the task list the subject owns                                             |
 | `lunora/privacy.ts`                   | the dataset, `definePrivacy`, and the workflow handlers                    |
-| `lunora/privacy-ports.ts`             | the ports over `ctx.db`, and the wire format for workflow steps            |
+| `lunora/privacy-ports.ts`             | the request store, dataset reader and file ports over `ctx.db`             |
 | `lunora/privacy-tombstones.ts`        | the tombstone port over the `PRIVACY_TOMBSTONES` Durable Object            |
 | `src/server/privacy-tombstones-do.ts` | the tombstone store, with its own SQLite outside the shard                 |
 | `lunora/admin.ts`                     | the operator's open list and retry, for the Studio's Privacy requests page |
@@ -81,7 +82,8 @@ message instead of writing unkeyed tombstones.
   that the Worker does not serve yet. The archive itself is stored in the
   `exportFiles` table, base64-encoded.
 - **Starting workflows from the harness.** `ctx.workflows` is a stub in
-  `@lunora/testing`, so the tests open requests with `privacyFor(ctx)` directly and run
-  the workflow handlers against the same port dispatcher a deployed workflow uses.
+  `@lunora/testing`, so the tests open requests with `privacyFor(ctx, identity)` directly
+  and run the workflow handlers against the same `privacyPort` mutation a deployed
+  workflow calls.
 - **Erasure of the auth tables.** The example has no sign-in tables, so it does not
   declare an `authDataset`. An app that does should add one.

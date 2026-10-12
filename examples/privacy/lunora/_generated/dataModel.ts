@@ -128,7 +128,7 @@ export interface IndexNamesByTable {
     tasks: "byUser";
     exportFiles: "byRequestAndName";
     ratelimit_buckets: "by_key";
-    privacy_archive: "bySubjectDataset";
+    privacy_archive: "bySubjectDataset" | "byRetainUntil";
     privacy_events: "byRequest";
     privacy_holds: "bySubject";
     privacy_requests: "byRequestId" | "bySubject" | "byStatus";

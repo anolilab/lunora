@@ -47,6 +47,7 @@ export const privacy_archive = sqliteTable("privacy_archive", {
     table: text("table").notNull(),
 }, (t) => ({
     bySubjectDataset: index("bySubjectDataset").on(t.subjectId, t.datasetId),
+    byRetainUntil: index("byRetainUntil").on(t.retainUntil),
 }));
 
 export const privacy_events = sqliteTable("privacy_events", {

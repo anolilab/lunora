@@ -9,15 +9,16 @@
  *
  * Each test gets a fresh Durable Object, so its SQLite starts empty.
  */
+import type { PrivacyIdentity } from "@lunora/privacy";
+import { dispatchPort } from "@lunora/privacy/workflow";
 import { createInProcessRuntime, resolveInProcessIdentity } from "@lunora/server/in-process";
 import type { WorkflowRunContext } from "@lunora/workflow";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../../lunora/_generated/server.js";
-import { privacyAs, privacyFor, privacyWorkflows } from "../../lunora/privacy";
-import type { CallIdentity } from "../../lunora/privacy-ports";
-import { dispatchPort } from "../../lunora/privacy-ports";
+import { privacyConfig, privacyFor, privacyWorkflows } from "../../lunora/privacy";
+import { localPorts } from "../../lunora/privacy-ports";
 import schema from "../../lunora/schema";
 
 type Context = WorkflowRunContext<{ requestId: string }>;
@@ -28,7 +29,7 @@ const DOWNLOAD_PATH = /\/privacy\/files\//u;
 const SUBJECT = "u1";
 const OTHER = "u2";
 
-const identity = (subjectId: string): CallIdentity => {
+const identity = (subjectId: string): PrivacyIdentity => {
     return { sessionAgeMs: 60_000, subjectId };
 };
 
@@ -42,16 +43,17 @@ const appCtx = (db: Database): MutationCtx => ({ db }) as unknown as MutationCtx
 interface RunHooks {
     /** Runs while the workflow sleeps through the grace window, as a subject's cancel would. */
     readonly duringSleep?: () => Promise<void>;
-    /** Every step name the run reached, in order. */
+    /** Every step the run reached, in order; a durable sleep reads as `sleep:<name>`. */
     readonly steps?: string[];
 }
 
 /**
- * A workflow context over the shard. `run` is the dispatcher the internal `privacyPort` mutation
- * runs. `step.do` runs its callback at once, since the test has no durable replay.
+ * A workflow context over the shard. `run` does what the internal `privacyPort` mutation does:
+ * the package's dispatcher over the app's local ports. `step.do` runs its callback at once, since the test has no durable replay.
  */
 const workflowContext = (db: Database, requestId: string, hooks: RunHooks = {}): Context => {
-    const run = async (_reference: unknown, args: { method: string; payload: string }) => dispatchPort(appCtx(db), args.method, args.payload);
+    const run = async (_reference: unknown, args: { method: string; payload: string }) =>
+        dispatchPort(privacyConfig, localPorts(appCtx(db)), args.method, args.payload);
 
     const step = {
         do: async (name: string, callback: () => Promise<unknown>) => {
@@ -59,7 +61,8 @@ const workflowContext = (db: Database, requestId: string, hooks: RunHooks = {}):
 
             return callback();
         },
-        sleepUntil: async () => {
+        sleepUntil: async (name: string) => {
+            hooks.steps?.push(`sleep:${name}`);
             await hooks.duringSleep?.();
         },
     };
@@ -110,7 +113,7 @@ describe("privacy example lifecycle (workerd)", () => {
         await withShard(async (db) => {
             await seed(db);
 
-            const request = await privacyAs(appCtx(db), identity(SUBJECT)).requestExport();
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestExport();
 
             await privacyWorkflows.exportHandler(workflowContext(db, request.id));
 
@@ -128,8 +131,8 @@ describe("privacy example lifecycle (workerd)", () => {
 
             expect(ready?.status).toBe("ready");
 
-            await expect(privacyAs(appCtx(db), identity(SUBJECT)).downloadUrl({ requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
-            await expect(privacyAs(appCtx(db), identity(OTHER)).downloadUrl({ requestId: request.id })).rejects.toMatchObject({
+            await expect(privacyFor(appCtx(db), identity(SUBJECT)).downloadUrl({ requestId: request.id })).resolves.toMatch(DOWNLOAD_PATH);
+            await expect(privacyFor(appCtx(db), identity(OTHER)).downloadUrl({ requestId: request.id })).rejects.toMatchObject({
                 code: "NOT_FOUND",
             });
             await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
@@ -142,7 +145,7 @@ describe("privacy example lifecycle (workerd)", () => {
         await withShard(async (db) => {
             await seed(db);
 
-            const request = await privacyAs(appCtx(db), identity(SUBJECT)).requestErasure();
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
 
             await expect(tasksOf(db, SUBJECT)).resolves.toHaveLength(2);
 
@@ -163,25 +166,25 @@ describe("privacy example lifecycle (workerd)", () => {
         await withShard(async (db) => {
             await seed(db);
 
-            const request = await privacyAs(appCtx(db), identity(SUBJECT)).requestErasure();
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
             const opened = await requestRow(db, request.id);
 
             expect(opened?.status).toBe("grace");
 
             // The workflow loads the request while it is still in its grace, and the subject cancels
-            // while it sleeps, so the run reaches the after-grace recheck and stops there.
+            // while it sleeps, so the run sleeps the grace out and its start step finds the cancel.
             const steps: string[] = [];
 
             await privacyWorkflows.erasureHandler(
                 workflowContext(db, request.id, {
                     duringSleep: async () => {
-                        await privacyAs(appCtx(db), identity(SUBJECT)).cancelRequest({ requestId: request.id });
+                        await privacyFor(appCtx(db), identity(SUBJECT)).cancelRequest({ requestId: request.id });
                     },
                     steps,
                 }),
             );
 
-            expect(steps).toStrictEqual(["load", "recheck"]);
+            expect(steps).toStrictEqual(["load", "sleep:grace", "start"]);
             await expect(tasksOf(db, SUBJECT)).resolves.toHaveLength(2);
             await expect(tasksOf(db, OTHER)).resolves.toStrictEqual(["not yours"]);
 
@@ -198,7 +201,7 @@ describe("privacy example lifecycle (workerd)", () => {
         await withShard(async (db) => {
             await seed(db);
 
-            const request = await privacyAs(appCtx(db), identity(SUBJECT)).requestErasure();
+            const request = await privacyFor(appCtx(db), identity(SUBJECT)).requestErasure();
 
             await privacyWorkflows.erasureHandler(workflowContext(db, request.id));
 
