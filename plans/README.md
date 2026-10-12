@@ -28,25 +28,25 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## Open (TODO)
 
-| Plan                                                   | Title                                                                                  | Notes                                                         |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                                               | decisions D1–D6 open; Phase 0 first                           |
-| [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                                    | replay engine, frame handlers, admin surface; decisions D1–D3 |
-| [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot | blocked: needs a read-only check of production pool rows for `inFlightIds` |
-| [482](./482-ratelimit-db-store-atomic-consume.md) | Make the ratelimit consume atomic on the D1-backed `.global()` table | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress) |
-| [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                                   | umbrella; phase/exit-criteria tracker for `alpha → main`      |
-| [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                                         | P2                                                            |
-| [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts                               | spike; deliverable is a decision                              |
-| [168](./168-cross-shard-transactions-spike.md)         | Cross-shard transaction story                                                          | spike; decision first                                         |
-| [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                                       | not shipped                                                   |
-| [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                                            | draft, design-only                                            |
-| [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters                              | deferred                                                      |
-| [364](./364-studio-conversational-assistant.md)        | Conversational assistant for the Studio                                                | P3                                                            |
-| [033](./033-stream.md)                                 | Cloudflare Stream (video)                                                              | P3, deferred                                                  |
-| [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                                   | P3, deferred                                                  |
-| [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                                 | P3, demand-gated                                              |
-| [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                                        | demand-gated                                                  |
-| [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target                            | phase 1 shipped; rest demand-gated                            |
+| Plan                                                   | Title                                                                | Notes                                                                             |
+| ------------------------------------------------------ | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                             | decisions D1–D6 open; Phase 0 first                                               |
+| [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                  | replay engine, frame handlers, admin surface; decisions D1–D3                     |
+| [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot | blocked: needs a read-only check of production pool rows for `inFlightIds`        |
+| [482](./482-ratelimit-db-store-atomic-consume.md)      | Make the ratelimit consume atomic on the D1-backed `.global()` table | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress) |
+| [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                 | umbrella; phase/exit-criteria tracker for `alpha → main`                          |
+| [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                       | P2                                                                                |
+| [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts             | spike; deliverable is a decision                                                  |
+| [168](./168-cross-shard-transactions-spike.md)         | Cross-shard transaction story                                        | spike; decision first                                                             |
+| [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                     | not shipped                                                                       |
+| [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                          | draft, design-only                                                                |
+| [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters            | deferred                                                                          |
+| [364](./364-studio-conversational-assistant.md)        | Conversational assistant for the Studio                              | P3                                                                                |
+| [033](./033-stream.md)                                 | Cloudflare Stream (video)                                            | P3, deferred                                                                      |
+| [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                 | P3, deferred                                                                      |
+| [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                               | P3, demand-gated                                                                  |
+| [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                      | demand-gated                                                                      |
+| [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target          | phase 1 shipped; rest demand-gated                                                |
 
 ## Shipped
 
@@ -61,8 +61,8 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 | 485  | Stop presence `setData` heartbeats before mount or on the server            | c52580876, 7ac090ea7 |
 | 486  | Gate raw data-read and observability MCP tools behind scopes                | ed2a1abe3, 88b7c1997 |
 | 487  | Never send the master admin token in a WebSocket URL                        | 5e89bec39            |
-| 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722) |
-| 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722) |
+| 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722)    |
+| 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722)    |
 
 ## Reference designs
 
