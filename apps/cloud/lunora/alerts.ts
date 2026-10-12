@@ -615,7 +615,7 @@ export const fireDeployAlerts = async (
  * same period is identifiable in the alert list.
  */
 /** The name of the `spend` rule an organization gets when it never made one. */
-export const DEFAULT_SPEND_RULE_NAME = "Spend warnings (default)";
+const DEFAULT_SPEND_RULE_NAME = "Spend warnings (default)";
 
 /**
  * The organization's enabled `spend` rules — and, for an organization with no

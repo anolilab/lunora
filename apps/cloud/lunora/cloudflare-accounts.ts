@@ -46,7 +46,7 @@ export interface CloudflareAccountView {
     workersSubdomain: string;
 }
 
-export const toCloudflareAccountView = (row: CloudflareAccountRow): CloudflareAccountView => {
+const toCloudflareAccountView = (row: CloudflareAccountRow): CloudflareAccountView => {
     return {
         _id: row._id as Id<"cloudflareAccounts">,
         accountId: row.accountId,
