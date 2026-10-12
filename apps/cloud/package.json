@@ -11,6 +11,7 @@
         "codegen": "node node_modules/@lunora/cli/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "deploy:check": "node --experimental-strip-types scripts/check-deploy-config.ts",
+        "bootstrap:cell": "node --experimental-strip-types scripts/bootstrap-cell.ts",
         "dev": "vite",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",

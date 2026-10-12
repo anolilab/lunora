@@ -169,6 +169,11 @@
                   "CLOUD_GITHUB_WEBHOOK_SECRET": "${{ secrets.CLOUD_GITHUB_WEBHOOK_SECRET }}"
                   "CLOUD_GITHUB_SETUP_STATE_SECRET": "${{ secrets.CLOUD_GITHUB_SETUP_STATE_SECRET }}"
                   "CELL_CLOUDFLARE_API_TOKEN": "${{ secrets.CELL_CLOUDFLARE_API_TOKEN }}"
+                  "CREEM_API_KEY": "${{ secrets.CREEM_API_KEY }}"
+                  "CREEM_WEBHOOK_SECRET": "${{ secrets.CREEM_WEBHOOK_SECRET }}"
+                  "CLOUD_GITHUB_APP_ID": "${{ secrets.CLOUD_GITHUB_APP_ID }}"
+                  "CLOUD_GITHUB_APP_PRIVATE_KEY": "${{ secrets.CLOUD_GITHUB_APP_PRIVATE_KEY }}"
+                  "CLOUD_GITHUB_APP_SLUG": "${{ secrets.CLOUD_GITHUB_APP_SLUG }}"
               "working-directory": "apps/cloud"
               "run": |
                   set -euo pipefail
@@ -180,6 +185,11 @@
                       LUNORA_TAIL_SECRET=LUNORA_TAIL_SECRET \
                       GITHUB_WEBHOOK_SECRET=CLOUD_GITHUB_WEBHOOK_SECRET \
                       GITHUB_SETUP_STATE_SECRET=CLOUD_GITHUB_SETUP_STATE_SECRET \
+                      CREEM_API_KEY=CREEM_API_KEY \
+                      CREEM_WEBHOOK_SECRET=CREEM_WEBHOOK_SECRET \
+                      GITHUB_APP_ID=CLOUD_GITHUB_APP_ID \
+                      GITHUB_APP_PRIVATE_KEY=CLOUD_GITHUB_APP_PRIVATE_KEY \
+                      GITHUB_APP_SLUG=CLOUD_GITHUB_APP_SLUG \
                       CLOUDFLARE_API_TOKEN=CELL_CLOUDFLARE_API_TOKEN
                   bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-dispatcher.json" \
                       CONTROL_PLANE_TOKEN=LUNORA_ADMIN_TOKEN \

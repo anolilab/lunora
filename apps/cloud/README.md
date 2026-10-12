@@ -1829,18 +1829,28 @@ diff against the top level.
 
 ### One-time setup per cell
 
-The committed configs carry `<replace-with-…>` placeholders wherever a per-cell
-resource id or hostname belongs. Create the resources, then paste the ids in:
+`scripts/bootstrap-cell.ts` does the per-cell setup and reports what it could
+not do. It reads each resource name from `env.<cell>` in `wrangler.jsonc`, so
+the names cannot drift from what the deploy binds:
 
 ```bash
-# Per environment; drop the -staging suffix for production.
-wrangler d1 create lunora-cloud-staging
-wrangler r2 bucket create lunora-cloud-telemetry-staging
-wrangler r2 bucket create lunora-cloud-tenant-backups-staging
-wrangler pipelines create lunora-cloud-telemetry-staging
+pnpm --filter @lunora/cloud run bootstrap:cell staging --dry-run   # show the plan
+pnpm --filter @lunora/cloud run bootstrap:cell staging             # do it
 ```
 
-`scripts/check-deploy-config.ts` refuses a deploy while any placeholder remains:
+For each D1 database, R2 bucket and dispatch namespace it creates what is
+missing and leaves what exists alone. Pipelines need an interactive
+`wrangler pipelines setup`, so a missing one is named, not created. A step the
+account's plan does not allow (Workers for Platforms, Workers Paid) is reported
+as blocked and the run carries on. It ends with `check-deploy-config.ts`, the
+same gate the deploy runs, so it is the last thing to pass before the first
+deploy.
+
+The committed configs carry `<replace-with-…>` placeholders wherever a per-cell
+resource id or hostname belongs. A D1 database the script creates prints its id,
+which goes into `wrangler.jsonc` in place of the placeholder.
+
+The gate refuses a deploy while a placeholder remains:
 
 ```bash
 pnpm --filter @lunora/cloud run deploy:check staging
@@ -1850,21 +1860,31 @@ That gate exists because wrangler will happily publish a Worker bound to a D1
 database that does not exist. The deploy goes green and the first query fails in
 production, with nothing pointing back at the config.
 
-Then the Worker secrets, which are never in git and never in the workflow — set
-once per cell with `wrangler secret put <NAME> --env <cell>`:
+**Worker secrets live in the GitHub Environment**, `cloud-staging` or
+`cloud-production`, one secret per value. The deploy writes each Worker's
+secrets from those with `wrangler deploy --secrets-file`, and a value shared by
+two Workers is stored once. GitHub does not allow a secret name starting with
+`GITHUB_`, so the three GitHub-related values are stored as `CLOUD_GITHUB_*`.
 
-- **Control plane** (`wrangler.jsonc`): `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`,
-  `SECRET_ENCRYPTION_KEY`, `CLOUDFLARE_API_TOKEN`, `GITHUB_WEBHOOK_SECRET`,
-  `GITHUB_SETUP_STATE_SECRET` (signs the GitHub App install flow's state),
-  `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, plus the optional
-  `LUNORA_TAIL_SECRET`, `R2_SQL_TOKEN`, `RESEND_API_KEY`, `GITHUB_APP_*`, the
-  four `BACKUP_OFFSITE_*` values (off-site backup copy, all or none) and the
-  social sign-in pairs. `.dev.vars.example` documents what each one does and, for
-  the optional ones, the symptom of leaving it unset.
-- **Dispatcher**: `CONTROL_PLANE_TOKEN` (the control plane's
-  `LUNORA_ADMIN_TOKEN`) — without it the per-plan runtime limits are not applied.
-- **Tail consumer**: `LUNORA_TAIL_SECRET`, the **same value** as on the control
-  plane, or `/v1/logs/tail` answers 503 and tenant logs never arrive.
+The bootstrap generates the values it can make and never replaces one that
+already exists, because a new `SECRET_ENCRYPTION_KEY` or `AUTH_SECRET` makes
+stored tenant secrets and sessions unreadable:
+
+- Generated: `AUTH_SECRET`, `SECRET_ENCRYPTION_KEY`, `LUNORA_ADMIN_TOKEN` (also
+  the dispatcher's `CONTROL_PLANE_TOKEN`), `LUNORA_TAIL_SECRET` (the control plane
+  and the tail consumer),
+  `LUNORA_LINEAGE_SECRET` (the outbound Worker and the dispatcher),
+  `CLOUD_GITHUB_WEBHOOK_SECRET`, `CLOUD_GITHUB_SETUP_STATE_SECRET`.
+- Provided by you: `CELL_CLOUDFLARE_API_TOKEN` (the cell's runtime token),
+  `CLOUDFLARE_API_TOKEN` (the CI deploy token, on the environment),
+  `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, `CLOUD_GITHUB_APP_ID`,
+  `CLOUD_GITHUB_APP_PRIVATE_KEY`, `CLOUD_GITHUB_APP_SLUG`. The bootstrap lists
+  each one that is missing, with the `gh secret set` command for it.
+
+Optional Worker secrets such as `R2_SQL_TOKEN`, `RESEND_API_KEY` and the four
+`BACKUP_OFFSITE_*` values are not forwarded by the workflow yet.
+`.dev.vars.example` documents what each one does and the symptom of leaving it
+unset.
 
 ### CI
 

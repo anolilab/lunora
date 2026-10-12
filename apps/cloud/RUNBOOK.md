@@ -146,7 +146,13 @@ App can be installed on public repositories.
 
 ## 4. Worker secrets
 
-`wrangler secret put <NAME> --env staging` for each, on the Worker named:
+Worker secrets are set in the GitHub Environment `cloud-staging`, not with
+`wrangler secret put`. `bootstrap:cell staging` generates the ones it can and lists
+the rest. The deploy then writes each Worker's secrets from the environment with
+`--secrets-file`. Set a provider value with
+`gh secret set <NAME> --env cloud-staging`. GitHub does not allow the `GITHUB_`
+prefix, so the GitHub App values and the webhook/state secrets are `CLOUD_GITHUB_*`
+in the environment. Which Worker gets which value:
 
 - `lunora-cloud`: `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, `SECRET_ENCRYPTION_KEY`
   (64 hex), `CLOUDFLARE_API_TOKEN` (the cell token), `GITHUB_WEBHOOK_SECRET`,
