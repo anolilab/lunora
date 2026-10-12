@@ -37,7 +37,7 @@ harness validates the half that only a live dispatch namespace can prove.
 ## Run it (needs a Cloudflare account + the Workers-for-Platforms add-on)
 
 ```bash
-cd apps/cloud/spikes/ws-dispatch
+cd plans/cloud-spikes/ws-dispatch
 
 # 1. Create the dispatch namespace once (if not already):
 wrangler dispatch-namespace create lunora-production

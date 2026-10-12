@@ -97,13 +97,6 @@
                 "rules": ["react-doctor/context-provider-value-from-unmemoized-local-literal", "react-hooks-js/set-state-in-effect"],
             },
             {
-                // Standalone spike harnesses, deployed independently with their
-                // own wrangler/tsc and not part of the control-plane build (see
-                // `spikes/*/README.md`). Already outside the ESLint surface.
-                "files": ["spikes/**"],
-                "rules": ["react-doctor/async-await-in-loop", "react-doctor/no-fetch-response-used-without-status-check"],
-            },
-            {
                 // `scripts/seed.ts` is a terminal dev script, not served code: it
                 // drives the local dev server over HTTP and its whole output is a
                 // progress report. A sequential await there is the point (each

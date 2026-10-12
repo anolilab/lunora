@@ -21,7 +21,7 @@ type DispatchNamespaceGet = (
  * .fetch(request)` and the resulting 101 response (carrying `webSocket`) must be
  * returned to the eyeball UNCHANGED. These tests pin that forwarding contract for
  * the dispatcher we own; the end-to-end behaviour against a live dispatch
- * namespace is validated by `spikes/ws-dispatch` (see its README).
+ * namespace is validated by `plans/cloud-spikes/ws-dispatch` (see its README).
  */
 
 const upgrade = (host = "acme.lunora.app"): Request => new Request(`https://${host}/_lunora/ws?shard=default`, { headers: { Upgrade: "websocket" } });
