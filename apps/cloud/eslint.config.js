@@ -10,6 +10,11 @@ export default createConfig(
             "**/dist/**",
             "**/node_modules/**",
             "**/_generated/**",
+            "lunora/_generated/**",
+            "lunora/.lunora-schema.json",
+            "lunora.advisor.map.json",
+            ".lunora/**",
+            ".wrangler/**",
             // Generated, not authored: the schema-drift baseline and the advisor
             // map are codegen artifacts committed so a clean checkout can diff
             // against them. `no-secrets` reads their long field names as entropy.

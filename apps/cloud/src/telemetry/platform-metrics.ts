@@ -16,6 +16,8 @@
  * - `queue`: blob2 cell; double1 pending builds, double2 running builds, double3 in-flight deploys
  * - `provision_failure`: blob2 cell, blob3 step, blob4 reason; double1 = 1
  * - `recursion`: blob2 cell, blob3 outcome (`terminated`, `allowed`, `forged`); double1 depth
+ * - `misconfigured`: blob2 cell, blob3 setting (`control_plane`, `lineage_secret`); double1 = 1
+ *   (a request refused fail-closed outside `development`, plan 475)
  *
  * Every dimension is a closed set or a cell name. No tenant hostname, script
  * name, error message or secret reaches this dataset.
@@ -30,7 +32,13 @@ import { getCatalogEntry, isLunoraError } from "@lunora/errors";
 import type { ControlPlaneDatabase } from "../store";
 
 /** The `blob1`/`index1` discriminator of each row kind. */
-export const PLATFORM_METRIC_KINDS = { dispatch: "dispatch", provisionFailure: "provision_failure", queue: "queue", recursion: "recursion" } as const;
+export const PLATFORM_METRIC_KINDS = {
+    misconfigured: "misconfigured",
+    dispatch: "dispatch",
+    provisionFailure: "provision_failure",
+    queue: "queue",
+    recursion: "recursion",
+} as const;
 
 /** Where in a release a provisioning failure happened — a closed set, so it is free to group on. */
 export type ProvisionStep = "activate" | "converge" | "secrets" | "status" | "store" | "verify";
@@ -62,6 +70,17 @@ export const recordRecursion = (
     input: { cell: string; depth: number; outcome: "allowed" | "forged" | "terminated" },
 ): void => {
     write(dataset, PLATFORM_METRIC_KINDS.recursion, [input.cell, input.outcome], [input.depth]);
+};
+
+/**
+ * A setting that is missing outside `development`, so the dispatcher refused a request (plan 475). The
+ * control plane's URL or token, or the lineage secret; a closed set, so it is free to group on.
+ */
+export type MisconfiguredSetting = "control_plane" | "lineage_secret";
+
+/** One request the dispatcher refused because a required setting is missing outside `development` (plan 475). */
+export const recordMisconfiguration = (dataset: AnalyticsEngineDatasetLike | undefined, input: { cell: string; setting: MisconfiguredSetting }): void => {
+    write(dataset, PLATFORM_METRIC_KINDS.misconfigured, [input.cell, input.setting], [1]);
 };
 
 /** One queue-depth sample, taken on the every-minute cron tick. */

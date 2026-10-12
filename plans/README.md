@@ -69,3 +69,20 @@ follow-on ships or is rejected.
 | [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
 | [435](./435-platform-budget-tck-design.md)          | Portability-budget leg of the platform TCK                              |
 | [445](./445-agent-approvals-inbox-design.md)        | Pending-approvals inbox for the HITL surface                            |
+
+## Lunora Cloud hardening wave (baseline `origin/feat/cloud-platform-dx` @ `1d8f444fe`, 2026-10-11)
+
+Findings from a read-only review of `apps/cloud` against the tenant-facing runtime surface. Each plan states its
+own evidence and gate. Open questions are decided in each plan's §9.
+
+| Plan | Title                                                                                                  | Status                                                                                                                             |
+| ---- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 475  | [Dispatcher fails closed without a control plane](475-dispatcher-fail-closed-without-control-plane.md) | TODO — first to ship (H)                                                                                                           |
+| 476  | [Plan survives a control-plane outage](476-dispatcher-plan-survives-control-plane-outage.md)           | TODO — 48 h staleness bound decided (H)                                                                                            |
+| 477  | [Per-project egress allowlist](477-tenant-egress-allowlist.md)                                         | BLOCKED — Workers for Platforms not enabled on the Lunora account; probe cannot run (M–L)                                          |
+| 478  | [Cookie scope and platform response headers](478-platform-hostname-cookie-and-response-headers.md)     | PHASE 0 DONE — `__Host-` config verified on better-auth 1.7.7; ready to implement (M)                                              |
+| 479  | [Rollback boundary and release invariants](479-rollback-boundary-and-release-invariants.md)            | TODO — policy stays out of releases; pin with tests (S–M)                                                                          |
+| 480  | [Service bindings and org connectors on WfP](480-cloud-service-bindings-and-org-connectors.md)         | PARTIAL — BYO service binding verified; WfP blocked on account access (L)                                                          |
+| 481  | [Tenant Workflows on every target](481-tenant-workflows-on-every-target.md)                            | PARTIAL — BYO workflows verified; BYO refusal is stale, workstream A unblocked; WfP blocked (M / L)                                |
+| 457  | [Services: typed service bindings to sibling Workers](457-service-bindings.md)                         | SHIPPED except §12 — restored; declaration snapshot landed in #1024; Studio card, celld fleet deploy and neore-v2 migration remain |
+| 482  | [Production app access gate (decision)](482-production-app-access-gate-decision.md)                    | DECIDED — option A now; SSO and groups with plan 166                                                                               |

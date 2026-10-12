@@ -7,8 +7,16 @@ import type { RouterEnv } from "../src/deploy/routes/shared";
 import dispatcher from "../src/dispatcher/worker";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
-import { failureReason, readQueueDepth, recordDispatch, recordProvisionFailure, recordQueueDepth } from "../src/telemetry/platform-metrics";
+import {
+    failureReason,
+    readQueueDepth,
+    recordDispatch,
+    recordMisconfiguration,
+    recordProvisionFailure,
+    recordQueueDepth,
+} from "../src/telemetry/platform-metrics";
 import { buildPlatformMetricsQueries, foldPlatformMetrics } from "../src/telemetry/platform-metrics-read";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 const dataset = (): AnalyticsEngineDatasetLike & { writeDataPoint: ReturnType<typeof vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>> } => {
     return { writeDataPoint: vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>() };
@@ -26,11 +34,13 @@ describe("platform metric data points", () => {
         recordDispatch(sink, { cell: "eu-1", durationMs: 42, outcome: "2xx" });
         recordQueueDepth(sink, { buildsPending: 3, buildsRunning: 2, cell: "eu-1", deploysInFlight: 1 });
         recordProvisionFailure(sink, { cell: "eu-1", reason: "TimeoutError", step: "converge" });
+        recordMisconfiguration(sink, { cell: "eu-1", setting: "lineage_secret" });
 
         expect(sink.writeDataPoint.mock.calls.map(([point]) => point)).toStrictEqual([
             { blobs: ["dispatch", "eu-1", "2xx"], doubles: [42], indexes: ["dispatch"] },
             { blobs: ["queue", "eu-1"], doubles: [3, 2, 1], indexes: ["queue"] },
             { blobs: ["provision_failure", "eu-1", "converge", "TimeoutError"], doubles: [1], indexes: ["provision_failure"] },
+            { blobs: ["misconfigured", "eu-1", "lineage_secret"], doubles: [1], indexes: ["misconfigured"] },
         ]);
     });
 
@@ -86,24 +96,18 @@ describe(readQueueDepth, () => {
 });
 
 describe("dispatcher platform metrics", () => {
-    const env = (fetchImpl: () => Promise<Response>, metrics?: AnalyticsEngineDatasetLike): Record<string, unknown> => {
-        return {
-            DISPATCHER: {
-                get: () => {
-                    return { fetch: fetchImpl };
-                },
-            },
-            LUNORA_APP_DOMAIN: "lunora.app",
-            LUNORA_CELL: "eu-1",
-            ...(metrics ? { PLATFORM_METRICS: metrics } : {}),
-        };
-    };
+    /** No control plane here, so this is the `development` free tier (plan 475). */
+    const env = (fetchImpl: () => Promise<Response>, metrics?: AnalyticsEngineDatasetLike) =>
+        dispatcherEnv({ development: true, LUNORA_CELL: "eu-1", PLATFORM_METRICS: metrics, tenant: fetchImpl });
     const request = (): Request => new Request("https://acme-app.lunora.app/api/orders");
 
     it("records latency and status class per cell, with no tenant dimension", async () => {
         const sink = dataset();
 
-        await dispatcher.fetch(request(), env(async () => new Response("ok", { status: 201 }), sink) as never);
+        await dispatcher.fetch(
+            request(),
+            env(async () => new Response("ok", { status: 201 }), sink),
+        );
 
         const point = sink.writeDataPoint.mock.calls[0]?.[0];
 
@@ -119,14 +123,17 @@ describe("dispatcher platform metrics", () => {
                 request(),
                 env(async () => {
                     throw new Error("boom");
-                }, sink) as never,
+                }, sink),
             ),
         ).rejects.toThrow("boom");
         expect(sink.writeDataPoint.mock.calls[0]?.[0]).toMatchObject({ blobs: ["dispatch", "eu-1", "exception"] });
     });
 
     it("serves exactly as before without the binding", async () => {
-        const response = await dispatcher.fetch(request(), env(async () => new Response("ok")) as never);
+        const response = await dispatcher.fetch(
+            request(),
+            env(async () => new Response("ok")),
+        );
 
         expect(response.status).toBe(200);
         await expect(response.text()).resolves.toBe("ok");
@@ -149,6 +156,9 @@ describe(buildPlatformMetricsQueries, () => {
         expect(queries.provisionFailures.query).toBe(
             `SELECT blob2 AS cell, blob3 AS step, blob4 AS reason, COUNT(*) AS failures ${where} GROUP BY cell, step, reason ORDER BY failures DESC LIMIT 50`,
         );
+        expect(queries.misconfigured.query).toBe(
+            `SELECT blob2 AS cell, blob3 AS setting, COUNT(*) AS refusals ${where} GROUP BY cell, setting ORDER BY cell, setting`,
+        );
         expect(queries.queueDepth.query).toBe(
             `SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '900' SECOND)) AS bucket, blob2 AS cell, MAX(double1) AS buildsPending, MAX(double2) AS buildsRunning, MAX(double3) AS deploysInFlight ${where} GROUP BY bucket, cell ORDER BY bucket`,
         );
@@ -158,6 +168,7 @@ describe(buildPlatformMetricsQueries, () => {
         expect(queries.dispatchLatency.params).toStrictEqual({ kind: "dispatch", since: "2023-11-14T22:13:20Z", to: "2023-11-15T22:13:20Z" });
         expect(queries.queueDepth.params.kind).toBe("queue");
         expect(queries.provisionFailures.params.kind).toBe("provision_failure");
+        expect(queries.misconfigured.params.kind).toBe("misconfigured");
     });
 });
 
@@ -165,6 +176,7 @@ describe(foldPlatformMetrics, () => {
     it("nests outcomes under their cell and coerces numeric strings", () => {
         expect(
             foldPlatformMetrics({
+                misconfigured: [{ cell: "eu-1", refusals: "4", setting: "control_plane" }],
                 dispatchLatency: [{ cell: "eu-1", p50: "12", p95: 80.5, requests: "1000" }],
                 dispatchOutcomes: [
                     { cell: "eu-1", outcome: "2xx", requests: "990" },
@@ -174,6 +186,7 @@ describe(foldPlatformMetrics, () => {
                 queueDepth: [{ bucket: "1700000000", buildsPending: 3, buildsRunning: 1, cell: "eu-1", deploysInFlight: 0 }],
             }),
         ).toStrictEqual({
+            misconfigured: [{ cell: "eu-1", refusals: 4, setting: "control_plane" }],
             dispatch: [{ cell: "eu-1", outcomes: { "2xx": 990, "5xx": 10 }, p50Ms: 12, p95Ms: 80.5, requests: 1000 }],
             provisionFailures: [{ cell: "eu-1", failures: 2, reason: "health_check", step: "verify" }],
             queue: [{ buildsPending: 3, buildsRunning: 1, cell: "eu-1", deploysInFlight: 0, t: 1_700_000_000_000 }],
@@ -218,7 +231,7 @@ describe(handlePlatformMetricsRoute, () => {
             expect(response.status).toBe(200);
             expect(body.to - body.from).toBe(2 * 60 * 60 * 1000);
             expect(body.dispatch).toStrictEqual([]);
-            expect(fetchMock).toHaveBeenCalledTimes(4);
+            expect(fetchMock).toHaveBeenCalledTimes(5);
 
             const sent = JSON.parse((fetchMock.mock.calls[0]?.[1] as undefined | { body?: string })?.body ?? "{}") as { query: string };
 

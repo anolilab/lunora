@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import dispatcher from "../src/dispatcher/worker";
+import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 /**
  * Admission at the dispatcher (plan 365 W3, and the fail-closed review). A
@@ -56,16 +57,11 @@ let cell = 0;
 const environment = () => {
     cell += 1;
 
-    return {
+    return dispatcherEnv({
         CONTROL_PLANE_TOKEN: "cp_token_fixture", // gitleaks:allow -- fabricated fixture, not a credential
         CONTROL_PLANE_URL: `https://cp-${String(cell)}.example`,
-        DISPATCHER: {
-            get: () => {
-                return { fetch: tenantFetch };
-            },
-        },
-        LUNORA_APP_DOMAIN: "lunora.app",
-    };
+        tenant: tenantFetch,
+    });
 };
 
 const status = async (url: string): Promise<number> => {
