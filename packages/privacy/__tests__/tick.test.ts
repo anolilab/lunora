@@ -36,3 +36,21 @@ describe("tick", () => {
         await expect(operator.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });
     });
 });
+
+describe("tick on a finished export", () => {
+    it("lists a ready export as neither approaching nor overdue, since the response was given", async () => {
+        const { operator, privacy, setClock } = setup({ now: new Date("2026-04-10T00:00:00.000Z") });
+        const opened = await privacy.requestExport();
+
+        await privacy.runExport(opened.id);
+
+        setClock(new Date("2026-05-05T00:00:00.000Z"));
+
+        await expect(operator.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });
+
+        // Past the deadline, but before the sweep has expired it.
+        setClock(new Date("2026-05-11T00:00:00.000Z"));
+
+        await expect(operator.tick()).resolves.toStrictEqual({ approaching: [], overdue: [] });
+    });
+});

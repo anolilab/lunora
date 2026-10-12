@@ -13,7 +13,7 @@ import { erasureOrder } from "./dataset";
 import { DAY_MS } from "./deadlines";
 import { dispositionFor } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
-import { effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
+import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
@@ -200,6 +200,10 @@ const tickRequests = async (scope: Scope): Promise<{ readonly approaching: Reado
     const open = await listOpen(scope);
     const overdue = open.filter((record) => isOverdue(record, at));
     const approaching = open.filter((record) => {
+        if (!awaitsResponse(record.status)) {
+            return false;
+        }
+
         const due = effectiveDueAt(record.receivedAt, record.extendedDueAt !== undefined).getTime();
 
         return due - at.getTime() <= DEADLINE_WARNING_MS && due >= at.getTime();

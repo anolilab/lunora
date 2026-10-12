@@ -87,6 +87,7 @@ describe("effectiveDueAt and isOverdue", () => {
 
     it("does not flag a finished request, even past its deadline", () => {
         expect(isOverdue({ receivedAt, status: "completed" }, at("2026-08-01T00:00:00.000Z"))).toBe(false);
+        expect(isOverdue({ receivedAt, status: "ready" }, at("2026-08-01T00:00:00.000Z"))).toBe(false);
     });
 
     it("honours the extension when one was granted", () => {

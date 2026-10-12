@@ -44,6 +44,13 @@ class InvalidTransitionError extends LunoraError {
 
 const isTerminal = (status: RequestStatus): boolean => TERMINAL.has(status);
 
+/**
+ * Whether the controller still owes the subject a response. A terminal request has had one, and so
+ * has a `ready` export: its archive is handed over, so its deadline is met even though the request
+ * stays open until the download window ends.
+ */
+const awaitsResponse = (status: RequestStatus): boolean => !isTerminal(status) && status !== "ready";
+
 /** Whether a value read from outside the package (a step result, a row) is a known status. */
 const isRequestStatus = (value: string): value is RequestStatus => Object.hasOwn(TRANSITIONS, value);
 
@@ -85,11 +92,11 @@ const canExtend = (receivedAt: Date, now: Date, alreadyExtended: boolean): boole
 const effectiveDueAt = (receivedAt: Date, extended: boolean): Date => (extended ? extendedDueAt(receivedAt) : dueAt(receivedAt));
 
 /**
- * A request is overdue once its effective deadline has passed and it has not finished. The deadline
+ * A request is overdue once its effective deadline has passed and the response is still owed. The deadline
  * is the extended one when `extendedDueAt` is set, and is computed from `receivedAt` either way.
  */
 const isOverdue = (request: { readonly extendedDueAt?: Date; readonly receivedAt: Date; readonly status: RequestStatus }, now: Date): boolean =>
-    !isTerminal(request.status) && now.getTime() > effectiveDueAt(request.receivedAt, request.extendedDueAt !== undefined).getTime();
+    awaitsResponse(request.status) && now.getTime() > effectiveDueAt(request.receivedAt, request.extendedDueAt !== undefined).getTime();
 
 /** The smallest drain budget, in days. Enough for a batched erasure and its completion notice. */
 const MIN_DRAIN_BUDGET_DAYS = 3;
@@ -109,6 +116,7 @@ const erasureGraceUntil = (receivedAt: Date, graceDays: number, drainBudgetDays:
 };
 
 export {
+    awaitsResponse,
     canCancel,
     canExtend,
     canTransition,
