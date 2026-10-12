@@ -23,7 +23,14 @@ erasure, and retention holds for records the law says to keep.
 - `@lunora/privacy/eu`: the EU response time and erasure grace.
 - `@lunora/privacy/de`: the HGB §257 and AO §147 retention periods.
 
-## What is not built yet
+## Status
 
-The export and erasure workflows, the request tables, and the app integration
-are still to come. Until they land, this package is the pure core only.
+- Built and tested: the deadline and lifecycle rules, the request service, datasets,
+  the export archive, erasure, the deadline sweep, the signed download, restore
+  tombstones and the operator surface.
+- The Studio has a Privacy requests tab. It appears only when the app declares
+  `@lunora/privacy`.
+- Not finished: the runnable example app (`examples/privacy`) is not merged, the
+  workerd suite for the storage paths is not written, and registering the workflow
+  handlers from the per-call factory has not been checked against codegen (plan §4.2).
+- Not reviewed: every legal and tax value. See `docs/legal.mdx`.
