@@ -108,13 +108,28 @@ const filesPrefixOf = (dataset: Dataset, subjectId: string): string | undefined 
 };
 
 /**
- * Delete the subject's stored files: every file each of their requests wrote, in any status,
- * and every object under each dataset's files prefix for the subject.
+ * Remove a request's files and, for a ready export, mark it expired in the same step, so the status
+ * and the files agree. The files go first: a failed delete leaves the export ready, so the next
+ * sweep or erasure retries it.
  */
-const eraseSubjectFiles = async (context: Pick<RunContext, "files" | "store">, datasets: ReadonlyArray<Dataset>, subjectId: string): Promise<void> => {
+const expireRequestFiles = async (context: Pick<RunContext, "files" | "now" | "store">, request: RequestRecord): Promise<void> => {
+    await deleteRequestFiles(context.files, request);
+
+    if (request.status === "ready") {
+        await context.store.update(request.id, { status: transition("ready", "expired") });
+        await context.store.addEvent(request.id, context.now(), "expired");
+    }
+};
+
+/**
+ * Delete the subject's stored files: every file each of their requests wrote, in any status,
+ * and every object under each dataset's files prefix for the subject. A ready export loses its
+ * files here too, so it is expired rather than left pointing at nothing.
+ */
+const eraseSubjectFiles = async (context: Pick<RunContext, "files" | "now" | "store">, datasets: ReadonlyArray<Dataset>, subjectId: string): Promise<void> => {
     const requests = await context.store.listForSubject(subjectId);
 
-    await Promise.all(requests.map(async (request) => deleteRequestFiles(context.files, request)));
+    await Promise.all(requests.map(async (request) => expireRequestFiles(context, request)));
 
     const prefixes = datasets.map((dataset) => filesPrefixOf(dataset, subjectId)).filter((prefix): prefix is string => prefix !== undefined);
 
@@ -356,6 +371,7 @@ export {
     deleteRequestFiles,
     eraseSubjectFiles,
     type ErasureOutcome,
+    expireRequestFiles,
     type ExportOutcome,
     type RunContext,
     runErasure,

@@ -18,7 +18,7 @@ import type { RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, fromStepRecord, openRequest, toStepRecord } from "./requests";
 import type { PrivacyPreset, RetentionRule } from "./rules";
 import type { DataPort, ErasureOutcome, ExportOutcome, RunContext, StorePort } from "./run";
-import { assembleExport, collectPart, deleteRequestFiles, eraseSubjectFiles, EXPORT_EXPIRY_MS, runErasure, runExport, verifySubjectErased } from "./run";
+import { assembleExport, collectPart, eraseSubjectFiles, expireRequestFiles, EXPORT_EXPIRY_MS, runErasure, runExport, verifySubjectErased } from "./run";
 import type { TombstonePort } from "./tombstones";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
@@ -415,9 +415,7 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
                     const open = await listOpen();
                     const due = open.filter((record) => record.status === "ready" && record.expiresAt !== undefined && record.expiresAt.getTime() < now);
 
-                    // The files go first: a failed delete leaves the request ready, so the next sweep retries it.
-                    await Promise.all(due.map(async (record) => deleteRequestFiles(ports.files, record)));
-                    await Promise.all(due.map(async (record) => setStatus(record, transition(record.status, "expired"))));
+                    await Promise.all(due.map(async (record) => expireRequestFiles(base, record)));
 
                     return due.map((record) => {
                         return { ...record, status: "expired" as const };

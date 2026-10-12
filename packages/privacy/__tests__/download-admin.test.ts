@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { defineDataset } from "../src/dataset";
+import type { ErasureOptions } from "../src/define";
 import { definePrivacy } from "../src/define";
 import type { DataPort } from "../src/run";
 import { memoryData, memoryFiles, memoryRequests } from "./memory-ports";
@@ -27,12 +28,13 @@ const codeOf = async (promise: Promise<unknown>): Promise<string> => {
     return "no-error";
 };
 
-const setup = (data: DataPort = memoryData({ tasks: 0 }), identity = SUBJECT, store = memoryRequests()) => {
+const setup = (data: DataPort = memoryData({ tasks: 0 }), identity = SUBJECT, store = memoryRequests(), erasure?: ErasureOptions) => {
     const files = memoryFiles();
     let clock = new Date("2026-10-11T10:00:00.000Z");
     let counter = 0;
     const privacy = definePrivacy({
         datasets: [tasks],
+        erasure,
         ports: () => {
             return {
                 identity: () => identity,
@@ -178,5 +180,41 @@ describe("admin", () => {
         await privacy.admin.sweep();
 
         await expect(privacy.requestExport()).resolves.toMatchObject({ status: "received" });
+    });
+});
+
+describe("erasing a subject with a ready export", () => {
+    const NO_GRACE: ErasureOptions = { graceDays: 0 };
+
+    it("expires the export and deletes its files when the erasure runs", async () => {
+        const { files, privacy, store } = setup(undefined, SUBJECT, memoryRequests(), NO_GRACE);
+        const exported = await privacy.requestExport();
+
+        await privacy.runExport(exported.id);
+
+        const erasure = await privacy.requestErasure();
+
+        await privacy.runErasure(erasure.id);
+
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+        await expect(codeOf(privacy.downloadUrl({ requestId: exported.id }))).resolves.toBe("UNPROCESSABLE");
+    });
+
+    it("does the same when the erasure workflow runs", async () => {
+        const { files, privacy, store } = setup(undefined, SUBJECT, memoryRequests(), NO_GRACE);
+        const exported = await privacy.requestExport();
+
+        await privacy.runExport(exported.id);
+
+        const erasure = await privacy.requestErasure();
+        const step = { do: async <T>(_name: string, run: () => Promise<T>) => run(), sleepUntil: async () => undefined };
+
+        await privacy.workflows.erasureHandler({ params: { requestId: erasure.id }, step });
+
+        expect(store.rows.get(erasure.id)?.status).toBe("completed");
+        expect(store.rows.get(exported.id)?.status).toBe("expired");
+        expect([...files.files.keys()].filter((key) => key.startsWith(`${exported.id}/`))).toStrictEqual([]);
+        await expect(codeOf(privacy.downloadUrl({ requestId: exported.id }))).resolves.toBe("UNPROCESSABLE");
     });
 });
