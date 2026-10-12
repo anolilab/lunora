@@ -32,59 +32,61 @@ export const reportOnly = async ({ ctx }: { ctx: { db: { query: (table: string) 
 };
 `;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "lunora-row-effects-"));
-    lunora = join(workdir, "lunora");
-    mkdirSync(join(lunora, "lib"), { recursive: true });
-    writeFileSync(join(lunora, "lib", "purge.ts"), PURGE, "utf8");
-    writeFileSync(join(lunora, "sweep.ts"), SWEEP, "utf8");
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
-describe("discoverRowEffects", () => {
-    it("attributes a helper's delete in another file to the export that calls it", () => {
-        expect.assertions(1);
-
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const effects = discoverRowEffects(project, lunora, discoverTableWrites(project, lunora), []);
-
-        // `purge` is exported too, so it reports its own delete; the sweep's effect is the one that reaches it through the import.
-        expect(effects.filter((effect) => effect.file === "sweep")).toStrictEqual([
-            expect.objectContaining({ exportName: "expire", file: "sweep", method: "delete", table: "sessions" }),
-        ]);
+describe("row effects", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-row-effects-"));
+        lunora = join(workdir, "lunora");
+        mkdirSync(join(lunora, "lib"), { recursive: true });
+        writeFileSync(join(lunora, "lib", "purge.ts"), PURGE, "utf8");
+        writeFileSync(join(lunora, "sweep.ts"), SWEEP, "utf8");
     });
 
-    it("reports nothing for an export that reaches no row-changing write", () => {
-        expect.assertions(1);
-
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const effects = discoverRowEffects(project, lunora, discoverTableWrites(project, lunora), []);
-
-        expect(effects.some((effect) => effect.exportName === "reportOnly")).toBe(false);
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
     });
-});
 
-describe("discoverTableWrites fields", () => {
-    it("records the keys of a patch's object literal, and leaves them undefined for other writes", () => {
-        expect.assertions(2);
+    describe("discoverRowEffects", () => {
+        it("attributes a helper's delete in another file to the export that calls it", () => {
+            expect.assertions(1);
 
-        writeFileSync(
-            join(lunora, "patches.ts"),
-            `export const edit = async (ctx: { db: { sessions: { patch: (id: string, value: object) => Promise<void>; delete: (id: string) => Promise<void> } } }): Promise<void> => {
-    await ctx.db.sessions.patch("a", { expiresAt: 1, title: "x" });
-    await ctx.db.sessions.delete("a");
-};
-`,
-            "utf8",
-        );
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const effects = discoverRowEffects(project, lunora, discoverTableWrites(project, lunora), []);
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const writes = discoverTableWrites(project, lunora).filter((write) => write.file === "patches");
+            // `purge` is exported too, so it reports its own delete; the sweep's effect is the one that reaches it through the import.
+            expect(effects.filter((effect) => effect.file === "sweep")).toStrictEqual([
+                expect.objectContaining({ exportName: "expire", file: "sweep", method: "delete", table: "sessions" }),
+            ]);
+        });
 
-        expect(writes.find((write) => write.method === "patch")?.fields).toStrictEqual(["expiresAt", "title"]);
-        expect(writes.find((write) => write.method === "delete")?.fields).toBeUndefined();
+        it("reports nothing for an export that reaches no row-changing write", () => {
+            expect.assertions(1);
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const effects = discoverRowEffects(project, lunora, discoverTableWrites(project, lunora), []);
+
+            expect(effects.some((effect) => effect.exportName === "reportOnly")).toBe(false);
+        });
+    });
+
+    describe("discoverTableWrites fields", () => {
+        it("records the keys of a patch's object literal, and leaves them undefined for other writes", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(lunora, "patches.ts"),
+                `export const edit = async (ctx: { db: { sessions: { patch: (id: string, value: object) => Promise<void>; delete: (id: string) => Promise<void> } } }): Promise<void> => {
+        await ctx.db.sessions.patch("a", { expiresAt: 1, title: "x" });
+        await ctx.db.sessions.delete("a");
+    };
+    `,
+                "utf8",
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const writes = discoverTableWrites(project, lunora).filter((write) => write.file === "patches");
+
+            expect(writes.find((write) => write.method === "patch")?.fields).toStrictEqual(["expiresAt", "title"]);
+            expect(writes.find((write) => write.method === "delete")?.fields).toBeUndefined();
+        });
     });
 });
