@@ -65,8 +65,23 @@ interface StorePort {
     readonly signedUrl: (key: string, ttlSeconds: number) => Promise<string>;
 }
 
+/**
+ * The archive of rows erasure kept under a retention rule (`privacy_archive`, or the app's own
+ * table). The app writes a `keep` row into it with the `until` its disposition carries as
+ * `retainUntil`; the sweep purges it once that date has passed.
+ */
+interface ArchivePort {
+    /**
+     * Delete up to `ERASE_BATCH` archived rows whose `retainUntil` is before `before`, and say how
+     * many it deleted and whether more may remain.
+     */
+    readonly purgeBatch: (before: Date) => Promise<{ readonly hasMore: boolean; readonly purged: number }>;
+}
+
 /** The ports one invocation binds: the app's data, storage, requests and clock. */
 interface PrivacyPorts {
+    /** Where kept rows wait out their retention period. Required for `admin.sweep` once a dataset uses `retain`. */
+    readonly archive?: ArchivePort;
     readonly data: DataPort;
     readonly files: StorePort;
     readonly newId: () => string;
@@ -573,6 +588,7 @@ const erasureRun = async (scope: RunScope, steps: StepRunner, requestId: string)
 };
 
 export {
+    type ArchivePort,
     collectPart,
     type DataPort,
     eraseDataset,

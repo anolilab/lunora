@@ -94,7 +94,7 @@ describe("admin", () => {
         expect([...files.files.keys()].some((key) => key.startsWith(`${opened.id}/`))).toBe(true);
 
         advance(8);
-        const expired = await privacy.admin.sweep();
+        const { expired } = await privacy.admin.sweep();
 
         expect(expired.map((record) => record.id)).toStrictEqual([opened.id]);
         expect(store.rows.get(opened.id)?.status).toBe("expired");
@@ -110,7 +110,7 @@ describe("admin", () => {
         await privacy.runExport(opened.id);
         advance(6);
 
-        await expect(privacy.admin.sweep()).resolves.toStrictEqual([]);
+        await expect(privacy.admin.sweep()).resolves.toStrictEqual({ expired: [], purged: 0 });
         expect(store.rows.get(opened.id)?.status).toBe("ready");
         expect(files.files.has(`${opened.id}/export.zip`)).toBe(true);
     });

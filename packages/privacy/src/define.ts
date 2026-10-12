@@ -12,7 +12,7 @@ import type { Dataset } from "./dataset";
 import { erasureOrder } from "./dataset";
 import type { DeadlinePolicy } from "./deadlines";
 import { DAY_MS, DEFAULT_DEADLINES } from "./deadlines";
-import { dispositionFor } from "./erasure";
+import { dispositionFor, drainUntilEmpty } from "./erasure";
 import { checkErasureGraceDays, DEFAULT_ERASURE_GRACE_DAYS } from "./eu";
 import { awaitsResponse, effectiveDueAt, isOverdue, isTerminal, MIN_DRAIN_BUDGET_DAYS } from "./lifecycle";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
@@ -101,10 +101,12 @@ interface Privacy {
         readonly retry: (requestId: string) => Promise<ExportOutcome | ErasureOutcome>;
 
         /**
-         * Expire every ready export past its download window: delete its files, then mark it
-         * `expired`. Returns the requests it expired. Run it from a cron.
+         * The housekeeping sweep. Run it from a cron. It expires every ready export past its download
+         * window (its files go first, then it is marked `expired`), and it purges every archived row
+         * whose retention period has ended through the `archive` port. Returns the expired requests
+         * and how many archived rows it purged.
          */
-        readonly sweep: () => Promise<ReadonlyArray<RequestRecord>>;
+        readonly sweep: () => Promise<SweepResult>;
     };
     readonly cancelRequest: (input: { requestId: string }) => Promise<RequestRecord>;
     readonly coverage: (tables: ReadonlyArray<string>, exclusions?: Readonly<Record<string, string>>) => ReadonlyArray<CoverageProblem>;
@@ -183,8 +185,15 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<ExportOutc
     return record.type === "export" ? exportRun(scope, inlineSteps, requestId) : runErasureNow(scope, requestId);
 };
 
+/** What `admin.sweep` did. */
+interface SweepResult {
+    readonly expired: ReadonlyArray<RequestRecord>;
+    /** Archived rows deleted because their retention period has ended. */
+    readonly purged: number;
+}
+
 /** Expire every ready export past its window. Each export's files go before its status changes, so a failed delete leaves it ready. */
-const sweepExpired = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => {
+const expireExports = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>> => {
     const now = scope.ports.now().getTime();
     const open = await listOpen(scope);
     const due = open.filter((record) => record.status === "ready" && record.expiresAt !== undefined && record.expiresAt.getTime() < now);
@@ -194,6 +203,47 @@ const sweepExpired = async (scope: Scope): Promise<ReadonlyArray<RequestRecord>>
     return due.map((record) => {
         return { ...record, status: "expired" as const };
     });
+};
+
+/** Whether any dataset keeps rows under a retention rule, so erasure moves rows into the archive. */
+const keepsArchivedRows = (datasets: ReadonlyArray<Dataset>): boolean =>
+    datasets.some((dataset) => dataset.tableNames.some((table) => typeof dataset.tables[table]?.erase === "object"));
+
+/**
+ * Delete every archived row whose retention period has ended, one batch at a time. An app with a
+ * retention rule must pass the `archive` port: without it the rows erasure kept would never go.
+ */
+const purgeArchive = async (scope: Scope): Promise<number> => {
+    const { archive } = scope.ports;
+
+    if (archive === undefined) {
+        if (keepsArchivedRows(scope.datasets)) {
+            throw new LunoraError("BAD_REQUEST", "A dataset retains rows, so the sweep needs an `archive` port to purge them once their period ends.");
+        }
+
+        return 0;
+    }
+
+    const before = scope.ports.now();
+    let purged = 0;
+
+    await drainUntilEmpty(async () => {
+        const batch = await archive.purgeBatch(before);
+
+        purged += batch.purged;
+
+        return batch;
+    });
+
+    return purged;
+};
+
+/** Expire the finished exports, then purge the archive. An expiry is not held back by a purge failure. */
+const sweep = async (scope: Scope): Promise<SweepResult> => {
+    const expired = await expireExports(scope);
+    const purged = await purgeArchive(scope);
+
+    return { expired, purged };
 };
 
 /** The deadline sweep: requests due within the warning window, and those already overdue. */
@@ -279,7 +329,7 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
             extend: async (requestId, reason) => extendRequest(ports.store, { deadlines: settings.deadlines, id: requestId, now: ports.now(), reason }),
             open: async () => listOpen(scope),
             retry: async (requestId) => retryRequest(scope, requestId),
-            sweep: async () => sweepExpired(scope),
+            sweep: async () => sweep(scope),
         },
 
         cancelRequest: async ({ requestId }) => {
@@ -394,6 +444,15 @@ const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
     return (context, identity) => bind(settings, config.ports(context), identity);
 };
 
-export { definePrivacy, type ErasureOptions, type Privacy, type PrivacyConfig, type PrivacyFor, type PrivacyIdentity, type PrivacyWorkflowContext };
+export {
+    definePrivacy,
+    type ErasureOptions,
+    type Privacy,
+    type PrivacyConfig,
+    type PrivacyFor,
+    type PrivacyIdentity,
+    type PrivacyWorkflowContext,
+    type SweepResult,
+};
 
 export { type PrivacyPorts } from "./run";

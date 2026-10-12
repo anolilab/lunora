@@ -12,7 +12,7 @@ import { definePrivacy } from "../src/define";
 import { isTerminal } from "../src/lifecycle";
 import type { RequestRecord, RequestStore } from "../src/requests";
 import type { PrivacyPreset } from "../src/rules";
-import type { DataPort, StorePort } from "../src/run";
+import type { ArchivePort, DataPort, StorePort } from "../src/run";
 import type { TombstonePort } from "../src/tombstones";
 
 export const NOW = new Date("2026-10-11T10:00:00.000Z");
@@ -211,6 +211,7 @@ export const durableStep = (options: { failOnce?: string } = {}): { runs: Map<st
 };
 
 export interface HarnessOptions {
+    readonly archive?: ArchivePort;
     readonly data?: DataPort;
     readonly datasets?: ReadonlyArray<Dataset>;
     readonly erasure?: ErasureOptions;
@@ -267,6 +268,7 @@ export const setup = (options: HarnessOptions = {}): Harness => {
                 },
                 now: () => clock,
                 store,
+                ...(options.archive === undefined ? {} : { archive: options.archive }),
                 ...(tombstones === null ? {} : { tombstones }),
             };
         },

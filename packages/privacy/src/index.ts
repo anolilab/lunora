@@ -14,7 +14,7 @@ export { actionCacheDataset, authDataset, documentHistoryDataset, storageObjects
 export type { CoverageProblem } from "./coverage";
 export type { Dataset, DatasetPhase, DatasetPlacement, DatasetSpec, TableErasure, TableSpec } from "./dataset";
 export { defineDataset } from "./dataset";
-export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyIdentity, PrivacyPorts, PrivacyWorkflowContext } from "./define";
+export type { ErasureOptions, Privacy, PrivacyConfig, PrivacyFor, PrivacyIdentity, PrivacyPorts, PrivacyWorkflowContext, SweepResult } from "./define";
 export { definePrivacy } from "./define";
 export type { Disposition, RowDisposition } from "./erasure";
 export { dispositionFor, ERASE_BATCH } from "./erasure";
@@ -23,6 +23,6 @@ export { isTerminal } from "./lifecycle";
 export type { RequestRecord, RequestStore } from "./requests";
 export type { PrivacyPolicy, PrivacyPreset, RetainDirective, RetentionRule, RetentionStart } from "./rules";
 export { retain } from "./rules";
-export type { DataPort, ErasureOutcome, ExportOutcome, StorePort } from "./run";
+export type { ArchivePort, DataPort, ErasureOutcome, ExportOutcome, StorePort } from "./run";
 export type { PrivacyTableName } from "./tables";
 export { privacyExtension } from "./tables";
