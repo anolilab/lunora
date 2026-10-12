@@ -27,12 +27,12 @@ export interface PlatformMetricsQuery {
     query: string;
 }
 
-/** Build the five statements for the window `(sinceSec, toSec]`. Pure, so the SQL is pinned by tests. */
+/** Build one statement per metric for the window `(sinceSec, toSec]`. Pure, so the SQL is pinned by tests. */
 export const buildPlatformMetricsQueries = (
     dataset: string,
     sinceSec: number,
     toSec: number,
-): Record<"misconfigured" | "dispatchLatency" | "dispatchOutcomes" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
+): Record<"dispatchLatency" | "dispatchOutcomes" | "misconfigured" | "provisionFailures" | "queueDepth", PlatformMetricsQuery> => {
     const table = analyticsEngineTable(dataset);
     const statement = (kind: string, select: string, tail: string): PlatformMetricsQuery => {
         return {
@@ -52,15 +52,15 @@ export const buildPlatformMetricsQueries = (
             "SELECT blob2 AS cell, blob3 AS outcome, COUNT(*) AS requests",
             "GROUP BY cell, outcome ORDER BY cell, outcome",
         ),
-        provisionFailures: statement(
-            PLATFORM_METRIC_KINDS.provisionFailure,
-            "SELECT blob2 AS cell, blob3 AS step, blob4 AS reason, COUNT(*) AS failures",
-            `GROUP BY cell, step, reason ORDER BY failures DESC LIMIT ${String(MAX_FAILURE_ROWS)}`,
-        ),
         misconfigured: statement(
             PLATFORM_METRIC_KINDS.misconfigured,
             "SELECT blob2 AS cell, blob3 AS setting, COUNT(*) AS refusals",
             "GROUP BY cell, setting ORDER BY cell, setting",
+        ),
+        provisionFailures: statement(
+            PLATFORM_METRIC_KINDS.provisionFailure,
+            "SELECT blob2 AS cell, blob3 AS step, blob4 AS reason, COUNT(*) AS failures",
+            `GROUP BY cell, step, reason ORDER BY failures DESC LIMIT ${String(MAX_FAILURE_ROWS)}`,
         ),
         // MAX, not AVG: a queue that backed up for one minute of fifteen is the
         // thing to see, and averaging it away hides exactly that.
@@ -93,7 +93,7 @@ export interface PlatformMetricsSnapshot {
 
 type Rows = ReadonlyArray<Record<string, unknown>>;
 
-/** Fold the five result sets into one snapshot — outcomes nested under their cell's latency row. */
+/** Fold the result sets into one snapshot — outcomes nested under their cell's latency row. */
 export const foldPlatformMetrics = (rows: {
     dispatchLatency: Rows;
     dispatchOutcomes: Rows;
@@ -141,7 +141,7 @@ export const foldPlatformMetrics = (rows: {
     };
 };
 
-/** Read a snapshot over `[from, to]` (epoch ms). The five reads are independent, so they run together. */
+/** Read a snapshot over `[from, to]` (epoch ms). The reads are independent, so they run together. */
 export const readPlatformMetrics = async (
     options: AnalyticsSqlCredentials & { dataset: string },
     window: { from: number; to: number },
@@ -153,13 +153,9 @@ export const readPlatformMetrics = async (
 
         return rows;
     };
-    const [misconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth] = await Promise.all([
-        run(queries.misconfigured),
-        run(queries.dispatchLatency),
-        run(queries.dispatchOutcomes),
-        run(queries.provisionFailures),
-        run(queries.queueDepth),
-    ]);
+    // Keyed by metric, so each result is bound to its name rather than to its position in a destructure.
+    const entries = await Promise.all(Object.entries(queries).map(async ([key, query]): Promise<[string, Rows]> => [key, await run(query)]));
+    const rows = Object.fromEntries(entries) as Record<keyof typeof queries, Rows>;
 
-    return foldPlatformMetrics({ misconfigured, dispatchLatency, dispatchOutcomes, provisionFailures, queueDepth });
+    return foldPlatformMetrics(rows);
 };
