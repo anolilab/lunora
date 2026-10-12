@@ -9,7 +9,7 @@ description: Export, erasure and retention for a user's data, built for GDPR Art
 The legal and tax values are **not** checked by a lawyer or tax adviser. Every one is marked as pending review, and the research behind them is on the [legal basis page](/docs/packages/privacy/legal). Do not rely on a default until a qualified lawyer and a tax adviser have reviewed it against your own processing.
 :::
 
-> **Experimental.** The package is under development and is not released.
+> **Experimental.** The package is published as an alpha (`1.0.0-alpha.*`), and its API may still change.
 
 ## Integrate it
 
@@ -136,7 +136,7 @@ A table with a `userId` column must be covered by a dataset, or excluded with a 
 
 ## What is not finished
 
-- The runnable example app (`examples/privacy`) is not merged, so there is no end-to-end example yet.
+- There is no full end-to-end demo. `examples/privacy` runs export and erasure over a task list, but it has no sign-in and declares no `authDataset`, so the auth tables are not erased. Payments has no dataset either: the tie-in is `retain()` with the `de.voucher` retention rule, and the app binds its own tables to it. The example does not use `retain()`.
 - The workerd suite for the storage paths is not written.
 - The workflow registration above is not yet verified against codegen (see the caution above).
 - The Studio's Privacy requests tab appears only when the app declares `@lunora/privacy`.

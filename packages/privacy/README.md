@@ -8,7 +8,7 @@ erasure, and retention holds for records the law says to keep.
 > questions are in `docs/legal.mdx`. Do not rely on a default until a qualified
 > lawyer and a tax adviser have reviewed it against your own processing.
 >
-> **Experimental.** The package is under development and is not released.
+> **Experimental.** The package is published as an alpha (`1.0.0-alpha.*`), and its API may still change.
 
 ## What is built
 
@@ -29,7 +29,9 @@ erasure, and retention holds for records the law says to keep.
   tombstones, the retention archive purge and the operator surface.
 - The Studio has a Privacy requests tab. It appears only when the app declares
   `@lunora/privacy`.
-- Not finished: the runnable example app (`examples/privacy`) is not merged, the
-  workerd suite for the storage paths is not written, and registering the workflow
-  handlers from the per-call factory has not been checked against codegen (plan §4.2).
+- Not finished: there is no end-to-end demo (`examples/privacy` has no sign-in, declares no
+  `authDataset` and does not use `retain()`; there is no payments dataset, only `retain()` with
+  the `de.voucher` rule bound to the app's own tables), the workerd suite for the storage paths
+  is not written, and registering the workflow handlers from the per-call factory has not been
+  checked against codegen (plan §4.2).
 - Not reviewed: every legal and tax value. See `docs/legal.mdx`.

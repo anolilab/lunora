@@ -59,7 +59,7 @@ Read from the official text:
 
 ### What this means for the package's defaults
 
-- **The default of 10 years for every voucher is longer than the law requires** for a business that is not a regulated institution. Keeping data longer than necessary conflicts with GDPR Art. 5(1)(e) (storage limitation). This is the most important open question. The package keeps 10 years because that was decided on 2026-10-11 as the conservative value, but the statute does not support that as a general rule. **Options:** both decisions are now options, and both keep the current values as their defaults.
+- **The voucher default is 10 years, and that is decided.** The statute sets 8 years for a business that is not a regulated institution, so the default is longer than the law requires. The maintainers chose 10 on 2026-10-11, and `germany({ voucherYears: 8 })` gives the statutory period to an app that wants it. A lawyer or tax adviser should still confirm the value for a given business, because keeping data longer than necessary is in tension with GDPR Art. 5(1)(e) (storage limitation).
 
 - `germany({ voucherYears: 8 | 10 })` sets the voucher period. The default is 10. Use 8 for a non-regulated business, as the statute sets it. Regulated institutions keep 10 either way.
 - `eu({ erasureGraceDays })` sets the erasure grace. The default is 14 days, and the range is 0 to 14 whole days.
@@ -90,7 +90,7 @@ The defaults stay as decided until a maintainer or a lawyer changes them.
 
 ## Open questions for a lawyer or tax adviser
 
-1. The voucher period: 8 years for non-regulated businesses, or 10 as decided? (Art. 5(1)(e), HGB §257(4), AO §147(3), BEG IV.)
+1. Does the decided 10-year voucher default hold for this business, given that the statute sets 8 for non-regulated businesses? (Art. 5(1)(e), HGB §257(4), AO §147(3), BEG IV.)
 2. Is a 14-day erasure grace "without undue delay" under Art. 17(1)? It is set by `eu({ erasureGraceDays })`. Is there a better design?
 3. Does the strict one-month clock (no pause for identity verification) match what the controller wants, given the EDPB's secondary reading?
 4. Is moving retained rows into an archive table compatible with the GoBD, and what logging does it need?
