@@ -91,6 +91,7 @@ import {
     NotFoundError,
     NotUniqueError,
     nullsFirstOf,
+    nullsOrderSuffix,
     patchDependsOnRow,
     RANK_TIEBREAK,
     rankPivotConditionSql,
@@ -153,8 +154,16 @@ import { effectiveColumnKind, sqliteDecode } from "./value-codec";
 /** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
 
+/** Exhaustiveness guard for the {@link orderTermsFor} switch: a dialect it does not spell out is a compile error here. */
+const assertNeverDialect = (name: never): never => {
+    throw new LunoraError("INTERNAL", `no ORDER BY NULL placement for dialect "${String(name)}"`);
+};
+
+/** One ORDER BY key as {@link orderTermsFor} reads it. */
+type OrderTermKey = { direction: SortDirection; field: string; nullable?: boolean; nulls?: NullPlacement };
+
 /**
- * Where this engine puts NULLs, spelled out, for the keys that can hold one.
+ * The ORDER BY terms for one key, with each dialect's NULL placement spelled out.
  *
  * `buildSeekWhere` is shared and dialect-blind: its NULL-aware pivot assumes the
  * SQLite/MySQL default, NULLs FIRST ascending and LAST descending. Postgres is
@@ -170,46 +179,38 @@ const ID_ORDER_FIELDS = new Set(["_id", "id"]);
  * null-pivot shapes in the same stroke — they disagreed with the seek on
  * Postgres too, just less visibly.
  *
- * Emitted only for a NULLABLE key: on a non-nullable column the clause is noise that can cost the
- * index. Postgres always spells it out (its default is the mirror of the seek's); SQLite only when
- * the caller asked for a non-default placement; MySQL has no `NULLS` clause in its grammar at all.
- * @returns the ` NULLS FIRST`/` NULLS LAST` suffix, or `""` when none is needed
+ * A nullable key only: on a non-nullable column the clause is noise that can cost the index.
+ * Postgres always spells the placement out (its default is the mirror of the seek's); SQLite only when
+ * the caller asked for a non-default placement; MySQL has no `NULLS` clause in its grammar, so a
+ * requested placement becomes a leading `(col IS NULL)` key — NULL rows are `1`, so ascending puts
+ * them last and descending first. MySQL's default needs nothing, as it already sorts the seek's way.
+ * @returns the ORDER BY terms for the key, in order
  */
-const nullsPlacement = (dialect: SqlDialect, key: { direction: SortDirection; nullable?: boolean; nulls?: NullPlacement }): string => {
-    if (key.nullable !== true) {
-        return "";
-    }
-
-    const suffix = nullsFirstOf(key) ? " NULLS FIRST" : " NULLS LAST";
+const orderTermsFor = (dialect: SqlDialect, key: OrderTermKey): SQL[] => {
+    const direction = key.direction === "desc" ? "DESC" : "ASC";
+    const nullable = key.nullable === true;
+    const term = (placement: string): SQL => sql`${fieldRefSql(dialect, key.field)} ${sql.raw(`${direction}${placement}`)}`;
 
     switch (dialect.name) {
-        // Postgres' default is the mirror of the seek's, so it is always spelled out.
+        case "mysql": {
+            const column = term("");
+
+            if (!nullable || key.nulls === undefined) {
+                return [column];
+            }
+
+            return [sql`(${columnRefSql(key.field)} IS NULL) ${sql.raw(key.nulls === "first" ? "DESC" : "ASC")}`, column];
+        }
         case "postgres": {
-            return suffix;
+            return [term(nullable ? nullsOrderSuffix(nullsFirstOf(key)) : "")];
         }
-        // SQLite already agrees with the default; only a requested placement needs words.
         case "sqlite": {
-            return key.nulls === undefined ? "" : suffix;
+            return [term(nullable && key.nulls !== undefined ? nullsOrderSuffix(nullsFirstOf(key)) : "")];
         }
-        // MySQL has no `NULLS` clause; see {@link mysqlNullsKey}.
         default: {
-            return "";
+            return assertNeverDialect(dialect.name);
         }
     }
-};
-
-/**
- * MySQL's stand-in for `NULLS FIRST/LAST`, which its grammar lacks: a leading `(col IS NULL)` sort key.
- * NULL rows are `1`, so ascending puts them last and descending first. Emitted only for a key that
- * asked for a non-default placement; the default is what MySQL does on its own.
- * @returns the extra ORDER BY term, or `undefined` when none is needed
- */
-const mysqlNullsKey = (dialect: SqlDialect, key: { field: string; nullable?: boolean; nulls?: NullPlacement }): SQL | undefined => {
-    if (dialect.name !== "mysql" || key.nullable !== true || key.nulls === undefined) {
-        return undefined;
-    }
-
-    return sql`(${columnRefSql(key.field)} IS NULL) ${sql.raw(key.nulls === "first" ? "DESC" : "ASC")}`;
 };
 
 /**
@@ -225,18 +226,10 @@ const mysqlNullsKey = (dialect: SqlDialect, key: { field: string; nullable?: boo
  * ahead of the tiebreak, so an ordered read is an index walk on this backend
  * too — a single direction throughout is what keeps it one.
  *
- * NULL placement is the other half of that agreement — see {@link nullsPlacement}.
+ * NULL placement is the other half of that agreement — see {@link orderTermsFor}.
  */
-const compileOrderBySql = (
-    keys: ReadonlyArray<{ direction: SortDirection; field: string; nullable?: boolean; nulls?: NullPlacement }>,
-    dialect: SqlDialect,
-): SQL => {
-    const parts = keys.flatMap((key) => {
-        const term = sql`${fieldRefSql(dialect, key.field)} ${sql.raw(`${key.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, key)}`)}`;
-        const emulated = mysqlNullsKey(dialect, key);
-
-        return emulated === undefined ? [term] : [emulated, term];
-    });
+const compileOrderBySql = (keys: ReadonlyArray<OrderTermKey>, dialect: SqlDialect): SQL => {
+    const parts = keys.flatMap((key) => orderTermsFor(dialect, key));
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
         // No adaptation: the helper reads `direction` off the last key and
@@ -4183,10 +4176,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // ascending except the sort columns, which follow their index.
             const rankColumns = rankPageColumns(index, sortColumns);
             const orderBy = sql.join(
-                rankColumns.map(
-                    (col) =>
-                        sql`${sql.identifier(col.column)} ${sql.raw(`${col.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, { direction: col.direction, nullable: col.nullable })}`)}`,
-                ),
+                rankColumns.flatMap((col) => orderTermsFor(dialect, { direction: col.direction, field: col.column, nullable: col.nullable })),
                 sql`, `,
             );
 

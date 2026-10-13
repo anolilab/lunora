@@ -192,6 +192,9 @@ interface OrderKeyConstraints {
  */
 const nullsFirstOf = (key: Pick<OrderKey, "direction" | "nulls">): boolean => (key.nulls === undefined ? key.direction !== "desc" : key.nulls === "first");
 
+/** The ORDER BY suffix that states a NULL placement: the one spelling the SQL text of every dialect shares. */
+const nullsOrderSuffix = (nullsFirst: boolean): string => (nullsFirst ? " NULLS FIRST" : " NULLS LAST");
+
 /**
  * Is `spec` a well-formed `{ sort, nulls }`? `orderBy` arrives from callers the type system does not
  * reach (an RPC argument), so a malformed entry is refused loudly rather than silently sorted some
@@ -724,6 +727,7 @@ export {
     isLiveForCompanion,
     normalizeOrderKeys,
     nullsFirstOf,
+    nullsOrderSuffix,
     type OrderKeyConstraints,
     softDeleteScope,
     tiebreakDirectionFor,

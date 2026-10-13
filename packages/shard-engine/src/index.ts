@@ -287,6 +287,7 @@ export {
     equalityPinnedFields,
     normalizeOrderKeys,
     nullsFirstOf,
+    nullsOrderSuffix,
     type OrderKeyConstraints,
     softDeleteScope,
     tiebreakDirectionFor,
