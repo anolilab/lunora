@@ -2,9 +2,10 @@
  * Reporting for codegen's platform-portability diagnostics.
  *
  * Every path that runs codegen has to surface these, because each one means the
- * emitted `ctx.*` surface does not match what the target can actually provide —
- * either a used feature was dropped, or the target has no capability matrix at
- * all and nothing was gated. A path that runs codegen and stays silent about
+ * emitted `ctx.*` surface, or the deploy, does not match what the target can
+ * actually provide — a used feature was dropped, the target has no capability
+ * matrix at all and nothing was gated, or the schema declares a vector index
+ * Vectorize would reject. A path that runs codegen and stays silent about
  * them ships that mismatch to production, which is the failure the whole target
  * seam exists to prevent.
  *
@@ -28,7 +29,7 @@ import type { Logger } from "./logger";
 /**
  * Log every diagnostic, and hand the caller ALL of them, partitioned by level.
  *
- * Error-level diagnostics fail. Both kinds carry `level: "error"` because each
+ * Error-level diagnostics fail. They carry `level: "error"` because each
  * "drops or misdirects an emitted surface" (see `PlatformDiagnostic`), and
  * reporting that as a warning with a zero exit is how an app ends up built
  * against a surface its target cannot serve while CI stays green.
