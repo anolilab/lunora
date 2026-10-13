@@ -1194,7 +1194,7 @@ type LunoraWideEvent = SpanHandle;
 ### `ManyRelation` (interface)
 
 ```ts
-interface ManyRelation<Target extends string = string> extends RelationDefinition {
+interface ManyRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "many";
 }
@@ -1431,7 +1431,7 @@ type OnDeleteAction = "cascade" | "restrict" | "set null";
 ### `OneRelation` (interface)
 
 ```ts
-interface OneRelation<Target extends string = string> extends RelationDefinition {
+interface OneRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "one";
 }
@@ -1917,10 +1917,15 @@ interface RelatedStartReference {
 
 ```ts
 interface RelationBuilder {
-    many: <Target extends string>(table: Target, options: {
-        field: string;
-        references?: string;
-    }) => ManyRelation<Target>;
+    many: {
+        <Target extends string>(table: Target, options: {
+            field: string;
+            references?: string;
+        }): ManyRelation<Target>;
+        <Target extends string>(table: Target, options: {
+            through: RelationThrough;
+        }): ThroughManyRelation<Target>;
+    };
     one: <Target extends string>(table: Target, options: {
         field: string;
         onDelete?: OnDeleteAction;
@@ -1929,15 +1934,19 @@ interface RelationBuilder {
 }
 ```
 
-### `RelationDefinition` (interface)
+### `RelationDefinition` (type)
 
 ```ts
-interface RelationDefinition {
-    field: string;
-    kind: "many" | "one";
-    onDelete?: OnDeleteAction;
-    references: string;
+type RelationDefinition = KeyedRelationDefinition | ThroughRelationDefinition;
+```
+
+### `RelationThrough` (interface)
+
+```ts
+interface RelationThrough {
+    from: string;
     table: string;
+    to: string;
 }
 ```
 
@@ -5184,6 +5193,19 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `KeyedRelationDefinition` (interface)
+
+```ts
+interface KeyedRelationDefinition {
+    field: string;
+    kind: "many" | "one";
+    onDelete?: OnDeleteAction;
+    references: string;
+    table: string;
+    through?: never;
+}
+```
+
 ### `LifecycleEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5304,7 +5326,11 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
-### `RelationDefinition` (interface)
+### `RelationDefinition` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RelationThrough` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
@@ -5487,6 +5513,16 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 ### `TableVectorIndex` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `ThroughRelationDefinition` (interface)
+
+```ts
+interface ThroughRelationDefinition {
+    kind: "many";
+    table: string;
+    through: RelationThrough;
+}
+```
 
 ### `TriggerAggregateOptions` (interface)
 
@@ -6534,7 +6570,13 @@ interface RelationWriteInfoLike {
     readonly nullable: boolean;
     readonly references: string;
     readonly refusal?: string;
+    readonly refusalNow?: () => string | undefined;
     readonly table: string;
+    readonly through?: {
+        readonly from: string;
+        readonly table: string;
+        readonly to: string;
+    };
 }
 ```
 
@@ -6939,6 +6981,14 @@ interface TableReaderLike$1 {
     withGeoIndex: (indexName: string, build: (q: unknown) => unknown) => TableReaderLike$1;
     withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike$1;
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike$1;
+}
+```
+
+### `ThroughManyRelation` (interface)
+
+```ts
+interface ThroughManyRelation<Target extends string = string> extends ThroughRelationDefinition {
+    readonly __target?: Target;
 }
 ```
 

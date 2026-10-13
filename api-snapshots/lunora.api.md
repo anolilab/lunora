@@ -721,7 +721,11 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `RelationDefinition` (interface)
+### `RelationDefinition` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelationThrough` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5711,7 +5715,11 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `RelationDefinition` (interface)
+### `RelationDefinition` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelationThrough` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7565,6 +7573,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `KeyedRelationDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LifecycleEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7685,7 +7697,11 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `RelationDefinition` (interface)
+### `RelationDefinition` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelationThrough` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7854,6 +7870,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TableVectorIndex` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ThroughRelationDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

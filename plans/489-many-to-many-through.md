@@ -121,7 +121,7 @@ filters do. Not applicable otherwise.
 
 ## 10. Execution record
 
-All of it landed on `feat-many-to-many-through`, stacked on `feat/db-query-ergonomics` (PR #1144, not yet merged when this was done).
+All of it landed on `feat/many-to-many-through`. It was started stacked on `feat/db-query-ergonomics`; #1144 merged into `alpha` while the work was in flight, so the branch was rebased onto `alpha` and the PR targets `alpha`.
 
 ### Shape of the change
 
@@ -152,15 +152,20 @@ All of it landed on `feat-many-to-many-through`, stacked on `feat/db-query-ergon
 
 ### Gates
 
-| Phase | Gate                                                         | Result                                                                                                                                                                                                                                                           |
-| ----- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | goldens byte-identical, new fixture                          | 182 codegen test files (2 831 tests) green with no fixture or example touched; new `codegen/__tests__/relation-through.test.ts`                                                                                                                                  |
-| 2     | conformance table equal on node:sqlite, a Durable Object, D1 | `shard-engine/__tests__/_helpers/through-cases.ts` (11 cases + 4 wide) run by `ctx-db.relation-through.test.ts`, the `@lunora/d1` node harness, and `do/__tests__/workerd/relation-through.workerd.test.ts` on real workerd                                      |
-| 3     | a failed `set` leaves the join rows as they were             | `do/__tests__/workerd/relation-through-rollback.workerd.test.ts` (real `state.storage.transaction`; the same failure outside a transaction keeps the release, so the test can fail) and the in-process equivalent in `server/__tests__/relation-through.test.ts` |
-| 4     | lint fires on a fixture, not on the documented shape         | `codegen/__tests__/relation-through.test.ts` and `advisor/__tests__/static-lints.test.ts`                                                                                                                                                                        |
+| Phase | Gate                                                         | Result                                                                                                                                                                                                                                                                                                                |
+| ----- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | goldens byte-identical, new fixture                          | 182 codegen test files (2 831 tests) green on the final tree with no fixture or example touched; new `codegen/__tests__/relation-through.test.ts`                                                                                                                                                                     |
+| 2     | conformance table equal on node:sqlite, a Durable Object, D1 | `shard-engine/__tests__/_helpers/through-cases.ts` (11 cases + 4 wide) run by `ctx-db.relation-through.test.ts`, the `@lunora/d1` node harness, and `do/__tests__/workerd/relation-through.workerd.test.ts` (Durable Object) and `d1/__tests__/workerd/relation-through.workerd.test.ts` (real D1 binding) on workerd |
+| 3     | a failed `set` leaves the join rows as they were             | `do/__tests__/workerd/relation-through-rollback.workerd.test.ts` (real `state.storage.transaction`; the same failure outside a transaction keeps the release, so the test can fail) and the in-process equivalent in `server/__tests__/relation-through.test.ts`                                                      |
+| 4     | lint fires on a fixture, not on the documented shape         | `codegen/__tests__/relation-through.test.ts` and `advisor/__tests__/static-lints.test.ts`                                                                                                                                                                                                                             |
 
 The advisor lint (F) was written in phase 1, not phase 4: without a through branch `relation_references_unknown_field` is an ERROR with no
 opt-out and would fail codegen for every through relation.
+
+Final tree, after the rebase onto `alpha`: `tsc --noEmit` clean in server, shard-engine, sql-store, advisor, codegen, d1, do, cli, studio, vite,
+hyperdrive, platform-node, mcp, runtime and lunora; vitest green in server (1 026+), shard-engine (1 738), sql-store (296), d1 (353), advisor
+(632), do (882), codegen (2 831) and studio (1 411); `pnpm run test:workerd` passed all 17 workerd suites; `api:check`, `lint:generated` and
+`lint:package-json` green.
 
 ### STOP conditions
 
@@ -168,13 +173,13 @@ opt-out and would fail codegen for every through relation.
   and `applyOnDelete` are untouched (cascade needs no new code and is tested through the join table's `onDelete`).
 - _More than 5 compound SELECTs or 100 bound parameters on workerd_: not hit. No compound SELECT is emitted. The wide cases seed 150 tags
   on one post so both hops carry a 150-id list (including the `notIn` path of `none`/`every` and `with`); they pass on a real Durable
-  Object, where a statement with 101 bound parameters is rejected, because every list compiles to one `json_each` parameter. The node
+  Object (where a statement with 101 bound parameters was probed to be rejected) and a real D1 binding (documented cap, not probed), because every list compiles to one `json_each` parameter. The node
   suite also asserts the widest statement it sent has at most 100 parameters.
 
 ### Phase 2 bench
 
 `packages/do/__bench__/relation-predicates-through.bench.ts` (2 000 posts, 200 tags, 12 000 join rows, node:sqlite). The through
-declaration costs the same as the hand-written equivalent (`postTags.some(tag.is(W))`), within run-to-run noise:
+declaration costs the same as the hand-written equivalent (`postTags.some(tag.is(W))`), within about 8%:
 
 | Case                                 | through (hz) | hand-written (hz) |
 | ------------------------------------ | ------------ | ----------------- |
@@ -189,8 +194,13 @@ Through-only: `every` (broad) 77.7 hz, `none` (broad) 48.8 hz. A broad `some` is
 
 - A write that touches only the join table and a live shape whose predicate goes through it: whether the source table's shape re-probes was
   not checked. The same question applies to every one-hop relation predicate and was left as it was.
+- `with` on a through relation reads **every** join row of the page's parents even when the caller passes `limit`. A one-hop `many`
+  pushes the `limit` into the child read; here the order comes from the target's `orderBy`, so the cap can only apply after the first hop.
+  `loadMany`'s per-parent fan-out still bounds the target reads, not the link reads.
+- A through relation declared by a **plugin** is rejected when the plugin merges: `validateThroughRelations` compares the join table's bare
+  `v.id("tags")` names with the prefixed table names, and no plugin declares one today.
 - `unindexed_relation_target` checks the join table's `from` column only. Predicates also filter the join table by `to`; an index
   leading with `to` is not linted.
 - `_count` over a through relation materialises the linked target ids; it is not a single grouped query.
-- Pre-existing and unrelated: `packages/server/__tests__/rls-empty-shapes.test.ts` fails `tsc` on this base (`rangeTypeGuard` missing from
-  a `WhereSqlStrategy` after the path-range commit); vitest does not typecheck, so its tests pass.
+- The in-process test runtime does not report its transaction state to the engine, so it never refuses a through write as an action would
+  be (a deployed shard's `buildCtx` passes `inTransaction` for every dispatch, and an action is not wrapped in one).

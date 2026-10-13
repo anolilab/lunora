@@ -1101,6 +1101,31 @@ describe("mask — relation-depth value oracle fails closed (regression)", () =>
         expect(seen["comments"]?.["post"]?.refusal).toBeUndefined();
     });
 
+    it("refuses a many-to-many write whose join-table key is masked, since a masked key never matches on disconnect", async () => {
+        expect.assertions(2);
+
+        const through = { from: "postId", table: "post_tags", to: "tagId" };
+        const info = { colocated: true, field: "postId", kind: "many", nullable: false, references: "_id", table: "tags", through } as const;
+        const database = createFakeDatabase([]);
+
+        (database.writer as unknown as Record<string, unknown>)["relationWrites"] = { posts: { tags: info } };
+
+        const refusalWhenMasking = async (policies: Record<string, Record<string, "redact">>) => {
+            const seen = await lunora.query
+                .use(maskForTest(policies))
+                .query(
+                    async ({ ctx }) => (ctx as unknown as { db: { relationWrites: Record<string, Record<string, { refusal?: string }>> } }).db.relationWrites,
+                )
+                .handler(makeContext(database, "u1"), {});
+
+            return seen["posts"]?.["tags"]?.refusal;
+        };
+
+        await expect(refusalWhenMasking({ post_tags: { tagId: "redact" } })).resolves.toContain("tagId");
+        // Masking a column of the target, which a link never copies, leaves the relation writable.
+        await expect(refusalWhenMasking({ tags: { label: "redact" } })).resolves.toBeUndefined();
+    });
+
     it("refuses the same filter nested one level deeper in `with`", async () => {
         expect.assertions(1);
 

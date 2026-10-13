@@ -350,6 +350,20 @@ interface AdvisorInsertWrite {
 }
 ```
 
+### `AdvisorKeyedRelation` (interface)
+
+```ts
+interface AdvisorKeyedRelation {
+    field: string;
+    kind: "many" | "one";
+    name: string;
+    onDelete?: "cascade" | "restrict" | "set null";
+    references: string;
+    table: string;
+    through?: never;
+}
+```
+
 ### `AdvisorKvKeyAccess` (interface)
 
 ```ts
@@ -649,17 +663,10 @@ interface AdvisorRawRowReturn {
 }
 ```
 
-### `AdvisorRelation` (interface)
+### `AdvisorRelation` (type)
 
 ```ts
-interface AdvisorRelation {
-    field: string;
-    kind: "many" | "one";
-    name: string;
-    onDelete?: "cascade" | "restrict" | "set null";
-    references: string;
-    table: string;
-}
+type AdvisorRelation = AdvisorKeyedRelation | AdvisorThroughRelation;
 ```
 
 ### `AdvisorRelationLoad` (interface)
@@ -841,6 +848,21 @@ interface AdvisorTableScan {
 interface AdvisorTableWrite extends AdvisorInsertWrite {
     fields?: string[];
     method: string;
+}
+```
+
+### `AdvisorThroughRelation` (interface)
+
+```ts
+interface AdvisorThroughRelation {
+    kind: "many";
+    name: string;
+    table: string;
+    through: {
+        from: string;
+        table: string;
+        to: string;
+    };
 }
 ```
 
@@ -1887,6 +1909,12 @@ const storageUploadWithoutMaxSize: Lint;
 
 ```ts
 const tableWithoutInsert: Lint;
+```
+
+### `throughRelationMissingUniqueIndex` (const)
+
+```ts
+const throughRelationMissingUniqueIndex: Lint;
 ```
 
 ### `topicTooManySubscriptions` (const)
