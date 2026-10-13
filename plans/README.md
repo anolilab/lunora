@@ -26,6 +26,7 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                                | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
 | [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                           | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
 | [468](./468-gdpr-package.md)               | `@lunora/privacy`: data-subject rights (export, erasure, holds) | Phase 0: codegen spike; legal and tax review open (§10)                                              |
+| [489](./489-many-to-many-through.md)       | Many-to-many relations through a join table                     | Shipped on `feat/many-to-many-through` (stacked on #1144); merge pending                             |
 
 ## Open (TODO)
 
@@ -35,7 +36,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                  | replay engine, frame handlers, admin surface; decisions D1–D3                     |
 | [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot | blocked: needs a read-only check of production pool rows for `inFlightIds`        |
 | [482](./482-ratelimit-db-store-atomic-consume.md)      | Make the ratelimit consume atomic on the D1-backed `.global()` table | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress) |
-| [489](./489-many-to-many-through.md)                   | Many-to-many relations through a join table                          | BLOCKED: design only; decision 4.1 open                                           |
 | [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                 | umbrella; phase/exit-criteria tracker for `alpha → main`                          |
 | [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                       | P2                                                                                |
 | [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts             | spike; deliverable is a decision                                                  |
