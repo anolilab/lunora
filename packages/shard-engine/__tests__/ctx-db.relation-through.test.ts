@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { assertShapeShardable } from "../src/relation-predicates";
 import createSqliteExec from "./_helpers/node-sqlite";
 import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "./_helpers/through-cases";
 
@@ -82,5 +83,36 @@ describe("many-to-many reads through a join table", () => {
 
         expect(widest).toBeLessThanOrEqual(100);
         expect(compound).toBeLessThanOrEqual(5);
+    });
+});
+
+describe("a live shape whose predicate goes through a join table", () => {
+    const withJoin = (join: Record<string, unknown>): SchemaLike => {
+        return { tables: { ...THROUGH_SCHEMA.tables, post_tags: { ...THROUGH_SCHEMA.tables.post_tags, ...join } } };
+    };
+    const predicate = { tags: { some: { label: "red" } } };
+
+    it("is accepted when the owner, the join table and the target all live in one Durable Object", () => {
+        expect.assertions(1);
+
+        expect(() => {
+            assertShapeShardable(predicate, withJoin({}), "posts");
+        }).not.toThrow();
+    });
+
+    it("is refused when only the join table is sharded, naming the join table", () => {
+        expect.assertions(1);
+
+        expect(() => {
+            assertShapeShardable(predicate, withJoin({ shardMode: { field: "postId", kind: "shardBy" } }), "posts");
+        }).toThrow(expect.objectContaining({ code: "SHAPE_CROSS_SHARD_JOIN", message: expect.stringContaining('"post_tags"') }));
+    });
+
+    it("is refused when only the join table is a memory table, naming the join table", () => {
+        expect.assertions(1);
+
+        expect(() => {
+            assertShapeShardable(predicate, withJoin({ memoryMode: true }), "posts");
+        }).toThrow(expect.objectContaining({ code: "SHAPE_MEMORY_TABLE", message: expect.stringContaining('"post_tags"') }));
     });
 });

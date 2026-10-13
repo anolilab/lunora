@@ -162,10 +162,16 @@ All of it landed on `feat/many-to-many-through`. It was started stacked on `feat
 The advisor lint (F) was written in phase 1, not phase 4: without a through branch `relation_references_unknown_field` is an ERROR with no
 opt-out and would fail codegen for every through relation.
 
-Final tree, after the rebase onto `alpha`: `tsc --noEmit` clean in server, shard-engine, sql-store, advisor, codegen, d1, do, cli, studio, vite,
-hyperdrive, platform-node, mcp, runtime and lunora; vitest green in server (1 026+), shard-engine (1 738), sql-store (296), d1 (353), advisor
-(632), do (882), codegen (2 831) and studio (1 411); `pnpm run test:workerd` passed all 17 workerd suites; `api:check`, `lint:generated` and
-`lint:package-json` green.
+Final tree, after the rebase onto `alpha` (measured, one package at a time): `tsc --noEmit` clean in server, shard-engine, sql-store,
+advisor, codegen, d1, do, cli, studio, vite, hyperdrive, platform-node, mcp, runtime and lunora; vitest green in server (67 files, 1 032
+tests), shard-engine (118 files, 1 741 tests), sql-store (296), d1 (353), advisor (632), do (882), codegen (2 831) and studio (1 411);
+`pnpm run test:workerd` passed all 17 workerd suites; `api:check`, `lint:generated` and `lint:package-json` green. Two contracts from §3
+have their own tests: `server/__tests__/relation-through-rls.test.ts` (a read policy on the join table or on the target hides a link from
+`with`, `some` and `_count`, and a write policy on the join table refuses the insert a `connect` makes and the delete a `disconnect` makes;
+each with a no-policy control) and the shape guard cases in `shard-engine/__tests__/ctx-db.relation-through.test.ts`.
+
+Not run: `test:templates`, `e2e`, `test:celld` and the non-JS SDK suites (none touch relation declarations), and a raw 101-parameter probe on
+D1 (the cap there is documented, not measured).
 
 ### STOP conditions
 
@@ -197,8 +203,8 @@ Through-only: `every` (broad) 77.7 hz, `none` (broad) 48.8 hz. A broad `some` is
 - `with` on a through relation reads **every** join row of the page's parents even when the caller passes `limit`. A one-hop `many`
   pushes the `limit` into the child read; here the order comes from the target's `orderBy`, so the cap can only apply after the first hop.
   `loadMany`'s per-parent fan-out still bounds the target reads, not the link reads.
-- A through relation declared by a **plugin** is rejected when the plugin merges: `validateThroughRelations` compares the join table's bare
-  `v.id("tags")` names with the prefixed table names, and no plugin declares one today.
+- A through relation declared by a **plugin** is expected to be rejected when the plugin merges: `validateThroughRelations` compares the
+  join table's bare `v.id("tags")` names with the prefixed table names. This was read off the code, not run, and no plugin declares one today.
 - `unindexed_relation_target` checks the join table's `from` column only. Predicates also filter the join table by `to`; an index
   leading with `to` is not linted.
 - `_count` over a through relation materialises the linked target ids; it is not a single grouped query.
