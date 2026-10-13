@@ -80,6 +80,28 @@ do {
 } while (cursor !== null);
 ```
 
+## Ordering rows that hold NULL
+
+`orderBy` puts rows whose column is empty (`null` or absent) first when ascending and last when
+descending. To put them somewhere else, give the entry a `sort` and a `nulls`:
+
+```ts
+await ctx.db.tasks.findMany({
+    orderBy: [{ dueAt: { sort: "asc", nulls: "last" } }], // dated tasks first, undated at the end
+    limit: 20,
+});
+```
+
+Paging works with any placement: the cursor seeks past the NULL group the same way it seeks past any
+other value, including when a page boundary falls inside it. Use the same `orderBy` for every page,
+as a cursor is only valid against the ordering that minted it. The placement has no effect on a
+column that cannot hold NULL.
+
+Whether a non-default placement is still answered from an index depends on the database. SQLite
+and D1 walk the index. Postgres is always given the placement explicitly, and MySQL, which has no
+`NULLS FIRST/LAST`, gets an extra `IS NULL` sort key that an index on the column alone cannot serve,
+so measure a hot read on those before relying on it.
+
 ## Load more / infinite lists on the client
 
 On the client a paginated list is the same query re-run with the next

@@ -3683,7 +3683,10 @@ interface OneRelationWhere<W> {
 ### `OrderBy` (type)
 
 ```ts
-type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc">>;
+type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc" | {
+    nulls: "first" | "last";
+    sort: "asc" | "desc";
+}>>;
 ```
 
 ### `PatchValues` (type)

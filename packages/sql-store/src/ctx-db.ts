@@ -90,6 +90,7 @@ import {
     normalizeOrderKeys,
     NotFoundError,
     NotUniqueError,
+    nullsFirstOf,
     patchDependsOnRow,
     RANK_TIEBREAK,
     rankPivotConditionSql,
@@ -176,12 +177,41 @@ const ID_ORDER_FIELDS = new Set(["_id", "id"]);
  * `ORDER BY c DESC NULLS LAST` from a plain btree walk.
  * @returns the ` NULLS FIRST`/` NULLS LAST` suffix, or `""` when the engine default already agrees
  */
-const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable?: boolean }): string => {
-    if (dialect.name !== "postgres" || key.nullable !== true) {
+const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable?: boolean; nulls?: "first" | "last" }): string => {
+    if (key.nullable !== true) {
         return "";
     }
 
-    return key.direction === "desc" ? " NULLS LAST" : " NULLS FIRST";
+    const suffix = nullsFirstOf(key) ? " NULLS FIRST" : " NULLS LAST";
+
+    switch (dialect.name) {
+        // Postgres' default is the mirror of the seek's, so it is always spelled out.
+        case "postgres": {
+            return suffix;
+        }
+        // SQLite already agrees with the default; only a requested placement needs words.
+        case "sqlite": {
+            return key.nulls === undefined ? "" : suffix;
+        }
+        // MySQL has no `NULLS` clause; see {@link mysqlNullsKey}.
+        default: {
+            return "";
+        }
+    }
+};
+
+/**
+ * MySQL's stand-in for `NULLS FIRST/LAST`, which its grammar lacks: a leading `(col IS NULL)` sort key.
+ * NULL rows are `1`, so ascending puts them last and descending first. Emitted only for a key that
+ * asked for a non-default placement; the default is what MySQL does on its own.
+ * @returns the extra ORDER BY term, or `undefined` when none is needed
+ */
+const mysqlNullsKey = (dialect: SqlDialect, key: { field: string; nullable?: boolean; nulls?: "first" | "last" }): SQL | undefined => {
+    if (dialect.name !== "mysql" || key.nullable !== true || key.nulls === undefined) {
+        return undefined;
+    }
+
+    return sql`(${columnRefSql(key.field)} IS NULL) ${sql.raw(key.nulls === "first" ? "DESC" : "ASC")}`;
 };
 
 /**
@@ -199,10 +229,16 @@ const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable
  *
  * NULL placement is the other half of that agreement — see {@link nullsPlacement}.
  */
-const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string; nullable?: boolean }>, dialect: SqlDialect): SQL => {
-    const parts = keys.map(
-        (key) => sql`${fieldRefSql(dialect, key.field)} ${sql.raw(`${key.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, key)}`)}`,
-    );
+const compileOrderBySql = (
+    keys: ReadonlyArray<{ direction?: string; field: string; nullable?: boolean; nulls?: "first" | "last" }>,
+    dialect: SqlDialect,
+): SQL => {
+    const parts = keys.flatMap((key) => {
+        const term = sql`${fieldRefSql(dialect, key.field)} ${sql.raw(`${key.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, key)}`)}`;
+        const emulated = mysqlNullsKey(dialect, key);
+
+        return emulated === undefined ? [term] : [emulated, term];
+    });
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
         // No adaptation: the helper reads `direction` off the last key and

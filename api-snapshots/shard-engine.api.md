@@ -1454,6 +1454,12 @@ class NotUniqueError extends LunoraError {
 }
 ```
 
+### `NullPlacement` (type)
+
+```ts
+type NullPlacement = "first" | "last";
+```
+
 ### `OnDeleteActionLike` (type)
 
 ```ts
@@ -1472,7 +1478,10 @@ interface OrderByClause {
 ### `OrderByInput` (type)
 
 ```ts
-type OrderByInput = Record<string, SortDirection>;
+type OrderByInput = Record<string, SortDirection | {
+    nulls: NullPlacement;
+    sort: SortDirection;
+}>;
 ```
 
 ### `OrderKey` (interface)
@@ -1482,6 +1491,7 @@ interface OrderKey {
     direction: SortDirection;
     field: string;
     nullable: boolean;
+    nulls?: NullPlacement;
 }
 ```
 
@@ -4525,6 +4535,15 @@ const normalizeSourceDocument: (document: Record<string, unknown>) => Record<str
 
 ```ts
 const normalizeSourceValue: (value: unknown) => unknown;
+```
+
+### `nullsFirstOf` (const)
+
+```ts
+const nullsFirstOf: (key: {
+    direction?: string;
+    nulls?: "first" | "last";
+}) => boolean;
 ```
 
 ### `operatorFields` (const)

@@ -115,8 +115,16 @@ export type Where<TDocument> = PathWhere<TDocument> & {
     OR?: Where<TDocument>[];
 };
 
-/** One `{ field: "asc" | "desc" }` ordering entry; `orderBy` is an ordered list. */
-export type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc">>;
+/**
+ * One ordering entry; `orderBy` is an ordered list. `{ field: "asc" | "desc" }` sorts NULLs first
+ * ascending and last descending. `{ field: { sort: "desc", nulls: "first" } }` places them yourself.
+ *
+ * Whether a placement other than the default is still served by an index depends on the database
+ * (SQLite walks the index; others may sort the matching rows), so measure a hot read.
+ * It has no effect on a column that cannot hold NULL. Keep the same `orderBy` for every page of a
+ * paginated read, as a cursor is only valid against the ordering that minted it.
+ */
+export type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc" | { nulls: "first" | "last"; sort: "asc" | "desc" }>>;
 
 export interface QueryArgs<TDocument> {
     cursor?: null | string;

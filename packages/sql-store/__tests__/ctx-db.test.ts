@@ -2981,6 +2981,57 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
         expect(updates()).toBe(16);
     });
 
+    describe("explain", () => {
+        it("describes the statement a read runs, using the engine's own plan", async () => {
+            expect.assertions(4);
+
+            const writer = makeWriter();
+
+            await writer.insert("counters", { name: "a", value: 1 });
+
+            const indexed = await writer.explain?.("counters", { where: { name: "a" } });
+            const scanned = await writer.explain?.("counters", { where: { value: 1 } });
+
+            expect(indexed?.sql).toMatch(/^SELECT .* FROM "counters"/u);
+            expect(indexed?.params).toContain("a");
+            expect(indexed?.plan.join("\n")).toContain("by_name");
+            expect(scanned?.plan.join("\n")).not.toContain("by_name");
+        });
+
+        it("writes nothing and returns no rows", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+
+            await writer.explain?.("counters", { where: { name: "a" } });
+
+            await expect(writer.findMany("counters")).resolves.toMatchObject({ page: [] });
+        });
+
+        it.each([
+            ["postgres", "EXPLAIN SELECT", { "QUERY PLAN": "Seq Scan on counters" }, "Seq Scan on counters"],
+            ["mysql", "EXPLAIN SELECT", { id: 1, key: null, table: "counters" }, "1 | null | counters"],
+        ] as const)("uses plain EXPLAIN on %s and reads that dialect's plan row", async (name, prefix, row, line) => {
+            expect.assertions(2);
+
+            const statements: string[] = [];
+            const base = execOver(database);
+            const exec: SqlCtxExec = {
+                ...base,
+                all: async (query, parameters) => {
+                    statements.push(query);
+
+                    return query.startsWith("EXPLAIN") ? [row] : base.all(query, parameters);
+                },
+            };
+            const writer = makeWriter({ ...makeSqliteDialect(), name }, exec);
+            const result = await writer.explain?.("counters", {});
+
+            expect(statements.some((statement) => statement.startsWith(prefix))).toBe(true);
+            expect(result?.plan).toStrictEqual([line]);
+        });
+    });
+
     describe("atomic field operators", () => {
         const contendedWriter = (): { updates: () => number; writer: ReturnType<typeof makeWriter> } => {
             // Every UPDATE finds the row's version moved by someone else first.
@@ -3361,55 +3412,186 @@ describe("createSqlCtxDb — $onUpdateFn on a .global() table", () => {
 
         expect(row?.touched).toBe(99);
     });
+});
 
-    describe("explain", () => {
-        it("describes the statement a read runs, using the engine's own plan", async () => {
-            expect.assertions(4);
+describe("createSqlCtxDb — orderBy null placement", () => {
+    const nullable = (kind: string): ValidatorLike => col(kind, { notNull: false });
+    const nullSchema: SchemaLike = {
+        tables: {
+            items: {
+                indexes: [{ fields: ["score"], name: "by_score" }],
+                shape: { label: col("string"), score: nullable("number") },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
 
-            const writer = makeWriter();
+    /** Four NULLs and a tie on 3, so a page boundary falls inside the NULL run and inside a tie. */
+    const ROWS: [string, null | number][] = [
+        ["a", null],
+        ["b", 3],
+        ["c", null],
+        ["d", 1],
+        ["e", null],
+        ["f", 3],
+        ["g", 2],
+        ["h", null],
+    ];
 
-            await writer.insert("counters", { name: "a", value: 1 });
+    type Combo = { nulls: "first" | "last"; sort: "asc" | "desc" };
 
-            const indexed = await writer.explain?.("counters", { where: { name: "a" } });
-            const scanned = await writer.explain?.("counters", { where: { value: 1 } });
+    const COMBOS: Combo[] = [
+        { nulls: "first", sort: "asc" },
+        { nulls: "last", sort: "asc" },
+        { nulls: "first", sort: "desc" },
+        { nulls: "last", sort: "desc" },
+    ];
 
-            expect(indexed?.sql).toMatch(/^SELECT .* FROM "counters"/u);
-            expect(indexed?.params).toContain("a");
-            expect(indexed?.plan.join("\n")).toContain("by_name");
-            expect(scanned?.plan.join("\n")).not.toContain("by_name");
+    /** The order a correct store must return, computed independently of the SQL. */
+    const expected = ({ nulls, sort }: Combo): string[] => {
+        const created = new Map(ROWS.map(([label], index) => [label, index]));
+        const sign = sort === "asc" ? 1 : -1;
+
+        return ROWS.toSorted(([leftLabel, left], [rightLabel, right]) => {
+            if (left !== right) {
+                if (left === null) {
+                    return nulls === "first" ? -1 : 1;
+                }
+
+                if (right === null) {
+                    return nulls === "first" ? 1 : -1;
+                }
+
+                return (left - right) * sign;
+            }
+
+            return ((created.get(leftLabel) ?? 0) - (created.get(rightLabel) ?? 0)) * sign;
+        }).map(([label]) => label);
+    };
+
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const seed = async (dialect: SqlDialect = makeSqliteDialect(), exec: SqlCtxExec = harness.exec) => {
+        let now = 1_700_000_000_000;
+        const writer = createSqlCtxDb({
+            clock: () => {
+                now += 1000;
+
+                return now;
+            },
+            dialect,
+            exec,
+            schema: nullSchema,
         });
 
-        it("writes nothing and returns no rows", async () => {
-            expect.assertions(1);
+        for (const [label, score] of ROWS) {
+            // eslint-disable-next-line no-await-in-loop -- sequential inserts keep `_creationTime` in input order
+            await writer.insert("items", score === null ? { label } : { label, score });
+        }
 
-            const writer = makeWriter();
+        return writer;
+    };
 
-            await writer.explain?.("counters", { where: { name: "a" } });
+    const labelsOf = (page: Record<string, unknown>[]): string[] => page.map((row) => String(row["label"]));
 
-            await expect(writer.findMany("counters")).resolves.toMatchObject({ page: [] });
+    it.each(COMBOS)("orders $sort with nulls $nulls like the reference, unpaged", async (combo) => {
+        expect.assertions(1);
+
+        const writer = await seed();
+        const all = await writer.findMany("items", { orderBy: [{ score: combo }] });
+
+        expect(labelsOf(all.page)).toStrictEqual(expected(combo));
+    });
+
+    it.each(
+        COMBOS.flatMap((combo) =>
+            [2, 3].map((size) => {
+                return { ...combo, size };
+            }),
+        ),
+    )("pages $sort with nulls $nulls in pages of $size with no gap and no repeat", async ({ size, ...combo }) => {
+        expect.assertions(1);
+
+        const writer = await seed();
+        const labels: string[] = [];
+        let cursor: null | string | undefined;
+
+        for (let guard = 0; guard < ROWS.length + 2; guard += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
+            const page = await writer.findMany("items", { cursor, limit: size, orderBy: [{ score: combo }] });
+
+            labels.push(...labelsOf(page.page));
+
+            if (page.isDone) {
+                break;
+            }
+
+            cursor = page.continueCursor;
+        }
+
+        expect(labels).toStrictEqual(expected(combo));
+    });
+
+    it.each([
+        ["postgres", { nulls: "last", sort: "asc" }, /"score" ASC NULLS LAST/u],
+        ["postgres", { nulls: "first", sort: "desc" }, /"score" DESC NULLS FIRST/u],
+        ["postgres", "asc", /"score" ASC NULLS FIRST/u],
+        ["mysql", { nulls: "last", sort: "asc" }, /\(`score` IS NULL\) ASC, [^,]*`score` ASC,/u],
+        ["mysql", { nulls: "first", sort: "desc" }, /\(`score` IS NULL\) DESC, [^,]*`score` DESC,/u],
+        ["sqlite", { nulls: "last", sort: "asc" }, /"score" ASC NULLS LAST/u],
+    ] as const)("%s emits the placement %j as the ORDER BY it needs", async (name, spec, pattern) => {
+        expect.assertions(1);
+
+        const statements: string[] = [];
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            all: async (query, parameters) => {
+                statements.push(query);
+
+                return query.startsWith("SELECT") ? [] : harness.exec.all(query, parameters);
+            },
+        };
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: { ...makeSqliteDialect(), name }, exec, schema: nullSchema });
+
+        await writer.findMany("items", { orderBy: [{ score: spec }] }).catch(() => undefined);
+
+        expect(statements.find((statement) => statement.includes("ORDER BY"))).toMatch(pattern);
+    });
+
+    it("rejects a hostile placement before any SQL is built", async () => {
+        expect.assertions(1);
+
+        const writer = await seed();
+
+        await expect(writer.findMany("items", { orderBy: [{ score: { nulls: "first; DROP TABLE items", sort: "asc" } as never }] })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
         });
+    });
 
-        it.each([
-            ["postgres", "EXPLAIN SELECT", { "QUERY PLAN": "Seq Scan on counters" }, "Seq Scan on counters"],
-            ["mysql", "EXPLAIN SELECT", { id: 1, key: null, table: "counters" }, "1 | null | counters"],
-        ] as const)("uses plain EXPLAIN on %s and reads that dialect's plan row", async (name, prefix, row, line) => {
-            expect.assertions(2);
+    it("leaves a SQLite default placement without a NULLS clause, so its plan is unchanged", async () => {
+        expect.assertions(1);
 
-            const statements: string[] = [];
-            const base = execOver(database);
-            const exec: SqlCtxExec = {
-                ...base,
-                all: async (query, parameters) => {
-                    statements.push(query);
+        const statements: string[] = [];
+        const exec: SqlCtxExec = {
+            ...harness.exec,
+            all: async (query, parameters) => {
+                statements.push(query);
 
-                    return query.startsWith("EXPLAIN") ? [row] : base.all(query, parameters);
-                },
-            };
-            const writer = makeWriter({ ...makeSqliteDialect(), name }, exec);
-            const result = await writer.explain?.("counters", {});
+                return harness.exec.all(query, parameters);
+            },
+        };
+        const writer = await seed(makeSqliteDialect(), exec);
 
-            expect(statements.some((statement) => statement.startsWith(prefix))).toBe(true);
-            expect(result?.plan).toStrictEqual([line]);
-        });
+        await writer.findMany("items", { orderBy: [{ score: { nulls: "first", sort: "asc" } }] });
+
+        expect(statements.filter((statement) => statement.includes("ORDER BY")).join("\n")).not.toContain("NULLS");
     });
 });

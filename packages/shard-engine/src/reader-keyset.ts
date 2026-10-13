@@ -82,9 +82,21 @@ const doWhereTextStrategy: WhereSqlStrategy<TextFragment> = {
     serialize: serializeSqlValue,
 };
 
+/** The SQL for a requested NULL placement — fixed literals, never the caller's string. */
+const nullsClause = (nulls: "first" | "last" | undefined): string => {
+    if (nulls === undefined) {
+        return "";
+    }
+
+    return nulls === "first" ? " NULLS FIRST" : " NULLS LAST";
+};
+
 /** An ORDER BY for `keys`, with an `id` tiebreak in the last key's direction unless an id field is already ordered. */
 const compileOrderByText = (keys: OrderKey[]): string => {
-    const parts = keys.map((key) => `${jsonPath(key.field)} ${key.direction === "desc" ? "DESC" : "ASC"}`);
+    // `nulls` is only set when it differs from SQLite's default (NULLs first ascending, last descending),
+    // so an un-annotated read compiles exactly as before. SQLite cannot answer a non-default placement from
+    // an index walk, so it sorts: that is the price of asking.
+    const parts = keys.map((key) => `${jsonPath(key.field)} ${key.direction === "desc" ? "DESC" : "ASC"}${nullsClause(key.nulls)}`);
 
     if (!keys.some((key) => key.field === "_id" || key.field === "id")) {
         parts.push(`${jsonPath("id")} ${tiebreakDirectionFor(keys) === "desc" ? "DESC" : "ASC"}`);

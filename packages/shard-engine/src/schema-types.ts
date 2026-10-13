@@ -296,8 +296,15 @@ export interface ResolveWithResult {
 
 export type SortDirection = "asc" | "desc";
 
-/** A single `{ field: "asc" | "desc" }` entry; `orderBy` is an ordered list of these. */
-export type OrderByInput = Record<string, SortDirection>;
+/** Where rows holding SQL NULL sort among the others. */
+export type NullPlacement = "first" | "last";
+
+/**
+ * A single `{ field: "asc" | "desc" }` entry; `orderBy` is an ordered list of these. The object form
+ * `{ field: { sort: "desc", nulls: "last" } }` also says where NULLs go. Without it NULLs sort
+ * first ascending and last descending, which is what an index walk gives.
+ */
+export type OrderByInput = Record<string, SortDirection | { nulls: NullPlacement; sort: SortDirection }>;
 
 export interface QueryArgs {
     baseWhere?: WhereInput;
@@ -508,6 +515,13 @@ export interface OrderKey {
      * which is the row-losing direction.
      */
     nullable: boolean;
+
+    /**
+     * Where this key's NULLs sort, when the caller asked for something other than the default. Set
+     * only on a nullable key: on a column that never holds NULL the placement is moot, and the
+     * clause it would add can cost the index.
+     */
+    nulls?: NullPlacement;
 }
 
 /** Query-options shape shared by every aggregate reader. */
