@@ -154,10 +154,19 @@ const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${q
  * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
  * that already has rows, and D1 is SQLite, so a NOT NULL add fails exactly when it matters. The runtime
  * auto-provisioner makes the same choice (see `alterGlobalTableDrift` in `@lunora/sql-store`), and the declared
- * `notNull` is still enforced on write. Existing rows read the new column as NULL until they are written.
+ * `notNull` is still enforced on write. Existing rows read the new column as NULL until they are written, so for a
+ * required column the statement is followed by a comment that says so and gives the backfill to run. The snapshot
+ * records no default value, so the value is left for the author to fill in rather than guessed.
  */
-const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string =>
-    `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, { ...column, nullable: true })};`;
+const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string => {
+    const statement = `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, { ...column, nullable: true })};`;
+
+    if (column.nullable) {
+        return statement;
+    }
+
+    return `${statement}\n-- ${quoteIdentifier(tableName)}.${quoteIdentifier(columnName)} is required, so rows written before it read NULL. Backfill them:\n-- UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(columnName)} = <value> WHERE ${quoteIdentifier(columnName)} IS NULL;`;
+};
 
 const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     const fields = index.fields.map((field) => columnRef(field)).join(", ");

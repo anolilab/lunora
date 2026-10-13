@@ -114,6 +114,27 @@ itself from the schema the worker is running:
 - **`.global()` tables** are provisioned on the first request that touches them,
   with the same additive rules.
 
+### Adding a required field to a table that has rows
+
+An added column is always created nullable, because SQLite and D1 reject
+`ADD COLUMN … NOT NULL` on a populated table. The validator still treats the
+field as required, so rows written before it need a value:
+
+- **A required field with a default** (`.default(v)`, `.defaultNow()`,
+  `.$defaultFn(fn)`) is backfilled on a `.global()` table when the runtime adds
+  the column: every row without a value gets the default, evaluated once. That
+  includes the `updatedAt` column `.timestamps()` adds, which starts at the time
+  of the deploy.
+- **A required field with no default** has no value to invent. Its existing rows
+  keep reading `NULL`, and the runtime logs one warning naming the column. Add a
+  backfilling `UPDATE` (the generated migration file shows the statement) before
+  you rely on the field.
+- A field that may hold null (`v.optional`, `.nullable()`, a union with
+  `v.null()`) needs nothing.
+
+Root and `.shardBy()` tables store each row as a JSON document, so a field
+added later is simply absent from older rows.
+
 So a deploy that only adds tables, optional fields or non-unique indexes needs
 nothing beyond the deploy itself. Two things still need a person before it:
 the hand-written SQL described below, and a data migration that backfills rows.
