@@ -1,6 +1,6 @@
 ---
 title: Relations
-description: Modeling many-to-one and one-to-many relationships with the one / many relation descriptors, foreign-key columns and indexed reads.
+description: Modeling many-to-one, one-to-many and many-to-many relationships with the one / many relation descriptors, foreign-key columns, join tables and indexed reads.
 related:
     - to: /docs/concepts/relation-graph
       note: "`ctx.db.related` — walking the derived foreign-key graph"
@@ -49,15 +49,16 @@ export default defineSchema({
 });
 ```
 
-## The two descriptors
+## The descriptors
 
 `.relations((r) => …)` returns a map of named accessors. Each accessor is
-built with one of two descriptors on the `r` builder:
+built with one of the descriptors on the `r` builder:
 
-| Descriptor            | Cardinality | Where the FK lives                                                                                | Signature                           |
-| --------------------- | ----------- | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `r.one(table, opts)`  | many-to-one | on **this** table; `opts.field` points at `table`.`references`                                    | `{ field, references?, onDelete? }` |
-| `r.many(table, opts)` | one-to-many | on the **target** table; `opts.field` is the column over there matching this table's `references` | `{ field, references? }`            |
+| Descriptor                   | Cardinality  | Where the FK lives                                                                                | Signature                           |
+| ---------------------------- | ------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `r.one(table, opts)`         | many-to-one  | on **this** table; `opts.field` points at `table`.`references`                                    | `{ field, references?, onDelete? }` |
+| `r.many(table, opts)`        | one-to-many  | on the **target** table; `opts.field` is the column over there matching this table's `references` | `{ field, references? }`            |
+| `r.many(table, { through })` | many-to-many | on a **join table** with one row per linked pair; see [Many-to-many](#many-to-many)               | `{ through: { table, from, to } }`  |
 
 - **`field`** (required): the name of the foreign-key column.
 - **`references`**: the target column the FK points at. Defaults to `_id`;
@@ -124,6 +125,64 @@ categories: defineTable({
 
 `.relations()` chains alongside `.index()`, `.shardBy()`, `.global()` and the
 rest of the table builder, and returns the same builder instance.
+
+## Many-to-many
+
+A link that needs a join table (`posts` ↔ `tags` through `post_tags`) is one more `r.many`, naming the join table
+and its two keys. The join table is an ordinary table: `from` points at the table that declares the relation and
+`to` at the target.
+
+```ts
+export default defineSchema({
+    posts: defineTable({ title: v.string() }).relations((r) => ({
+        tags: r.many("tags", { through: { table: "post_tags", from: "postId", to: "tagId" } }),
+    })),
+
+    tags: defineTable({ label: v.string() }),
+
+    post_tags: defineTable({ postId: v.id("posts"), tagId: v.id("tags") })
+        // one row per pair: a repeated connect must not store the link twice
+        .index("by_pair", ["postId", "tagId"], { unique: true })
+        .relations((r) => ({
+            post: r.one("posts", { field: "postId", onDelete: "cascade" }),
+            tag: r.one("tags", { field: "tagId", onDelete: "cascade" }),
+        })),
+});
+```
+
+- **The schema is checked when it loads.** The join table has to exist, `from` and `to` have to be required
+  `v.id` columns pointing at the declaring table and the target, and a **unique index over exactly those two
+  columns** is required. The `through_relation_missing_unique_index` advisor lint reports the missing index at
+  codegen time.
+- **Reads work like any other `many`.** `with: { tags: true }` loads the linked tags (two batched reads: the join
+  rows, then the tags), `where: { tags: { some | every | none: … } }` filters posts through the join, and
+  `with: { _count: { tags: true } }` counts. Rows come back in the target read's order (its `orderBy`), not in the
+  order the links were created. The join table's and the target's read policies both apply, so a link the caller
+  cannot see, or one to a tag it cannot read, is not returned or counted. A join table or target that sits on a
+  sharded table is refused in a live shape's predicate, as any other relation is.
+- **Deletes follow the join table's own foreign keys.** A through relation declares no `onDelete`. Deleting a post
+  or a tag removes its join rows when the join table's `r.one(…, { onDelete: "cascade" })` says so, exactly as it
+  would for a hand-written join table. Without those, the join rows are left behind and simply point at nothing.
+- **Writes** use the same `connect` / `disconnect` / `set` operators, and only ever write join rows: the tags
+  themselves are read, never changed.
+
+    ```ts
+    await ctx.db.posts.insert({ title: "Hello", tags: { connect: [red, green] } });
+    await ctx.db.posts.patch(postId, { tags: { disconnect: [red] } });
+    await ctx.db.posts.patch(postId, { tags: { set: [green, blue] } }); // adds blue, removes red
+    ```
+
+    `connect` is idempotent (a link that already exists is left alone), `disconnect` of a link that is not there
+    does nothing, and `set` is a diff against the links already present. Each target must exist and be readable
+    (`NOT_FOUND` otherwise), checked before the first join row changes. A join table with a **required column
+    besides `from` and `to`** (a role, an `addedAt`) cannot be written this way and is refused with
+    `UNPROCESSABLE`: write its rows directly. Every join row goes through its own write, so the join table's write
+    policy, triggers and validators run for each one.
+
+- **It needs a mutation.** The links are several row writes that only a mutation's transaction makes atomic: if
+  the third insert fails, the earlier deletes and inserts roll back. An action has no transaction, so a many-to-many
+  write there is refused with `UNPROCESSABLE`. The owner, the join table and the target all have to live in the
+  same shard's Durable Object, as for any [nested write](#writing-through-a-relation).
 
 ## Index your foreign keys
 
@@ -238,7 +297,7 @@ await ctx.db.users.patch(userId, { posts: { set: [postB, postC] } }); // exactly
 - A relation whose foreign-key column, or the column it references, is [masked](/docs/concepts/masking) for the
   caller is refused with `UNPROCESSABLE`: the write would copy the masked value into a stored column.
 - Not available in `insertMany`, `patchMany` or `replace`: they reject a relation write rather than store it as
-  a column value. A relation many-to-many through a join table is not a relation kind yet; write the join rows.
+  a column value.
 
 ## Relations vs the relation graph
 

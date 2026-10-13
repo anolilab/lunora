@@ -54,6 +54,14 @@ Each of these shipped on the alpha channel as a `BREAKING CHANGE` (or a
 deliberate surface cut) on the road to 1.0. If your app started on an early
 alpha, work through them in order.
 
+### `@lunora/server`: `RelationDefinition` is a union
+
+`r.many(target, { through })` adds a many-to-many relation, which has no `field`, `references` or `onDelete`
+of its own. `RelationDefinition` (and the matching `RelationDefinitionLike`, `RelationIR` and `AdvisorRelation`
+types) is therefore a union of the single-key relation and the through relation, so code that reads
+`relation.field` off a relation map has to narrow on `relation.through` first. Apps that only declare
+relations with `r.one` and `r.many({ field })` are unaffected.
+
 ### `@lunora/ratelimit`: `shards` option removed
 
 `RateLimitConfig.shards` split a limit into N sub-buckets that each held
