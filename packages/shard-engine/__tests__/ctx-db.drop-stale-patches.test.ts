@@ -116,6 +116,52 @@ describe("ctx-db .dropStalePatches()", () => {
         expect(dropped).toHaveLength(1);
     });
 
+    it("never drops an atomic operator for a field that moved: it is relative to the stored value", async () => {
+        expect.assertions(3);
+
+        const { cursor, dropped, setBaseline, writer } = setup();
+        const id = await writer.insert("documents", { body: "b", title: "t", views: 0 });
+        const baseline = cursor();
+
+        // Another writer bumps the counter after the caller's baseline.
+        await writer.patch(id, { views: { increment: 1 } });
+
+        // The caller's queued increment arrives late and must still count.
+        setBaseline(baseline);
+        await writer.patch(id, { views: { increment: 1 } });
+
+        const row = await writer.get(id);
+
+        expect(row?.["views"]).toBe(2);
+        expect(dropped).toHaveLength(0);
+
+        // The same holds through patchIf.
+        await writer.patchIf?.("documents", id, { patch: { views: { increment: 5 } }, where: { body: "b" } });
+
+        const afterPatchIf = await writer.get(id);
+
+        expect(afterPatchIf?.["views"]).toBe(7);
+    });
+
+    it("still drops the whole patch when a literal field beside the operator went stale", async () => {
+        expect.assertions(3);
+
+        const { cursor, dropped, setBaseline, writer } = setup();
+        const id = await writer.insert("documents", { body: "b", title: "original", views: 0 });
+        const baseline = cursor();
+
+        await writer.patch(id, { title: "theirs" });
+
+        setBaseline(baseline);
+        await writer.patch(id, { title: "mine", views: { increment: 1 } });
+
+        const row = await writer.get(id);
+
+        expect(row?.["title"]).toBe("theirs");
+        expect(row?.["views"]).toBe(0);
+        expect(dropped).toHaveLength(1);
+    });
+
     it("applies a patch to a field nobody else touched — the point of the feature", async () => {
         expect.assertions(3);
 

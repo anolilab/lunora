@@ -3681,6 +3681,14 @@ interface OneRelationWhere<W> {
 type OrderBy<TDocument> = Partial<Record<keyof TDocument, "asc" | "desc">>;
 ```
 
+### `PatchValues` (type)
+
+```ts
+type PatchValues<Row> = {
+    [K in keyof Row]?: Row[K] | OperatorFor<NonNullable<Row[K]>>;
+};
+```
+
 ### `QueryArgs` (interface)
 
 ```ts
@@ -3906,11 +3914,11 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
             skipDuplicates?: boolean;
         }): Promise<Id<string & T>[]>;
     };
-    patch: (id: Id<string & T>, values: Partial<IM[T]>) => Promise<void>;
+    patch: (id: Id<string & T>, values: PatchValues<IM[T]>) => Promise<void>;
     patchMany: {
         (patches: ReadonlyArray<{
             id: Id<string & T>;
-            values: Partial<IM[T]>;
+            values: PatchValues<IM[T]>;
         }>, options?: {
             limit?: number;
         }): Promise<{
@@ -3918,7 +3926,7 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
         }>;
         (args: {
             limit?: number;
-            values: Partial<IM[T]>;
+            values: PatchValues<IM[T]>;
             where: Partial<DM[T]>;
         }): Promise<{
             patched: number;
@@ -3929,7 +3937,7 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
     upsert: (args: {
         create: IM[T];
         target: UpsertTargetOf<DM, T>;
-        update?: Partial<IM[T]>;
+        update?: PatchValues<IM[T]>;
     }) => Promise<{
         created: boolean;
         id: Id<string & T>;
@@ -3937,7 +3945,7 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
     upsertMany: (args: {
         rows: ReadonlyArray<{
             create: IM[T];
-            update?: Partial<IM[T]>;
+            update?: PatchValues<IM[T]>;
         }>;
         target: UpsertTargetOf<DM, T>;
     }) => Promise<{
@@ -5668,6 +5676,14 @@ interface BatchWriteOptions {
 }
 ```
 
+### `BooleanFieldOperator` (interface)
+
+```ts
+interface BooleanFieldOperator {
+    toggle: true;
+}
+```
+
 ### `ComposedOut` (type)
 
 ```ts
@@ -5760,9 +5776,10 @@ interface DatabaseWriterLike {
         row: Record<string, unknown>;
         tableName: string;
     }>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
+        verify?: PatchVerifier;
         where: WhereInput;
     }) => Promise<{
         applied: boolean;
@@ -6123,10 +6140,72 @@ type NestedWithArgument<WK> = WK extends {
 } ? NW : {};
 ```
 
+### `NumberFieldOperator` (type)
+
+```ts
+type NumberFieldOperator = {
+    decrement: number;
+    divide?: never;
+    increment?: never;
+    multiply?: never;
+} | {
+    decrement?: never;
+    divide: number;
+    increment?: never;
+    multiply?: never;
+} | {
+    decrement?: never;
+    divide?: never;
+    increment: number;
+    multiply?: never;
+} | {
+    decrement?: never;
+    divide?: never;
+    increment?: never;
+    multiply: number;
+};
+```
+
+### `OperatorFor` (type)
+
+```ts
+type OperatorFor<T> = [
+    T
+] extends [
+    number
+] ? [
+    number
+] extends [
+    T
+] ? NumberFieldOperator : never : [
+    T
+] extends [
+    boolean
+] ? [
+    boolean
+] extends [
+    T
+] ? BooleanFieldOperator : never : never;
+```
+
 ### `PRESENCE_KEY` (const)
 
 ```ts
 const PRESENCE_KEY = "presence";
+```
+
+### `PatchVerifier` (type)
+
+```ts
+type PatchVerifier = (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+```
+
+### `PatchWriteOptions` (interface)
+
+```ts
+interface PatchWriteOptions {
+    verify?: PatchVerifier;
+}
 ```
 
 ### `ProjectDoc` (type)

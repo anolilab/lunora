@@ -683,9 +683,10 @@ interface DatabaseWriterLike {
         tableName: string;
     }>;
     normalizeId: (tableName: string, id: string) => null | string;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
+        verify?: PatchVerifier;
         where: WhereInput;
     }) => Promise<{
         applied: boolean;
@@ -1532,6 +1533,20 @@ interface PaginationOptions {
     cursor?: null | string;
     endCursor?: null | string;
     numItems: number;
+}
+```
+
+### `PatchVerifier` (type)
+
+```ts
+type PatchVerifier = (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+```
+
+### `PatchWriteOptions` (interface)
+
+```ts
+interface PatchWriteOptions {
+    verify?: PatchVerifier;
 }
 ```
 
@@ -3568,6 +3583,12 @@ const assertFlatPredicate: (where: WhereInput | undefined, schema: ResolveContex
 const assertNoExplicitUndefined: (op: "patch" | "patchIf" | "replace", document: Record<string, unknown>) => void;
 ```
 
+### `assertPatchAllowed` (const)
+
+```ts
+const assertPatchAllowed: (options: PatchWriteOptions | undefined, previous: Record<string, unknown>, next: Record<string, unknown>) => void;
+```
+
 ### `assertReadonly` (const)
 
 ```ts
@@ -4494,6 +4515,12 @@ const normalizeSourceDocument: (document: Record<string, unknown>) => Record<str
 const normalizeSourceValue: (value: unknown) => unknown;
 ```
 
+### `operatorFields` (const)
+
+```ts
+const operatorFields: (definition: TableDefinitionLike, patch: Record<string, unknown>) => ReadonlySet<string>;
+```
+
 ### `param` (const)
 
 ```ts
@@ -4886,6 +4913,12 @@ const reprojectionMigrationId: (table: string) => string;
 
 ```ts
 const reprojectionTables: (schema: SchemaLike) => string[];
+```
+
+### `resolvePatchOperators` (const)
+
+```ts
+const resolvePatchOperators: (definition: TableDefinitionLike, patch: Record<string, unknown>, current: Record<string, unknown>) => Record<string, unknown>;
 ```
 
 ### `resolveRankPartition` (const)

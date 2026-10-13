@@ -2858,6 +2858,35 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
         };
     };
 
+    /**
+     * An exec that runs `beforeUpdate` ahead of each UPDATE the writer issues (numbered from 1), standing in for
+     * another writer that wins the row first. Returns the exec and a counter of the UPDATEs seen.
+     */
+    const interceptUpdates = (beforeUpdate: (updateNumber: number) => void): { exec: SqlCtxExec; updates: () => number } => {
+        const base = execOver(database);
+        let updates = 0;
+
+        return {
+            exec: {
+                ...base,
+                all: async (query, parameters) => {
+                    if (/^update/iu.test(query)) {
+                        updates += 1;
+                        beforeUpdate(updates);
+                    }
+
+                    return base.all(query, parameters);
+                },
+            },
+            updates: () => updates,
+        };
+    };
+
+    /** Move the row's version the way a concurrent writer's committed UPDATE would. */
+    const bumpVersion = (set = ""): void => {
+        database.prepare(`UPDATE "counters" SET ${set}"_version" = COALESCE("_version", 0) + 1`).run();
+    };
+
     const makeWriter = (dialect: SqlDialect = makeSqliteDialect(), exec: SqlCtxExec = execOver(database)) =>
         createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect, exec, schema: counterSchema });
 
@@ -2940,25 +2969,105 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
     it("gives up with a conflict when every attempt loses the row to another writer", async () => {
         expect.assertions(2);
 
-        const base = execOver(database);
-        let updates = 0;
         // Every conditional UPDATE finds the row's version moved by someone else first.
-        const contended: SqlCtxExec = {
-            ...base,
-            all: async (query, parameters) => {
-                if (/^update/iu.test(query)) {
-                    updates += 1;
-                    database.prepare(`UPDATE "counters" SET "_version" = COALESCE("_version", 0) + 1`).run();
-                }
-
-                return base.all(query, parameters);
-            },
-        };
+        const { exec: contended, updates } = interceptUpdates(() => {
+            bumpVersion();
+        });
         const id = await makeWriter().insert("counters", { name: "a", value: 0 });
 
         await expect(makeWriter(makeSqliteDialect(), contended).patchIf?.("counters", id, { patch: { value: 1 }, where: { value: 0 } })).rejects.toMatchObject({
             code: "CONFLICT",
         });
-        expect(updates).toBe(16);
+        expect(updates()).toBe(16);
+    });
+
+    describe("atomic field operators", () => {
+        const contendedWriter = (): { updates: () => number; writer: ReturnType<typeof makeWriter> } => {
+            // Every UPDATE finds the row's version moved by someone else first.
+            const { exec, updates } = interceptUpdates(() => {
+                bumpVersion();
+            });
+
+            return { updates, writer: makeWriter(makeSqliteDialect(), exec) };
+        };
+
+        it("applies an increment to the stored value", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 5 });
+
+            await writer.patch(id, { value: { increment: 3 } });
+
+            await expect(writer.get(id)).resolves.toMatchObject({ value: 8 });
+        });
+
+        it("lands every one of ten concurrent increments instead of conflicting", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 0 });
+
+            await Promise.all(Array.from({ length: 10 }, async () => writer.patch(id, { value: { increment: 1 } })));
+
+            await expect(writer.get(id)).resolves.toMatchObject({ value: 10 });
+        });
+
+        it("gives up with a conflict after the bounded number of re-reads", async () => {
+            expect.assertions(2);
+
+            const { updates, writer } = contendedWriter();
+            const id = await makeWriter().insert("counters", { name: "a", value: 0 });
+
+            await expect(writer.patch(id, { value: { increment: 1 } })).rejects.toMatchObject({ code: "CONFLICT" });
+            expect(updates()).toBe(16);
+        });
+
+        it("still reports a plain patch that loses the version check as a conflict straight away", async () => {
+            expect.assertions(2);
+
+            const { updates, writer } = contendedWriter();
+            const id = await makeWriter().insert("counters", { name: "a", value: 0 });
+
+            await expect(writer.patch(id, { value: 1 })).rejects.toMatchObject({ code: "CONFLICT" });
+            expect(updates()).toBe(1);
+        });
+
+        it("takes the post-image verdict on each attempt's own read, so a retry cannot slip past it", async () => {
+            expect.assertions(3);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 3 });
+            // The first UPDATE finds another writer already took the value down to 1.
+            const { exec: racing } = interceptUpdates((updateNumber) => {
+                if (updateNumber === 1) {
+                    bumpVersion(`"value" = 1, `);
+                }
+            });
+            const seen: number[] = [];
+            const nonNegative = (_previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
+                seen.push(next["value"] as number);
+
+                return (next["value"] as number) >= 0;
+            };
+
+            // 3 - 2 = 1 passes on the first read; after the lost race the row holds 1 and 1 - 2 = -1 must not land.
+            await expect(
+                makeWriter(makeSqliteDialect(), racing).patch(id, { value: { decrement: 2 } }, undefined, { verify: nonNegative }),
+            ).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+            expect(seen).toStrictEqual([1, -1]);
+            await expect(writer.get(id)).resolves.toMatchObject({ value: 1 });
+        });
+
+        it("rejects an operator the stored value cannot take", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 1 });
+
+            await expect(writer.patch(id, { value: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        });
     });
 });

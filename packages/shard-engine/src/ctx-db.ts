@@ -88,6 +88,7 @@ import {
 import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
+import { assertPatchAllowed, operatorFields, resolvePatchOperators } from "./patch-operators";
 import {
     applySelect,
     buildSeekWhere,
@@ -2263,7 +2264,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * @returns `true` when the patch must be dropped
      */
     const isStalePatch = (tableName: string, id: string, patch: Record<string, unknown>, current: Record<string, unknown>): boolean => {
-        if (schema.tables[tableName]?.dropStalePatchesMode !== true || !cdcEnabled) {
+        const definition = schema.tables[tableName];
+
+        if (definition?.dropStalePatchesMode !== true || !cdcEnabled) {
             return false;
         }
 
@@ -2283,7 +2286,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // `bigint`/`Date`/bytes, and the plain stringifier throws on the first of
         // those rather than comparing it. Sorted-key encoding also means two
         // structurally identical objects compare equal regardless of key order.
-        return Object.keys(stripReservedPatchFields(patch)).some((field) => stableWireKey(seen[field]) !== stableWireKey(current[field]));
+        // An operator (`{ increment: 1 }`) is a function of whatever the row holds when it runs,
+        // not a value the caller saw, so a moved field can never make it stale. Judging it by
+        // `seen` would drop an offline client's queued increment whenever anyone else bumped
+        // the counter, and report success.
+        const relative = operatorFields(definition, patch);
+
+        return Object.keys(stripReservedPatchFields(patch)).some(
+            (field) => !relative.has(field) && stableWireKey(seen[field]) !== stableWireKey(current[field]),
+        );
     };
 
     /** True when `tableName` is declared `.global()` (i.e. lives in D1, not this DO). */
@@ -4008,7 +4019,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return normalizeIdStructurally(schema, tableName, id);
         },
 
-        async patch(id, patch, expectedTable) {
+        async patch(id, patch, expectedTable, patchOptions) {
             // Single probe — eliminates the redundant `tableNameFromId` +
             // `writer.get` chain that doubled the SQL round-trips per patch
             // on the prior code path.
@@ -4032,7 +4043,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // actually sends.
                     meterWrite(patch);
 
-                    await global.patch(id, patch, expectedTable);
+                    await global.patch(id, patch, expectedTable, patchOptions);
                     return;
                 }
 
@@ -4063,9 +4074,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return;
             }
 
-            const merged = { ...existing, ...stripReservedPatchFields(patch), ...commitSeqFields(tableName), _id: id };
+            // Atomic field operators (`{ increment: 1 }`, …) resolve against the row just
+            // read; the DO runs one mutation at a time, so no other write can land between.
+            const effectivePatch = resolvePatchOperators(tableDefinition, patch, existing);
+            const merged = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
 
-            applyOnUpdate(tableDefinition, patch, merged, auth);
+            applyOnUpdate(tableDefinition, effectivePatch, merged, auth);
+
+            // The caller's authorization verdict, taken on the row this write actually produces.
+            assertPatchAllowed(patchOptions, existing, merged);
 
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
@@ -4145,7 +4162,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // a bounded number of times, so a row that no longer matches reports `applied: false`.
             for (let attempt = 1; attempt <= PATCH_IF_MAX_ATTEMPTS; attempt += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row after a conflict
-                const outcome = await patchIfAttempt(tableName, id, args, attempt < PATCH_IF_MAX_ATTEMPTS, (patch) => writer.patch(id, patch, tableName));
+                const outcome = await patchIfAttempt(tableName, id, args, attempt < PATCH_IF_MAX_ATTEMPTS, (patch) =>
+                    writer.patch(id, patch, tableName, { verify: args.verify }),
+                );
 
                 if (outcome !== undefined) {
                     return outcome;

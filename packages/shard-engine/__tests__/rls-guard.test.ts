@@ -260,6 +260,20 @@ describe("guardWriter — generic id-based access resolves the owning table", ()
         expect(raw.patch).toHaveBeenCalledTimes(1);
     });
 
+    it("forwards the write options, so a post-image verdict reaches the store through the guard", async () => {
+        expect.assertions(1);
+
+        const raw = createFakeWriter();
+        const guarded = guardWriter(raw as never, requiredSchema as never, tableOfId) as unknown as {
+            patch: (id: string, p: unknown, table?: string, options?: unknown) => Promise<unknown>;
+        };
+        const options = { verify: () => true };
+
+        await guarded.patch("orphan_id", { x: 1 }, undefined, options);
+
+        expect(raw.patch).toHaveBeenCalledWith("orphan_id", { x: 1 }, undefined, options);
+    });
+
     it("denies lookupById(id) for a bare id that resolves to a protected table (plan 254)", async () => {
         expect.assertions(2);
 

@@ -31,6 +31,7 @@ interface CapturedCall {
     args: unknown;
     method: string;
     tableOrId?: string;
+    verify?: (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
 }
 
 interface FakeDatabase {
@@ -58,7 +59,7 @@ interface FakeDatabase {
             options?: { allowExplicitId?: boolean; limit?: number },
         ) => Promise<string[]>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
-        patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+        patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: { verify?: CapturedCall["verify"] }) => Promise<void>;
         patchIf: (
             tableName: string,
             id: string,
@@ -185,8 +186,8 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return documents.map((document, index) => (document["_id"] as string | undefined) ?? `new-id-${String(index)}`);
             },
-            async patch(id, patchValue) {
-                calls.push({ args: patchValue, method: "patch", tableOrId: id });
+            async patch(id, patchValue, _expectedTable, writeOptions) {
+                calls.push({ args: patchValue, method: "patch", tableOrId: id, verify: writeOptions?.verify });
             },
             async patchIf(tableName, id, args) {
                 calls.push({ args, method: "patchIf", tableOrId: id });
@@ -1006,6 +1007,40 @@ describe("rls — write path", () => {
         const patchCall = database.calls.find((call) => call.method === "patch");
 
         expect(patchCall).toBeDefined();
+    });
+
+    it("checks an atomic operator's resolved value, not the operator object, against the update policy", async () => {
+        expect.assertions(7);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "accounts",
+            when: ({ row }) => typeof row?.["balance"] === "number" && row["balance"] >= 0,
+        });
+        const database = createFakeDatabase([{ _id: "a1", balance: 3, table: "accounts" }]);
+        const run = async (patch: Record<string, unknown>) =>
+            lunora.mutation
+                .use(rlsForTest<TestContext>([policy]))
+                .mutation(async ({ ctx }) => ctx.db.patch("a1", patch))
+                .handler(makeContext(database, "u1"), {});
+
+        // 3 - 1 = 2 keeps the post-image valid; 3 - 5 = -2 does not.
+        await expect(run({ balance: { decrement: 1 } })).resolves.toBeUndefined();
+        await expect(run({ balance: { decrement: 5 } })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+        await run({ balance: 9 });
+
+        // The store, not the gate, performs the arithmetic: the operator is forwarded untouched, with a
+        // verdict the store takes on the row IT reads (it may differ from the gate's, and may retry).
+        const [operatorCall, plainCall] = database.calls.filter((call) => call.method === "patch");
+
+        expect(database.calls.filter((call) => call.method === "patch")).toHaveLength(2);
+        // Every update through the gate carries the verdict, a plain patch included: the row the store reads can
+        // differ from the one the gate read, whatever the patch holds.
+        expect(plainCall?.verify).toBeTypeOf("function");
+        expect(operatorCall?.verify?.({ balance: 3 }, { balance: 2 })).toBe(true);
+        expect(operatorCall?.verify?.({ balance: 1 }, { balance: -4 })).toBe(false);
+        expect(operatorCall?.verify?.({ balance: 3 }, { balance: "x" })).toBe(false);
     });
 
     it("boolean update policy denies a patch that reassigns the policy column (WITH-CHECK post-image)", async () => {

@@ -107,7 +107,7 @@ interface GuardableWriter {
         options?: { allowExplicitId?: boolean; limit?: number },
     ) => unknown;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
-    patch: (id: string, patch: unknown, expectedTable?: string) => unknown;
+    patch: (id: string, patch: unknown, expectedTable?: string, options?: unknown) => unknown;
     patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => unknown;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => unknown;
     query: (tableName: string) => unknown;
@@ -453,10 +453,10 @@ const guardWriter = <W>(
             // eslint-disable-next-line unicorn/no-null -- mirrors the seam's own `null`-for-absent contract
             return base.lookupById?.(id, expectedTable) ?? null;
         },
-        patch: async (id: string, patch: unknown, expectedTable?: string) => {
+        patch: async (id: string, patch: unknown, expectedTable?: string, options?: unknown) => {
             await guardById(id, expectedTable);
 
-            return base.patch(id, patch, expectedTable);
+            return base.patch(id, patch, expectedTable, options);
         },
         patchMany: async (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => {
             // `expectedTable` (the facade's bound table) scopes each id, mirroring the single patch gate.

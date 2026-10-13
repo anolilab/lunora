@@ -35,6 +35,7 @@ import type {
     DatabaseWriterLike,
     GroupByEntry,
     GroupByOptions,
+    PatchWriteOptions,
     QueryPage,
     RankIndexDefinitionLike,
     RankPage,
@@ -58,6 +59,7 @@ import {
     applySelect,
     assertFlatPredicate,
     assertNoExplicitUndefined,
+    assertPatchAllowed,
     assertValidClientId,
     buildSeekWhere,
     CDC_LOG_TABLE,
@@ -87,12 +89,14 @@ import {
     normalizeOrderKeys,
     NotFoundError,
     NotUniqueError,
+    operatorFields,
     RANK_TIEBREAK,
     rankPivotConditionSql,
     rankTableName,
     readAggregateValue,
     relationHooks,
     renderSql,
+    resolvePatchOperators,
     resolveRankPartition,
     resolveRankSeekTuple,
     resolveRelationPredicates,
@@ -1490,11 +1494,11 @@ const throwIfRowTooBig = (dialect: SqlDialect, error: unknown, table: string): v
 };
 
 /**
- * Reads-and-decides a `patchIf` makes before giving up with `ConflictError`.
+ * Reads-and-decides a `patchIf` or an operator `patch` makes before giving up with `ConflictError`.
  * Each miss means another writer changed the row in between, so a run of this
  * length is sustained contention on one row, not bad luck.
  */
-const PATCH_IF_ATTEMPTS = 16;
+const OCC_RETRY_ATTEMPTS = 16;
 
 /** The column `patchIf`'s read evaluates its `where` into; double-underscored so no schema field can take the name. */
 const PATCH_IF_MATCH_COLUMN = "__lunora_patch_if_match__";
@@ -2615,6 +2619,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         patch: Record<string, unknown>,
         snapshot: Record<string, unknown> | undefined,
         condition?: SQL,
+        patchOptions?: PatchWriteOptions,
     ): Promise<Record<string, unknown> | undefined> => {
         const existing = decodeRow(definition, snapshot);
 
@@ -2622,9 +2627,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             throw new LunoraError("INTERNAL", `document not found: ${id}`);
         }
 
-        const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(patch), _id: id };
+        // Atomic field operators resolve against THIS read; the version check below
+        // rejects the write if the row has moved since, and `patch` re-reads.
+        const effectivePatch = resolvePatchOperators(definition, patch, existing);
+        const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(effectivePatch), _id: id };
 
-        applyOnUpdate(definition, patch, merged, auth);
+        applyOnUpdate(definition, effectivePatch, merged, auth);
+
+        // The caller's authorization verdict, taken on the row this attempt actually produces.
+        assertPatchAllowed(patchOptions, existing, merged);
 
         // Refinement checks fire on the merged row so a patch that flips
         // a field to an invalid value is rejected before D1 sees it.
@@ -3576,7 +3587,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return normalizeIdStructurally(schema, tableName, id);
         },
 
-        async patch(id, patch, expectedTable) {
+        async patch(id, patch, expectedTable, patchOptions) {
             // A key present with value `undefined` is a silent-data-loss footgun:
             // `runRowValidators` skips it (`v.optional(x).parse(undefined)` is
             // fine) and `serializeColumnValue(merged[field] ?? null)` then wrote
@@ -3598,15 +3609,24 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
-            // Capture the RAW stored row alongside the decoded `existing` — the
-            // raw values seed the optimistic-concurrency CAS below, before the
-            // before-update trigger's `await` window can let a concurrent write
-            // slip in.
-            const snapshot = await rawRow(tableName, id);
+            // Each attempt reads the RAW stored row alongside the decoded `existing`: the raw values
+            // seed the optimistic-concurrency CAS, before the before-update trigger's `await` window
+            // can let a concurrent write slip in. A plain patch that loses the version check is a real
+            // conflict. An operator patch (`{ increment: 1 }`) is a function of the row, not a value the
+            // caller saw, so it re-reads and re-resolves: concurrent counters must not throw.
+            const attempts = operatorFields(definition, patch).size > 0 ? OCC_RETRY_ATTEMPTS : 1;
 
-            if (!(await writePatch(tableName, definition, id, patch, snapshot))) {
-                throw new ConflictError(`optimistic concurrency conflict on "${tableName}" — the row changed during this mutation; refetch and retry`, "occ");
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row a lost race moved
+                const snapshot = await rawRow(tableName, id);
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                if (await writePatch(tableName, definition, id, patch, snapshot, undefined, patchOptions)) {
+                    return;
+                }
             }
+
+            throw new ConflictError(`optimistic concurrency conflict on "${tableName}" — the row changed during this mutation; refetch and retry`, "occ");
         },
 
         /**
@@ -3631,7 +3651,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const condition = compileWhereSql(args.where, whereSqlStrategyFor(definition)) ?? sql`1 = 1`;
 
-            for (let attempt = 0; attempt < PATCH_IF_ATTEMPTS; attempt += 1) {
+            for (let attempt = 0; attempt < OCC_RETRY_ATTEMPTS; attempt += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row a lost race moved
                 const [read] = await queryAll(
                     exec,
@@ -3652,7 +3672,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- see above
-                const merged = await writePatch(tableName, definition, id, args.patch, snapshot, condition);
+                const merged = await writePatch(tableName, definition, id, args.patch, snapshot, condition, { verify: args.verify });
 
                 if (merged) {
                     return { applied: true, doc: merged };
@@ -3660,7 +3680,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             throw new ConflictError(
-                `patchIf on "${tableName}" lost the row to concurrent writes ${String(PATCH_IF_ATTEMPTS)} times in a row; retry the operation`,
+                `patchIf on "${tableName}" lost the row to concurrent writes ${String(OCC_RETRY_ATTEMPTS)} times in a row; retry the operation`,
                 "occ",
             );
         },

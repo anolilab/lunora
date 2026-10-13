@@ -65,6 +65,42 @@ describe(applyPlanToCollections, () => {
         expect(log).toStrictEqual(["nodes:delete:d1", 'nodes:patch:p1:{"text":"edited"}', "nodes:insert:i1"]);
     });
 
+    it("resolves an atomic operator against the local row instead of storing the operator", () => {
+        expect.assertions(2);
+
+        const draft: Record<string, unknown> = { flag: false, views: 5 };
+        const collection = {
+            update: (_id: string, updater: (row: Record<string, unknown>) => void) => {
+                updater(draft);
+            },
+        } as unknown as Collection<Row, string>;
+
+        applyPlanToCollections({ nodes: collection }, { patches: [{ fields: { flag: { toggle: true }, views: { increment: 2 } }, id: "p1", table: "nodes" }] });
+
+        expect(draft["views"]).toBe(7);
+        expect(draft["flag"]).toBe(true);
+    });
+
+    it("leaves out an operator it cannot resolve locally instead of showing the operator object", () => {
+        expect.assertions(2);
+
+        const draft: Record<string, unknown> = { flag: false, views: 5 };
+        const collection = {
+            update: (_id: string, updater: (row: Record<string, unknown>) => void) => {
+                updater(draft);
+            },
+        } as unknown as Collection<Row, string>;
+
+        // `missing` is absent from the local copy, so its increment cannot be applied here; `views` still is.
+        applyPlanToCollections(
+            { nodes: collection },
+            { patches: [{ fields: { missing: { increment: 1 }, views: { increment: 2 } }, id: "p1", table: "nodes" }] },
+        );
+
+        expect(draft["views"]).toBe(7);
+        expect("missing" in draft).toBe(false);
+    });
+
     it("skips a table with no wired collection rather than throwing", () => {
         expect.assertions(1);
 

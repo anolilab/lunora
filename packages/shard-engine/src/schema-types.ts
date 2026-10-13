@@ -168,7 +168,23 @@ export interface SchemaLike {
     readonly tables: Record<string, TableDefinitionLike>;
 }
 
+/**
+ * Decides whether an update may be written, given the row as the store read it and the row it is
+ * about to write. A layer that authorizes writes (the RLS gate) passes one so the verdict is taken
+ * against the store's own read, not an earlier one: an atomic operator (`{ increment: 1 }`)
+ * resolves to a value that depends on the row, so a check made before the store reads can approve
+ * a different post-image than the one that lands.
+ */
+export type PatchVerifier = (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+
+/** Optional extras for a single `patch` call. */
+export interface PatchWriteOptions {
+    /** Checked on every attempt, after operators resolve and before the write; `false` raises FORBIDDEN. */
+    verify?: PatchVerifier;
+}
+
 /** Structural mirror of `@lunora/server`'s `TableDefinition`. */
+
 export interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly commitOrderedMode?: boolean;
@@ -768,7 +784,7 @@ export interface DatabaseWriterLike {
     ) => Promise<string[]>;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     normalizeId: (tableName: string, id: string) => null | string;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
 
     /**
      * Conditional patch: apply `patch` to row `id` of `tableName` only while the
@@ -792,7 +808,7 @@ export interface DatabaseWriterLike {
     patchIf?: (
         tableName: string,
         id: string,
-        args: { patch: Record<string, unknown>; where: WhereInput },
+        args: { patch: Record<string, unknown>; verify?: PatchVerifier; where: WhereInput },
     ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
     patchMany?: (
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,

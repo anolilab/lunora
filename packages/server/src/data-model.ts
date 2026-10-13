@@ -498,7 +498,7 @@ export interface TableWriterFacade<
         (values: ReadonlyArray<IM[T]>, options: { limit?: number; skipDuplicates: true }): Promise<(Id<string & T> | null)[]>;
         (values: ReadonlyArray<IM[T]>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<Id<string & T>[]>;
     };
-    patch: (id: Id<string & T>, values: Partial<IM[T]>) => Promise<void>;
+    patch: (id: Id<string & T>, values: PatchValues<IM[T]>) => Promise<void>;
 
     /**
      * Patch many rows in this table. Pass an array of `{ id, values }` or
@@ -506,8 +506,8 @@ export interface TableWriterFacade<
      * the actual patched count. Atomic within a mutation.
      */
     patchMany: {
-        (patches: ReadonlyArray<{ id: Id<string & T>; values: Partial<IM[T]> }>, options?: { limit?: number }): Promise<{ patched: number }>;
-        (args: { limit?: number; values: Partial<IM[T]>; where: Partial<DM[T]> }): Promise<{ patched: number }>;
+        (patches: ReadonlyArray<{ id: Id<string & T>; values: PatchValues<IM[T]> }>, options?: { limit?: number }): Promise<{ patched: number }>;
+        (args: { limit?: number; values: PatchValues<IM[T]>; where: Partial<DM[T]> }): Promise<{ patched: number }>;
     };
     replace: (id: Id<string & T>, values: IM[T]) => Promise<void>;
 
@@ -520,17 +520,56 @@ export interface TableWriterFacade<
      * tuple) used to look it up. Returns the row id and whether it was `created`.
      * Composes `findFirst` + `insert`/`patch`, so RLS gates each step.
      */
-    upsert: (args: { create: IM[T]; target: UpsertTargetOf<DM, T>; update?: Partial<IM[T]> }) => Promise<{ created: boolean; id: Id<string & T> }>;
+    upsert: (args: { create: IM[T]; target: UpsertTargetOf<DM, T>; update?: PatchValues<IM[T]> }) => Promise<{ created: boolean; id: Id<string & T> }>;
 
     /** Sequential {@link TableWriterFacade.upsert} over many rows sharing one `target`; one result per input row, in order. */
     upsertMany: (args: {
-        rows: ReadonlyArray<{ create: IM[T]; update?: Partial<IM[T]> }>;
+        rows: ReadonlyArray<{ create: IM[T]; update?: PatchValues<IM[T]> }>;
         target: UpsertTargetOf<DM, T>;
     }) => Promise<{ created: boolean; id: Id<string & T> }[]>;
 }
 
 /** Conflict target for `upsert`/`upsertMany`: one column of table `T`, or a tuple of them. */
 export type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string> | (keyof DM[T] & string);
+
+/**
+ * An atomic update for a number column, applied to the value the row holds when the
+ * write runs: `{ increment: 1 }`, `{ decrement: 1 }`, `{ multiply: 2 }`, `{ divide: 2 }`.
+ * The column must already hold a finite number; a result that is not finite is rejected.
+ */
+type NumberFieldOperator =
+    | { decrement: number; divide?: never; increment?: never; multiply?: never }
+    | { decrement?: never; divide: number; increment?: never; multiply?: never }
+    | { decrement?: never; divide?: never; increment: number; multiply?: never }
+    | { decrement?: never; divide?: never; increment?: never; multiply: number };
+
+/** An atomic update for a boolean column: `{ toggle: true }` flips the stored value. */
+interface BooleanFieldOperator {
+    toggle: true;
+}
+
+/**
+ * The values a `patch` accepts: any column's own type, and for a number or boolean
+ * column also an atomic operator ({@link NumberFieldOperator}, {@link BooleanFieldOperator}).
+ */
+export type PatchValues<Row> = {
+    [K in keyof Row]?: Row[K] | OperatorFor<NonNullable<Row[K]>>;
+};
+
+/**
+ * The operator a column of type `T` takes: arithmetic when `T` is exactly `number` (so a literal union
+ * such as `1 | 2` is out — the result could leave the set — and so is `number | string`, which the
+ * store does not treat as a number column), `{ toggle: true }` when it is exactly `boolean`.
+ */
+type OperatorFor<T> = [T] extends [number]
+    ? [number] extends [T]
+        ? NumberFieldOperator
+        : never
+    : [T] extends [boolean]
+      ? [boolean] extends [T]
+          ? BooleanFieldOperator
+          : never
+      : never;
 
 /** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
 export type DatabaseReaderFacade<
