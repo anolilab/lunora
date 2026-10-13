@@ -30,6 +30,9 @@ interface RelationWriteInfoLike {
     readonly kind: "many" | "one";
     readonly nullable: boolean;
     readonly references: string;
+
+    /** Set by a wrapper that must forbid writes through this relation, with the reason the caller is told. */
+    readonly refusal?: string;
     readonly table: string;
 }
 
@@ -165,6 +168,10 @@ const parseOperation = (tableName: string, key: string, info: RelationWriteInfoL
 
     if (Object.keys(operation).length === 0) {
         return undefined;
+    }
+
+    if (info.refusal !== undefined) {
+        fail("UNPROCESSABLE", `ctx.db.${tableName}: relation "${key}" cannot be written: ${info.refusal}`);
     }
 
     if (!info.colocated) {

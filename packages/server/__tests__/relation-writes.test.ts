@@ -337,6 +337,25 @@ describe("nested relation writes", () => {
             await expect((async () => run(table("posts")))()).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         });
 
+        it("refuses a relation a wrapper has marked as not writable", async () => {
+            expect.assertions(2);
+
+            const raw = writer as unknown as FacadeWriterLike & { relationWrites: Record<string, Record<string, object>> };
+            const refused = {
+                ...raw,
+                relationWrites: { posts: { ...raw.relationWrites["posts"], author: { ...raw.relationWrites["posts"]?.["author"], refusal: "masked" } } },
+            };
+            const user = (await table("users").insert({ name: "ada" })) as string;
+
+            await expect(
+                bindTableFacade(refused as unknown as FacadeWriterLike, "posts").insert({ author: { connect: user }, title: "t" }),
+            ).rejects.toMatchObject({
+                code: "UNPROCESSABLE",
+                message: expect.stringContaining("masked"),
+            });
+            expect(((await table("posts").findMany()) as { page: unknown[] }).page).toHaveLength(0);
+        });
+
         it("leaves an ordinary patch alone", async () => {
             expect.assertions(1);
 

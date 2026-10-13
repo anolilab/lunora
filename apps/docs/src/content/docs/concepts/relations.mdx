@@ -234,6 +234,8 @@ await ctx.db.users.patch(userId, { posts: { set: [postB, postC] } }); // exactly
   table (or between two `.global()` tables, where each write is its own commit), or to a table on another shard, is
   refused with `UNPROCESSABLE`: a D1 write does not roll back with the Durable Object's transaction, and a row on
   another shard cannot be addressed from this one. Write each side yourself.
+- A relation whose foreign-key column, or the column it references, is [masked](/docs/concepts/masking) for the
+  caller is refused with `UNPROCESSABLE`: the write would copy the masked value into a stored column.
 - Not available in `insertMany`, `patchMany` or `replace`: they reject a relation write rather than store it as
   a column value. A relation many-to-many through a join table is not a relation kind yet; write the join rows.
 

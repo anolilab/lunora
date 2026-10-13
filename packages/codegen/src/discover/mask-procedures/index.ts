@@ -61,8 +61,8 @@ const maskFromBuilderChain = (receiver: TsNode): { maskColumns: { column: string
 // Table-access discovery inside a function body
 // ---------------------------------------------------------------------------
 
-/** Read-access call sites masking transforms: `ctx.db.query/findMany/findFirst/findFirstOrThrow/get`. */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
+/** Read-access call sites masking transforms: `ctx.db.query`, `findMany`, `findFirst`, `findFirstOrThrow`, `get` and `explain`. */
+const READ_METHODS = new Set(["explain", "findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
 
 /** Write-access call sites: `ctx.db.insert/patch/replace/delete` (masking never touches these — captured only for completeness). */
 const WRITE_METHODS = new Set(["delete", "insert", "patch", "replace"]);

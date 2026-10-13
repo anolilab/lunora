@@ -5836,7 +5836,7 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
-    explain?: (tableName: string, args?: QueryArgs$1) => Promise<unknown>;
+    explain?: (tableName: string, args?: QueryArgs$1) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs$1) => Promise<QueryPage$1>;
@@ -6155,7 +6155,7 @@ interface MaskDatabase {
     }) => Promise<{
         deleted: number;
     }>;
-    explain?: (tableName: string, args?: QueryArgs) => Promise<unknown>;
+    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -6217,6 +6217,7 @@ interface MaskDatabase {
             document: Record<string, unknown>;
         }[];
     }>;
+    relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 ```
@@ -6531,6 +6532,7 @@ interface RelationWriteInfoLike {
     readonly kind: "many" | "one";
     readonly nullable: boolean;
     readonly references: string;
+    readonly refusal?: string;
     readonly table: string;
 }
 ```

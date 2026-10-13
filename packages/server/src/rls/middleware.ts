@@ -72,6 +72,7 @@ import { findRelated, whereFilter } from "@lunora/shard-engine";
 import { previewPatch } from "../../../../shared/field-operators";
 import { isPlainObject } from "../../../../shared/wire-codec";
 import type { Middleware } from "../builder/types";
+import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";
@@ -256,7 +257,7 @@ interface DatabaseWriterLike {
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
-    explain?: (tableName: string, args?: QueryArgs) => Promise<unknown>;
+    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;

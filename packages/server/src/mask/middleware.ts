@@ -97,10 +97,12 @@ import { fnv1aHex } from "../../../../shared/fnv1a";
 import { rootOfFieldPath } from "../../../../shared/json-field-path";
 import { isRelationPredicate } from "../../../../shared/relation-operators";
 import type { Middleware } from "../builder/types";
+import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";
 import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
+import type { RelationWriteInfosLike } from "../relation-writes";
 import type { AuthLike } from "../rls/middleware";
 import { indexRolePermissions, isFacadeEntry, resolvePolicyAuth } from "../rls/middleware";
 import type { IndexFieldsByTable } from "../schema";
@@ -180,7 +182,7 @@ interface MaskDatabase {
     delete: (id: string, expectedTable?: string) => Promise<void>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
     deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => Promise<{ deleted: number }>;
-    explain?: (tableName: string, args?: QueryArgs) => Promise<unknown>;
+    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -223,6 +225,8 @@ interface MaskDatabase {
         start: Record<string, unknown>,
         options?: { relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] },
     ) => Promise<{ continueCursor: null | string; isDone: boolean; nodes: { document: Record<string, unknown> }[] }>;
+
+    relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
@@ -918,8 +922,43 @@ const wrapDatabase = <Context>(
         assertWithAllowed(tableName, wrapper?.["with"], method);
     };
 
+    // A relation write copies a value between rows: a to-one `connect` stores the target's `references` value in
+    // this row's key, and a to-many one stores this row's `references` value in each child. Both are read through
+    // this middleware, so a masked key or referenced column would be stored as its masked form (a null or a hash
+    // token), and a masked key would never match on `disconnect`. Writes pass through a mask untouched elsewhere,
+    // so the relation is refused rather than let it corrupt stored data.
+    const maskedColumnOf = (tableName: string, column: string): string | undefined =>
+        Object.hasOwn(perTable.get(tableName) ?? {}, column) ? column : undefined;
+
+    const guardedRelationWrites = (): MaskDatabase["relationWrites"] => {
+        if (base.relationWrites === undefined) {
+            return undefined;
+        }
+
+        const guarded: Record<string, Record<string, RelationWriteInfosLike[string]>> = {};
+
+        for (const [tableName, infos] of Object.entries(base.relationWrites)) {
+            guarded[tableName] = Object.fromEntries(
+                Object.entries(infos).map(([name, info]) => {
+                    // The key lives on this table for a to-one and on the target for a to-many; the referenced column is the other.
+                    const [keyTable, referencedTable] = info.kind === "one" ? [tableName, info.table] : [info.table, tableName];
+                    const masked = maskedColumnOf(keyTable, info.field) ?? maskedColumnOf(referencedTable, info.references);
+
+                    return [
+                        name,
+                        masked === undefined ? info : { ...info, refusal: `"${masked}" is masked for this caller, so its stored value cannot be copied` },
+                    ];
+                }),
+            );
+        }
+
+        return guarded;
+    };
+
     const wrapped: MaskDatabase = {
         ...base,
+
+        relationWrites: guardedRelationWrites(),
 
         async deleteWhere(tableName, where, options) {
             assertWhereAllowed(tableName, where, "deleteMany({ where })");

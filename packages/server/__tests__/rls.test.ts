@@ -9,6 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { FacadeWriterLike } from "../src/facade";
+import { bindTableFacade } from "../src/facade";
 import type { Middleware, Policy, Role } from "../src/index";
 import { definePermission, definePolicies, definePolicy, defineRole, initLunora, LunoraError, rls } from "../src/index";
 
@@ -934,6 +936,32 @@ describe("rls — write path", () => {
             name: "LunoraError",
         });
 
+        expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it("gates each child of a nested relation write by that child's own update policy", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([
+            { _id: "f1", table: "folders" },
+            { _id: "d1", ownerId: "u2", table: "documents" },
+        ]);
+
+        (database.writer as unknown as Record<string, unknown>)["relationWrites"] = {
+            folders: { documents: { colocated: true, field: "folderId", kind: "many", nullable: true, references: "_id", table: "documents" } },
+        };
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => bindTableFacade(ctx.db as unknown as FacadeWriterLike, "folders").patch("f1", { documents: { connect: ["d1"] } }));
+
+        // The caller may read the document but not update it, so pointing it at the folder is refused.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
     });
 

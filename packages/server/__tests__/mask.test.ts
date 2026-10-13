@@ -1078,6 +1078,29 @@ describe("mask — relation-depth value oracle fails closed (regression)", () =>
         await expect(run({ authorId: "u1" })).resolves.toStrictEqual({ params: [], plan: [], sql: "" });
     });
 
+    it("refuses a relation write whose key or referenced column is masked, since it would copy the masked value", async () => {
+        expect.assertions(3);
+
+        const info = { colocated: true, field: "authorId", kind: "one", nullable: false, references: "_id", table: "users" } as const;
+        const database = createFakeDatabase([]);
+
+        (database.writer as unknown as Record<string, unknown>)["relationWrites"] = {
+            comments: { post: { ...info, field: "postId", table: "posts" } },
+            posts: { author: info, comments: { colocated: true, field: "postId", kind: "many", nullable: false, references: "_id", table: "comments" } },
+        };
+
+        const seen = await lunora.query
+            .use(maskForTest({ posts: { authorId: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as { db: { relationWrites: Record<string, Record<string, { refusal?: string }>> } }).db.relationWrites)
+            .handler(makeContext(database, "u1"), {});
+
+        // `posts.authorId` is masked, so connecting `posts.author` would store its masked form.
+        expect(seen["posts"]?.["author"]?.refusal).toContain("authorId");
+        // Relations that do not touch a masked column are left alone.
+        expect(seen["posts"]?.["comments"]?.refusal).toBeUndefined();
+        expect(seen["comments"]?.["post"]?.refusal).toBeUndefined();
+    });
+
     it("refuses the same filter nested one level deeper in `with`", async () => {
         expect.assertions(1);
 

@@ -64,10 +64,10 @@ const rlsFromBuilderChain = (receiver: TsNode): { rlsTables: string[]; usesRls: 
 /**
  * Read-access call sites: `ctx.db.query("table")` / `db.query("table")`,
  * `ctx.db.findMany("table", ...)` / `db.findMany("table", ...)`, and the same
- * for `findFirst` / `findFirstOrThrow` / `get`. These are the public
+ * for `findFirst` / `findFirstOrThrow` / `get` / `explain` (an RLS-gated read that returns a plan, not rows). These are the public
  * `DatabaseWriter` read entry points that RLS wraps.
  */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
+const READ_METHODS = new Set(["explain", "findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
 
 /**
  * Write-access call sites: `ctx.db.insert("table", ...)` / `db.insert(...)`,
