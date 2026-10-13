@@ -30,6 +30,7 @@ const ROWS: Record<string, unknown>[] = [
 
 const strategy: WhereSqlStrategy = {
     fieldRef: (field) => sql`"docs".${sql.identifier(field)}`,
+    rangeTypeGuard: () => sql`1 = 1`,
     serialize: (value) => value,
 };
 
