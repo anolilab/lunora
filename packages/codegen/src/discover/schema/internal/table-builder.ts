@@ -43,6 +43,7 @@ const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 const RESERVED_TABLE_NAMES = new Set([
     "aggregate",
     "asId",
+    "assertPatchAllowed",
     "cdcChangedTables",
     "count",
     "delete",

@@ -250,9 +250,11 @@ interface DatabaseWriterLike {
      * wrapped is `@lunora/do`'s `createShardCtxDb`, which always implements it.
      */
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
+    /** Update-policy check on row `id` with no write; see `@lunora/shard-engine`'s `DatabaseWriterLike.assertPatchAllowed`. */
+    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
 
+    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     /** Uncapped, chunked erase of a whole table. The RLS wrapper gates each row like a single delete. */
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
@@ -261,6 +263,7 @@ interface DatabaseWriterLike {
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
+
     get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
 
     /**
@@ -275,6 +278,7 @@ interface DatabaseWriterLike {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { limit?: number; skipDuplicates?: boolean },
     ) => Promise<(string | null)[]>;
+
     insertManyUnsafe: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -290,6 +294,7 @@ interface DatabaseWriterLike {
      * don't implement it fall back to the probe path.
      */
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
+
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
 
     /** Conditional patch. Optional: a writer without an atomic conditional write omits it, and the wrapper refuses. */
@@ -1522,6 +1527,11 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         },
 
         patch: (id, patch, expectedTable) => gatePatchById(id, patch, (writer, options) => writer.patch(id, patch, expectedTable, options), expectedTable),
+
+        // The update gate with no write behind it: an empty patch leaves the post-image equal to the row as it
+        // stands, so only the policy is evaluated. A relation-only patch runs this on its parent row, which it never
+        // writes. Overridden for the same reason as `patch`: the `...base` spread would expose the guard's table-only check.
+        assertPatchAllowed: (id, expectedTable) => gatePatchById(id, {}, () => Promise.resolve(), expectedTable),
 
         // The update gate of a single patch, against the row as it stands, with the
         // patch's post-image as WITH CHECK. Overriding is mandatory: the `...base`

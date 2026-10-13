@@ -89,6 +89,7 @@ type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promi
  */
 interface GuardableWriter {
     aggregate: (tableName: string, options: unknown) => unknown;
+    assertPatchAllowed?: (id: string, expectedTable?: string) => unknown;
     count: (tableName: string, whereOrArgs?: unknown) => unknown;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => unknown;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => unknown;
@@ -184,6 +185,8 @@ const WRITER_METHOD_GATING = {
     aggregate: "loop-gated",
     /** Pure id formatter — composes a string from `(tableName, id)`, reads and writes nothing. */
     asId: "ungated",
+    /** By-id, and the update gate a relation-only patch runs on its parent row. It writes nothing, so the guard only resolves the table. */
+    assertPatchAllowed: "id-gated",
     /** Metadata-only changelog probe: returns table NAMES and a cursor, never a document. */
     cdcChangedTables: "ungated",
     count: "loop-gated",
@@ -471,6 +474,11 @@ const guardWriter = <W>(
             );
 
             return base.patchMany(patches, options, expectedTable);
+        },
+        assertPatchAllowed: async (id: string, expectedTable?: string) => {
+            await guardById(id, expectedTable);
+
+            return base.assertPatchAllowed?.(id, expectedTable);
         },
         patchWhere: base.patchWhere
             ? async (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => {

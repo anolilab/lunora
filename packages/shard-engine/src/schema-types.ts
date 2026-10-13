@@ -742,6 +742,14 @@ export interface DatabaseWriterLike {
     asId?: (tableName: string, id: string) => string;
 
     /**
+     * Check that the caller's update policy would let row `id` be written, without writing it: no row changes,
+     * no trigger fires, no timestamp, version or change-data-capture entry moves. A relation-only patch uses it to
+     * gate its parent row, which it never writes. Optional: the RLS middleware evaluates the update policy here, and
+     * a writer with no policy layer has no update rule to check. The guard gates only the table.
+     */
+    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
      * Which tables this store's change-data-capture log recorded a write to
      * after `sinceSeq`, plus the log's current head — a metadata-only probe that
      * reads no documents.
@@ -792,6 +800,7 @@ export interface DatabaseWriterLike {
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
     deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
 
     /**
@@ -817,6 +826,7 @@ export interface DatabaseWriterLike {
     ) => Promise<string[]>;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     normalizeId: (tableName: string, id: string) => null | string;
+
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
 
     /**

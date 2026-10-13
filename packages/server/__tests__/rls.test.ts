@@ -965,6 +965,65 @@ describe("rls — write path", () => {
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
     });
 
+    /** A folder with one document, and the relation-only patch that attaches the document to it. */
+    const relationOnlyFolderPatch = (folderOwner: string, documentOwner: string) => {
+        const folderPolicy = definePolicy<TestContext>({
+            on: "update",
+            table: "folders",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const documentPolicy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([
+            { _id: "f1", ownerId: folderOwner, table: "folders" },
+            { _id: "d1", ownerId: documentOwner, table: "documents" },
+        ]);
+
+        (database.writer as unknown as Record<string, unknown>)["relationWrites"] = {
+            folders: { documents: { colocated: true, field: "folderId", kind: "many", nullable: true, references: "_id", table: "documents" } },
+        };
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([folderPolicy, documentPolicy]))
+            .mutation(async ({ ctx }) => bindTableFacade(ctx.db as unknown as FacadeWriterLike, "folders").patch("f1", { documents: { connect: ["d1"] } }));
+
+        return { database, handler };
+    };
+
+    it("denies a relation-only patch whose parent the caller may read but not update, before any child is written", async () => {
+        expect.assertions(2);
+
+        const { database, handler } = relationOnlyFolderPatch("u2", "u1");
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it("still gates each child when the parent's update policy allows the relation-only patch", async () => {
+        expect.assertions(2);
+
+        const { database, handler } = relationOnlyFolderPatch("u1", "u2");
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it("writes the child of a relation-only patch once both the parent and the child allow it", async () => {
+        expect.assertions(2);
+
+        const { database, handler } = relationOnlyFolderPatch("u1", "u1");
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const patches = database.calls.filter((call) => call.method === "patch");
+
+        expect(patches.map((call) => call.tableOrId)).toStrictEqual(["d1"]);
+        expect(patches[0]?.args).toStrictEqual({ folderId: "f1" });
+    });
+
     it.each([
         ["a policy table", "documents"],
         ["a table without policies", "notes"],

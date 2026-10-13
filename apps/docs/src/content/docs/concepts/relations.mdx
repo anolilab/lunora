@@ -226,8 +226,9 @@ await ctx.db.users.patch(userId, { posts: { set: [postB, postC] } }); // exactly
   operator that is not `connect`, `disconnect` or `set` is a `VALIDATION_ERROR`, not a stored column.
 - **Every row goes through its own write**, so RLS policies, triggers and validators run for each child, and
   live queries see them. The request is validated in full before the first row is written. A `patch` that only
-  changes relations changes the children, not the parent row, so the parent's own update policy is not consulted
-  (each child's is).
+  changes relations changes the children, not the parent row, but the parent's update policy is still checked
+  before any child is written, so a caller who can read a parent without updating it cannot re-point its children
+  (each child's own policy applies as well).
 - **It is one mutation, and so one transaction**: if the third `connect` fails, the first two are rolled back.
   An action has no transaction, so there the writes already made stay.
 - **Both tables have to live in the same shard's Durable Object.** A relation from a shard table to a `.global()`

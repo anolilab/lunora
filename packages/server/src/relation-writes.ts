@@ -40,6 +40,8 @@ type RelationWriteInfosLike = Readonly<Record<string, RelationWriteInfoLike>>;
 
 /** The writer methods a relation write composes. */
 interface RelationWriteWriterLike {
+    /** Checks the update policy on a relation-only patch's parent row, which is never written. Optional: a writer with no policy layer omits it. */
+    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
     findMany: (tableName: string, args?: unknown) => Promise<unknown>;
     get: (id: string, expectedTable?: string) => Promise<unknown>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
@@ -388,8 +390,9 @@ const insertWithRelations = async (
 
 /**
  * `patch` with nested relation writes. A patch that only touches relations changes the children, not the parent
- * row: the parent is read (so it must exist and be visible) but its own update policy is not consulted, while each
- * child write is gated by that child's policy.
+ * row: the parent is read (so it must exist and be visible) and its update policy is checked without a write, so a
+ * caller who may read a parent but not update it cannot re-point its children. Each child write is gated by that
+ * child's own policy.
  */
 const patchWithRelations = async (
     writer: RelationWriteWriterLike,
@@ -410,8 +413,13 @@ const patchWithRelations = async (
 
     if (Object.keys(columns).length > 0) {
         await writer.patch(id, columns, tableName);
-    } else if ((await writer.get(id, tableName)) === null) {
-        throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
+    } else {
+        if ((await writer.get(id, tableName)) === null) {
+            throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
+        }
+
+        // The parent is not written, but its update policy still decides whether its children may change.
+        await writer.assertPatchAllowed?.(id, tableName);
     }
 
     await applyManys(writer, tableName, parsed, parentValueFor(writer, tableName, id, columns));

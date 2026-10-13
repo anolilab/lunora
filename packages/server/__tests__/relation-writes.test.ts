@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { SqlExec } from "@lunora/shard-engine";
 import { v } from "@lunora/values";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FacadeEntry, FacadeWriterLike } from "../src/facade";
 import { bindTableFacade } from "../src/facade";
@@ -18,6 +18,12 @@ import { defineSchema, defineTable } from "../src/schema";
  * `audits` is `.global()`, to pin that a relation crossing backends is refused rather than half-applied.
  */
 const schema = defineSchema({
+    albums: defineTable({ title: v.string() })
+        .timestamps()
+        .relations((r) => {
+            return { tracks: r.many("tracks", { field: "albumId" }) };
+        }),
+    tracks: defineTable({ albumId: v.optional(v.id("albums").nullable()), name: v.string() }),
     audits: defineTable({ note: v.string(), userId: v.optional(v.id("users").nullable()) })
         .global()
         .relations((r) => {
@@ -375,6 +381,38 @@ describe("nested relation writes", () => {
                 code: "VALIDATION_ERROR",
                 message: expect.stringContaining("authorId"),
             });
+        });
+    });
+
+    describe("relation-only patch", () => {
+        it("leaves the parent row exactly as it was, updatedAt included, and changes only the child", async () => {
+            expect.assertions(3);
+
+            const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+            const album = (await table("albums").insert({ title: "Live" })) as string;
+            const track = (await table("tracks").insert({ name: "Intro" })) as string;
+            const before = (await table("albums").get(album)) as Record<string, unknown>;
+
+            clock.mockReturnValue(2000);
+
+            try {
+                await table("albums").patch(album, { tracks: { connect: [track] } });
+            } finally {
+                clock.mockRestore();
+            }
+
+            expect(before["updatedAt"]).toBe(1000);
+            await expect(table("albums").get(album as never)).resolves.toStrictEqual(before);
+            expect(((await table("tracks").get(track as never)) as Record<string, unknown>)["albumId"]).toBe(album);
+        });
+
+        it("is NOT_FOUND for a missing parent and writes no child", async () => {
+            expect.assertions(2);
+
+            const track = (await table("tracks").insert({ name: "Intro" })) as string;
+
+            await expect(table("albums").patch("nope", { tracks: { connect: [track] } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+            expect(((await table("tracks").get(track as never)) as Record<string, unknown>)["albumId"] ?? null).toBeNull();
         });
     });
 });
