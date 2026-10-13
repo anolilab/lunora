@@ -324,6 +324,7 @@ export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./r
 export {
     assertFlatPredicate,
     assertShapeShardable,
+    composeReadPredicate,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
     isRelationPredicate,

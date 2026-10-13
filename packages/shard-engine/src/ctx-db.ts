@@ -89,16 +89,7 @@ import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./driz
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
 import { assertPatchAllowed, operatorFields, readPatchField, resolvePatch } from "./patch-operators";
-import {
-    applySelect,
-    buildSeekWhere,
-    decodeCursor,
-    encodeCursor,
-    equalityPinnedFields,
-    normalizeOrderKeys,
-    softDeleteScope,
-    uniqueIndexFields,
-} from "./query-args";
+import { applySelect, encodeCursor, softDeleteScope } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankPivotConditionSql, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
 import { UNVOUCHABLE_DEP } from "./read-footprint";
@@ -109,7 +100,7 @@ import { compileOrderByText, doWhereTextStrategy, paginateStage, scanKeyset, sel
 import { isPushableWhere, whereOfFilter } from "./reader-where-filter";
 import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
-import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
+import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, resolveRelationPredicates } from "./relation-predicates";
 import { describeRelationWrites } from "./relation-writes";
 import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
@@ -2905,47 +2896,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
-     * Compile a `findMany` read down to its SQL statement: ordering, the keyset seek, the policy and
-     * soft-delete scopes, and relation predicates (resolved first). `read` only feeds the EXISTS push-down
-     * stamps; a semijoin lookup goes through the ordinary related-table read and stamps like any read.
-     * Dependency stamping for the main table is the caller's: `findMany` does it, `explain` does not,
-     * because describing a query must not make a live query subscribe to the table it describes.
+     * Compile a `findMany` read down to its SQL statement. The predicate, ordering and page size come
+     * from {@link composeReadPredicate}; this only emits them as text. `read` only feeds the EXISTS
+     * push-down stamps; a semijoin lookup goes through the ordinary related-table read and stamps like
+     * any read. Dependency stamping for the main table is the caller's: `findMany` does it, `explain`
+     * does not, because describing a query must not make a live query subscribe to the table it describes.
      */
     const compileFindMany = async (tableName: string, definition: TableDefinitionLike, args: QueryArgs, read: typeof onRead) => {
-        const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
-            pinned: equalityPinnedFields(args.where),
-            uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
-        });
-        const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
-
-        // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
-        // before the keyset seek so policy + cursor compose cleanly.
-        let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
-
-        // Soft delete: hide rows whose marker column is set, unless the caller
-        // opted in via `includeDeleted`. AND-merged like a baseWhere so it
-        // composes with RLS + the keyset seek; relation `with` loads route back
-        // through this `findMany`, so they inherit the scope automatically.
-        predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
-
-        // Rewrite any relation-crossing predicate (`{ author: { is: W } }`,
-        // `{ posts: { some: W } }`, …) into a flat `IN`/`NOT IN` via a
-        // backend-routed child fetch, *before* compiling — the predicate may
-        // arrive from caller `where` or an injected RLS `baseWhere`. A read
-        // with no relation predicates returns unchanged (no extra query).
-        predicate = await resolveRelationPredicates(predicate, {
+        const { fetchLimit, limit, orderKeys, predicate } = await composeReadPredicate(definition, args, {
             canPushExists: relationExistsPushDownEnabled ? canPushRelationExists : undefined,
             existsPushMode: relationExistsPushDown === "always" ? "always" : "auto",
             fetcher: relationPredicateFetcher,
             maxRelationKeys,
-            relationBaseWhere: args.relationBaseWhere,
             schema,
             tableName,
         });
-
-        if (seek) {
-            predicate = predicate ? { AND: [predicate, seek] } : seek;
-        }
 
         // A pushed-down relation node leaves a `__relationExists` marker in
         // the tree; compile it with the EXISTS-aware strategy. Without the
@@ -2955,10 +2920,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsTextStrategy(read) : doWhereTextStrategy;
         const whereCondition = compileWhereSql(predicate, whereStrategy, textFragments);
 
-        const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-        // Over-fetch by one row to learn whether another page exists without
-        // issuing a second query.
-        const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), limit === undefined ? undefined : limit + 1);
+        const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), fetchLimit);
 
         return { limit, orderKeys, statement };
     };

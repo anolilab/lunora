@@ -64,23 +64,21 @@ import {
     assertNoExplicitUndefined,
     assertPatchAllowed,
     assertValidClientId,
-    buildSeekWhere,
     CDC_LOG_TABLE,
     CDC_LOG_TABLE_SEQ_INDEX,
     cdcForkedError,
     cdcTrimmedError,
     coerceAggregateNumber,
     compileWhereSql,
+    composeReadPredicate,
     ConflictError,
     CountRlsUnsupportedError,
     CURSOR_PREFIX,
     cursorBelowRetainedFloor,
-    decodeCursor,
     describeRelationWrites,
     encodeAggregateKey,
     encodeCursor,
     encodePartitionKey,
-    equalityPinnedFields,
     fanOutScalarCounts,
     foldAggregateTally,
     hasTrigger,
@@ -90,7 +88,6 @@ import {
     mergeWhere,
     normalizeCountArgument,
     normalizeIdStructurally,
-    normalizeOrderKeys,
     NotFoundError,
     NotUniqueError,
     nullsFirstOf,
@@ -117,7 +114,6 @@ import {
     stripReservedPatchFields,
     throwingScheduler,
     tiebreakDirectionFor,
-    uniqueIndexFields,
     whereOfFilter,
     WORKERD_SQLITE_LIMITS,
 } from "@lunora/shard-engine";
@@ -2953,41 +2949,17 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     });
 
     /**
-     * Compile a `findMany` read down to its SQL: ordering, the keyset seek, the policy and
-     * soft-delete scopes, and relation predicates (resolved first, so those do read). Shared by
-     * `findMany` and `explain`, so the statement a plan describes is the one a read runs.
+     * Compile a `findMany` read down to its SQL. The predicate, ordering and page size come from
+     * {@link composeReadPredicate}, so this only emits them as text. Shared by `findMany` and
+     * `explain`, so the statement a plan describes is the one a read runs.
      */
     const compileFindMany = async (tableName: string, definition: TableDefinitionLike, args: QueryArgs) => {
-        const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
-            pinned: equalityPinnedFields(args.where),
-            uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
-        });
-        const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
-
-        // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
-        // before the keyset seek so policy + cursor compose cleanly.
-        let predicate: undefined | WhereInput = mergeWhere(args.baseWhere, args.where);
-
-        // Soft delete: hide rows whose marker column is set unless the caller
-        // opted in via `includeDeleted`. Relation `with` loads route back
-        // through this `findMany`, so they inherit the scope automatically.
-        predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
-
-        // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
-        // backend-routed child fetch before compiling. `relationBaseWhere` is
-        // threaded through so a child table's RLS read filter applies on the
-        // hop — as it is on the `with`-load `resolveWith` calls below.
-        predicate = await resolveRelationPredicates(predicate, {
+        const { fetchLimit, limit, orderKeys, predicate } = await composeReadPredicate(definition, args, {
             fetcher: relationPredicateFetcher,
             maxRelationKeys,
-            relationBaseWhere: args.relationBaseWhere,
             schema,
             tableName,
         });
-
-        if (seek) {
-            predicate = predicate ? { AND: [predicate, seek] } : seek;
-        }
 
         const whereCondition = compileWhereSql(predicate, whereSqlStrategyFor(definition));
         const orderBy = compileOrderBySql(orderKeys, dialect);
@@ -3000,11 +2972,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         query = sql`${query} ORDER BY ${orderBy}`;
 
-        const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-
-        if (limit !== undefined) {
-            // Over-fetch by one row to learn whether another page exists.
-            query = sql`${query} LIMIT ${sql.raw(String(limit + 1))}`;
+        if (fetchLimit !== undefined) {
+            query = sql`${query} LIMIT ${sql.raw(String(fetchLimit))}`;
         }
 
         return { limit, orderKeys, query };

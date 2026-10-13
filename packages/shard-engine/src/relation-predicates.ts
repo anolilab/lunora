@@ -32,9 +32,11 @@ import { LunoraError } from "@lunora/errors";
 
 import type { RelationOperator } from "../../../shared/relation-operators";
 import { isRelationPredicate as isSharedRelationPredicate, RELATION_OPERATOR_SET } from "../../../shared/relation-operators";
+import { mergeWhere } from "./aggregates";
 import { isMemoryTable } from "./ctx-db-memory";
+import { buildSeekWhere, decodeCursor, equalityPinnedFields, normalizeOrderKeys, softDeleteScope, uniqueIndexFields } from "./query-args";
 import { distinctValues } from "./relations";
-import type { QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
+import type { OrderKey, QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
 import { RELATION_EXISTS_KEY } from "./where-types";
 
@@ -489,6 +491,44 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
 };
 
 /**
+ * Compose the predicate, ordering and page size of a `findMany`-shaped read. This is the one
+ * place that fixes the composition order, so `findMany` and `explain` cannot disagree about it:
+ * the ordering and keyset seek come from the cursor's own columns; `baseWhere` (RLS / aggregate
+ * scope) AND-merges with `where`; the soft-delete scope joins them; relation predicates are then
+ * resolved to flat columns (the one await, which reads through `relation.fetcher`); and the seek
+ * is ANDed in last. A malformed cursor throws before any child fetch runs.
+ *
+ * Each dialect compiles the result to its own SQL. `fetchLimit` is `limit + 1`, the over-fetch
+ * that tells the caller whether another page exists without a second query.
+ */
+const composeReadPredicate = async (
+    definition: TableDefinitionLike,
+    args: QueryArgs,
+    relation: Omit<ResolveRelationPredicatesOptions, "relationBaseWhere">,
+): Promise<{ fetchLimit: number | undefined; limit: number | undefined; orderKeys: OrderKey[]; predicate: WhereInput | undefined }> => {
+    const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
+        pinned: equalityPinnedFields(args.where),
+        uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
+    });
+    const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+
+    let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
+    predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
+
+    // `relationBaseWhere` threads a child table's RLS read filter onto each relation hop, as the
+    // `with`-load `resolveWith` calls do; without it a relation predicate could read rows the caller may not.
+    predicate = await resolveRelationPredicates(predicate, { ...relation, relationBaseWhere: args.relationBaseWhere });
+
+    if (seek) {
+        predicate = predicate ? { AND: [predicate, seek] } : seek;
+    }
+
+    const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+
+    return { fetchLimit: limit === undefined ? undefined : limit + 1, limit, orderKeys, predicate };
+};
+
+/**
  * A relation predicate whose target table a live shape cannot observe, and which
  * of the two reasons applies — they need different remedies in the message.
  */
@@ -629,5 +669,13 @@ const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: Re
     );
 };
 
-export { assertFlatPredicate, assertShapeShardable, containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates };
+export {
+    assertFlatPredicate,
+    assertShapeShardable,
+    composeReadPredicate,
+    containsRelationPredicate,
+    DEFAULT_MAX_RELATION_KEYS,
+    isRelationPredicate,
+    resolveRelationPredicates,
+};
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions };
