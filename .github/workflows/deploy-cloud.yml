@@ -4,9 +4,11 @@
 # something that ends up inside them changes.
 #
 # `push`, not `pull_request`: a deploy publishes to a real Cloudflare account, so
-# it happens after review, from the branch that carries the merged change.
-# `alpha` is the staging cell, `main` the production one, which mirrors how the
-# npm packages already release from those two branches (semantic-release.yml).
+# it happens after review. A merge to `alpha` deploys the staging cell; the
+# production cell deploys only when a `cloud-v*` tag is pushed, so what serves
+# tenants is a commit somebody chose to release, not whatever last reached `main`.
+# Cut one with `git tag cloud-v<n> <commit> && git push origin cloud-v<n>`
+# (the `cloud-production` environment accepts nothing else, and needs approval).
 #
 # The path list is wider than `apps/cloud/**` on purpose. The control plane
 # BUNDLES the workspace packages rather than resolving them at runtime, so a
@@ -16,7 +18,9 @@
 # pipeline by editing the pipeline still runs it.
 "on": # yamllint disable-line rule:truthy
     "push":
-        "branches": ["main", "alpha"]
+        # Path filters do not apply to tag pushes: a tag is the decision to release.
+        "branches": ["alpha"]
+        "tags": ["cloud-v*"]
         "paths":
             - ".github/workflows/deploy-cloud.yml"
             - "apps/cloud/**"
@@ -28,7 +32,7 @@
     "workflow_dispatch":
         "inputs":
             "target":
-                "description": "Which cell to deploy (defaults to the one the branch maps to)"
+                "description": "Which cell to deploy (defaults to staging, or production on a cloud-v* tag). Production needs a cloud-v* tag under Use workflow from"
                 "required": false
                 "type": "choice"
                 "options": ["staging", "production"]
@@ -46,9 +50,9 @@
 
 "jobs":
     "deploy":
-        # The branch → cell mapping lives in this one expression, repeated in
+        # The ref → cell mapping lives in this one expression, repeated in
         # `environment` below because the `env` context is not available there.
-        "name": "Deploy (${{ inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }})"
+        "name": "Deploy (${{ inputs.target || (github.ref_type == 'tag' && 'production' || 'staging') }})"
         "if": "github.repository == 'anolilab/lunora'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 40
@@ -66,7 +70,7 @@
         # LUNORA_LINEAGE_SECRET, CLOUD_GITHUB_WEBHOOK_SECRET, …). The "Write the Worker
         # secrets" step fans them out to each Worker through `--secrets-file`. Optional
         # ones left unset on the environment are left unset on the Worker.
-        "environment": "cloud-${{ inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}"
+        "environment": "cloud-${{ inputs.target || (github.ref_type == 'tag' && 'production' || 'staging') }}"
         "outputs":
             "target": "${{ steps.target.outputs.name }}"
         "env":
@@ -95,15 +99,22 @@
               "env":
                   "REQUESTED": "${{ inputs.target }}"
                   "REF_NAME": "${{ github.ref_name }}"
+                  "REF_TYPE": "${{ github.ref_type }}"
               "run": |
                   set -euo pipefail
 
                   if [ -n "${REQUESTED}" ]; then
                       name="${REQUESTED}"
-                  elif [ "${REF_NAME}" = "main" ]; then
+                  elif [ "${REF_TYPE}" = "tag" ]; then
                       name="production"
                   else
                       name="staging"
+                  fi
+
+                  # The environment enforces this too; failing here says why.
+                  if [ "${name}" = "production" ] && [ "${REF_TYPE}" != "tag" ]; then
+                      echo "::error::Production deploys from a cloud-v* tag only. Pick the tag under 'Use workflow from'."
+                      exit 1
                   fi
 
                   echo "name=${name}" >> "$GITHUB_OUTPUT"
@@ -263,16 +274,16 @@
                   rm -f "${RUNNER_TEMP}"/secrets-*.json
 
     "release":
-        # Production only. A staging deploy is not a release — tagging every alpha
-        # merge would make `cloud-v*` a commit log rather than a list of what is
-        # actually serving tenants.
-        "name": "Tag + GitHub Release"
+        # Production only: the run was started by a `cloud-v*` tag. A staging deploy
+        # is not a release — a release per alpha merge would make the list a commit log
+        # rather than a record of what is actually serving tenants.
+        "name": "GitHub Release"
         "needs": "deploy"
-        "if": "needs.deploy.outputs.target == 'production'"
+        "if": "needs.deploy.outputs.target == 'production' && github.ref_type == 'tag'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 10
         "permissions":
-            "contents": "write" # to create the tag + GitHub release
+            "contents": "write" # to create the GitHub release
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -288,49 +299,39 @@
             # semantic-release owns: `apps/cloud` is private and never published to
             # npm, so it has no semver of its own, and a tag in that namespace would
             # be read by multi-semantic-release as a package release that never
-            # happened. The run number is monotonic per workflow file, which is
-            # enough to order deploys; the sha the release points at identifies the
-            # code. (Renaming this file restarts the counter — bump the tag prefix if
-            # that ever happens.)
-            #
-            # `gh release create --target` mints the tag itself, rather than
-            # `git tag && git push`: the shared checkout composite does not persist
-            # credentials, so a git push from here has nothing to authenticate with.
+            # happened. The tag was pushed by a person; the release only describes it.
             #
             # `--notes-start-tag` rather than a bare `--generate-notes`: the repo
             # publishes a GitHub release per `@lunora/*` package on every
             # semantic-release run, so "the previous release" is almost never the
             # previous CLOUD release, and the auto-generated range would be wrong by
             # dozens of unrelated package bumps.
-            - "name": "Tag the deployed commit and cut its release"
+            - "name": "Cut the release for the deployed tag"
               "shell": "bash"
               "env":
                   "GH_TOKEN": "${{ github.token }}"
-                  "RUN_NUMBER": "${{ github.run_number }}"
-                  "SHA": "${{ github.sha }}"
+                  "TAG": "${{ github.ref_name }}"
               "run": |
                   set -euo pipefail
-
-                  tag="cloud-v${RUN_NUMBER}"
 
                   git fetch --quiet origin '+refs/tags/*:refs/tags/*'
 
                   # `-v:refname` sorts `cloud-v9` before `cloud-v10`; the numeric
                   # suffix is the whole version, so a lexical sort would pick the
-                  # wrong start tag the first time the counter passes ten.
-                  previous="$(git tag --list 'cloud-v*' --sort=-v:refname | head -n 1)"
+                  # wrong start tag the first time the counter passes ten. The
+                  # previous release is the next one down from this tag.
+                  previous="$(git tag --list 'cloud-v*' --sort=-v:refname | awk -v tag="${TAG}" 'found { print; exit } $0 == tag { found = 1 }')"
 
-                  # Re-running a workflow reuses its run number, so the release may
-                  # already exist. That is a no-op, not a failure.
-                  if gh release view "${tag}" >/dev/null 2>&1; then
-                      echo "::notice::Release ${tag} already exists; leaving it as it is."
+                  # Re-running a workflow must not fail on a release that exists.
+                  if gh release view "${TAG}" >/dev/null 2>&1; then
+                      echo "::notice::Release ${TAG} already exists; leaving it as it is."
                       exit 0
                   fi
 
-                  args=(--target "${SHA}" --title "Lunora Cloud ${tag}" --generate-notes --latest=false)
+                  args=(--verify-tag --title "Lunora Cloud ${TAG}" --generate-notes --latest=false)
 
                   if [ -n "${previous}" ]; then
                       args+=(--notes-start-tag "${previous}")
                   fi
 
-                  gh release create "${tag}" "${args[@]}"
+                  gh release create "${TAG}" "${args[@]}"

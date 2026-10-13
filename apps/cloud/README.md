@@ -1889,9 +1889,10 @@ unset.
 
 `.github/workflows/deploy-cloud.yml` deploys on push:
 
-- **`alpha` → `cloud-staging`**, **`main` → `cloud-production`**, and
-  `workflow_dispatch` can target either explicitly.
-- It fires when `apps/cloud/**`, `packages/**`, `shared/**`, `protocol/**` or the
+- **`alpha` → `cloud-staging`**, and a pushed **`cloud-v*` tag → `cloud-production`**
+  (the environment accepts no branch, and needs approval). `workflow_dispatch` can target
+  either; production needs the tag picked under "Use workflow from".
+- A branch push fires when `apps/cloud/**`, `packages/**`, `shared/**`, `protocol/**` or the
   lockfile changes. The wider-than-`apps/cloud` path list is deliberate: the
   control plane bundles the workspace packages, so a package change _is_ a change
   to the deployed bytes.
@@ -1926,10 +1927,11 @@ unset.
 
 ### Tags and releases
 
-A **production** deploy tags the commit `cloud-v<run-number>` and cuts a GitHub
-Release whose notes span back to the previous `cloud-v*` tag. Staging deploys are
-not tagged — tagging every `alpha` merge would make `cloud-v*` a commit log
-rather than a list of what is actually serving tenants.
+A **production** deploy is started by pushing a `cloud-v<n>` tag
+(`git tag cloud-v<n> <commit> && git push origin cloud-v<n>`); after it succeeds the
+workflow cuts a GitHub Release for that tag whose notes span back to the previous
+`cloud-v*` tag. Staging deploys are not tagged — a release per `alpha` merge would
+make `cloud-v*` a commit log rather than a list of what is actually serving tenants.
 
 The `cloud-v*` namespace is deliberately outside the `@lunora/<pkg>@<version>`
 shape `semantic-release` owns: `apps/cloud` is private, never published to npm,
