@@ -19,6 +19,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { isFieldPath } from "../../../shared/json-field-path";
 import { isJsonSafe, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import type { WhereFragments } from "./where-fragments";
 import { drizzleFragments } from "./where-fragments";
@@ -84,6 +85,15 @@ interface WhereSqlStrategy<T = SQL> {
     inList?: (reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => T;
 
     /**
+     * The test that the leaf at path `field` is a JSON value of `type`. A range (`gt`/`gte`/`lt`/`lte`) over a path
+     * is ANDed with it, so `gt: 5` matches the number leaves above 5 and nothing else on every engine; each engine
+     * orders values of different types differently (SQLite puts every text above every number, Postgres and MySQL
+     * put them the other way round), so an unbracketed range would answer differently per backend. Absent ⇒ the
+     * range is left as it was. A cursor seek opts out with `crossType` (see {@link FieldOperators.crossType}).
+     */
+    rangeTypeGuard?: (field: string, type: RangeOperandType) => T;
+
+    /**
      * Optional correlated-EXISTS push-down hook: compiles a {@link RELATION_EXISTS_KEY}
      * marker node into a `[NOT] EXISTS (SELECT 1 FROM … WHERE …)` predicate. The DO
      * JSON-blob path supplies it (relation predicates push down to a subquery);
@@ -98,11 +108,23 @@ interface WhereSqlStrategy<T = SQL> {
     serialize: SerializeValue;
 }
 
+/** The JSON types a range over a path can be bracketed to. */
+type RangeOperandType = "boolean" | "number" | "string";
+
+/** The JSON type a range operand brackets to, or `undefined` for one that is none of them (a Date, a bigint, an object). */
+const rangeOperandType = (value: unknown): RangeOperandType | undefined => {
+    const type = typeof value;
+
+    return type === "number" || type === "string" || type === "boolean" ? type : undefined;
+};
+
 /** Placeholder budget for an `in` list when the tree holds only one — the whole statement's share. */
 const IN_LIST_DEFAULT_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
 const OPERATOR_KEYS = ["eq", "ne", "lt", "lte", "gt", "gte", "in", "notIn", "isNull", "contains"] as const;
-const OPERATOR_KEY_SET = new Set<string>(OPERATOR_KEYS);
+// `crossType` is a modifier on the comparators, not an operator of its own, so it joins the set but not the list.
+const OPERATOR_KEY_SET = new Set<string>([...OPERATOR_KEYS, "crossType"]);
+const RANGE_OPERATOR_KEYS: ReadonlySet<string> = new Set(["gt", "gte", "lt", "lte"]);
 const BINARY_COMPARATORS: Record<string, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
 
 /** A plain object whose every own key is a known operator is an operator object; anything else is an equality literal. */
@@ -149,6 +171,7 @@ const compileComparator = <T>(
     value: unknown,
     strategy: WhereSqlStrategy<T>,
     fragments: WhereFragments<T>,
+    crossType = false,
 ): T => {
     // user's `where: { col: { eq: undefined } }` still fails loudly at the driver instead of quietly matching every null row.
     if (value === null) {
@@ -168,7 +191,17 @@ const compileComparator = <T>(
         return fragments.constant(false);
     }
 
-    return fragments.binary(reference, comparator, strategy.serialize(value, field));
+    const comparison = fragments.binary(reference, comparator, strategy.serialize(value, field));
+
+    if (crossType || !strategy.rangeTypeGuard || !RANGE_OPERATOR_KEYS.has(operator) || !isFieldPath(field)) {
+        return comparison;
+    }
+
+    // A range over a path matches the leaves of the operand's own type. An operand that is none of them (a Date, a
+    // bigint, an object) has no leaf to match, as on Postgres and MySQL where it binds as NULL.
+    const type = rangeOperandType(value);
+
+    return type === undefined ? fragments.constant(false) : fragments.connect(comparison, strategy.rangeTypeGuard(field, type), "AND");
 };
 
 /**
@@ -400,7 +433,7 @@ const compileFieldOperators = <T>(field: string, reference: T, operators: FieldO
         const comparator = BINARY_COMPARATORS[operator];
 
         if (comparator) {
-            clauses.push(compileComparator(field, reference, operator, comparator, value, strategy, fragments));
+            clauses.push(compileComparator(field, reference, operator, comparator, value, strategy, fragments, record["crossType"] === true));
         } else if (operator === "isNull") {
             clauses.push(fragments.nullCheck(reference, !value));
         } else if (operator === "contains") {
@@ -637,4 +670,4 @@ export const compileWhereSql = <T = SQL>(
 };
 
 export { serverInList };
-export type { WhereSqlStrategy };
+export type { RangeOperandType, WhereSqlStrategy };

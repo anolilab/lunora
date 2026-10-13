@@ -961,6 +961,7 @@ interface FanoutTopicStat {
 ```ts
 interface FieldOperators {
     contains?: string;
+    crossType?: boolean;
     eq?: unknown;
     gt?: unknown;
     gte?: unknown;
@@ -1778,6 +1779,12 @@ const REPROJECTION_MIGRATION_PREFIX = "__lunora_reproject__";
 
 ```ts
 const RLS_UNWRAP_SYMBOL: symbol;
+```
+
+### `RangeOperandType` (type)
+
+```ts
+type RangeOperandType = "boolean" | "number" | "string";
 ```
 
 ### `RankBeforeOptions` (interface)
@@ -3467,6 +3474,7 @@ interface WhereSqlStrategy<T = SQL> {
     containsExpr?: (reference: T, term: T) => T;
     fieldRef: FieldRefSql<T>;
     inList?: (reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => T;
+    rangeTypeGuard?: (field: string, type: RangeOperandType) => T;
     relationExists?: (request: unknown) => T;
     serialize: SerializeValue;
 }

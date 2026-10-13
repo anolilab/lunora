@@ -28,14 +28,14 @@ import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
-import { DOC_COLUMN, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import { DOC_COLUMN, jsonPathSql, jsonTypeGuardSql, rowToDocument, serializeSqlValue } from "./do-sql";
 import { sqliteInList } from "./drizzle";
 import type { WhereSqlStrategy } from "./where-sql";
 import { compileWhereSql } from "./where-sql";
 import type { WhereInput } from "./where-types";
 
 /** Flat JSON-blob `where` strategy: fields via `json_extract`, values via `serializeSqlValue`. Mirrors the query path's `doWhereSqlStrategy`. */
-const shapeWhereStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
+const shapeWhereStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, rangeTypeGuard: jsonTypeGuardSql, serialize: serializeSqlValue };
 
 /** Build the `id IN (...)` restriction for a non-empty id list, or `undefined` to leave the query unrestricted. */
 const idInClause = (ids: ReadonlyArray<string>): SQL | undefined => {

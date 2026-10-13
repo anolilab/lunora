@@ -129,9 +129,12 @@ comparison. A path has at most four segments, the column included.
   wire-encoded and non-JSON cases, in the test suite. `contains` works on a path too: it searches the leaf's own text,
   with the same case rule as a column on that engine (SQLite ignores ASCII case; Postgres and MySQL do not). A number
   leaf is searched by its digits. A boolean leaf is `1` or `0` on SQLite and `true` or `false` on Postgres and MySQL,
-  and an object or array leaf by its JSON text, which is spaced differently on SQLite and Postgres. A range (`gt`, `lt`) over a path whose values mix types
-  (a number in some rows, a string or boolean in others) is not the same on every backend, so keep a ranged path to one
-  type.
+  and an object or array leaf by its JSON text, which is spaced differently on SQLite and Postgres. A range (`gt`, `gte`, `lt`, `lte`) over a path
+  matches only the leaves of the operand's own type, the same on every backend: `gt: 5` finds the numbers above 5 and
+  neither the text `"7"`, a boolean nor an array, and `gt: "7"` finds the text leaves after it. An operand that is none
+  of number, string or boolean (a `Date`, a `bigint`) matches nothing. Ordering by a path still sorts every type
+  together, in an order that differs per engine, so keep an ordered path to one type; paging through it reaches every
+  row either way. Two text leaves compare by the engine's own string order, as a text column does.
 - A path into a [masked](/docs/concepts/masking) column is refused like the column itself, whichever path.
 
 To change one nested key without rewriting the object, patch the path:

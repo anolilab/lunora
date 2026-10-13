@@ -77,6 +77,8 @@ import {
     isFtsAvailable,
     jsonPath,
     jsonPathSql,
+    jsonTypeGuard,
+    jsonTypeGuardSql,
     qualifiedJsonPath,
     qualifiedJsonPathSql,
     quoteIdentifier,
@@ -978,7 +980,7 @@ const runGeoTerminalScored = (
 };
 
 /** DO drizzle `where` strategy (flat): fields via `json_extract`, values via {@link serializeSqlValue}. */
-const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
+const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, rangeTypeGuard: jsonTypeGuardSql, serialize: serializeSqlValue };
 
 /**
  * Refuse a SQL-side reduce or group over a column that MAY be stored as an
@@ -1032,6 +1034,7 @@ const makeRelationExistsSqlStrategy = (onRead: ReadHook): WhereSqlStrategy => {
 
     const strategy: WhereSqlStrategy = {
         fieldRef: jsonPathSql,
+        rangeTypeGuard: jsonTypeGuardSql,
         relationExists: (request) => {
             const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
             const alias = `__rel_${String(aliasCounter)}`;
@@ -1073,6 +1076,7 @@ const makeRelationExistsTextStrategy = (onRead: ReadHook): WhereSqlStrategy<Text
 
     const strategy: WhereSqlStrategy<TextFragment> = {
         fieldRef: (field) => rawText(jsonPath(field)),
+        rangeTypeGuard: (field, type) => rawText(jsonTypeGuard(field, type)),
         relationExists: (request) => {
             const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
             const alias = `__rel_${String(aliasCounter)}`;

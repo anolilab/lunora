@@ -17,6 +17,13 @@
  */
 interface FieldOperators {
     contains?: string;
+
+    /**
+     * Compare a path's leaves across JSON types, in the engine's own order. Set on a keyset seek only: it has to
+     * agree with the `ORDER BY` that produced the cursor, which sorts every type, so a type-bracketed range would
+     * skip the rows of the other types and the next page could never reach them.
+     */
+    crossType?: boolean;
     eq?: unknown;
     gt?: unknown;
     gte?: unknown;

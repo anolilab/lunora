@@ -148,6 +148,33 @@ const pathJsonText = new WeakMap<SQL, string>();
 const pgJsonParam = (json: string): SQL => sql`CAST(CAST(${json} AS text) AS jsonb)`;
 
 /**
+ * The test that the leaf at path `field` is a JSON value of `type`, ANDed onto a range over it so that `gt: 5`
+ * matches number leaves only on every engine (see `WhereSqlStrategy.rangeTypeGuard`).
+ *
+ * SQLite reads `json_type`, because `json_extract` flattens `true` to `1`. Postgres and MySQL read the type of the
+ * `jsonb`/`JSON` reference the comparison already uses, which is NULL for text that is not JSON.
+ */
+const pathTypeGuardSql = (dialect: SqlDialect, field: string, type: "boolean" | "number" | "string"): SQL => {
+    if (dialect.name === "sqlite") {
+        const [root = "", ...rest] = pathSegments(field);
+        const column = columnRefSql(root);
+        const names = { boolean: "'true', 'false'", number: "'integer', 'real'", string: "'text'" }[type];
+
+        return sql`NULLIF(CASE WHEN json_valid(${column}) THEN json_type(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END, 'null') IN (${sql.raw(names)})`;
+    }
+
+    const reference = fieldRefSql(dialect, field);
+
+    if (dialect.name === "postgres") {
+        return sql`jsonb_typeof(${reference}) = ${sql.raw(`'${type}'`)}`;
+    }
+
+    const names = { boolean: "'BOOLEAN'", number: "'INTEGER', 'UNSIGNED INTEGER', 'DOUBLE', 'DECIMAL'", string: "'STRING'" }[type];
+
+    return sql`JSON_TYPE(${reference}) IN (${sql.raw(names)})`;
+};
+
+/**
  * The bound form of one value compared against a path on Postgres or MySQL.
  *
  * It is bound as JSON, not as the SQLite storage form: `sqliteEncode` turns `true` into `1`, and JSON `true`
@@ -775,6 +802,7 @@ export {
     pathContainsNeedle,
     pathInList,
     pathTextReference,
+    pathTypeGuardSql,
     qualifiedColumnRefSql,
     queryAll,
     queryBatch,

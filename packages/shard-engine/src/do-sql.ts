@@ -26,6 +26,7 @@ import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { sqlComparableProjection } from "./sql-projection";
+import type { RangeOperandType } from "./where-sql";
 
 /** The stored JSON document column every DO table carries alongside `id` / `_creationTime`. */
 const DOC_COLUMN = "__doc__";
@@ -223,6 +224,19 @@ const documentPath = (prefix: string, field: string): string => {
 
 const jsonPath = (field: string): string => documentPath("", field);
 
+/** SQLite's `json_type` names for each JSON type a range over a path can be bracketed to; a boolean is `true` or `false`, a number `integer` or `real`. */
+const JSON_EXTRACT_PREFIX = /^json_extract\(/u;
+const JSON_TYPE_NAMES: Record<RangeOperandType, string> = { boolean: "'true', 'false'", number: "'integer', 'real'", string: "'text'" };
+
+/**
+ * The test that the leaf at path `field` is a JSON value of `type`: `json_type(__doc__, '$.a.b') IN (…)`, built from
+ * the same path text as {@link jsonPath} so it addresses the leaf the comparison reads. `json_extract` flattens a
+ * boolean to `1` or `0`, so the comparison alone cannot tell `true` from the number `1`; the type can. A JSON `null`
+ * leaf is NULL here, as it is in the comparison, so a `NOT` over the range treats it like a missing key.
+ */
+const jsonTypeGuard = (field: string, type: RangeOperandType): string =>
+    `NULLIF(${jsonPath(field).replace(JSON_EXTRACT_PREFIX, "json_type(")}, 'null') IN (${JSON_TYPE_NAMES[type]})`;
+
 /**
  * Drizzle field reference for the DO store. Wraps the string {@link jsonPath} in
  * `dsql.raw` to keep the **literal** `json_extract(__doc__, '$.field')` path —
@@ -238,6 +252,9 @@ const jsonPath = (field: string): string => documentPath("", field);
  * the wire.
  */
 const jsonPathSql = (field: string): SQL => dsql.raw(jsonPath(field));
+
+/** Drizzle form of {@link jsonTypeGuard}, the `rangeTypeGuard` of every flat DO `where` strategy. */
+const jsonTypeGuardSql = (field: string, type: RangeOperandType): SQL => dsql.raw(jsonTypeGuard(field, type));
 
 /**
  * Table-qualified twin of {@link jsonPath}, for the correlation refs in a
@@ -450,6 +467,8 @@ export {
     isFtsAvailable,
     jsonPath,
     jsonPathSql,
+    jsonTypeGuard,
+    jsonTypeGuardSql,
     qualifiedJsonPath,
     qualifiedJsonPathSql,
     rowToDocument,

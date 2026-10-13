@@ -22,7 +22,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { readFieldPath } from "../../../../shared/json-field-path";
+import { isFieldPath, readFieldPath } from "../../../../shared/json-field-path";
 import { isRelationPredicate } from "../../../../shared/relation-operators";
 // `isPlainObject` comes from the wire codec rather than being re-declared here.
 // The prototype check it carries is load-bearing: a local `typeof === "object"`
@@ -152,7 +152,10 @@ const matchesOrderedOperators = (field: string, documentValue: unknown, operator
         } else {
             const compare = ORDERED_COMPARATORS[operator] as (left: unknown, right: unknown) => boolean;
 
-            result = kleeneAnd(result, ternaryOf(isOrderable(documentValue) && compare(documentValue, operand)));
+            // On a path the range is bracketed to the operand's own type, as in the SQL stores: `"30" > 5` is not true.
+            const sameType = !isFieldPath(field) || typeof documentValue === typeof operand;
+
+            result = kleeneAnd(result, ternaryOf(sameType && isOrderable(documentValue) && compare(documentValue, operand)));
         }
     }
 

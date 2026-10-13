@@ -492,7 +492,7 @@ export type {
 } from "./types";
 export type { VectorBackfillProgress } from "./vector-backfill";
 export { backfillVectorIndexes, VECTOR_BACKFILL_MAX_PAGES } from "./vector-backfill";
-export type { WhereSqlStrategy } from "./where-sql";
+export type { RangeOperandType, WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql, serverInList } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";
 export { RELATION_EXISTS_KEY } from "./where-types";

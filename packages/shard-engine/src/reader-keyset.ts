@@ -9,7 +9,7 @@
  */
 import type { SqlExec } from "./ctx-db";
 import { runSql } from "./do-exec";
-import { DOC_COLUMN, jsonPath, quoteIdentifier, rowToDocument, serializeSqlValue } from "./do-sql";
+import { DOC_COLUMN, jsonPath, jsonTypeGuard, quoteIdentifier, rowToDocument, serializeSqlValue } from "./do-sql";
 import {
     buildSeekBeforeWhere,
     buildSeekWhere,
@@ -88,6 +88,7 @@ const selectPageSql = (tableName: string, where: TextFragment | undefined, order
  */
 const doWhereTextStrategy: WhereSqlStrategy<TextFragment> = {
     fieldRef: (field) => rawText(jsonPath(field)),
+    rangeTypeGuard: (field, type) => rawText(jsonTypeGuard(field, type)),
     serialize: serializeSqlValue,
 };
 

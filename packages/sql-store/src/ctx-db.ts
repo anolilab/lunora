@@ -144,6 +144,7 @@ import {
     pathContainsNeedle,
     pathInList,
     pathTextReference,
+    pathTypeGuardSql,
     queryAll,
     queryBatch,
     queryRun,
@@ -1614,6 +1615,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // {@link whereSqlStrategyFor}.
     const whereSqlStrategyBase: Omit<WhereSqlStrategy, "serialize"> = {
         fieldRef: (field) => fieldRefSql(dialect, field),
+        rangeTypeGuard: (field, type) => pathTypeGuardSql(dialect, field, type),
         // `contains` keeps whatever case behaviour each engine's substring test
         // already gives callers, which is NOT the same across the three: SQLite is
         // ASCII-case-insensitive (the compiler's `instr(lower(…), lower(…))`
