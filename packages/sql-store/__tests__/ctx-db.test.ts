@@ -2989,8 +2989,8 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
 
             await writer.insert("counters", { name: "a", value: 1 });
 
-            const indexed = await writer.explain?.("counters", { where: { name: "a" } });
-            const scanned = await writer.explain?.("counters", { where: { value: 1 } });
+            const indexed = await writer.explain("counters", { where: { name: "a" } });
+            const scanned = await writer.explain("counters", { where: { value: 1 } });
 
             expect(indexed?.sql).toMatch(/^SELECT .* FROM "counters"/u);
             expect(indexed?.params).toContain("a");
@@ -3015,7 +3015,7 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
                 },
             };
             const writer = makeWriter({ ...makeSqliteDialect(), name }, exec);
-            const result = await writer.explain?.("counters", {});
+            const result = await writer.explain("counters", {});
 
             expect(statements.some((statement) => statement.startsWith(prefix))).toBe(true);
             expect(result?.plan).toStrictEqual([line]);

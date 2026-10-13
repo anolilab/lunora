@@ -115,6 +115,9 @@ const createRawWriter = (log: string[]) => {
         async delete(id: string) {
             log.push(`raw.delete:${id}`);
         },
+        async explain() {
+            return { params: [], plan: [], sql: "" };
+        },
         async findFirst(tableName: string, args?: { baseWhere?: FakeWhere; where?: FakeWhere }) {
             log.push(`raw.findFirst:${tableName}`);
 

@@ -517,8 +517,7 @@ export interface PlatformCapabilities {
          * Carried by no host contract: it prefixes a statement the engines already build with
          * `EXPLAIN QUERY PLAN` (SQLite, D1) or `EXPLAIN` (Postgres, MySQL), on `localSql` for a
          * shard-local table and through `@lunora/sql-store` on the `globalTables` backend. The plan
-         * text is the database's own, so its wording differs by backend. A writer that cannot
-         * describe a query omits the method and the call is refused. Advisory by nature (see the
+         * text is the database's own, so its wording differs by backend. Advisory by nature (see the
          * module header).
          */
         queryExplain?: Capability;

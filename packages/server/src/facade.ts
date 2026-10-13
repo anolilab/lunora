@@ -84,8 +84,7 @@ export interface FacadeWriterLike {
     // delete row-by-row instead, mirroring `@lunora/do`'s `DatabaseWriterLike`.
     deleteMany?(ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string): Promise<{ deleted: number }>;
     deleteWhere?(tableName: string, where: Record<string, unknown>, options?: { limit?: number }): Promise<{ deleted: number }>;
-    // Optional: a writer whose backend cannot describe a query omits it.
-    explain?(tableName: string, args?: unknown): Promise<unknown>;
+    explain(tableName: string, args?: unknown): Promise<unknown>;
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
@@ -326,13 +325,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         // `where` is supplied) and only asks whether a row came back — no count scan.
         exists: async (where) => (await writer.findFirst(tableName, where === undefined ? undefined : { where })) !== null,
 
-        explain: async (args) => {
-            if (writer.explain === undefined) {
-                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.explain is unsupported: this writer cannot describe a query`);
-            }
-
-            return writer.explain(tableName, args);
-        },
+        explain: (args) => writer.explain(tableName, args),
         findFirst: (args) => writer.findFirst(tableName, args),
         findFirstOrThrow: (args) => writer.findFirstOrThrow(tableName, args),
         findMany: (args) => writer.findMany(tableName, args),

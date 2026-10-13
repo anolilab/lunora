@@ -33,7 +33,7 @@ describe("ctx-db explain", () => {
         expect.assertions(2);
 
         const writer = createShardContextDatabase({ clock: () => 1, schema, sql: harness.sql });
-        const result = await writer.explain?.("messages", { limit: 5, where: { room: "lobby" } });
+        const result = await writer.explain("messages", { limit: 5, where: { room: "lobby" } });
 
         expect(result?.sql).toMatch(/^SELECT .* FROM "messages"/u);
         expect(result?.params).toContain("lobby");
@@ -43,8 +43,8 @@ describe("ctx-db explain", () => {
         expect.assertions(2);
 
         const writer = createShardContextDatabase({ clock: () => 1, schema, sql: harness.sql });
-        const indexed = await writer.explain?.("messages", { where: { room: "lobby" } });
-        const unindexed = await writer.explain?.("messages", { where: { body: "hi" } });
+        const indexed = await writer.explain("messages", { where: { room: "lobby" } });
+        const unindexed = await writer.explain("messages", { where: { body: "hi" } });
 
         expect(indexed?.plan.join("\n")).toContain("by_room");
         expect(unindexed?.plan.join("\n")).not.toContain("by_room");
@@ -63,8 +63,8 @@ describe("ctx-db explain", () => {
         expect(onRead.mock.calls.length).toBeGreaterThan(0);
 
         onRead.mockClear();
-        await writer.explain?.("messages", { where: { room: "lobby" } });
-        await writer.explain?.("messages");
+        await writer.explain("messages", { where: { room: "lobby" } });
+        await writer.explain("messages");
 
         // ...describing it must not, or a live query that explains would re-run on every write.
         expect(onRead).not.toHaveBeenCalled();
@@ -75,6 +75,6 @@ describe("ctx-db explain", () => {
 
         const writer = createShardContextDatabase({ clock: () => 1, schema, sql: harness.sql });
 
-        await expect(writer.explain?.("nope")).rejects.toThrow("unknown table");
+        await expect(writer.explain("nope")).rejects.toThrow("unknown table");
     });
 });

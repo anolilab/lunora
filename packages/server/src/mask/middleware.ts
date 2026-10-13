@@ -182,7 +182,7 @@ interface MaskDatabase {
     delete: (id: string, expectedTable?: string) => Promise<void>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
     deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => Promise<{ deleted: number }>;
-    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
+    explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -1045,10 +1045,6 @@ const wrapDatabase = <Context>(
         // column would therefore be the same value oracle `findMany` refuses, so it gets the same guard.
         async explain(tableName, args) {
             assertReadArgsAllowed(tableName, args, "explain");
-
-            if (base.explain === undefined) {
-                throw new LunoraError("INTERNAL", `ctx.db.explain on "${tableName}" is unsupported: this writer cannot describe a query`);
-            }
 
             return base.explain(tableName, args);
         },

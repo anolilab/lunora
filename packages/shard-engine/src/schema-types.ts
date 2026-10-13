@@ -796,10 +796,9 @@ export interface DatabaseWriterLike {
 
     /**
      * Describe how the store would run `findMany(tableName, args)`: the statement, its bound
-     * parameters, and the database's own plan for it, one line per step. Optional because a writer
-     * whose backend cannot describe a query omits it; callers raise an explicit unsupported error.
+     * parameters, and the database's own plan for it, one line per step.
      */
-    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
+    explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;

@@ -68,8 +68,8 @@ describe("explain on D1", () => {
 
         await writer.insert(table, { body: "hi", room: "lobby" });
 
-        const indexed = await writer.explain?.(table, { where: { room: "lobby" } });
-        const scanned = await writer.explain?.(table, { where: { body: "hi" } });
+        const indexed = await writer.explain(table, { where: { room: "lobby" } });
+        const scanned = await writer.explain(table, { where: { body: "hi" } });
 
         expect(indexed?.plan.join("\n")).toContain("by_room");
         expect(scanned?.plan.length).toBeGreaterThan(0);

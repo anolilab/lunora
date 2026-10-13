@@ -34,8 +34,8 @@ describe("explain on workerd", () => {
 
             await db.insert("messages", { body: "hi", room: "lobby" });
 
-            const indexed = await db.explain?.("messages", { where: { room: "lobby" } });
-            const scanned = await db.explain?.("messages", { where: { body: "hi" } });
+            const indexed = await db.explain("messages", { where: { room: "lobby" } });
+            const scanned = await db.explain("messages", { where: { body: "hi" } });
 
             expect(indexed?.sql).toContain('FROM "messages"');
             expect(indexed?.plan.join("\n")).toContain("by_room");

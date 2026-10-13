@@ -3511,10 +3511,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "explain");
 
             if (global) {
-                if (global.explain === undefined) {
-                    throw new LunoraError("INTERNAL", `ctx.db.explain on global table '${tableName}' is unsupported: its backend cannot describe a query`);
-                }
-
                 return global.explain(tableName, args);
             }
 
