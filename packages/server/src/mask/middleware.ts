@@ -942,7 +942,10 @@ const wrapDatabase = <Context>(
                 Object.entries(infos).map(([name, info]) => {
                     // The key lives on this table for a to-one and on the target for a to-many; the referenced column is the other.
                     const [keyTable, referencedTable] = info.kind === "one" ? [tableName, info.table] : [info.table, tableName];
-                    const masked = maskedColumnOf(keyTable, info.field) ?? maskedColumnOf(referencedTable, info.references);
+                    // A many-to-many link keeps both keys on the join table, and a masked one would never match on `disconnect`.
+                    const masked = info.through
+                        ? (maskedColumnOf(info.through.table, info.through.from) ?? maskedColumnOf(info.through.table, info.through.to))
+                        : (maskedColumnOf(keyTable, info.field) ?? maskedColumnOf(referencedTable, info.references));
 
                     return [
                         name,

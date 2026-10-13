@@ -8,6 +8,7 @@ import type {
     ExternalSourceIR,
     GeoIndexIR,
     IndexIR,
+    KeyedRelationIR,
     RankIndexIR,
     RankSortKeyIR,
     RelationIR,
@@ -123,8 +124,8 @@ const assertTableNameAllowed = (name: string, node: Node): void => {
     }
 };
 
-const asOnDelete = (value: string | undefined): RelationIR["onDelete"] =>
-    value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined;
+const asOnDelete = (value: string | undefined): KeyedRelationIR["onDelete"] =>
+    value && ON_DELETE_ACTIONS.has(value) ? (value as KeyedRelationIR["onDelete"]) : undefined;
 
 /**
  * Unwrap a `.relations((r) => …)` arrow body to the object literal it returns,
@@ -147,6 +148,45 @@ const relationsObjectBody = (argument: Node): ObjectLiteralExpression | undefine
     }
 
     return Node.isObjectLiteralExpression(body) ? body : undefined;
+};
+
+/**
+ * Lift the `through: { table, from, to }` option of `r.many(target, { through })` into a {@link RelationIR}. The
+ * three names feed the advisor's join-table lints, so like the target table they must be string literals.
+ */
+const throughRelation = (throughProperty: Node, name: string, table: string): RelationIR => {
+    const literal = Node.isPropertyAssignment(throughProperty) ? throughProperty.getInitializer() : undefined;
+
+    if (!literal || !Node.isObjectLiteralExpression(literal)) {
+        throw diagnosticAt(throughProperty, "relation `through` must be an object literal `{ table, from, to }` — codegen resolves it statically.");
+    }
+
+    const [joinTable, from, to] = ["table", "from", "to"].map((key) => getStringProperty(literal, key));
+
+    if (joinTable === undefined || from === undefined || to === undefined) {
+        throw diagnosticAt(literal, "relation `through` needs string-literal `table`, `from` and `to` — codegen resolves them statically.");
+    }
+
+    return { kind: "many", name, table, through: { from, table: joinTable, to } };
+};
+
+/** Build the {@link RelationIR} for `r.one`/`r.many` from its (possibly absent) options object: a `through` join table, or a foreign-key `field`. */
+const relationFromOptions = (method: "many" | "one", name: string, table: string, options: Node | undefined): RelationIR => {
+    const literal = options && Node.isObjectLiteralExpression(options) ? options : undefined;
+    const throughProperty = method === "many" ? literal?.getProperty("through") : undefined;
+
+    if (throughProperty) {
+        return throughRelation(throughProperty, name, table);
+    }
+
+    return {
+        field: (literal && getStringProperty(literal, "field")) ?? "_unknown_",
+        kind: method,
+        name,
+        onDelete: method === "one" && literal ? asOnDelete(getStringProperty(literal, "onDelete")) : undefined,
+        references: (literal && getStringProperty(literal, "references")) ?? "_id",
+        table,
+    };
 };
 
 /** Lift one `name: r.one(table, opts)` / `r.many(...)` property into a {@link RelationIR}, or `undefined`. */
@@ -189,17 +229,7 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
 
     const table = tableArgument.getLiteralText();
 
-    let field = "_unknown_";
-    let references = "_id";
-    let onDelete: RelationIR["onDelete"];
-
-    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
-        field = getStringProperty(optionsExpression, "field") ?? field;
-        references = getStringProperty(optionsExpression, "references") ?? references;
-        onDelete = method === "one" ? asOnDelete(getStringProperty(optionsExpression, "onDelete")) : undefined;
-    }
-
-    return { field, kind: method, name: propertyKeyName(property), onDelete, references, table };
+    return relationFromOptions(method, propertyKeyName(property), table, optionsExpression);
 };
 
 /**

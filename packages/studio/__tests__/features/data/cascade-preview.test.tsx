@@ -222,7 +222,9 @@ describe("advisorSchemaFromColumns", () => {
             posts: [{ name: "title", optional: false, type: "string" }],
         });
 
-        const relations = new Map((schema.tables.find((table) => table.name === "comments")?.relations ?? []).map((r) => [r.field, r]));
+        const relations = new Map(
+            (schema.tables.find((table) => table.name === "comments")?.relations ?? []).flatMap((r) => (r.kind === "one" ? [[r.field, r] as const] : [])),
+        );
 
         expect(relations.get("postId")).toMatchObject({ kind: "one", onDelete: "cascade", references: "posts", table: "comments" });
         expect(relations.get("editorId")?.onDelete).toBe("restrict");

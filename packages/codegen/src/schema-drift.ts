@@ -181,7 +181,10 @@ const tableSnapshotOf = (table: TableIR): TableSnapshot => {
     const relations: Record<string, RelationSnapshot> = {};
 
     for (const relation of table.relations) {
-        relations[relation.name] = { field: relation.field, kind: relation.kind, table: relation.table };
+        relations[relation.name] =
+            relation.through === undefined
+                ? { field: relation.field, kind: relation.kind, table: relation.table }
+                : { field: relation.through.from, kind: relation.kind, table: relation.table, through: { ...relation.through } };
     }
 
     // The three table-level modifiers that move or destroy rows without touching

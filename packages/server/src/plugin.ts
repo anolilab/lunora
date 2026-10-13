@@ -62,7 +62,7 @@ import { LunoraError } from "@lunora/errors";
 
 import composeMiddleware from "./builder/compose-middleware";
 import type { Middleware } from "./builder/types";
-import { validateGlobalVectors, validateIndexFields, validateTableModes } from "./schema";
+import { validateGlobalVectors, validateIndexFields, validateTableModes, validateThroughRelations } from "./schema";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -110,7 +110,12 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
     const relationMap: Record<string, RelationDefinition> = {};
 
     for (const [accessor, relation] of Object.entries(table.relationMap)) {
-        relationMap[accessor] = { ...relation, table: rewriteReference(relation.table, key, bareNames) };
+        const target = rewriteReference(relation.table, key, bareNames);
+
+        relationMap[accessor] =
+            relation.through === undefined
+                ? { ...relation, table: target }
+                : { ...relation, table: target, through: { ...relation.through, table: rewriteReference(relation.through.table, key, bareNames) } };
     }
 
     const aggregateIndexes: AggregateIndexDefinition[] = table.aggregateIndexes.map((index) => {
@@ -446,6 +451,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     validateIndexFields(merged);
     validateTableModes(merged);
     validateGlobalVectors(merged, mergedVectorIndexes);
+    validateThroughRelations(merged);
 
     return {
         // Preserve secure-by-default RLS across `.extend(...)` — a plugin's

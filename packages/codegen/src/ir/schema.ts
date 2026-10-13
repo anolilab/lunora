@@ -149,7 +149,8 @@ export interface RankIndexIR {
     sortBy: ReadonlyArray<RankSortKeyIR>;
 }
 
-export interface RelationIR {
+/** A `one` / `many` relation backed by one foreign-key column. */
+export interface KeyedRelationIR {
     /** FK column: on this table for `one`, on the target table for `many`. */
     field: string;
     kind: "many" | "one";
@@ -161,7 +162,21 @@ export interface RelationIR {
     references: string;
     /** Target table name. */
     table: string;
+    through?: never;
 }
+
+/** A many-to-many relation: `r.many(target, { through: { table, from, to } })`. */
+export interface ThroughRelationIR {
+    kind: "many";
+    /** Accessor name the relation is loaded under (the `with` key). */
+    name: string;
+    /** Target table name. */
+    table: string;
+    /** The join table and its two keys: `from` points at the declaring table, `to` at `table`. */
+    through: { from: string; table: string; to: string };
+}
+
+export type RelationIR = KeyedRelationIR | ThroughRelationIR;
 
 /**
  * Statically-discovered `.source(...)` config (plan 077). Only the bits the

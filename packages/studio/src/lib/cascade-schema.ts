@@ -8,7 +8,7 @@
  * import for all cascade-related types.
  */
 
-import type { AdvisorRelation, AdvisorSchema } from "@lunora/advisor";
+import type { AdvisorKeyedRelation, AdvisorSchema } from "@lunora/advisor";
 
 import type { ColumnMeta } from "./admin";
 
@@ -32,7 +32,7 @@ const advisorSchemaFromColumns = (columnsByTable: Readonly<Record<string, Readon
                 name,
                 relations: columns
                     .filter((column) => column.ref !== undefined)
-                    .map((column): AdvisorRelation => {
+                    .map((column): AdvisorKeyedRelation => {
                         return { field: column.name, kind: "one", name: column.name, onDelete: column.onDelete, references: column.ref as string, table: name };
                     }),
             };
@@ -54,8 +54,8 @@ const advisorSchemaFromColumns = (columnsByTable: Readonly<Record<string, Readon
  * parent being deleted) and values are the relations declared on the
  * **referencing** (child) table.
  */
-const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorRelation[]> => {
-    const map = new Map<string, AdvisorRelation[]>();
+const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorKeyedRelation[]> => {
+    const map = new Map<string, AdvisorKeyedRelation[]>();
     // `childTable:field` pairs already recorded per parent. The same edge declared
     // twice is still ONE edge; without this the preview renders a duplicate node
     // for it, doubling the apparent blast radius of the delete.
@@ -126,5 +126,5 @@ const walkCascade = <T extends { children: T[] }>(root: T, predicate: (node: T) 
     return results;
 };
 
-export type { AdvisorRelation, AdvisorSchema } from "@lunora/advisor";
+export type { AdvisorKeyedRelation, AdvisorSchema } from "@lunora/advisor";
 export { advisorSchemaFromColumns, buildCascadeMap, walkCascade };

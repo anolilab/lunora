@@ -17,10 +17,12 @@ import type {
     GeoIndexDefinition,
     GlobalBackend,
     IndexDefinition,
+    KeyedRelationDefinition,
     OnDeleteAction,
     RankIndexDefinition,
     RankSortKey,
     RelationDefinition,
+    RelationThrough,
     Schema,
     SearchIndexDefinition,
     SearchLanguage,
@@ -28,6 +30,7 @@ import type {
     ShardMode,
     TableDefinition,
     TableVectorIndex,
+    ThroughRelationDefinition,
     TriggerBuilder,
     TriggerDefinition,
     TriggerEvent,
@@ -69,21 +72,33 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
 }
 
 /** A `one` (many-to-one) relation descriptor; phantom `Target` carries the target table name. */
-interface OneRelation<Target extends string = string> extends RelationDefinition {
+interface OneRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "one";
 }
 
 /** A `many` (one-to-many) relation descriptor; phantom `Target` carries the target table name. */
-interface ManyRelation<Target extends string = string> extends RelationDefinition {
+interface ManyRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "many";
 }
 
+/** A `many` relation through a join table (many-to-many); phantom `Target` carries the target table name. */
+interface ThroughManyRelation<Target extends string = string> extends ThroughRelationDefinition {
+    readonly __target?: Target;
+}
+
 /** The `r` argument passed to `.relations((r) => …)`. */
 interface RelationBuilder {
-    /** One-to-many: the FK `field` lives on the target table, matching this table's `references` (default `_id`). */
-    many: <Target extends string>(table: Target, options: { field: string; references?: string }) => ManyRelation<Target>;
+    /**
+     * One-to-many (`field`): the FK `field` lives on the target table, matching this table's `references` (default `_id`).
+     * Many-to-many (`through`): `through.table` holds one row per linked pair, `through.from` pointing at this table's
+     * `_id` and `through.to` at the target's `_id`.
+     */
+    many: {
+        <Target extends string>(table: Target, options: { field: string; references?: string }): ManyRelation<Target>;
+        <Target extends string>(table: Target, options: { through: RelationThrough }): ThroughManyRelation<Target>;
+    };
     /** Many-to-one: the FK `field` lives on this table, pointing at `table`.`references` (default `_id`). */
     one: <Target extends string>(table: Target, options: { field: string; onDelete?: OnDeleteAction; references?: string }) => OneRelation<Target>;
 }
@@ -386,10 +401,18 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
 }
 
 /** Shared relation builder — `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
+function manyRelation<Target extends string>(table: Target, options: { field: string; references?: string }): ManyRelation<Target>;
+function manyRelation<Target extends string>(table: Target, options: { through: RelationThrough }): ThroughManyRelation<Target>;
+function manyRelation(table: string, options: { field: string; references?: string } | { through: RelationThrough }): RelationDefinition {
+    if ("through" in options) {
+        return { kind: "many", table, through: { ...options.through } };
+    }
+
+    return { field: options.field, kind: "many", references: options.references ?? "_id", table };
+}
+
 const relationBuilder: RelationBuilder = {
-    many: (table, options) => {
-        return { field: options.field, kind: "many", references: options.references ?? "_id", table };
-    },
+    many: manyRelation,
     one: (table, options) => {
         return { field: options.field, kind: "one", onDelete: options.onDelete, references: options.references ?? "_id", table };
     },
@@ -1591,6 +1614,61 @@ const validateTableModes = (tables: Record<string, TableDefinition>): void => {
     validateMemoryTables(tables);
 };
 
+/** The table a bare, required `v.id("t")` column points at, or `undefined` for any other validator (optional, nullable, a union, …). */
+const requiredIdTarget = (validator: Validator | undefined): string | undefined => {
+    const tableName = validator?.kind === "id" ? (validator as { _meta?: { tableName?: unknown } })._meta?.tableName : undefined;
+
+    return typeof tableName === "string" ? tableName : undefined;
+};
+
+/** Check one through relation against its join table; see {@link validateThroughRelations}. */
+const validateThroughRelation = (tables: Record<string, TableDefinition>, tableName: string, name: string, relation: ThroughRelationDefinition): void => {
+    const { from, table: joinName, to } = relation.through;
+    const label = `defineSchema: relation "${name}" on table "${tableName}" (through "${joinName}")`;
+    const join = tables[joinName];
+
+    if (join === undefined) {
+        throw new LunoraError("INTERNAL", `${label} names a join table that is not declared`);
+    }
+
+    if (tables[relation.table] === undefined) {
+        throw new LunoraError("INTERNAL", `${label} targets "${relation.table}", which is not declared`);
+    }
+
+    for (const [column, expected] of [
+        [from, tableName],
+        [to, relation.table],
+    ] as const) {
+        if (requiredIdTarget(join.shape[column]) !== expected) {
+            throw new LunoraError("INTERNAL", `${label}: "${joinName}.${column}" must be a required v.id("${expected}") column`);
+        }
+    }
+
+    if (!join.indexes.some((index) => index.unique === true && index.fields.length === 2 && index.fields.includes(from) && index.fields.includes(to))) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${label} needs a unique index over ("${from}", "${to}") on "${joinName}": ${JSON.stringify(`.index("by_${from}_${to}", ["${from}", "${to}"], { unique: true })`)}. Without it a repeated connect stores the same link twice.`,
+        );
+    }
+};
+
+/**
+ * A through relation (`r.many(target, { through })`) is only as sound as its join table: the join table must
+ * exist, `from` and `to` must be required `v.id` columns pointing at the owner and the target, and a unique index
+ * over exactly that pair must make a link a single row. Without the index a double `connect` is two rows and
+ * every read through the relation returns the target twice. Run by `defineSchema` and again by
+ * `mergeSchemaExtension` over the merged set.
+ */
+const validateThroughRelations = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        for (const [name, relation] of Object.entries(table.relationMap)) {
+            if (relation.through !== undefined) {
+                validateThroughRelation(tables, tableName, name, relation);
+            }
+        }
+    }
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -1603,6 +1681,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     validateTableModes(tables);
     validateGlobalVectors(tables, vectorIndexes);
     validateIndexFields(tables);
+    validateThroughRelations(tables);
 
     return withExtend({ tables, vectorIndexes });
 };
@@ -1624,6 +1703,7 @@ export {
     validateGlobalVectors,
     validateIndexFields,
     validateTableModes,
+    validateThroughRelations,
 };
 
 export type {
@@ -1637,6 +1717,7 @@ export type {
     RankIndexOptions,
     RelationBuilder,
     TableBuilder,
+    ThroughManyRelation,
     VectorIndexOptions,
     VectorizeOptions,
 };

@@ -10,6 +10,10 @@
  * relation can be written at all are all checked up front, so a malformed or unsupported request fails with the
  * parent row unwritten. After that only a missing target (`NOT_FOUND`) or a gated denial can stop it midway.
  *
+ * A many-to-many relation (`through`) is written the same way, on the join table instead of the target: `connect`
+ * inserts a join row holding the two keys unless the link already exists, `disconnect` deletes it, and `set` diffs
+ * the list against the links already there. The target rows themselves are only read, never written.
+ *
  * Atomicity is the mutation's: both tables live on one shard, so the Durable Object's transaction covers the
  * parent and every child. Where they do not (a relation that crosses a `.global()` backend or another shard) the
  * engine reports it not `colocated` and this refuses up front. A D1 write does not roll back with the Durable
@@ -33,7 +37,13 @@ interface RelationWriteInfoLike {
 
     /** Set by a wrapper that must forbid writes through this relation, with the reason the caller is told. */
     readonly refusal?: string;
+
+    /** Asked when the write runs, for a relation whose writability depends on where it runs (see the engine's `RelationWriteInfo`). */
+    readonly refusalNow?: () => string | undefined;
     readonly table: string;
+
+    /** Set for a many-to-many relation: the join table and its two keys. `field` is `through.from`. */
+    readonly through?: { readonly from: string; readonly table: string; readonly to: string };
 }
 
 type RelationWriteInfosLike = Readonly<Record<string, RelationWriteInfoLike>>;
@@ -42,8 +52,10 @@ type RelationWriteInfosLike = Readonly<Record<string, RelationWriteInfoLike>>;
 interface RelationWriteWriterLike {
     /** Checks the update policy on a relation-only patch's parent row, which is never written. Optional: a writer with no policy layer omits it. */
     assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    delete: (id: string, expectedTable?: string) => Promise<void>;
     findMany: (tableName: string, args?: unknown) => Promise<unknown>;
     get: (id: string, expectedTable?: string) => Promise<unknown>;
+    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
@@ -98,7 +110,8 @@ const idList = (value: unknown, label: string): string[] => {
 };
 
 const assertCanEmpty = (name: string, info: RelationWriteInfoLike, operator: string): void => {
-    if (!info.nullable) {
+    // A many-to-many relation empties by deleting join rows, so it needs no nullable key.
+    if (!info.nullable && info.through === undefined) {
         fail("VALIDATION_ERROR", `${name}.${operator}: "${info.field}" cannot be empty; make it optional or nullable to allow it`);
     }
 };
@@ -172,8 +185,10 @@ const parseOperation = (tableName: string, key: string, info: RelationWriteInfoL
         return undefined;
     }
 
-    if (info.refusal !== undefined) {
-        fail("UNPROCESSABLE", `ctx.db.${tableName}: relation "${key}" cannot be written: ${info.refusal}`);
+    const refusal = info.refusal ?? info.refusalNow?.();
+
+    if (refusal !== undefined) {
+        fail("UNPROCESSABLE", `ctx.db.${tableName}: relation "${key}" cannot be written: ${refusal}`);
     }
 
     if (!info.colocated) {
@@ -299,6 +314,69 @@ const currentChildren = async (writer: RelationWriteWriterLike, { info, name }: 
     return page;
 };
 
+/** The join-table facts of a many-to-many write; present exactly when `info.through` is. */
+const throughOf = ({ info }: ManyWrite): NonNullable<RelationWriteInfoLike["through"]> => info.through as NonNullable<RelationWriteInfoLike["through"]>;
+
+/** The join rows of `parentValue` (at most {@link MAX_RELATION_ROWS}), optionally narrowed to links onto `targets`. */
+const linksOf = async (
+    writer: RelationWriteWriterLike,
+    write: ManyWrite,
+    parentValue: unknown,
+    targets: ReadonlyArray<string> | undefined,
+): Promise<Record<string, unknown>[]> => {
+    const { from, table, to } = throughOf(write);
+    const where = targets === undefined ? { [from]: parentValue } : { [from]: parentValue, [to]: { in: targets } };
+    const { page } = (await writer.findMany(table, { limit: MAX_RELATION_ROWS + 1, where })) as { page: Record<string, unknown>[] };
+
+    if (page.length > MAX_RELATION_ROWS) {
+        fail("VALIDATION_ERROR", `${write.name}: the relation already holds more than ${String(MAX_RELATION_ROWS)} rows; disconnect in batches first`);
+    }
+
+    return page;
+};
+
+/**
+ * Apply one many-to-many write: the join rows to delete, then the links to insert. The targets of new links are read
+ * first, so a missing or hidden one stops the write before the first join row changes. Every join row is written
+ * through the bound writer, so the join table's own policy gates it.
+ */
+const applyThrough = async (writer: RelationWriteWriterLike, write: ManyWrite, parentValue: unknown): Promise<void> => {
+    const { from, table: joinTable, to } = throughOf(write);
+    let { attach } = write;
+    let release: Record<string, unknown>[];
+
+    if (write.replace === undefined) {
+        // Disconnecting a link that is not there is a no-op, and a link to a target that is gone can still be cut.
+        release = write.release.length === 0 ? [] : await linksOf(writer, write, parentValue, write.release);
+    } else {
+        const current = await linksOf(writer, write, parentValue, undefined);
+        const wanted = new Set(write.replace);
+        const linked = new Set(current.map((link) => String(link[to])));
+
+        release = current.filter((link) => !wanted.has(String(link[to])));
+        attach = write.replace.filter((id) => !linked.has(id));
+    }
+
+    if (write.replace === undefined && attach.length > 0) {
+        const existing = await linksOf(writer, write, parentValue, attach);
+        const linked = new Set(existing.map((link) => String(link[to])));
+
+        attach = attach.filter((id) => !linked.has(id));
+    }
+
+    await Promise.all(attach.map((id) => loadRow(writer, write.name, "connect", write.info.table, id)));
+
+    for (const link of release) {
+        // eslint-disable-next-line no-await-in-loop -- one gated delete per join row, in order so a denial stops the write at a known row
+        await writer.delete(String(link["_id"]), joinTable);
+    }
+
+    for (const id of attach) {
+        // eslint-disable-next-line no-await-in-loop -- one gated insert per link
+        await writer.insert(joinTable, { [from]: parentValue, [to]: id });
+    }
+};
+
 /**
  * Apply the to-many writes once the parent row exists: release the named children, attach the named ones, or make
  * `replace` the complete list. A relation keyed on a column the parent has no value for is refused, because
@@ -316,6 +394,13 @@ const applyManys = async (
 
         if (parentValue === null || parentValue === undefined) {
             fail("VALIDATION_ERROR", `ctx.db.${tableName}: ${write.name} is keyed on "${write.info.references}", which this row has no value for`);
+        }
+
+        if (write.info.through !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- sequential, as the other relations
+            await applyThrough(writer, write, parentValue);
+
+            continue;
         }
 
         let { attach } = write;

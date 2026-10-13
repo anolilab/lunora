@@ -1,4 +1,4 @@
-import type { RelationIR, SchemaIR, ValidatorIR } from "../ir";
+import type { KeyedRelationIR, SchemaIR, ValidatorIR } from "../ir";
 import { isOptionalOnInsert, unwrapOptional } from "./shared";
 
 /**
@@ -254,7 +254,7 @@ const stringEnumValues = (validator: ValidatorIR): string[] | undefined => {
  * One column's emitted metadata. Split out of {@link buildTableColumns} so the
  * per-field decisions read on their own rather than nested two loops deep.
  */
-const buildColumn = (field: string, validator: ValidatorIR, onDeleteByField: ReadonlyMap<string, RelationIR["onDelete"]>): EmittedColumn => {
+const buildColumn = (field: string, validator: ValidatorIR, onDeleteByField: ReadonlyMap<string, KeyedRelationIR["onDelete"]>): EmittedColumn => {
     const resolved = unwrapOptional(validator);
     const column: EmittedColumn = { name: field, optional: isOptionalOnInsert(validator), type: resolved.kind };
 
@@ -308,8 +308,8 @@ const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> =>
 
         // `one` relations are the ones whose FK column lives on THIS table, so
         // only those map a local field to a declared delete action.
-        const onDeleteByField = new Map<string, RelationIR["onDelete"]>(
-            table.relations.filter((relation) => relation.kind === "one").map((relation) => [relation.field, relation.onDelete]),
+        const onDeleteByField = new Map<string, KeyedRelationIR["onDelete"]>(
+            table.relations.flatMap((relation) => (relation.kind === "one" ? [[relation.field, relation.onDelete] as const] : [])),
         );
 
         for (const [field, validator] of Object.entries(table.shape)) {

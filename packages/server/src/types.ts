@@ -281,23 +281,54 @@ interface RankIndexDefinition {
 type OnDeleteAction = "cascade" | "restrict" | "set null";
 
 /**
- * A declared relation between two tables, recorded by `.relations((r) => …)`.
+ * The join table behind a many-to-many relation, declared by
+ * `r.many(target, { through: { table, from, to } })`.
  *
- * - `one` (many-to-one): the FK column `field` lives on **this** table and
- * points at `table`.`references` (default `_id`). Loads a single doc.
- * - `many` (one-to-many): the FK column `field` lives on the **target** table
- * and points back at this table's `references` (default `_id`). Loads an array.
+ * - `table` — the join table, one row per linked pair.
+ * - `from` — the join table's `v.id` column pointing at the table that declares the relation.
+ * - `to` — the join table's `v.id` column pointing at the relation's target table.
+ */
+interface RelationThrough {
+    from: string;
+    table: string;
+    to: string;
+}
+
+/**
+ * A relation backed by one foreign-key column: `one` (many-to-one) or `many` (one-to-many).
+ *
+ * - `one`: the FK column `field` lives on **this** table and points at
+ * `table`.`references` (default `_id`). Loads a single doc.
+ * - `many`: the FK column `field` lives on the **target** table and points back
+ * at this table's `references` (default `_id`). Loads an array.
  *
  * `onDelete` is meaningful only on `one`: it is the action applied to the
  * holder rows when the referenced parent row is deleted.
  */
-interface RelationDefinition {
+interface KeyedRelationDefinition {
     field: string;
     kind: "many" | "one";
     onDelete?: OnDeleteAction;
     references: string;
     table: string;
+    through?: never;
 }
+
+/**
+ * A many-to-many relation: the link lives in the `through` join table, whose `from` column points at this
+ * table's `_id` and whose `to` column points at `table`'s `_id`. Loads an array of `table` rows.
+ *
+ * It has no `field`/`references`/`onDelete` of its own: the two foreign keys are the join table's, and a delete
+ * on either side cascades through the `onDelete` of the join table's own `r.one(...)` relations.
+ */
+interface ThroughRelationDefinition {
+    kind: "many";
+    table: string;
+    through: RelationThrough;
+}
+
+/** A declared relation between two tables, recorded by `.relations((r) => …)`: a single-key relation or a many-to-many one. */
+type RelationDefinition = KeyedRelationDefinition | ThroughRelationDefinition;
 
 /** Distance metric used by a Vectorize index. */
 type VectorMetric = "cosine" | "dot-product" | "euclidean";
@@ -2662,6 +2693,7 @@ export type {
     IndexDefinition,
     IndexRangeBuilder,
     InferArgs,
+    KeyedRelationDefinition,
     LifecycleEvent,
     LifecycleEventKind,
     LogFields,
@@ -2691,6 +2723,7 @@ export type {
     RelatedStart,
     RelatedStartReference,
     RelationDefinition,
+    RelationThrough,
     RestCacheConfig,
     RetryPolicy,
     RunQueryOptions,
@@ -2718,6 +2751,7 @@ export type {
     TableDefinition,
     TableReader,
     TableVectorIndex,
+    ThroughRelationDefinition,
     TriggerAggregateOptions,
     TriggerBuilder,
     TriggerCtx,

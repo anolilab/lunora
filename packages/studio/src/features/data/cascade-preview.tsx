@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
 import type { TablePage } from "../../lib/admin";
-import type { AdvisorRelation, AdvisorSchema } from "../../lib/cascade-schema";
+import type { AdvisorKeyedRelation, AdvisorSchema } from "../../lib/cascade-schema";
 import { buildCascadeMap, walkCascade } from "../../lib/cascade-schema";
 import { fireAndForget } from "../../lib/internal";
 
@@ -29,7 +29,7 @@ interface CascadeNode {
     /** Whether this relation blocks the delete (restrict) vs cascades. */
     isRestrict: boolean;
     /** The relation that caused this node to appear (undefined for the root). */
-    relation: AdvisorRelation | undefined;
+    relation: AdvisorKeyedRelation | undefined;
     /** Total count of matching rows (may exceed MAX_ROWS_PER_TABLE). */
     rowCount: number;
     /** Sample matching row ids (up to MAX_ROWS_PER_TABLE). */
@@ -191,8 +191,8 @@ const fetchRelatedRows = async (
 const resolveCascadeNode = async (
     table: string,
     rowId: string,
-    relation: AdvisorRelation | undefined,
-    cascadeMap: Map<string, AdvisorRelation[]>,
+    relation: AdvisorKeyedRelation | undefined,
+    cascadeMap: Map<string, AdvisorKeyedRelation[]>,
     visited: Set<string>,
     depth: number,
     readPage: (t: string, c: string, v: string) => Promise<TablePage>,

@@ -105,6 +105,7 @@ import storagePresignedUrlForPrivateContent from "./lints/static/storage-presign
 import storageUploadWithoutContentTypeAllowlist from "./lints/static/storage-upload-without-content-type-allowlist";
 import storageUploadWithoutMaxSize from "./lints/static/storage-upload-without-max-size";
 import tableWithoutInsert from "./lints/static/table-without-insert";
+import throughRelationMissingUniqueIndex from "./lints/static/through-relation-missing-unique-index";
 import topicTooManySubscriptions from "./lints/static/topic-too-many-subscriptions";
 import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedCollect from "./lints/static/unbounded-collect";
@@ -255,6 +256,7 @@ export { default as storagePresignedUrlForPrivateContent } from "./lints/static/
 export { default as storageUploadWithoutContentTypeAllowlist } from "./lints/static/storage-upload-without-content-type-allowlist";
 export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-upload-without-max-size";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
+export { default as throughRelationMissingUniqueIndex } from "./lints/static/through-relation-missing-unique-index";
 export { default as topicTooManySubscriptions } from "./lints/static/topic-too-many-subscriptions";
 export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-timestamp";
 export { default as unboundedCollectOnOpenRange } from "./lints/static/unbounded-collect-on-open-range";
@@ -299,7 +301,7 @@ export type { AdvisorRawRowReturn } from "./raw-row-returns";
 export type { AdvisorRelationLoad } from "./relation-loads";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorRowEffect } from "./row-effects";
-export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
+export type { AdvisorIndex, AdvisorKeyedRelation, AdvisorRelation, AdvisorSchema, AdvisorTable, AdvisorThroughRelation } from "./schema";
 export { fromServerSchema } from "./schema";
 export type { AdvisorSecretLiteral } from "./secrets";
 export type { AdvisorShape } from "./shapes";
@@ -343,6 +345,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     crossModuleTableWrite,
     unindexedForeignKey,
     unindexedRelationTarget,
+    throughRelationMissingUniqueIndex,
     duplicateIndex,
     tableWithoutInsert,
     workflowUnused,

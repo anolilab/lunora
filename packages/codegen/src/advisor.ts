@@ -5,6 +5,7 @@ import type {
     AdvisorMutatorDeclaration,
     AdvisorNotifyCall,
     AdvisorNotifyConfig,
+    AdvisorRelation,
     AdvisorSchema,
     AdvisorShape,
     Finding,
@@ -139,7 +140,11 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                 indexes: flattenIndexes(table),
                 isPublic: table.isPublic ?? false,
                 name: table.name,
-                relations: table.relations.map((relation) => {
+                relations: table.relations.map((relation): AdvisorRelation => {
+                    if (relation.through !== undefined) {
+                        return { kind: "many", name: relation.name, table: relation.table, through: { ...relation.through } };
+                    }
+
                     return {
                         field: relation.field,
                         kind: relation.kind,

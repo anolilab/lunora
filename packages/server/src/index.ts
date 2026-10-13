@@ -175,6 +175,7 @@ export type {
     RelatedStart,
     RelatedStartReference,
     RelationDefinition,
+    RelationThrough,
     RestCacheConfig,
     RetryPolicy,
     RunQueryOptions,

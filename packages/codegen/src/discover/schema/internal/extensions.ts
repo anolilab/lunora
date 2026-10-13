@@ -150,7 +150,11 @@ const namespaceExtensionTable = (table: TableIR, key: string, bareNames: Readonl
         ...(fromPackage ? { extensionFromPackage: true as const } : {}),
         name: ownPrefixed,
         relations: table.relations.map((relation) => {
-            return { ...relation, table: rewriteReference(relation.table, key, bareNames) };
+            const target = rewriteReference(relation.table, key, bareNames);
+
+            return relation.through === undefined
+                ? { ...relation, table: target }
+                : { ...relation, table: target, through: { ...relation.through, table: rewriteReference(relation.through.table, key, bareNames) } };
         }),
         // Inline `.vectorize()` stamps `table` with the bare owner name, so it
         // is always one of `bareNames` and resolves to `ownPrefixed`.

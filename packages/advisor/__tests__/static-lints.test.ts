@@ -1,8 +1,9 @@
+import type { TableDefinition } from "@lunora/server";
 import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorQueryRead, AdvisorSchema } from "../src";
+import type { AdvisorQueryRead, AdvisorSchema, AdvisorTable } from "../src";
 import {
     duplicateIndex,
     emptyIndex,
@@ -13,6 +14,7 @@ import {
     relationReferencesUnknownField,
     relationReferencesUnknownTable,
     runAdvisor,
+    throughRelationMissingUniqueIndex,
 } from "../src";
 
 /** Build a LintContext from query reads only (an empty schema), for the query-shaped lints. */
@@ -388,5 +390,55 @@ describe("runAdvisor with the full static set", () => {
         // and unindexed_foreign_key never fires here because byAuthor leads authorId.
         expect(names).toContain("index_references_unknown_field");
         expect(names).toContain("duplicate_index");
+    });
+});
+
+describe("through relations (many-to-many)", () => {
+    const joinShape = { postId: v.id("posts"), tagId: v.id("tags") };
+    const schemaWith = (join: TableDefinition) =>
+        defineSchema({
+            post_tags: join,
+            posts: defineTable({ title: v.string() }).relations((r) => {
+                return { tags: r.many("tags", { through: { from: "postId", table: "post_tags", to: "tagId" } }) };
+            }),
+            tags: defineTable({ label: v.string() }),
+        });
+    // `defineSchema` already refuses a join table without the unique pair, so the two lint-worthy shapes are
+    // built as the codegen feeder sees them: straight from the IR, with the join table's indexes dropped.
+    const withoutUnique = (indexes: AdvisorTable["indexes"]) => {
+        const schema = fromServerSchema(schemaWith(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true })));
+
+        return { ...schema, tables: schema.tables.map((table) => (table.name === "post_tags" ? { ...table, indexes } : table)) };
+    };
+
+    it("through_relation_missing_unique_index flags a join table without the unique pair and not the documented shape", () => {
+        expect.assertions(3);
+
+        const documented = fromServerSchema(schemaWith(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true })));
+
+        expect(throughRelationMissingUniqueIndex.run({ schema: withoutUnique([]) })).toHaveLength(1);
+        // A plain (non-unique) index over the pair does not stop a repeated connect from storing it twice.
+        expect(throughRelationMissingUniqueIndex.run({ schema: withoutUnique([{ fields: ["postId", "tagId"], kind: "index", name: "byPair" }]) })).toHaveLength(
+            1,
+        );
+        expect(throughRelationMissingUniqueIndex.run({ schema: documented })).toHaveLength(0);
+    });
+
+    it("the relation lints accept a through relation whose join table has both keys", () => {
+        expect.assertions(2);
+
+        const schema = fromServerSchema(schemaWith(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true })));
+
+        expect(relationReferencesUnknownField.run({ schema })).toHaveLength(0);
+        expect(relationReferencesUnknownTable.run({ schema })).toHaveLength(0);
+    });
+
+    it("relation_references_unknown_field flags a through key the join table does not have", () => {
+        expect.assertions(1);
+
+        const schema = fromServerSchema(schemaWith(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true })));
+        const dropped = { ...schema, tables: schema.tables.map((table) => (table.name === "post_tags" ? { ...table, fields: ["postId"] } : table)) };
+
+        expect(relationReferencesUnknownField.run({ schema: dropped })[0]?.metadata).toMatchObject({ column: "tagId", owner: "post_tags" });
     });
 });

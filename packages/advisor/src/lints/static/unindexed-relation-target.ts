@@ -1,6 +1,16 @@
 import emit from "../../finding";
+import type { AdvisorRelation } from "../../schema";
 import type { Lint } from "../../types";
 import { leadingIndexedColumns, PRIMARY_KEY, suggestIndexName } from "./fk-index";
+
+/**
+ * Where a `many` relation's foreign-key column lives and which column of the declaring table it points at: on the
+ * target table, or — for a many-to-many relation, which reads its join table first — on the join table.
+ */
+const keyHolder = (relation: AdvisorRelation): { column: string; references: string; table: string } =>
+    relation.through === undefined
+        ? { column: relation.field, references: relation.references, table: relation.table }
+        : { column: relation.through.from, references: "_id", table: relation.through.table };
 
 /**
  * The to-many counterpart of `unindexed_foreign_key`.
@@ -41,7 +51,8 @@ const unindexedRelationTarget: Lint = {
                     continue;
                 }
 
-                const target = tablesByName.get(relation.table);
+                const holder = keyHolder(relation);
+                const target = tablesByName.get(holder.table);
 
                 // An unknown target is `relation_references_unknown_table`'s job;
                 // without the target's indexes/relations we cannot judge coverage.
@@ -49,7 +60,7 @@ const unindexedRelationTarget: Lint = {
                     continue;
                 }
 
-                const fkColumn = relation.field;
+                const fkColumn = holder.column;
 
                 // The PK is always indexed; an FK onto it needs nothing extra.
                 if (fkColumn === PRIMARY_KEY) {
@@ -69,14 +80,14 @@ const unindexedRelationTarget: Lint = {
 
                 findings.push(
                     emit(unindexedRelationTarget, {
-                        cacheKey: `unindexed_relation_target:${relation.table}:${fkColumn}`,
-                        detail: `Relation "${relation.name}" on table "${table.name}" is a to-many over "${relation.table}" via its column "${fkColumn}", which is not the leading column of any index on "${relation.table}". Relation predicates (\`some\`/\`none\`/\`every\`) and \`with:\` reads of "${relation.name}" full-scan "${relation.table}".`,
+                        cacheKey: `unindexed_relation_target:${target.name}:${fkColumn}`,
+                        detail: `Relation "${relation.name}" on table "${table.name}" is a to-many over "${target.name}" via its column "${fkColumn}", which is not the leading column of any index on "${target.name}". Relation predicates (\`some\`/\`none\`/\`every\`) and \`with:\` reads of "${relation.name}" full-scan "${target.name}".`,
                         metadata: {
                             fkColumn,
-                            references: { column: relation.references, table: table.name },
+                            references: { column: holder.references, table: table.name },
                             relation: relation.name,
                             suggestedIndex: { fields: [fkColumn], name: suggestedIndex },
-                            table: relation.table,
+                            table: target.name,
                         },
                     }),
                 );

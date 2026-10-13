@@ -212,14 +212,32 @@ export interface TableDefinitionLike {
     readonly ttlPolicy?: { after?: number; field: string };
 }
 
-/** Structural mirror of `@lunora/server`'s `RelationDefinition`. */
-export interface RelationDefinitionLike {
+/** Structural mirror of `@lunora/server`'s `KeyedRelationDefinition`: a `one` or `many` relation backed by one foreign-key column. */
+export interface KeyedRelationDefinitionLike {
     readonly field: string;
     readonly kind: "many" | "one";
     readonly onDelete?: OnDeleteActionLike;
     readonly references: string;
     readonly table: string;
+    readonly through?: never;
 }
+
+/** Structural mirror of `@lunora/server`'s `RelationThrough`: the join table of a many-to-many relation. */
+export interface RelationThroughLike {
+    readonly from: string;
+    readonly table: string;
+    readonly to: string;
+}
+
+/** Structural mirror of `@lunora/server`'s `ThroughRelationDefinition`: a many-to-many relation through a join table. */
+export interface ThroughRelationDefinitionLike {
+    readonly kind: "many";
+    readonly table: string;
+    readonly through: RelationThroughLike;
+}
+
+/** Structural mirror of `@lunora/server`'s `RelationDefinition`. */
+export type RelationDefinitionLike = KeyedRelationDefinitionLike | ThroughRelationDefinitionLike;
 
 export type OnDeleteActionLike = "cascade" | "restrict" | "set null";
 

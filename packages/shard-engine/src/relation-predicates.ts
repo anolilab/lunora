@@ -36,7 +36,15 @@ import { mergeWhere } from "./aggregates";
 import { isMemoryTable } from "./ctx-db-memory";
 import { buildSeekWhere, decodeCursor, equalityPinnedFields, normalizeOrderKeys, softDeleteScope, uniqueIndexFields } from "./query-args";
 import { distinctValues } from "./relations";
-import type { OrderKey, QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
+import type {
+    KeyedRelationDefinitionLike,
+    OrderKey,
+    QueryArgs,
+    QueryPage,
+    RelationDefinitionLike,
+    TableDefinitionLike,
+    ThroughRelationDefinitionLike,
+} from "./schema-types";
 import type { WhereInput } from "./where-types";
 import { RELATION_EXISTS_KEY } from "./where-types";
 
@@ -104,7 +112,7 @@ const requireOperatorMeta = (operator: string): RelationOperatorMeta => {
  * - **project** — the *child* column whose distinct values the semijoin reads
  * off matched rows. Always the mirror of `clause`.
  */
-const joinColumns = (relation: RelationDefinitionLike): { clause: string; project: string } =>
+const joinColumns = (relation: KeyedRelationDefinitionLike): { clause: string; project: string } =>
     relation.kind === "one" ? { clause: relation.field, project: relation.references } : { clause: relation.references, project: relation.field };
 
 /**
@@ -132,7 +140,7 @@ interface RelationExistsMarker {
     /** Table the outer `where` reads — the correlation's parent side. */
     parentTable: string;
     /** The relation crossed, carrying kind + join columns. */
-    relation: RelationDefinitionLike;
+    relation: KeyedRelationDefinitionLike;
 }
 
 /**
@@ -164,7 +172,7 @@ interface ResolveRelationPredicatesOptions {
      * parent+child co-location in one SQLite DB; D1 omits it (cross-backend, no
      * shared subquery scope).
      */
-    canPushExists?: (relation: RelationDefinitionLike) => boolean;
+    canPushExists?: (relation: KeyedRelationDefinitionLike) => boolean;
     /** Push-eligible-node policy (see {@link ExistsPushMode}). Defaults to `"auto"`. */
     existsPushMode?: ExistsPushMode;
     /** Backend-routed child reader — `resolveWith`'s `fetcher` (a DO/D1 `findMany`). */
@@ -180,7 +188,7 @@ interface ResolveRelationPredicatesOptions {
 
 /** Internal threaded context (everything but the per-call `tableName`). */
 interface ResolveContext {
-    canPushExists?: (relation: RelationDefinitionLike) => boolean;
+    canPushExists?: (relation: KeyedRelationDefinitionLike) => boolean;
     existsPushMode: ExistsPushMode;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     maxRelationKeys: number;
@@ -263,7 +271,7 @@ const assertFlatPredicate = (where: WhereInput | undefined, schema: ResolveConte
  * contributes a key — relation predicates are fail-closed by construction.
  */
 const projectChildKeys = async (
-    relation: RelationDefinitionLike,
+    relation: Pick<RelationDefinitionLike, "table">,
     childWhere: WhereInput,
     projectField: string,
     context: ResolveContext,
@@ -316,7 +324,7 @@ const projectChildKeys = async (
  */
 const compileOperator = async (
     operator: string,
-    relation: RelationDefinitionLike,
+    relation: KeyedRelationDefinitionLike,
     childWhere: WhereInput,
     context: ResolveContext,
     escalatable: boolean,
@@ -341,6 +349,30 @@ const compileOperator = async (
 };
 
 /**
+ * A many-to-many operator is the semijoin run twice: the target rows matching the predicate (`every` runs it
+ * negated, as {@link compileOperator} does), then the join rows pointing at them, then the parents those rows name.
+ * Both child reads honour their own table's RLS filter, so a link the caller cannot see, or one to a target it
+ * cannot read, matches nothing.
+ *
+ * Never EXISTS-escalated: the correlated push-down is built from one foreign key, and a join table is two. A key
+ * set past the cap fails closed, like any semijoin whose relation is not co-located.
+ */
+const compileThroughOperator = async (
+    operator: string,
+    relation: ThroughRelationDefinitionLike,
+    childWhere: WhereInput,
+    context: ResolveContext,
+): Promise<WhereInput> => {
+    const meta = requireOperatorMeta(operator);
+    const { from, table, to } = relation.through;
+    const targetKeys = (await projectChildKeys(relation, meta.negateChild ? { NOT: childWhere } : childWhere, "_id", context, false)) as unknown[];
+    // Nothing matched on the target side, so no join row can: skip the second read.
+    const ownerKeys = targetKeys.length === 0 ? [] : ((await projectChildKeys({ table }, { [to]: { in: targetKeys } }, from, context, false)) as unknown[]);
+
+    return { _id: meta.negated ? { notIn: ownerKeys } : { in: ownerKeys } };
+};
+
+/**
  * Phase 2: rewrite a pushable relation operator into a correlated-EXISTS marker
  * instead of a semijoin (no child fetch). The child predicate is RLS-merged
  * (`relationBaseWhere`) and recursively resolved — so a co-located grandchild
@@ -351,7 +383,7 @@ const compileOperator = async (
  */
 const buildExistsMarker = async (
     operator: string,
-    relation: RelationDefinitionLike,
+    relation: KeyedRelationDefinitionLike,
     childWhere: WhereInput,
     parentTable: string,
     context: ResolveContext,
@@ -396,6 +428,14 @@ const resolveRelationNode = async (
         assertCardinality(operator, name, relation);
 
         const childWhere = predicate[operator] ?? {};
+
+        if (relation.through !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- sequential bounded resolution per operator, as below
+            clauses.push(await compileThroughOperator(operator, relation, childWhere, context));
+
+            continue;
+        }
+
         const pushable = context.canPushExists?.(relation) ?? false;
 
         if (pushable && context.existsPushMode === "always") {
@@ -564,8 +604,12 @@ const inspectKey = (key: string, value: WhereInput[string], schema: ResolveConte
         return undefined;
     }
 
-    if (schema.tables[relation.table]?.shardMode?.kind === "shardBy") {
-        return { kind: "shard", relation: key, target: relation.table };
+    // A many-to-many predicate reads the join table too, so the join table must be observable as well.
+    const reached = relation.through === undefined ? [relation.table] : [relation.table, relation.through.table];
+    const sharded = reached.find((table) => schema.tables[table]?.shardMode?.kind === "shardBy");
+
+    if (sharded !== undefined) {
+        return { kind: "shard", relation: key, target: sharded };
     }
 
     // A `.memory()` target is invisible for the same reason a memory-backed
@@ -573,8 +617,10 @@ const inspectKey = (key: string, value: WhereInput[string], schema: ResolveConte
     // hop away: a write to the related table produces no changed key, so the
     // SOURCE table is never re-probed and the shape keeps whatever membership it
     // seeded with. Same refusal, different remedy.
-    if (isMemoryTable(schema.tables[relation.table])) {
-        return { kind: "memory", relation: key, target: relation.table };
+    const memory = reached.find((table) => isMemoryTable(schema.tables[table]));
+
+    if (memory !== undefined) {
+        return { kind: "memory", relation: key, target: memory };
     }
 
     // The relation target isn't itself unreplicable, but its OWN nested predicate

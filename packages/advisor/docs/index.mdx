@@ -175,6 +175,7 @@ Storage, AI, containers & payments:
 | `index_references_unknown_field`             | `ERROR` | An index naming a field the table doesn't have                                                                 |
 | `relation_references_unknown_field`          | `ERROR` | A relation pointing at a field that doesn't exist                                                              |
 | `relation_references_unknown_table`          | `ERROR` | A relation pointing at a table that doesn't exist                                                              |
+| `through_relation_missing_unique_index`      | `ERROR` | A many-to-many join table with no unique index over its two keys (a repeated connect stores the link twice)    |
 | `shape_unknown_table`                        | `ERROR` | A shape bound to a table that doesn't exist                                                                    |
 | `workflow_unknown_target`                    | `ERROR` | A workflow call naming a workflow that doesn't exist                                                           |
 | `workflow_duplicate_step_name`               | `ERROR` | A durable step name reused across two call sites in one workflow (which cache each gets becomes positional)    |

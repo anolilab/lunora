@@ -36,7 +36,16 @@
 import { LunoraError } from "@lunora/errors";
 
 import { applySelect } from "./query-args";
-import type { FanOutBudget, NestedWith, QueryArgs, RelationDefinitionLike, ResolveWithOptions, TableDefinitionLike } from "./schema-types";
+import type {
+    FanOutBudget,
+    KeyedRelationDefinitionLike,
+    NestedWith,
+    QueryArgs,
+    RelationDefinitionLike,
+    ResolveWithOptions,
+    TableDefinitionLike,
+    ThroughRelationDefinitionLike,
+} from "./schema-types";
 import { FAN_OUT_BUDGET } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
@@ -167,6 +176,39 @@ const groupByForeignKey = (
  */
 const withBudget = (args: QueryArgs, budget: FanOutBudget): QueryArgs => ({ ...args, [FAN_OUT_BUDGET]: budget }) as QueryArgs;
 
+/** Bucket target rows under every owner that links to them, keeping the order the rows were read in. */
+const groupByLinkedOwner = (links: Map<unknown, Set<unknown>>, targets: Record<string, unknown>[]): Map<unknown, Record<string, unknown>[]> => {
+    const ownersOf = new Map<unknown, unknown[]>();
+
+    for (const [owner, ids] of links) {
+        for (const id of ids) {
+            const owners = ownersOf.get(id);
+
+            if (owners) {
+                owners.push(owner);
+            } else {
+                ownersOf.set(id, [owner]);
+            }
+        }
+    }
+
+    const groups = new Map<unknown, Record<string, unknown>[]>();
+
+    for (const target of targets) {
+        for (const owner of ownersOf.get(target["_id"]) ?? []) {
+            const group = groups.get(owner);
+
+            if (group) {
+                group.push(target);
+            } else {
+                groups.set(owner, [target]);
+            }
+        }
+    }
+
+    return groups;
+};
+
 /** Distinct, non-nullish values of `field` across `rows`, preserving first-seen order. */
 const distinctValues = (rows: Record<string, unknown>[], field: string): unknown[] => {
     const seen = new Set<unknown>();
@@ -231,7 +273,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         return relation;
     };
 
-    const loadOne = async (name: string, relation: RelationDefinitionLike, nested: NestedWith): Promise<void> => {
+    const loadOne = async (name: string, relation: KeyedRelationDefinitionLike, nested: NestedWith): Promise<void> => {
         const fkValues = distinctValues(parents, relation.field);
 
         if (fkValues.length === 0) {
@@ -273,7 +315,32 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         }
     };
 
-    const loadMany = async (name: string, relation: RelationDefinitionLike, nested: NestedWith): Promise<void> => {
+    /**
+     * One read of `table` under a relation hop's refinements: the table's read policy rides `baseWhere` (same as a
+     * top-level read), `relationBaseWhere` threads on for nested `with`, and `nested`'s `where`/`orderBy`/`with`
+     * apply. Shared by the `many` and the many-to-many loaders.
+     */
+    const fetchChildren = async (table: string, nested: NestedWith, where: WhereInput, limit: number | undefined): Promise<Record<string, unknown>[]> => {
+        const { page } = await fetcher(
+            table,
+            withBudget(
+                {
+                    baseWhere: relationBaseWhere?.(table),
+                    limit,
+                    orderBy: nested.orderBy,
+                    relationBaseWhere,
+                    relationMask,
+                    where: nested.where ? { AND: [nested.where, where] } : where,
+                    with: nested.with,
+                },
+                budget,
+            ),
+        );
+
+        return page;
+    };
+
+    const loadMany = async (name: string, relation: KeyedRelationDefinitionLike, nested: NestedWith): Promise<void> => {
         const referenceValues = distinctValues(parents, relation.references);
 
         if (referenceValues.length === 0) {
@@ -286,27 +353,8 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
 
         const cap = typeof nested.limit === "number" ? Math.max(0, Math.floor(nested.limit)) : undefined;
 
-        // RLS: the child table's read policy rides `baseWhere` (same as a
-        // top-level read); `relationBaseWhere` threads on for nested `with`.
-        const fetchWhere = async (where: WhereInput, limit: number | undefined): Promise<Record<string, unknown>[]> => {
-            const { page } = await fetcher(
-                relation.table,
-                withBudget(
-                    {
-                        baseWhere: relationBaseWhere?.(relation.table),
-                        limit,
-                        orderBy: nested.orderBy,
-                        relationBaseWhere,
-                        relationMask,
-                        where: nested.where ? { AND: [nested.where, where] } : where,
-                        with: nested.with,
-                    },
-                    budget,
-                ),
-            );
-
-            return page;
-        };
+        const fetchWhere = (where: WhereInput, limit: number | undefined): Promise<Record<string, unknown>[]> =>
+            fetchChildren(relation.table, nested, where, limit);
 
         /**
          * `with: { rel: { limit: n } }` bounds the fetch, not just the result.
@@ -365,9 +413,109 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         }
     };
 
+    /**
+     * The join rows of every parent as `parent id → linked target ids`, read under the join table's own read
+     * policy so a link the caller may not see is not a link. The first hop of a many-to-many load.
+     */
+    const loadLinks = async (relation: ThroughRelationDefinitionLike): Promise<Map<unknown, Set<unknown>>> => {
+        const { from, table, to } = relation.through;
+        const links = new Map<unknown, Set<unknown>>();
+        const ownerIds = distinctValues(parents, "_id");
+
+        if (ownerIds.length === 0) {
+            return links;
+        }
+
+        for (const row of masked(table, await fetchChildren(table, {}, { [from]: { in: ownerIds } }, undefined))) {
+            const owner = row[from];
+            const target = row[to];
+
+            if (owner === null || owner === undefined || target === null || target === undefined) {
+                continue;
+            }
+
+            const linked = links.get(owner);
+
+            if (linked) {
+                linked.add(target);
+            } else {
+                links.set(owner, new Set([target]));
+            }
+        }
+
+        return links;
+    };
+
+    /**
+     * A many-to-many relation is two of the batched hops the other kinds already make: the join rows keyed by the
+     * parent, then the target rows keyed by the ids those rows name. A `limit` fans out one bounded target read per
+     * parent exactly as {@link loadMany} does, and draws on the same budget; rows come back in the target read's
+     * order (its `orderBy`), not in the order the join rows were created.
+     */
+    const loadThrough = async (name: string, relation: ThroughRelationDefinitionLike, nested: NestedWith): Promise<void> => {
+        const cap = typeof nested.limit === "number" ? Math.max(0, Math.floor(nested.limit)) : undefined;
+        const links = cap === 0 ? new Map<unknown, Set<unknown>>() : await loadLinks(relation);
+        const fetchTargets = (ids: Iterable<unknown>, limit: number | undefined): Promise<Record<string, unknown>[]> =>
+            fetchChildren(relation.table, nested, { _id: { in: [...ids] } }, limit);
+
+        let byOwner = new Map<unknown, Record<string, unknown>[]>();
+
+        if (links.size > 0 && cap !== undefined && links.size <= budget.remaining) {
+            budget.remaining -= links.size;
+
+            const owners = [...links.keys()];
+            const pages = await Promise.all([...links.values()].map(async (ids) => fetchTargets(ids, cap)));
+
+            byOwner = new Map(owners.map((owner, index) => [owner, masked(relation.table, pages[index] ?? [])]));
+        } else if (links.size > 0) {
+            const linkedIds = new Set([...links.values()].flatMap((ids) => [...ids]));
+
+            byOwner = groupByLinkedOwner(links, masked(relation.table, await fetchTargets(linkedIds, undefined)));
+        }
+
+        for (const parent of parents) {
+            const group = byOwner.get(parent["_id"]) ?? [];
+
+            parent[name] = projectChildren(cap === undefined ? group : group.slice(0, cap), nested);
+        }
+    };
+
+    /**
+     * `_count` over a many-to-many relation counts the target rows the caller can read, not the join rows: a link to
+     * a row the target's read policy hides (or one that no longer exists) is not counted. That takes both hops,
+     * where a one-to-many count is a single grouped query.
+     */
+    const countThrough = async (name: string, relation: ThroughRelationDefinitionLike): Promise<void> => {
+        const links = await loadLinks(relation);
+        const visible = new Set<unknown>();
+
+        if (links.size > 0) {
+            const ids = new Set([...links.values()].flatMap((linked) => [...linked]));
+
+            for (const target of await fetchChildren(relation.table, {}, { _id: { in: [...ids] } }, undefined)) {
+                visible.add(target["_id"]);
+            }
+        }
+
+        for (const parent of parents) {
+            const counts = (parent["_count"] as Record<string, number> | undefined) ?? {};
+
+            counts[name] = [...(links.get(parent["_id"]) ?? [])].filter((id) => visible.has(id)).length;
+            parent["_count"] = counts;
+        }
+    };
+
     const resolveCounts = async (countInput: Record<string, true>): Promise<void> => {
         for (const name of Object.keys(countInput)) {
             const relation = requireRelation(name);
+
+            if (relation.through !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- one two-hop count per relation
+                await countThrough(name, relation);
+
+                continue;
+            }
+
             // `many`: count children whose FK matches this parent's reference.
             // `one`: count target rows the parent's FK points at (0 or 1).
             const [whereField, parentField] = relation.kind === "many" ? [relation.field, relation.references] : [relation.references, relation.field];
@@ -415,8 +563,13 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         const relation = requireRelation(name);
         const nested: NestedWith = value === true ? {} : value;
 
-        // eslint-disable-next-line no-await-in-loop -- relations resolved sequentially; each batched fetch mutates the shared parent page in place
-        await (relation.kind === "one" ? loadOne(name, relation, nested) : loadMany(name, relation, nested));
+        if (relation.through === undefined) {
+            // eslint-disable-next-line no-await-in-loop -- same
+            await (relation.kind === "one" ? loadOne(name, relation, nested) : loadMany(name, relation, nested));
+        } else {
+            // eslint-disable-next-line no-await-in-loop -- same
+            await loadThrough(name, relation, nested);
+        }
     }
 };
 
@@ -475,7 +628,7 @@ interface ApplyOnDeleteOptions {
  * global holders are gone. Callers that care should add their own
  * compensation (a periodic reconciliation job, or a Cloudflare Queue retry).
  */
-const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable: string, relation: RelationDefinitionLike): Promise<void> => {
+const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable: string, relation: KeyedRelationDefinitionLike): Promise<void> => {
     const { deletedId, deletedReference, findHolders, onCascade, onRestrict, onSetNull, tableName } = options;
     const referencedValue = relation.references === "_id" ? deletedId : deletedReference(relation.references);
 

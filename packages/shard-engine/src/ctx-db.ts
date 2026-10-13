@@ -1923,7 +1923,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * already the expensive part.
      */
     const relationEdges = deriveRelationEdges(schema);
-    const relationWrites = describeRelationWrites(schema);
+    const relationWrites = describeRelationWrites(schema, options.inTransaction);
 
     /**
      * This mutation's `_commitSeq`, allocated on first use and reused for every
