@@ -2906,7 +2906,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Compile a `findMany` read down to its SQL statement: ordering, the keyset seek, the policy and
-     * soft-delete scopes, and relation predicates (resolved first, so those do read, through `read`).
+     * soft-delete scopes, and relation predicates (resolved first). `read` only feeds the EXISTS push-down
+     * stamps; a semijoin lookup goes through the ordinary related-table read and stamps like any read.
      * Dependency stamping for the main table is the caller's: `findMany` does it, `explain` does not,
      * because describing a query must not make a live query subscribe to the table it describes.
      */

@@ -32,6 +32,10 @@ const schema = defineSchema({
             comments: r.many("comments", { field: "postId" }),
         };
     }),
+    members: defineTable({ name: v.string(), teamSlug: v.optional(v.string().nullable()) }),
+    teams: defineTable({ name: v.string(), slug: v.optional(v.string().nullable()) }).relations((r) => {
+        return { members: r.many("members", { field: "teamSlug", references: "slug" }) };
+    }),
     users: defineTable({ name: v.string() }).relations((r) => {
         return {
             audits: r.many("audits", { field: "userId" }),
@@ -214,10 +218,89 @@ describe("nested relation writes", () => {
             await expect(table("users").patch(user as never, { posts: { connect: ids } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         });
 
+        it.each([
+            ["disconnect", { comments: { disconnect: ["x"] } }],
+            ["set", { comments: { set: [] } }],
+        ])("refuses %s where the child's foreign key cannot be empty", async (_label, values) => {
+            expect.assertions(1);
+
+            const post = await newPost("p");
+
+            await expect(table("posts").patch(post as never, values as never)).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+                message: expect.stringContaining("cannot be empty"),
+            });
+        });
+
+        it("points children at the parent's referenced column when it is not _id", async () => {
+            expect.assertions(1);
+
+            const member = (await table("members").insert({ name: "m" })) as string;
+            const team = (await table("teams").insert({ name: "t", slug: "core" })) as string;
+
+            await table("teams").patch(team, { members: { connect: [member] } });
+
+            expect(((await table("members").get(member as never)) as Record<string, unknown>)["teamSlug"]).toBe("core");
+        });
+
+        it("refuses to connect children to a parent that has no value for the referenced column", async () => {
+            expect.assertions(2);
+
+            const member = (await table("members").insert({ name: "m" })) as string;
+            const team = (await table("teams").insert({ name: "t" })) as string;
+
+            await expect(table("teams").patch(team as never, { members: { connect: [member] } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            expect(((await table("members").get(member as never)) as Record<string, unknown>)["teamSlug"] ?? null).toBeNull();
+        });
+
         it("a patch that only changes relations still needs the row to exist", async () => {
             expect.assertions(1);
 
             await expect(table("users").patch("missing", { posts: { connect: [] } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        });
+    });
+
+    describe("validation happens before anything is written", () => {
+        it.each([
+            ["a malformed to-many list", { posts: { connect: "x" } }, "VALIDATION_ERROR"],
+            ["set combined with connect", { posts: { connect: [], set: [] } }, "VALIDATION_ERROR"],
+            ["a relation on another backend", { audits: { connect: ["x"] } }, "UNPROCESSABLE"],
+        ])("insert with %s leaves no parent row behind", async (_label, relation, code) => {
+            expect.assertions(2);
+
+            await expect(table("users").insert({ name: "ada", ...relation })).rejects.toMatchObject({ code });
+            expect(((await table("users").findMany()) as { page: unknown[] }).page).toHaveLength(0);
+        });
+
+        it("patch with an invalid to-many write leaves the parent's own columns alone", async () => {
+            expect.assertions(2);
+
+            const user = (await table("users").insert({ name: "ada" })) as string;
+
+            await expect(table("users").patch(user as never, { name: "grace", posts: { connect: "x" } })).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+            });
+            expect(((await table("users").get(user as never)) as Record<string, unknown>)["name"]).toBe("ada");
+        });
+
+        it("rejects an unknown operator instead of storing the object as a column", async () => {
+            expect.assertions(2);
+
+            await expect(table("posts").insert({ author: { conect: "x" }, title: "t" })).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+                message: expect.stringContaining("conect"),
+            });
+            expect(((await table("posts").findMany()) as { page: unknown[] }).page).toHaveLength(0);
+        });
+
+        it("treats an empty relation object as nothing to do", async () => {
+            expect.assertions(2);
+
+            const post = (await table("posts").insert({ author: {}, title: "t" })) as string;
+            const row = (await table("posts").get(post)) as Record<string, unknown>;
+
+            expect(row["title"]).toBe("t");
+            expect(row).not.toHaveProperty("author");
         });
     });
 
@@ -254,7 +337,7 @@ describe("nested relation writes", () => {
             await expect((async () => run(table("posts")))()).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         });
 
-        it("leaves an ordinary patch alone, including a column that looks like an operator", async () => {
+        it("leaves an ordinary patch alone", async () => {
             expect.assertions(1);
 
             const post = await newPost("t");
@@ -262,6 +345,17 @@ describe("nested relation writes", () => {
             await table("posts").patch(post, { title: "renamed" });
 
             expect(((await table("posts").get(post as never)) as Record<string, unknown>)["title"]).toBe("renamed");
+        });
+
+        it("refuses an upsert whose target key is supplied by a relation write", async () => {
+            expect.assertions(1);
+
+            const user = (await table("users").insert({ name: "ada" })) as string;
+
+            await expect(table("posts").upsert({ create: { author: { connect: user }, title: "t" }, target: "authorId" })).rejects.toMatchObject({
+                code: "VALIDATION_ERROR",
+                message: expect.stringContaining("authorId"),
+            });
         });
     });
 });

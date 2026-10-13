@@ -35,6 +35,7 @@ import type {
     DatabaseWriterLike,
     GroupByEntry,
     GroupByOptions,
+    NullPlacement,
     PatchWriteOptions,
     QueryArgs,
     QueryPage,
@@ -44,6 +45,7 @@ import type {
     SchedulerLike,
     SchemaLike,
     ServerDefaultContextLike,
+    SortDirection,
     TableDefinitionLike,
     TableReaderLike,
     TriggerContextLike,
@@ -172,13 +174,12 @@ const ID_ORDER_FIELDS = new Set(["_id", "id"]);
  * null-pivot shapes in the same stroke — they disagreed with the seek on
  * Postgres too, just less visibly.
  *
- * Emitted only for a NULLABLE key on Postgres: MySQL has no `NULLS` clause in
- * its grammar at all, SQLite already agrees, and on a non-nullable column the
- * clause is noise that can cost the index — Postgres cannot answer
- * `ORDER BY c DESC NULLS LAST` from a plain btree walk.
- * @returns the ` NULLS FIRST`/` NULLS LAST` suffix, or `""` when the engine default already agrees
+ * Emitted only for a NULLABLE key: on a non-nullable column the clause is noise that can cost the
+ * index. Postgres always spells it out (its default is the mirror of the seek's); SQLite only when
+ * the caller asked for a non-default placement; MySQL has no `NULLS` clause in its grammar at all.
+ * @returns the ` NULLS FIRST`/` NULLS LAST` suffix, or `""` when none is needed
  */
-const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable?: boolean; nulls?: "first" | "last" }): string => {
+const nullsPlacement = (dialect: SqlDialect, key: { direction: SortDirection; nullable?: boolean; nulls?: NullPlacement }): string => {
     if (key.nullable !== true) {
         return "";
     }
@@ -207,7 +208,7 @@ const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable
  * asked for a non-default placement; the default is what MySQL does on its own.
  * @returns the extra ORDER BY term, or `undefined` when none is needed
  */
-const mysqlNullsKey = (dialect: SqlDialect, key: { field: string; nullable?: boolean; nulls?: "first" | "last" }): SQL | undefined => {
+const mysqlNullsKey = (dialect: SqlDialect, key: { field: string; nullable?: boolean; nulls?: NullPlacement }): SQL | undefined => {
     if (dialect.name !== "mysql" || key.nullable !== true || key.nulls === undefined) {
         return undefined;
     }
@@ -231,7 +232,7 @@ const mysqlNullsKey = (dialect: SqlDialect, key: { field: string; nullable?: boo
  * NULL placement is the other half of that agreement — see {@link nullsPlacement}.
  */
 const compileOrderBySql = (
-    keys: ReadonlyArray<{ direction?: string; field: string; nullable?: boolean; nulls?: "first" | "last" }>,
+    keys: ReadonlyArray<{ direction: SortDirection; field: string; nullable?: boolean; nulls?: NullPlacement }>,
     dialect: SqlDialect,
 ): SQL => {
     const parts = keys.flatMap((key) => {
@@ -3331,13 +3332,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // fresh database returns an empty page instead of `no such table`.
             await ensureMigrated();
 
-            // Relation reads routed by the child's backend (shard-local child of
-            // this global parent → injected cross-shard reader; global/same-
-            // backend → local D1 writer). Shared with the aggregate/count paths
-            // as the top-level `relationPredicateFetcher`; aliased here for the
-            // nested `with` load.
-            const relationFetcher = relationPredicateFetcher;
-
             /**
              * Grouped aggregate counter for `_count` relation loading. For
              * local D1 children, issues one `SELECT :whereField AS __fk__,
@@ -3422,7 +3416,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             if (limit === undefined) {
                 if (args.with) {
                     await resolveWith({
-                        fetcher: relationFetcher,
+                        fetcher: relationPredicateFetcher,
                         groupedCounter: relationGroupedCounter,
                         parents: documents,
                         ...relationHooks(args),
@@ -3442,7 +3436,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             if (args.with) {
                 await resolveWith({
-                    fetcher: relationFetcher,
+                    fetcher: relationPredicateFetcher,
                     groupedCounter: relationGroupedCounter,
                     parents: page,
                     ...relationHooks(args),

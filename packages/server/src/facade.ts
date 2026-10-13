@@ -16,7 +16,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { RelationWriteInfosLike } from "./relation-writes";
-import { applyToManyRelations, applyToOneRelations, assertNoRelationWrites, splitRelationWrites } from "./relation-writes";
+import { assertNoRelationWrites, insertWithRelations, patchWithRelations } from "./relation-writes";
 
 /**
  * Structural detector for `@lunora/do`'s `ConflictError(kind: "unique")`. The
@@ -34,7 +34,12 @@ const isUniqueConflict = (error: unknown): boolean =>
  * field is absent (an upsert with no value to match on would silently match the
  * wrong rows). Multiple keys on one object compose as an implicit AND.
  */
-const buildUpsertWhere = (tableName: string, target: ReadonlyArray<string> | string, create: Record<string, unknown>): Record<string, unknown> => {
+const buildUpsertWhere = (
+    tableName: string,
+    target: ReadonlyArray<string> | string,
+    create: Record<string, unknown>,
+    relations: RelationWriteInfosLike | undefined,
+): Record<string, unknown> => {
     const fields = typeof target === "string" ? [target] : target;
 
     if (fields.length === 0) {
@@ -45,6 +50,15 @@ const buildUpsertWhere = (tableName: string, target: ReadonlyArray<string> | str
 
     for (const field of fields) {
         if (!(field in create)) {
+            const supplier = Object.entries(relations ?? {}).find(([name, info]) => info.kind === "one" && info.field === field && name in create)?.[0];
+
+            if (supplier !== undefined) {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `ctx.db.${tableName}.upsert: target field "${field}" is supplied by the "${supplier}" relation write; pass "${field}" itself so the existing row can be found`,
+                );
+            }
+
             throw new LunoraError("INTERNAL", `ctx.db.${tableName}.upsert: target field "${field}" is missing from the create document`);
         }
 
@@ -236,60 +250,14 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         }
     };
 
-    // Nested relation writes (`{ author: { connect: id } }`, `{ posts: { set: [...] } }`) are composed here from
-    // the bound writer's own reads and patches — see `relation-writes.ts`. A `to-one` becomes a foreign-key column
-    // of the row being written; a `to-many` is applied to the children once the parent exists.
-    const relationInfos = (): RelationWriteInfosLike | undefined => writer.relationWrites?.[tableName];
+    // Nested relation writes (`{ author: { connect: id } }`, `{ posts: { set: [...] } }`) are composed from the bound
+    // writer's own reads and patches — see `relation-writes.ts`.
+    const relationInfos = writer.relationWrites?.[tableName];
 
-    // The value a child's foreign key must equal: the parent's `references` column, usually `_id`.
-    const parentValue = async (id: string, references: string, written: Record<string, unknown>): Promise<unknown> => {
-        if (references === "_id") {
-            return id;
-        }
+    const insert = (document: Record<string, unknown>, options?: FacadeInsertOptions): Promise<null | string> =>
+        insertWithRelations(writer, tableName, relationInfos, document, (columns) => insertColumns(columns, options));
 
-        if (Object.hasOwn(written, references)) {
-            return written[references];
-        }
-
-        return ((await writer.get(id, tableName)) as Record<string, unknown> | null)?.[references];
-    };
-
-    const insert = async (document: Record<string, unknown>, options?: FacadeInsertOptions): Promise<null | string> => {
-        const split = splitRelationWrites(relationInfos(), document);
-
-        if (split.relations.length === 0) {
-            return insertColumns(document, options);
-        }
-
-        const columns = await applyToOneRelations(writer, tableName, split);
-        const id = await insertColumns(columns, options);
-
-        if (id !== null) {
-            await applyToManyRelations(writer, tableName, split, (references) => parentValue(id, references, columns));
-        }
-
-        return id;
-    };
-
-    const patch = async (id: string, values: Record<string, unknown>): Promise<void> => {
-        const split = splitRelationWrites(relationInfos(), values);
-
-        if (split.relations.length === 0) {
-            await writer.patch(id, values, tableName);
-
-            return;
-        }
-
-        const columns = await applyToOneRelations(writer, tableName, split);
-
-        if (Object.keys(columns).length > 0) {
-            await writer.patch(id, columns, tableName);
-        } else if ((await writer.get(id, tableName)) === null) {
-            throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
-        }
-
-        await applyToManyRelations(writer, tableName, split, (references) => parentValue(id, references, columns));
-    };
+    const patch = (id: string, values: Record<string, unknown>): Promise<void> => patchWithRelations(writer, tableName, relationInfos, id, values);
 
     // "Exactly one row" — the assertion `findFirst` drops. The typed surface refuses
     // `limit`/`cursor` (see `TableReaderFacade.findUnique`), so the over-fetch below
@@ -312,7 +280,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
     // insert/patch is gated by its own policy). The `tableName` passed to `patch`
     // scopes the by-id write to this table (the same IDOR guard as `patch`).
     const upsert = async ({ create, target, update }: UpsertArgs): Promise<UpsertResult> => {
-        const where = buildUpsertWhere(tableName, target, create);
+        const where = buildUpsertWhere(tableName, target, create, relationInfos);
         const existing = (await writer.findFirst(tableName, { where })) as null | Record<string, unknown>;
 
         if (existing && typeof existing["_id"] === "string") {
@@ -376,7 +344,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         insert,
         insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => {
             for (const document of documents) {
-                assertNoRelationWrites(tableName, relationInfos(), document, "insertMany");
+                assertNoRelationWrites(tableName, relationInfos, document, "insertMany");
             }
 
             if (writer.insertMany === undefined) {
@@ -397,7 +365,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
                 : [(first as { values: Record<string, unknown> }).values];
 
             for (const values of batch) {
-                assertNoRelationWrites(tableName, relationInfos(), values, "patchMany");
+                assertNoRelationWrites(tableName, relationInfos, values, "patchMany");
             }
 
             if (Array.isArray(first)) {
@@ -425,7 +393,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         rank: (indexName, options) => writer.rank(tableName, indexName, options),
         rankPage: (indexName, options) => writer.rankPage(tableName, indexName, options),
         replace: (id, document) => {
-            assertNoRelationWrites(tableName, relationInfos(), document, "replace");
+            assertNoRelationWrites(tableName, relationInfos, document, "replace");
 
             return writer.replace(id, document, tableName);
         },

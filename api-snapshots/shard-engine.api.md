@@ -2167,12 +2167,12 @@ type RelationGraphReader = Pick<DatabaseWriterLike, "findMany"> & Pick<Partial<D
 
 ```ts
 interface RelationWriteInfo {
+    readonly colocated: boolean;
     readonly field: string;
     readonly kind: "many" | "one";
     readonly nullable: boolean;
     readonly references: string;
     readonly table: string;
-    readonly writable: boolean;
 }
 ```
 
@@ -4566,10 +4566,7 @@ const normalizeSourceValue: (value: unknown) => unknown;
 ### `nullsFirstOf` (const)
 
 ```ts
-const nullsFirstOf: (key: {
-    direction?: string;
-    nulls?: "first" | "last";
-}) => boolean;
+const nullsFirstOf: (key: Pick<OrderKey, "direction" | "nulls">) => boolean;
 ```
 
 ### `operatorFields` (const)

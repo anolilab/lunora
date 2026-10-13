@@ -120,9 +120,11 @@ const { sql, params, plan } = await ctx.db.messages.explain({ where: { room: "lo
 
 An index serves the read when the plan says `SEARCH … USING INDEX`; `SCAN` means every row is
 read. `sql` and `params` are the exact statement and bound values. `explain` honors RLS and
-soft delete like the read does, so the plan is the one your caller would get. A relation filter in
-`where` is resolved first, which reads the related table. It subscribes to nothing, so a live query
-that explains does not become reactive to the table.
+soft delete like the read does, so the plan is the one your caller would get. Explaining does not
+subscribe a live query to the table. A relation filter in `where` is resolved first with an ordinary
+read of the related table, which does subscribe to that table, because the ids it matched end up in
+`params`. `limit: n` shows as `LIMIT n + 1`, the over-fetch `findMany` uses to learn whether another
+page exists.
 
 `params` includes values your RLS policies injected (a user id, a tenant), and a relation filter
 inlines the ids it matched, so keep `explain` output on the server rather than returning it to a

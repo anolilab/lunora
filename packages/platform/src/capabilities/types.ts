@@ -302,7 +302,6 @@ export interface PlatformCapabilities {
          * fires. One rating covering both is how that shipped as green.
          */
         cronTriggers?: Capability;
-
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -399,7 +398,6 @@ export interface PlatformCapabilities {
          * host either populates or does not.
          */
         identityProxy?: Capability;
-
         /** Image transforms (resize/format/optimize) via an Images binding. */
         images?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */

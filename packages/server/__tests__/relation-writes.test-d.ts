@@ -23,7 +23,7 @@ type Rel = Relations;
 
 const check = (): unknown[] => {
     const toOne: RelationWrites<DataModel, Rel, "posts"> = { author: { connect: "u" as Id<"users"> } };
-    const toMany: RelationWrites<DataModel, Rel, "users"> = { posts: { connect: ["p" as Id<"posts">], set: [] } };
+    const toMany: RelationWrites<DataModel, Rel, "users"> = { posts: { connect: ["p" as Id<"posts">] } };
 
     const inserts: ReadonlyArray<InsertValues<DataModel, InsertModel, Rel, "posts">> = [
         // the key itself
@@ -47,9 +47,18 @@ const check = (): unknown[] => {
         { author: { disconnect: true } },
         // @ts-expect-error -- a to-one has no `set`
         { author: { set: [] } },
+        // @ts-expect-error -- connect and disconnect together are ambiguous
+        { author: { connect: "u" as Id<"users">, disconnect: true } },
     ];
 
-    return [toOne, toMany, inserts, userInserts, patches];
+    const manyPatches: ReadonlyArray<RelationWrites<DataModel, Rel, "users">> = [
+        { posts: { set: ["p" as Id<"posts">] } },
+        { posts: { connect: ["p" as Id<"posts">], disconnect: ["q" as Id<"posts">] } },
+        // @ts-expect-error -- set replaces the whole list and cannot be combined with connect
+        { posts: { connect: ["p" as Id<"posts">], set: [] } },
+    ];
+
+    return [toOne, toMany, inserts, userInserts, patches, manyPatches];
 };
 
 export default check;

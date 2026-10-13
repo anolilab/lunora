@@ -3999,23 +3999,30 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
 }
 ```
 
-### `ToManyRelationWrite` (interface)
+### `ToManyRelationWrite` (type)
 
 ```ts
-interface ToManyRelationWrite<TargetId> {
+type ToManyRelationWrite<TargetId> = {
+    connect?: never;
+    disconnect?: never;
+    set: ReadonlyArray<TargetId>;
+} | {
     connect?: ReadonlyArray<TargetId>;
     disconnect?: ReadonlyArray<TargetId>;
-    set?: ReadonlyArray<TargetId>;
-}
+    set?: never;
+};
 ```
 
-### `ToOneRelationWrite` (interface)
+### `ToOneRelationWrite` (type)
 
 ```ts
-interface ToOneRelationWrite<TargetId> {
-    connect?: TargetId;
-    disconnect?: true;
-}
+type ToOneRelationWrite<TargetId> = {
+    connect: TargetId;
+    disconnect?: never;
+} | {
+    connect?: never;
+    disconnect: true;
+};
 ```
 
 ### `UpsertTargetOf` (type)
@@ -6519,12 +6526,12 @@ type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM>
 
 ```ts
 interface RelationWriteInfoLike {
+    readonly colocated: boolean;
     readonly field: string;
     readonly kind: "many" | "one";
     readonly nullable: boolean;
     readonly references: string;
     readonly table: string;
-    readonly writable: boolean;
 }
 ```
 

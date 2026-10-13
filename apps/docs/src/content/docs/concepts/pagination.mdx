@@ -97,10 +97,16 @@ other value, including when a page boundary falls inside it. Use the same `order
 as a cursor is only valid against the ordering that minted it. The placement has no effect on a
 column that cannot hold NULL.
 
-Whether a non-default placement is still answered from an index depends on the database. SQLite
-and D1 walk the index. Postgres is always given the placement explicitly, and MySQL, which has no
-`NULLS FIRST/LAST`, gets an extra `IS NULL` sort key that an index on the column alone cannot serve,
-so measure a hot read on those before relying on it.
+Whether a non-default placement is still answered from an index depends on the database, so
+measure a hot read before relying on it:
+
+- **SQLite and D1** walk the index for the first page. Later pages carry an extra `OR col IS NULL`
+  arm in the seek, which drops to a scan, the same cost the default `desc` order already pays.
+- **Postgres** is always given the placement explicitly. A plain btree index is `ASC NULLS LAST`
+  (read backwards, `DESC NULLS FIRST`), so those two placements are served from it and the default
+  ones are sorted.
+- **MySQL** has no `NULLS FIRST/LAST`, so a non-default placement adds an `IS NULL` sort key that an
+  index on the column alone cannot serve.
 
 ## Load more / infinite lists on the client
 

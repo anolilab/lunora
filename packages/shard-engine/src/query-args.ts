@@ -17,19 +17,20 @@
  *
  * One thing it is NOT free of is the dialect's NULL ordering. A keyset seek has
  * to place NULLs exactly where the ORDER BY does or a nullable ordered column
- * cannot be paged at all. {@link pivotCondition} fixes ONE placement for every
- * dialect — the SQLite/MySQL default, NULLs first ascending and last descending
- * — rather than branching on the engine, because the seek tree it returns is
- * compiled by a shared dialect-blind compiler. Postgres defaults the other way,
- * so `@lunora/sql-store` writes the placement out as an explicit
- * `NULLS FIRST`/`NULLS LAST` on the nullable keys of its ORDER BY; see
+ * cannot be paged at all. {@link pivotCondition} reads each key's placement — the
+ * SQLite/MySQL default (NULLs first ascending, last descending) unless the key
+ * carries an explicit one — and is the same on every dialect, because the seek
+ * tree it returns is compiled by a shared dialect-blind compiler. Postgres
+ * defaults the other way, so `@lunora/sql-store` writes the placement out as an
+ * explicit `NULLS FIRST`/`NULLS LAST` on the nullable keys of its ORDER BY; see
  * `compileOrderBySql` there.
  */
 import { LunoraError } from "@lunora/errors";
 
+import { validatorAcceptsNull } from "../../../shared/accepts-null";
 import { readFieldPath } from "../../../shared/json-field-path";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import type { OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
+import type { NullPlacement, OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
 /** The implicit tiebreak appended to every sort so the order is total. */
@@ -68,11 +69,13 @@ const NEVER_NULL_FIELDS = new Set(["_creationTime", "_id", "id"]);
  * `OR col IS NULL` arm, and that arm is what turns an index seek into a table
  * scan — so the answer has to come from the schema, not from a guess.
  *
- * Two spellings make a column nullable, and both have to be read: `.nullable()`
- * clears `column.notNull` and keeps the base kind, while `v.optional(inner)`
- * wraps it in a fresh `"optional"` validator whose own column meta is the
- * DEFAULT `notNull: true` — so an optional column that only checked `notNull`
- * would read as non-nullable and lose exactly the rows this arm exists for.
+ * Three spellings make a column nullable, and all have to be read: `.nullable()`
+ * clears `column.notNull` and keeps the base kind, `v.optional(inner)` wraps it
+ * in a fresh `"optional"` validator whose own column meta is the DEFAULT
+ * `notNull: true`, and `v.union(x, v.null())` / `v.any()` / `v.null()` parse
+ * `null` while keeping that same default flag (`validatorAcceptsNull`). A check
+ * that only read `notNull` would call each of them non-nullable and lose
+ * exactly the rows this arm exists for.
  *
  * A field the shape does not declare answers `true` (emit the arm, take the
  * slow plan). Both stores read undeclared fields out of a JSON document, where
@@ -92,7 +95,7 @@ const columnIsNullable = (field: string, shape: Record<string, ValidatorLike> | 
         return true;
     }
 
-    return validator.kind === "optional" || validator._meta?.column?.notNull === false;
+    return validator.kind === "optional" || validator._meta?.column?.notNull === false || validatorAcceptsNull(validator);
 };
 
 /** Boolean combinator keys in a `where` tree — never a column, so never a pin. */
@@ -184,10 +187,17 @@ interface OrderKeyConstraints {
 }
 
 /**
- * Is `spec` a well-formed `{ sort, nulls }`? `orderBy` arrives from callers the type system does not
- * reach (an RPC argument), and `nulls` ends up in SQL text, so the object form is checked, not trusted.
+ * Do this key's NULLs sort before its other values? The default is the SQLite/MySQL one — first
+ * ascending, last descending — unless the key carries an explicit placement.
  */
-const isPlacementSpec = (spec: unknown): boolean => {
+const nullsFirstOf = (key: Pick<OrderKey, "direction" | "nulls">): boolean => (key.nulls === undefined ? key.direction !== "desc" : key.nulls === "first");
+
+/**
+ * Is `spec` a well-formed `{ sort, nulls }`? `orderBy` arrives from callers the type system does not
+ * reach (an RPC argument), so a malformed entry is refused loudly rather than silently sorted some
+ * other way.
+ */
+const isPlacementSpec = (spec: unknown): spec is { nulls: NullPlacement; sort: SortDirection } => {
     if (typeof spec !== "object" || spec === null) {
         return false;
     }
@@ -204,14 +214,14 @@ const isPlacementSpec = (spec: unknown): boolean => {
  * could cost its index.
  */
 const orderKeyFor = (field: string, spec: OrderByInput[string], shape: Record<string, ValidatorLike> | undefined): OrderKey => {
-    if (typeof spec !== "string" && !isPlacementSpec(spec)) {
+    if (spec !== "asc" && spec !== "desc" && !isPlacementSpec(spec)) {
         throw new LunoraError("VALIDATION_ERROR", `orderBy "${field}": expected "asc", "desc" or { sort: "asc" | "desc", nulls: "first" | "last" }`);
     }
 
     const direction = typeof spec === "string" ? spec : spec.sort;
     const nullable = columnIsNullable(field, shape);
 
-    if (typeof spec === "string" || !nullable || (spec.nulls === "first") === (direction !== "desc")) {
+    if (typeof spec === "string" || !nullable || nullsFirstOf({ direction }) === (spec.nulls === "first")) {
         return { direction, field, nullable };
     }
 
@@ -452,13 +462,6 @@ const decodeCursor = (cursor: string): unknown[] => {
 };
 
 /**
- * Do this key's NULLs sort before its other values? The default is the SQLite/MySQL one — first
- * ascending, last descending — unless the key carries an explicit placement.
- */
-const nullsFirstOf = (key: { direction?: string; nulls?: "first" | "last" }): boolean =>
-    key.nulls === undefined ? key.direction !== "desc" : key.nulls === "first";
-
-/**
  * The pivot comparison for ONE column of the lexicographic seek: the rows on the
  * wanted side of `value` under this column's direction.
  *
@@ -488,14 +491,14 @@ const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, in
     const { field } = column;
     // Which way the value comparison runs: later rows are greater under `asc`, smaller under `desc`.
     const greaterWanted = (column.direction !== "desc") === wantLater;
-    const nullsFirst = nullsFirstOf(column);
+    // The NULL group lies on the side the seek is moving away from.
+    const nullsBehind = nullsFirstOf(column) === wantLater;
 
     // Only `null`: both a fresh cursor (normalised at mint) and a legacy one
     // (normalised in `decodeCursor`) carry SQL NULL by the time they reach here.
     if (value === null) {
-        // Non-null rows are on the wanted side of a NULL pivot when the NULLs sort before them and
-        // the seek wants later rows, or after them and it wants earlier ones.
-        if (nullsFirst === wantLater) {
+        // Non-null rows are on the wanted side of a NULL pivot when the NULL group is behind the seek.
+        if (nullsBehind) {
             // Inclusive at a NULL pivot is "the non-nulls, plus the NULL group itself" — every row.
             return inclusive ? { OR: [{ [field]: { isNull: false } }, { [field]: { isNull: true } }] } : { [field]: { isNull: false } };
         }
@@ -512,10 +515,10 @@ const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, in
 
     const comparison: WhereInput = { [field]: { [operator]: value } };
 
-    // NULL rows are on the wanted side of a non-null pivot when they sort after it and the seek
-    // wants later rows, or before it and it wants earlier ones. Otherwise a comparator reaches
-    // everything wanted, and a column that never holds NULL has nothing more to reach.
-    if (nullsFirst === wantLater || !column.nullable) {
+    // NULL rows are on the wanted side of a non-null pivot when the NULL group is ahead of the seek.
+    // Otherwise a comparator reaches everything wanted, and a column that never holds NULL has
+    // nothing more to reach.
+    if (nullsBehind || !column.nullable) {
         return comparison;
     }
 
@@ -532,6 +535,8 @@ const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, in
     //
     // Under the default placement the arm lands on EVERY `desc` pivot of the forward seek —
     // "newest first", the dominant read shape — which is why an unconditional arm was not a corner case.
+    // A non-default placement (`asc` + `nulls: "last"`, `desc` + `nulls: "first"`) hits the same arm on every
+    // page after the first, so only the first page is served from the index walk.
     return { OR: [comparison, { [field]: { isNull: true } }] };
 };
 

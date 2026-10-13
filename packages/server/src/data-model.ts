@@ -119,9 +119,8 @@ export type Where<TDocument> = PathWhere<TDocument> & {
  * One ordering entry; `orderBy` is an ordered list. `{ field: "asc" | "desc" }` sorts NULLs first
  * ascending and last descending. `{ field: { sort: "desc", nulls: "first" } }` places them yourself.
  *
- * Whether a placement other than the default is still served by an index depends on the database
- * (SQLite walks the index; others may sort the matching rows), so measure a hot read.
- * It has no effect on a column that cannot hold NULL. Keep the same `orderBy` for every page of a
+ * A placement other than the default can change the query plan (see Pagination in the docs), so
+ * measure a hot read. It has no effect on a column that cannot hold NULL. Keep the same `orderBy` for every page of a
  * paginated read, as a cursor is only valid against the ordering that minted it.
  */
 export type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc" | { nulls: "first" | "last"; sort: "asc" | "desc" }>>;
@@ -466,9 +465,12 @@ export interface TableReaderFacade<
      * served by an index (`SEARCH … USING INDEX by_room`) rather than a scan (`SCAN …`).
      *
      * Honors RLS and soft delete exactly like the read, so the plan is the one your caller would get.
-     * A relation filter in `where` is resolved first, which reads the related table. It subscribes to
-     * nothing, so a live query that explains does not become reactive to the table. `with` and `select`
-     * do not change the statement and are ignored.
+     * Explaining does not subscribe a live query to this table. A relation filter in `where` is resolved
+     * first with an ordinary read of the related table, which does subscribe to that table, since the ids
+     * it matched are part of `params`. Takes no `with` or `select`: neither changes the statement.
+     *
+     * `params` carries values your RLS policies injected and, for a relation filter, the ids it matched.
+     * Keep the result on the server rather than returning it to a client.
      */
     explain: (args?: QueryArgsOf<DM, REL, T>) => Promise<QueryPlan>;
     findFirst: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
@@ -670,21 +672,20 @@ export interface QueryPlan {
     sql: string;
 }
 
-/** Nested write for a to-one relation: point the row at `Target`, or clear the link. */
-export interface ToOneRelationWrite<TargetId> {
-    connect?: TargetId;
-    /** Needs a foreign key that can be empty, or the write is refused. */
-    disconnect?: true;
-}
+/**
+ * Nested write for a to-one relation: point the row at `Target` (`connect`), or clear the link (`disconnect`, which
+ * needs a foreign key that can be empty). One or the other, not both.
+ */
+export type ToOneRelationWrite<TargetId> = { connect: TargetId; disconnect?: never } | { connect?: never; disconnect: true };
 
-/** Nested write for a to-many relation: point `Target` rows at this one, release them, or replace the whole list. */
-export interface ToManyRelationWrite<TargetId> {
-    connect?: ReadonlyArray<TargetId>;
-    /** Needs a foreign key that can be empty, or the write is refused. */
-    disconnect?: ReadonlyArray<TargetId>;
-    /** The complete list: rows not named are released. Cannot be combined with `connect` or `disconnect`. */
-    set?: ReadonlyArray<TargetId>;
-}
+/**
+ * Nested write for a to-many relation: point `Target` rows at this one (`connect`), release them (`disconnect`, which
+ * needs a foreign key that can be empty), or replace the whole list (`set`: rows not named are released). `set`
+ * cannot be combined with the other two.
+ */
+export type ToManyRelationWrite<TargetId> =
+    | { connect?: never; disconnect?: never; set: ReadonlyArray<TargetId> }
+    | { connect?: ReadonlyArray<TargetId>; disconnect?: ReadonlyArray<TargetId>; set?: never };
 
 /**
  * Nested relation writes accepted by `insert`, `patch` and `upsert`, keyed by relation name:

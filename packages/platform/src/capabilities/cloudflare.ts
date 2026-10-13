@@ -37,7 +37,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         queryExplain: {
             level: "native",
-            note: "EXPLAIN QUERY PLAN over state.storage.sql for a shard-local table and over the D1 binding for .global(); both run against the real engines (workerd and a D1 binding) in the test suite",
+            note: "EXPLAIN QUERY PLAN over state.storage.sql for a shard-local table and over the D1 binding for .global() on D1; both run against the real engines (workerd and a D1 binding) in the test suite. A Hyperdrive Postgres or MySQL .global() backend uses plain EXPLAIN and is checked against canned plan rows only",
         },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         serverReactors: {

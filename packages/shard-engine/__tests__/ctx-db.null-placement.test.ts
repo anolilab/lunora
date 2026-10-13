@@ -204,12 +204,43 @@ describe("orderBy null placement", () => {
         await expect(writer.findMany("items", { orderBy: [{ score: spec as never }] })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
-    it("ignores a placement on a column that cannot hold NULL, keeping its index plan", async () => {
+    it("ignores a placement on a column that cannot hold NULL", async () => {
         expect.assertions(1);
 
         const writer = await seed();
         const all = await writer.findMany("items", { orderBy: [{ label: { nulls: "last", sort: "asc" } }] });
 
         expect(labelsOf(all.page)).toStrictEqual(ROWS.map(([label]) => label).toSorted((left, right) => left.localeCompare(right)));
+    });
+});
+
+describe("which columns take a NULL placement", () => {
+    const unionWithNull = { _meta: { column: { notNull: true }, members: [col("string"), col("null")] }, kind: "union" } satisfies ValidatorLike;
+
+    it.each([
+        ["a union with v.null()", unionWithNull],
+        ["v.any()", col("any")],
+        ["v.null()", col("null")],
+        ["v.optional(...)", { _meta: { column: { notNull: true }, inner: col("string") }, kind: "optional" }],
+    ])("records a requested placement on %s, which stores NULL", (_label, validator) => {
+        expect.assertions(1);
+
+        const [key] = normalizeOrderKeys([{ status: { nulls: "last", sort: "asc" } }], { status: validator });
+
+        expect(key).toMatchObject({ nullable: true, nulls: "last" });
+    });
+
+    it("does not on a plain required column", () => {
+        expect.assertions(1);
+
+        const [key] = normalizeOrderKeys([{ status: { nulls: "last", sort: "asc" } }], { status: col("string") });
+
+        expect(key?.nulls).toBeUndefined();
+    });
+
+    it.each(["DESC", "up", "", undefined])("rejects the plain-string direction %j instead of sorting ascending", (direction) => {
+        expect.assertions(1);
+
+        expect(() => normalizeOrderKeys([{ score: direction as never }], schema.tables["items"]?.shape)).toThrow(/expected "asc", "desc"/u);
     });
 });

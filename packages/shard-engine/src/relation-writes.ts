@@ -7,23 +7,24 @@ import type { SchemaLike, TableDefinitionLike } from "./schema-types";
  * `relationEdges` — and it travels through the RLS and mask wrappers with the rest of the writer.
  */
 interface RelationWriteInfo {
+    /**
+     * Do both tables live on this shard's Durable Object, so its transaction covers a write to either? A
+     * `.global()` table is a separate store whose commits the transaction cannot roll back (even when both
+     * sides are global, each write is its own commit), and a row on another shard cannot be addressed from
+     * this one at all. The facade refuses those up front rather than half-apply them.
+     */
+    readonly colocated: boolean;
     /** The foreign-key column: on THIS table for a `one` relation, on the TARGET table for a `many` one. */
     readonly field: string;
+
     readonly kind: "many" | "one";
 
     /** Can the foreign key hold NULL, so `disconnect` and `set` have somewhere to point a row that leaves? */
     readonly nullable: boolean;
-
     /** The column the foreign key points at: on the target for `one`, on this table for `many`. Usually `_id`. */
     readonly references: string;
-    readonly table: string;
 
-    /**
-     * Do both tables live on the same backend and shard tier? A write across them is two stores' writes: a
-     * Durable Object transaction does not roll back a D1 row, and a row on another shard cannot be addressed
-     * from this one at all. The facade refuses those up front rather than half-apply them.
-     */
-    readonly writable: boolean;
+    readonly table: string;
 }
 
 /** `{ table: { relationName: info } }` — only tables that declare a relation appear. */
@@ -33,7 +34,7 @@ const sameTier = (left: TableDefinitionLike, right: TableDefinitionLike): boolea
     const a = left.shardMode ?? { kind: "root" };
     const b = right.shardMode ?? { kind: "root" };
 
-    return a.kind === b.kind && a.field === b.field;
+    return a.kind !== "global" && a.kind === b.kind && a.field === b.field;
 };
 
 /** Is the foreign-key column nullable? A column the target table does not declare reads as not nullable (the safe answer). */
@@ -61,7 +62,7 @@ const describeRelationWrites = (schema: SchemaLike): RelationWriteMap => {
                 nullable: fieldAcceptsNull(owner, relation.field),
                 references: relation.references,
                 table: relation.table,
-                writable: target !== undefined && sameTier(definition, target),
+                colocated: target !== undefined && sameTier(definition, target),
             };
         }
     }

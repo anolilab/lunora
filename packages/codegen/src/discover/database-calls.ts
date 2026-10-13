@@ -28,7 +28,8 @@ const isDatabaseAccessor = (receiver: TsNode): boolean =>
  *
  * A read method missing from this set is INVISIBLE to every feeder that reads
  * through `readTargetOf` — the soft-delete and relation-load analyses — so adding
- * one to the facade means adding it here in the same change.
+ * one to the facade means adding it here in the same change. `explain` is left out on purpose: it takes
+ * no `with`/`select` and returns a plan rather than rows, so neither analysis has anything to learn from it.
  */
 const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "findUnique"]);
 

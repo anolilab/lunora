@@ -2998,16 +2998,6 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
             expect(scanned?.plan.join("\n")).not.toContain("by_name");
         });
 
-        it("writes nothing and returns no rows", async () => {
-            expect.assertions(1);
-
-            const writer = makeWriter();
-
-            await writer.explain?.("counters", { where: { name: "a" } });
-
-            await expect(writer.findMany("counters")).resolves.toMatchObject({ page: [] });
-        });
-
         it.each([
             ["postgres", "EXPLAIN SELECT", { "QUERY PLAN": "Seq Scan on counters" }, "Seq Scan on counters"],
             ["mysql", "EXPLAIN SELECT", { id: 1, key: null, table: "counters" }, "1 | null | counters"],

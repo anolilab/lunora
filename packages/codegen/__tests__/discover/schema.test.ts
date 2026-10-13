@@ -943,7 +943,7 @@ describe("discoverSchema", () => {
         const server = emitServer({ schema: relationSchema });
 
         // Phantom descriptors + the per-table Relations map.
-        expect(dataModel).toContain("export interface OneRelation<Target extends keyof DataModel, Field extends string = string>");
+        expect(dataModel).toContain("export interface OneRelation<Target extends keyof DataModel, Field extends string>");
         expect(dataModel).toContain("export interface ManyRelation<Target extends keyof DataModel>");
         expect(dataModel).toContain('posts: ManyRelation<"posts">;');
         expect(dataModel).toContain('author: OneRelation<"users", "authorId">;');

@@ -11,7 +11,7 @@ import type { SqlExec } from "./ctx-db";
 import { runSql } from "./do-exec";
 import { DOC_COLUMN, jsonPath, quoteIdentifier, rowToDocument, serializeSqlValue } from "./do-sql";
 import { buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, tiebreakDirectionFor, uniqueIndexFields } from "./query-args";
-import type { OrderKey, PaginationOptions, QueryPage, TableDefinitionLike } from "./schema-types";
+import type { NullPlacement, OrderKey, PaginationOptions, QueryPage, TableDefinitionLike } from "./schema-types";
 import type { TextFragment } from "./where-fragments";
 import { joinText, rawText, textFragments } from "./where-fragments";
 import type { WhereSqlStrategy } from "./where-sql";
@@ -83,7 +83,7 @@ const doWhereTextStrategy: WhereSqlStrategy<TextFragment> = {
 };
 
 /** The SQL for a requested NULL placement — fixed literals, never the caller's string. */
-const nullsClause = (nulls: "first" | "last" | undefined): string => {
+const nullsClause = (nulls: NullPlacement | undefined): string => {
     if (nulls === undefined) {
         return "";
     }
@@ -94,8 +94,7 @@ const nullsClause = (nulls: "first" | "last" | undefined): string => {
 /** An ORDER BY for `keys`, with an `id` tiebreak in the last key's direction unless an id field is already ordered. */
 const compileOrderByText = (keys: OrderKey[]): string => {
     // `nulls` is only set when it differs from SQLite's default (NULLs first ascending, last descending),
-    // so an un-annotated read compiles exactly as before. SQLite cannot answer a non-default placement from
-    // an index walk, so it sorts: that is the price of asking.
+    // so an un-annotated read compiles exactly as before.
     const parts = keys.map((key) => `${jsonPath(key.field)} ${key.direction === "desc" ? "DESC" : "ASC"}${nullsClause(key.nulls)}`);
 
     if (!keys.some((key) => key.field === "_id" || key.field === "id")) {

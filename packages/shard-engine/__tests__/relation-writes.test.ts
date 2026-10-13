@@ -35,6 +35,13 @@ const schema: SchemaLike = {
             shape: { postId: col("id") },
             shardMode: { field: "orgId", kind: "shardBy" },
         },
+        globalNotes: {
+            indexes: [],
+            relationMap: { owner: { field: "ownerId", kind: "one", references: "_id", table: "globalOwners" } },
+            shape: { ownerId: col("id") },
+            shardMode: { kind: "global" },
+        },
+        globalOwners: { indexes: [], shape: { name: col("string") }, shardMode: { kind: "global" } },
         orgs: { indexes: [], shape: { name: col("string") }, shardMode: { field: "_id", kind: "shardBy" } },
         posts: {
             indexes: [],
@@ -69,16 +76,18 @@ describe(describeRelationWrites, () => {
         expect(described["posts"]?.["comments"]).toMatchObject({ nullable: false });
     });
 
-    it("marks a relation writable only when both tables share a backend and shard tier", () => {
-        expect.assertions(5);
+    it("marks a relation colocated only when both tables share a shard's Durable Object", () => {
+        expect.assertions(6);
 
-        expect(described["posts"]?.["author"]?.writable).toBe(true);
-        expect(described["users"]?.["audits"]?.writable).toBe(false);
-        expect(described["audits"]?.["user"]?.writable).toBe(false);
+        expect(described["posts"]?.["author"]?.colocated).toBe(true);
+        expect(described["users"]?.["audits"]?.colocated).toBe(false);
+        expect(described["audits"]?.["user"]?.colocated).toBe(false);
         // Same shard key: both live on the shard the key selects.
-        expect(described["orgTags"]?.["post"]?.writable).toBe(true);
+        expect(described["orgTags"]?.["post"]?.colocated).toBe(true);
         // A different shard key (or a root table against a sharded one) is another shard.
-        expect(described["orgPosts"]?.["org"]?.writable).toBe(false);
+        expect(described["orgPosts"]?.["org"]?.colocated).toBe(false);
+        // Two `.global()` tables share a backend, but each write is its own commit, so no transaction covers both.
+        expect(described["globalNotes"]?.["owner"]?.colocated).toBe(false);
     });
 
     it("lists only tables that declare a relation", () => {
@@ -87,6 +96,7 @@ describe(describeRelationWrites, () => {
         expect(Object.keys(described).toSorted((left, right) => left.localeCompare(right))).toStrictEqual([
             "audits",
             "comments",
+            "globalNotes",
             "orgPosts",
             "orgTags",
             "posts",

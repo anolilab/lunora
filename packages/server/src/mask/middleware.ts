@@ -812,8 +812,8 @@ const wrapDatabase = <Context>(
      * rank oracle across pages. Fail closed when an `orderBy` entry references a
      * masked column, mirroring `assertWhereAllowed` and the index-reader guard
      * (`order()` over a masked `withIndex` already throws). `orderBy` is a
-     * `Partial<Record<column, "asc" | "desc">>[]`, so each entry's keys are the
-     * ordered columns.
+     * `Partial<Record<column, direction | { sort, nulls }>>[]`, so each entry's keys
+     * are the ordered columns.
      *
      * `scope` is the masked-column set this level is checked against — the same
      * split `assertWhereScope` makes: {@link rootScope} at the root, and

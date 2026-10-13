@@ -188,16 +188,6 @@ export interface PatchWriteOptions {
 }
 
 /** Structural mirror of `@lunora/server`'s `TableDefinition`. */
-/** What `explain` returns: the SQL a read compiles to and the database's plan for it. */
-export interface QueryPlan {
-    /** The bound parameters, in order. */
-    params: unknown[];
-    /** One line per plan step, as the database reports it (`SEARCH messages USING INDEX by_room (room=?)`). */
-    plan: string[];
-    /** The statement the read compiles to. */
-    sql: string;
-}
-
 export interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly commitOrderedMode?: boolean;
@@ -303,7 +293,7 @@ export type NullPlacement = "first" | "last";
 /**
  * A single `{ field: "asc" | "desc" }` entry; `orderBy` is an ordered list of these. The object form
  * `{ field: { sort: "desc", nulls: "last" } }` also says where NULLs go. Without it NULLs sort
- * first ascending and last descending, which is what an index walk gives.
+ * first ascending and last descending, as SQLite orders them.
  */
 export type OrderByInput = Record<string, SortDirection | { nulls: NullPlacement; sort: SortDirection }>;
 
@@ -382,6 +372,16 @@ export interface CrossShardReadArgs {
  * `toCrossShardArgs` in `@lunora/sql-store`.
  */
 export type RelationMask = (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+
+/** What `explain` returns: the SQL a read compiles to and the database's plan for it. */
+export interface QueryPlan {
+    /** The bound parameters, in order. */
+    params: unknown[];
+    /** One line per plan step, as the database reports it (`SEARCH messages USING INDEX by_room (room=?)`). */
+    plan: string[];
+    /** The statement the read compiles to. */
+    sql: string;
+}
 
 export interface QueryPage {
     continueCursor: null | string;

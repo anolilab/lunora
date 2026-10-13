@@ -6581,11 +6581,11 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `ToManyRelationWrite` (interface)
+### `ToManyRelationWrite` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `ToOneRelationWrite` (interface)
+### `ToOneRelationWrite` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
