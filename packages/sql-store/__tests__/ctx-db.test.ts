@@ -3114,12 +3114,33 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
         expect(page.page.map((row) => row["_id"])).toStrictEqual(["b", "a", "c"]);
     });
 
-    it.each(["postgres", "mysql"] as const)("refuses a path on %s rather than guessing its JSON operators", async (name) => {
-        expect.assertions(1);
+    // The dialect is named Postgres/MySQL but the exec is a stub: this checks the rendered SQL shape only. The
+    // statements run for real in `@lunora/hyperdrive`'s global-json-paths suite, against PGlite and MySQL.
+    it.each([
+        ["postgres", "pg_input_is_valid"],
+        ["mysql", "JSON_VALID"],
+    ] as const)("renders a path on %s as the guarded JSON read, not a refusal", async (name, guard) => {
+        expect.assertions(2);
 
-        const writer = createSqlCtxDb({ clock: () => 1, dialect: { ...makeSqliteDialect(), name }, exec: harness.exec, schema: pathSchema });
+        const statements: string[] = [];
+        const stub: SqlCtxExec = {
+            all: (query) => {
+                statements.push(query);
 
-        await expect(writer.findMany("users", { where: { "profile.plan": "pro" } })).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+                return Promise.resolve([]);
+            },
+            run: (query) => {
+                statements.push(query);
+
+                return Promise.resolve({ rowsAffected: 0 });
+            },
+        };
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: { ...makeSqliteDialect(), name }, exec: stub, schema: pathSchema });
+
+        await writer.findMany("users", { where: { "profile.plan": "pro" } });
+
+        expect(statements.some((query) => query.includes(guard) && query.includes("profile"))).toBe(true);
+        expect(statements.some((query) => query.includes("json_extract"))).toBe(false);
     });
 
     it("rejects a path that is too deep before building any SQL", async () => {

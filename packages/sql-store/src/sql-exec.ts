@@ -15,11 +15,11 @@
 import { LunoraError } from "@lunora/errors";
 import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { renderSql } from "@lunora/shard-engine";
-import type { SQL } from "drizzle-orm";
-import { sql } from "drizzle-orm";
+import { SQL, sql } from "drizzle-orm";
 
 import { FieldPathError, isFieldPath, splitFieldPath } from "../../../shared/json-field-path";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
+import { needsWireEncoding } from "../../../shared/wire-codec";
 import type { SqlDialect, SqlRunResult } from "./dialect";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 
@@ -43,20 +43,78 @@ const pathSegments = (field: string): string[] => {
 };
 
 /**
+ * The text form of each path reference {@link fieldRefSql} builds on Postgres or MySQL, keyed by the reference. The
+ * WHERE compiler hands the reference back to `containsExpr`, which reads its text form from here; a plain column has
+ * no entry and is searched as it always was.
+ */
+const pathTextReferences = new WeakMap<SQL, SQL>();
+
+/** The text form of a path reference, or `undefined` for a plain column. */
+const pathTextReference = (reference: SQL): SQL | undefined => pathTextReferences.get(reference);
+
+/**
+ * Postgres: the object's member at `segments`, as `jsonb`, with a JSON `null` as SQL NULL. The keys are bound
+ * parameters, and each step is `->` with a text key, which reads an object member only: `#>` would index into an
+ * array, so `list.0` would return the first element where the SQLite and DO stores read NULL. A JSON `null` leaf is
+ * returned as SQL NULL, as `json_extract` does.
+ */
+const postgresMember = (column: SQL, segments: ReadonlyArray<string>): SQL => {
+    let member = sql`${column}::jsonb`;
+
+    for (const segment of segments) {
+        member = sql`${member} -> ${segment}::text`;
+    }
+
+    return sql`NULLIF(${member}, 'null'::jsonb)`;
+};
+
+/**
+ * Postgres: the member as a `jsonb` reference, guarded by `pg_input_is_valid` (Postgres 16+), the non-raising check
+ * for text that is not JSON. A cast would raise on it.
+ */
+const postgresPathSql = (column: SQL, segments: ReadonlyArray<string>): SQL =>
+    sql`CASE WHEN pg_input_is_valid(${column}, 'jsonb') THEN ${postgresMember(column, segments)} END`;
+
+/** Postgres: the member's text, unquoted, as `contains` searches it. A string leaf is its own text; a number is its digits. */
+const postgresPathTextSql = (column: SQL, segments: ReadonlyArray<string>): SQL =>
+    sql`CASE WHEN pg_input_is_valid(${column}, 'jsonb') THEN ${postgresMember(column, segments)} #>> '{}' END`;
+
+/**
+ * MySQL: the member through `JSON_EXTRACT`, as a JSON reference guarded by `JSON_VALID`. The path is one bound
+ * parameter built with the SQLite quoting rule, so a key containing `.`, `"` or `\` addresses the real key. MySQL's
+ * `$.key` reads object members only, so an array step is NULL. A JSON `null` leaf is returned as SQL NULL.
+ */
+const mysqlMember = (column: SQL, segments: ReadonlyArray<string>): SQL => {
+    const path = `$${segments.map((segment) => `.${jsonPathSegment(segment)}`).join("")}`;
+
+    return sql`NULLIF(JSON_EXTRACT(${column}, ${path}), CAST('null' AS JSON))`;
+};
+
+const mysqlPathSql = (column: SQL, segments: ReadonlyArray<string>): SQL => sql`CASE WHEN JSON_VALID(${column}) THEN ${mysqlMember(column, segments)} END`;
+
+/** MySQL: the member's text, unquoted, as `contains` searches it. */
+const mysqlPathTextSql = (column: SQL, segments: ReadonlyArray<string>): SQL =>
+    sql`CASE WHEN JSON_VALID(${column}) THEN JSON_UNQUOTE(${mysqlMember(column, segments)}) END`;
+
+/**
+ * The needle of a `contains` over a path: the term's own text, unquoted, so `"ada"` searches for `ada`. `term` is the
+ * bound value fragment; a NULL term stays NULL and matches nothing, as it does on SQLite.
+ */
+const pathContainsNeedle = (engine: "mysql" | "postgres", term: SQL): SQL =>
+    engine === "postgres" ? sql`(${term})::jsonb #>> '{}'` : sql`JSON_UNQUOTE(${term})`;
+
+/**
  * A `where`/`orderBy` field as SQL: a column, or a dotted path into an object column
  * (`profile.plan` → `json_extract("profile", '$.plan')`).
  *
- * Object columns are stored as JSON text, which SQLite and D1 can read into with `json_extract`. Postgres
- * and MySQL would need their own operators and casts, so a path there is refused rather than guessed at.
- * @throws LunoraError `NOT_IMPLEMENTED` for a path on a dialect other than SQLite; `VALIDATION_ERROR` for a malformed or too-deep one.
+ * Object columns are stored as JSON text. SQLite reads them with `json_extract`; Postgres and MySQL read them
+ * with `->` and `JSON_EXTRACT` (see {@link postgresPathSql}, {@link mysqlPathSql}). Every dialect returns NULL for a
+ * missing key, a step through a non-object, a JSON `null` and text that is not JSON.
+ * @throws LunoraError `VALIDATION_ERROR` for a malformed or too-deep path.
  */
 const fieldRefSql = (dialect: SqlDialect, field: string): SQL => {
     if (!isFieldPath(field)) {
         return columnRefSql(field);
-    }
-
-    if (dialect.name !== "sqlite") {
-        throw new LunoraError("NOT_IMPLEMENTED", `filtering or ordering by a path into an object column ("${field}") is not supported on ${dialect.name}`);
     }
 
     const [root = "", ...rest] = pathSegments(field);
@@ -66,7 +124,106 @@ const fieldRefSql = (dialect: SqlDialect, field: string): SQL => {
     // Durable Object store always keeps valid JSON and reads NULL there, so guard the read to agree with it.
     const column = columnRefSql(root);
 
-    return sql`CASE WHEN json_valid(${column}) THEN json_extract(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END`;
+    if (dialect.name === "sqlite") {
+        return sql`CASE WHEN json_valid(${column}) THEN json_extract(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END`;
+    }
+
+    const postgres = dialect.name === "postgres";
+    const reference = postgres ? postgresPathSql(column, rest) : mysqlPathSql(column, rest);
+
+    pathTextReferences.set(reference, postgres ? postgresPathTextSql(column, rest) : mysqlPathTextSql(column, rest));
+
+    return reference;
+};
+
+/** The JSON text behind each bound path value, so a list of them can be sent as one array parameter ({@link pathInList}). */
+const pathJsonText = new WeakMap<SQL, string>();
+
+/**
+ * A JSON text parameter as `jsonb`. The explicit text cast is load-bearing: a parameter cast straight to `jsonb`
+ * takes its type from that cast, and a driver that sends strings as `text` (postgres.js with `fetch_types: false`)
+ * then yields the JSON string `"30"` where `30` was meant, so a number path matched the text row. The same
+ * double cast is what shard-engine's Postgres `in` uses (`postgresElements`).
+ */
+const pgJsonParam = (json: string): SQL => sql`CAST(CAST(${json} AS text) AS jsonb)`;
+
+/**
+ * The bound form of one value compared against a path on Postgres or MySQL.
+ *
+ * It is bound as JSON, not as the SQLite storage form: `sqliteEncode` turns `true` into `1`, and JSON `true`
+ * does not equal `1` on either engine, while `30` must not equal `"30"`. A value that cannot be JSON (a bigint,
+ * bytes, a Date) is stored wire-encoded, which the path reads as NULL, so it is bound as NULL and matches
+ * nothing. `undefined` goes through unchanged so the driver rejects it, as it does everywhere else.
+ */
+const pathValueSql = (engine: "mysql" | "postgres", value: unknown): unknown => {
+    if (value === undefined) {
+        return value;
+    }
+
+    if (typeof value === "bigint" || needsWireEncoding(value)) {
+        return engine === "postgres" ? sql`CAST(NULL AS jsonb)` : sql`CAST(NULL AS JSON)`;
+    }
+
+    const json = JSON.stringify(value);
+    const bound = engine === "postgres" ? sql`${pgJsonParam(json)}` : sql`CAST(${json} AS JSON)`;
+
+    pathJsonText.set(bound, json);
+
+    return bound;
+};
+
+/**
+ * `IN` / `NOT IN` over path values, sent as ONE JSON array parameter that the engine unpacks into a set, as the
+ * column form does past its literal bound.
+ *
+ * Bound item by item, a long list overruns the parameter count the wire protocol carries, and the statement
+ * then matches nothing without raising. A NULL item, or a value that cannot be JSON (a bigint), can never equal a
+ * stored path, so it is dropped from an `IN`; in a `NOT IN` it makes the whole predicate NULL, which matches no row.
+ * @throws LunoraError `BAD_REQUEST` for an `undefined` item, which the driver would otherwise have rejected.
+ */
+const pathInList = (engine: "mysql" | "postgres", reference: SQL, items: ReadonlyArray<unknown>, negated: boolean): SQL => {
+    const texts: string[] = [];
+    let nonMatching = false;
+
+    for (const item of items) {
+        if (item === undefined) {
+            throw new LunoraError("BAD_REQUEST", "an `in` list holds an undefined value");
+        }
+
+        const text = item instanceof SQL ? pathJsonText.get(item) : undefined;
+
+        if (text === undefined) {
+            nonMatching = true;
+        } else {
+            texts.push(text);
+        }
+    }
+
+    if (texts.length === 0 || (negated && nonMatching)) {
+        return sql`1 = 0`;
+    }
+
+    const array = `[${texts.join(",")}]`;
+    const elements =
+        engine === "postgres"
+            ? sql`SELECT e.v FROM jsonb_array_elements(${pgJsonParam(array)}) AS e(v)`
+            : sql`SELECT jt.v FROM JSON_TABLE(${array}, '$[*]' COLUMNS (v JSON PATH '$')) AS jt`;
+
+    return negated ? sql`${reference} NOT IN (${elements})` : sql`${reference} IN (${elements})`;
+};
+
+/**
+ * The value a where/index/aggregate site binds for `field`. `encodeColumn` is the column-aware SQLite
+ * encode the site already used; it is what every dialect keeps for a plain column, and for a path on SQLite.
+ * A path on Postgres or MySQL is bound as JSON instead (see {@link pathValueSql}). `null` is left as `null`
+ * on every path so the caller's NULL handling still applies.
+ */
+const serializeFieldValue = (dialect: SqlDialect, field: string, value: unknown, encodeColumn: (value: unknown) => unknown): unknown => {
+    if (dialect.name === "sqlite" || !isFieldPath(field) || value === null) {
+        return encodeColumn(value);
+    }
+
+    return pathValueSql(dialect.name, value);
 };
 
 /**
@@ -615,6 +772,9 @@ export {
     indexState,
     nextRowVersion,
     nullSafeEqualsSql,
+    pathContainsNeedle,
+    pathInList,
+    pathTextReference,
     qualifiedColumnRefSql,
     queryAll,
     queryBatch,
@@ -623,6 +783,7 @@ export {
     runInOrder,
     serializeColumnValue,
     serializeDocumentColumn,
+    serializeFieldValue,
     tableColumns,
 };
 

@@ -33,7 +33,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         objectColumnPaths: {
             level: "native",
-            note: "json_extract over the Durable Object's document, and over the JSON-text column of a .global() table on D1; both run against the real engines (workerd and a D1 binding) in the test suite. A Hyperdrive Postgres or MySQL .global() backend refuses a path filter with NOT_IMPLEMENTED",
+            note: "json_extract over the Durable Object's document, and over the JSON-text column of a .global() table on D1; both run against the real engines (workerd and a D1 binding) in the test suite. A Hyperdrive Postgres or MySQL .global() backend reads paths with its own JSON operators, checked against PGlite (Postgres 18, so 16+ is required) and MySQL 8.0 in the hyperdrive suite, `contains` included",
         },
         queryExplain: {
             level: "native",

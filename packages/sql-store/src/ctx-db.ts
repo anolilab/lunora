@@ -118,8 +118,7 @@ import {
     whereOfFilter,
     WORKERD_SQLITE_LIMITS,
 } from "@lunora/shard-engine";
-import type { SQL } from "drizzle-orm";
-import { sql } from "drizzle-orm";
+import { SQL, sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { readFieldPath } from "../../../shared/json-field-path";
@@ -142,11 +141,15 @@ import {
     nextRowVersion,
     nullSafeEqualsSql,
     OCC_VERSION_COLUMN,
+    pathContainsNeedle,
+    pathInList,
+    pathTextReference,
     queryAll,
     queryBatch,
     queryRun,
     serializeColumnValue,
     serializeDocumentColumn,
+    serializeFieldValue,
     tableColumns,
 } from "./sql-exec";
 import { effectiveColumnKind, sqliteDecode } from "./value-codec";
@@ -199,7 +202,7 @@ const orderTermsFor = (dialect: SqlDialect, key: OrderTermKey): SQL[] => {
                 return [column];
             }
 
-            return [sql`(${columnRefSql(key.field)} IS NULL) ${sql.raw(key.nulls === "first" ? "DESC" : "ASC")}`, column];
+            return [sql`(${fieldRefSql(dialect, key.field)} IS NULL) ${sql.raw(key.nulls === "first" ? "DESC" : "ASC")}`, column];
         }
         case "postgres": {
             return [term(nullable ? nullsOrderSuffix(nullsFirstOf(key)) : "")];
@@ -1578,6 +1581,23 @@ const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): neve
  */
 const provisioningByScope = new WeakMap<object, Promise<void>>();
 
+/**
+ * The server `in` renderer, with one change for path values. Their items are SQL fragments (see
+ * `serializeFieldValue`), which the column form's wide branch cannot unpack, so a list holding one goes to
+ * {@link pathInList} whatever its length.
+ */
+const pathAwareInList = (engine: "mysql" | "postgres") => {
+    const serverIn = serverInList(engine);
+
+    return (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number): SQL => {
+        if (items.some((item) => item instanceof SQL)) {
+            return pathInList(engine, reference, items, negated);
+        }
+
+        return serverIn(reference, items, negated, budget);
+    };
+};
+
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
 
@@ -1604,14 +1624,32 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // is case-SENSITIVE there, not case-insensitive as this comment used to say.
         // Left as-is deliberately: there is no majority to fold toward, and making
         // MySQL insensitive would silently widen every shipped `contains` filter.
-        ...(dialect.name === "mysql" ? { containsExpr: (reference, term) => sql`LOCATE(${term}, ${reference}) > 0` } : {}),
-        ...(dialect.name === "postgres" ? { containsExpr: (reference, term) => sql`strpos(${reference}, ${term}) > 0` } : {}),
+        ...(dialect.name === "mysql"
+            ? {
+                  containsExpr: (reference, term) => {
+                      const text = pathTextReference(reference);
+
+                      // A path searches its leaf's text for the term's text, the same substring test a column gets.
+                      return text === undefined ? sql`LOCATE(${term}, ${reference}) > 0` : sql`LOCATE(${pathContainsNeedle("mysql", term)}, ${text}) > 0`;
+                  },
+              }
+            : {}),
+        ...(dialect.name === "postgres"
+            ? {
+                  containsExpr: (reference, term) => {
+                      const text = pathTextReference(reference);
+
+                      // A path searches its leaf's text for the term's text, the same substring test a column gets.
+                      return text === undefined ? sql`strpos(${reference}, ${term}) > 0` : sql`strpos(${text}, ${pathContainsNeedle("postgres", term)}) > 0`;
+                  },
+              }
+            : {}),
         // The compiler defaults `inList` to SQLite's bounded `json_each` form,
         // because D1 is the same Workerd build as a Durable Object and caps a
         // statement at 100 bound parameters. The other two engines bind
         // thousands and have no `json_each`, so they take a literal list up to
         // a bound and one array/JSON parameter past it.
-        ...(dialect.name === "sqlite" ? {} : { inList: serverInList(dialect.name) }),
+        ...(dialect.name === "sqlite" ? {} : { inList: pathAwareInList(dialect.name) }),
     };
 
     /** One `WhereSqlStrategy` per table definition — see {@link whereSqlStrategyFor}. Definitions come from `defineSchema` and never mutate, so the entry is valid for the ctx-db's life. */
@@ -1650,7 +1688,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         const strategy: WhereSqlStrategy = {
             ...whereSqlStrategyBase,
-            serialize: (value, field) => serializeDocumentColumn(definition, field, value),
+            serialize: (value, field) => serializeFieldValue(dialect, field, value, (bound) => serializeDocumentColumn(definition, field, bound)),
         };
 
         whereStrategyByDefinition.set(definition, strategy);
@@ -2002,7 +2040,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // number in a marked form only the column's kind can reproduce, and a
         // kind-blind binding here scoped the recompute to no rows at all.
         const serialize = (key: string, value: unknown): unknown =>
-            definition ? serializeDocumentColumn(definition, key, value) : serializeColumnValue(value);
+            serializeFieldValue(dialect, key, value, (bound) => (definition ? serializeDocumentColumn(definition, key, bound) : serializeColumnValue(bound)));
 
         for (const key of index.by ?? []) {
             // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill

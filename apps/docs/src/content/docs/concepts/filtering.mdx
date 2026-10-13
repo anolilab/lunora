@@ -122,8 +122,16 @@ comparison. A path has at most four segments, the column included.
 - `orderBy` takes a path too (`orderBy: [{ "profile.plan": "asc" }]`), and paging with a cursor works across it.
 - It is not indexed. A declared index covers top-level columns, so a path filter reads the rows the rest of
   the `where` selects; pair it with an indexed column.
-- On a `.global()` table the path is read with SQLite's `json_extract`, which D1 and the Node host provide.
-  A Postgres or MySQL backend refuses a path with `NOT_IMPLEMENTED` rather than guessing its JSON operators.
+- On a `.global()` table the path works on every backend. SQLite, D1 and the Node host read it with
+  `json_extract`. Postgres reads it with `->` steps and a `jsonb` `null` check, and MySQL with `JSON_EXTRACT`. Both
+  use a guard so text that is not JSON reads as `null` instead of raising. The Postgres path needs Postgres 16 or
+  later, for `pg_input_is_valid`. These were run against PGlite (Postgres 18) and MySQL 8.0, including the null, array,
+  wire-encoded and non-JSON cases, in the test suite. `contains` works on a path too: it searches the leaf's own text,
+  with the same case rule as a column on that engine (SQLite ignores ASCII case; Postgres and MySQL do not). A number
+  leaf is searched by its digits. A boolean leaf is `1` or `0` on SQLite and `true` or `false` on Postgres and MySQL,
+  and an object or array leaf by its JSON text, which is spaced differently on SQLite and Postgres. A range (`gt`, `lt`) over a path whose values mix types
+  (a number in some rows, a string or boolean in others) is not the same on every backend, so keep a ranged path to one
+  type.
 - A path into a [masked](/docs/concepts/masking) column is refused like the column itself, whichever path.
 
 To change one nested key without rewriting the object, patch the path:

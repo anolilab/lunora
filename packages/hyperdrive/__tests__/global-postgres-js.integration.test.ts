@@ -24,7 +24,13 @@ const schema = {
     tables: {
         wide: {
             indexes: [],
-            shape: { big: v.bigint(), blob: v.bytes(), label: v.string(), n: v.number() },
+            shape: {
+                big: v.bigint(),
+                blob: v.bytes(),
+                label: v.string(),
+                n: v.number(),
+                profile: { _meta: { column: { notNull: false }, shape: {} }, kind: "object" },
+            },
             shardMode: { kind: "global" },
         },
     },
@@ -53,8 +59,8 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
         await runSqlGlobalTableMigrations(exec, schema, postgresDialect);
         writer = createPostgresGlobalCtxDb(fromPostgresJs(sql as never), { clock: () => 1_700_000_000_000, schema });
 
-        await writer.insert("wide", { big: 7n, blob: new Uint8Array([1, 2]).buffer, label: "hit", n: 7 });
-        await writer.insert("wide", { big: 8n, blob: new Uint8Array([3]).buffer, label: "miss", n: 8 });
+        await writer.insert("wide", { big: 7n, blob: new Uint8Array([1, 2]).buffer, label: "hit", n: 7, profile: { age: 30 } });
+        await writer.insert("wide", { big: 8n, blob: new Uint8Array([3]).buffer, label: "miss", n: 8, profile: { age: "30" } });
     }, 60_000);
 
     afterAll(async () => {
@@ -79,4 +85,16 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
         },
         60_000,
     );
+
+    it("matches a dotted path through postgres.js by number and by text, and over a long list", async () => {
+        expect.assertions(3);
+
+        // `profile.age` is 30 on one row and "30" on the other: the JSON-bound value keeps the number and the text apart.
+        await expect(labelsWhere({ "profile.age": 30 })).resolves.toStrictEqual(["hit"]);
+        await expect(labelsWhere({ "profile.age": "30" })).resolves.toStrictEqual(["miss"]);
+
+        const list = [...Array.from({ length: 40_000 }, (_, index) => index + 100), 30];
+
+        await expect(labelsWhere({ "profile.age": { in: list } })).resolves.toStrictEqual(["hit"]);
+    }, 60_000);
 });

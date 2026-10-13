@@ -446,10 +446,11 @@ export interface PlatformCapabilities {
          *
          * Carried by no host contract: a shard-local table reads into its JSON document with SQLite's
          * `json_extract`, and a `.global()` table does the same over its JSON-text column through
-         * `@lunora/sql-store`, so it follows the `globalTables` backend. A backend whose SQL is not
-         * SQLite's (Postgres or MySQL behind Hyperdrive) refuses a path filter with `NOT_IMPLEMENTED`
-         * rather than guessing its JSON operators; the partial update is made in the engine and works
-         * everywhere. Advisory by nature (see the module header).
+         * `@lunora/sql-store`, so it follows the `globalTables` backend. Postgres and MySQL behind
+         * Hyperdrive read the same paths with their own JSON operators (`->` and `JSON_EXTRACT`), verified
+         * against PGlite (Postgres 18) and MySQL 8.0; Postgres needs 16 or later for `pg_input_is_valid`. Every
+         * path form works on all three, `contains` included, with no refusal. The partial update is made in the
+         * engine and works everywhere. Advisory by nature (see the module header).
          */
         objectColumnPaths?: Capability;
 
