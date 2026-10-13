@@ -8,13 +8,9 @@ import type { OrderByInput } from "../src/schema-types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * `orderBy: [{ score: { sort, nulls } }]` against a real SQLite engine, paged through the keyset
- * cursor.
- *
- * The property that matters is the one a keyset seek can break silently: concatenating the pages must
- * give exactly the unpaged order, with no row skipped and none repeated, when a page boundary falls
- * INSIDE the run of NULLs. The unpaged order is itself checked against an independent reference sort,
- * so a seek and an ORDER BY that were wrong in the same way would not pass.
+ * `orderBy: [{ score: { sort, nulls } }]` against a real SQLite engine: the EXPLAIN plan, the
+ * validation of a placement, and the default placement. Paging across a NULL run is the conformance
+ * suite's case, not this file's.
  */
 const col = (kind: string, column: Record<string, unknown> = {}): ValidatorLike => {
     return { _meta: { column: { notNull: true, ...column } }, kind };
@@ -42,37 +38,6 @@ const ROWS: [string, null | number][] = [
     ["h", null],
 ];
 
-type Combo = { nulls: "first" | "last"; sort: "asc" | "desc" };
-
-const COMBOS: Combo[] = [
-    { nulls: "first", sort: "asc" },
-    { nulls: "last", sort: "asc" },
-    { nulls: "first", sort: "desc" },
-    { nulls: "last", sort: "desc" },
-];
-
-/** The order a correct engine must return: by score with NULLs where asked, ties by creation order in the sort's direction. */
-const expected = ({ nulls, sort }: Combo): string[] => {
-    const created = new Map(ROWS.map(([label], index) => [label, index]));
-    const sign = sort === "asc" ? 1 : -1;
-
-    return ROWS.toSorted(([leftLabel, left], [rightLabel, right]) => {
-        if (left !== right) {
-            if (left === null) {
-                return nulls === "first" ? -1 : 1;
-            }
-
-            if (right === null) {
-                return nulls === "first" ? 1 : -1;
-            }
-
-            return (left - right) * sign;
-        }
-
-        return ((created.get(leftLabel) ?? 0) - (created.get(rightLabel) ?? 0)) * sign;
-    }).map(([label]) => label);
-};
-
 let harness: ReturnType<typeof createSqliteExec>;
 
 const seed = async (): Promise<ReturnType<typeof createShardContextDatabase>> => {
@@ -99,26 +64,9 @@ const seed = async (): Promise<ReturnType<typeof createShardContextDatabase>> =>
 
 const labelsOf = (page: Record<string, unknown>[]): string[] => page.map((row) => String(row["label"]));
 
-const pagedLabels = async (writer: Awaited<ReturnType<typeof seed>>, combo: Combo, size: number): Promise<string[]> => {
-    const labels: string[] = [];
-    let cursor: null | string | undefined;
-
-    for (let guard = 0; guard < ROWS.length + 2; guard += 1) {
-        // eslint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
-        const page = await writer.findMany("items", { cursor, limit: size, orderBy: [{ score: combo }] });
-
-        labels.push(...labelsOf(page.page));
-
-        if (page.isDone) {
-            return labels;
-        }
-
-        cursor = page.continueCursor;
-    }
-
-    throw new Error("pagination did not terminate");
-};
-
+// Paging and the unpaged order across all four placements are pinned by the shard-engine conformance suite
+// (`orderBy null placement`), which runs on node and on workerd. What stays here is the SQLite-specific plan
+// and the validation and default-placement behaviour the suite does not cover.
 describe("orderBy null placement", () => {
     beforeEach(() => {
         harness = createSqliteExec();
@@ -126,29 +74,6 @@ describe("orderBy null placement", () => {
 
     afterEach(() => {
         harness.close();
-    });
-
-    it.each(COMBOS)("orders $sort with nulls $nulls like the reference, unpaged", async (combo) => {
-        expect.assertions(1);
-
-        const writer = await seed();
-        const all = await writer.findMany("items", { orderBy: [{ score: combo }] });
-
-        expect(labelsOf(all.page)).toStrictEqual(expected(combo));
-    });
-
-    it.each(
-        COMBOS.flatMap((combo) =>
-            [2, 3].map((size) => {
-                return { ...combo, size };
-            }),
-        ),
-    )("pages $sort with nulls $nulls in pages of $size with no gap and no repeat", async ({ size, ...combo }) => {
-        expect.assertions(1);
-
-        const writer = await seed();
-
-        await expect(pagedLabels(writer, combo, size)).resolves.toStrictEqual(expected(combo));
     });
 
     it("leaves the default placement alone: a string direction and the explicit default agree", async () => {

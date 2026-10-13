@@ -533,6 +533,117 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
          * multicasts one tenant's rows onto another tenant's socket, with no
          * error anywhere.
          */
+        describe("orderBy null placement", () => {
+            /**
+             * Four NULLs and a tie on 3, so a page boundary falls inside the NULL run and inside a tie. The expected
+             * order is computed here, not read back from the engine: a seek and an ORDER BY that were wrong in the
+             * same way would agree with each other and pass a check against the engine alone.
+             */
+            // `undefined` is the absent field: a column the row never set reads back as NULL.
+            const ROWS: [string, number | undefined][] = [
+                ["a", undefined],
+                ["b", 3],
+                ["c", undefined],
+                ["d", 1],
+                ["e", undefined],
+                ["f", 3],
+                ["g", 2],
+                ["h", undefined],
+            ];
+
+            const COMBOS: { nulls: "first" | "last"; sort: "asc" | "desc" }[] = [
+                { nulls: "first", sort: "asc" },
+                { nulls: "last", sort: "asc" },
+                { nulls: "first", sort: "desc" },
+                { nulls: "last", sort: "desc" },
+            ];
+
+            const reference = ({ nulls, sort }: (typeof COMBOS)[number]): string[] => {
+                const created = new Map(ROWS.map(([label], index) => [label, index]));
+                const sign = sort === "asc" ? 1 : -1;
+
+                return ROWS.toSorted(([leftLabel, left], [rightLabel, right]) => {
+                    if (left !== right) {
+                        if (left === undefined) {
+                            return nulls === "first" ? -1 : 1;
+                        }
+
+                        if (right === undefined) {
+                            return nulls === "first" ? 1 : -1;
+                        }
+
+                        return (left - right) * sign;
+                    }
+
+                    return ((created.get(leftLabel) ?? 0) - (created.get(rightLabel) ?? 0)) * sign;
+                }).map(([label]) => label);
+            };
+
+            const labelsOf = (page: Record<string, unknown>[]): string[] => page.map((row) => String(row["label"]));
+
+            it("pages every placement in threes with no row skipped or repeated", async () => {
+                const { close, host } = factory();
+
+                try {
+                    const sql = host.sql as unknown as SqlExec;
+                    // One table per placement: the host is isolated per test, not per combination.
+                    const tableNames = COMBOS.map((_, index) => `items_${String(index)}`);
+                    const shape = { label: column("string"), score: column("number", { notNull: false }) };
+                    const schema = {
+                        tables: Object.fromEntries(tableNames.map((table) => [table, { indexes: [{ fields: ["score"], name: "by_score" }], shape }])),
+                    } as unknown as SchemaLike;
+
+                    runShardMigrations(sql, schema);
+
+                    let now = 1_700_000_000_000;
+                    const database = createShardContextDatabase({
+                        clock: () => {
+                            now += 1000;
+
+                            return now;
+                        },
+                        schema,
+                        sql,
+                    });
+
+                    for (const table of tableNames) {
+                        for (const [label, score] of ROWS) {
+                            // eslint-disable-next-line no-await-in-loop -- sequential inserts keep `_creationTime` in input order
+                            await database.insert(table, score === undefined ? { label } : { label, score });
+                        }
+                    }
+
+                    for (const [index, combo] of COMBOS.entries()) {
+                        const table = tableNames[index] ?? "";
+                        // eslint-disable-next-line no-await-in-loop -- the unpaged read is one statement in a sequence of reads
+                        const unpaged = await database.findMany(table, { orderBy: [{ score: combo }] });
+
+                        expect(labelsOf(unpaged.page)).toStrictEqual(reference(combo));
+
+                        const paged: string[] = [];
+                        let cursor: null | string | undefined;
+
+                        for (let guard = 0; guard < ROWS.length + 2; guard += 1) {
+                            // eslint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
+                            const page = await database.findMany(table, { cursor, limit: 3, orderBy: [{ score: combo }] });
+
+                            paged.push(...labelsOf(page.page));
+
+                            if (page.isDone) {
+                                break;
+                            }
+
+                            cursor = page.continueCursor;
+                        }
+
+                        expect(paged).toStrictEqual(reference(combo));
+                    }
+                } finally {
+                    close?.();
+                }
+            });
+        });
+
         describe("RLS identity under live subscription", () => {
             const OWNER_KEY = "shard-a";
             /** Identity-blind: every subscriber is owed the same rows. */
