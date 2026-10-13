@@ -3851,6 +3851,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const mainTableStrategy: WhereSqlStrategy = {
                 ...whereSqlStrategyFor(definition),
                 fieldRef: (field) => sql`m.${columnRefSql(field)}`,
+                // `isPushableWhere` keeps every path out of this `where`, and the inherited guard would not carry the `m.` qualifier.
+                rangeTypeGuard: () => {
+                    throw new LunoraError("INTERNAL", "a path range is never pushed into a search");
+                },
             };
 
             const passesSearchFilters = (document: Record<string, unknown>): boolean => searchFilters.every((predicate) => predicate(document));

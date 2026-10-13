@@ -15,9 +15,9 @@ const col = (kind: string, column: Record<string, unknown> = {}): ValidatorLike 
 
 const OLD: SchemaLike = { tables: { notes: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } } } };
 
-const withFields = (fields: Record<string, ValidatorLike>): SchemaLike => {
+const withFields = (fields: Record<string, ValidatorLike>, indexes: { fields: string[]; name: string; unique: boolean }[] = []): SchemaLike => {
     return {
-        tables: { notes: { indexes: [], shape: { body: col("string"), ...fields }, shardMode: { kind: "global" } } },
+        tables: { notes: { indexes, shape: { body: col("string"), ...fields }, shardMode: { kind: "global" } } },
     };
 };
 
@@ -96,22 +96,28 @@ describe("adding a required field to a populated .global() table", () => {
         await expect(pick("priority")).resolves.toStrictEqual([[9], [3]]);
     });
 
-    it("does not write one shared value into a unique column with a per-row default", async () => {
+    it.each([
+        ["a per-row default on a .unique() column", { token: col("string", { defaultFn: () => "t", unique: true }) }, []],
+        ["a constant default on a .unique() column", { slug: col("string", { defaultValue: "t", unique: true }) }, []],
+        [
+            "a default on a column of a composite unique index",
+            { kind: col("string", { defaultValue: "personal" }), owner: col("string", { defaultValue: "o" }) },
+            [{ fields: ["owner", "kind"], name: "by_owner_kind", unique: true }],
+        ],
+    ])("does not write one shared value into %s, which would fail the index build", async (_label, fields, indexes) => {
         expect.assertions(3);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        await runSqlGlobalTableMigrations(harness.exec, withFields({ token: col("string", { defaultFn: () => "t", unique: true }) }), dialect);
-
-        await expect(pick("token")).resolves.toStrictEqual([[null], [null]]);
-        expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0])).toContain("notes.token");
+        await expect(runSqlGlobalTableMigrations(harness.exec, withFields(fields, indexes), dialect)).resolves.toBeUndefined();
+        await expect(pick(Object.keys(fields)[0] as string)).resolves.toStrictEqual([[null], [null]]);
+        expect(warn.mock.calls.length).toBeGreaterThan(0);
     });
 
-    it("retries the whole add when the backfill fails, instead of leaving the rows NULL", async () => {
-        expect.assertions(2);
+    it("reports the statement and keeps the column when the backfill fails, instead of dropping it", async () => {
+        expect.assertions(3);
 
-        const schema = withFields({ priority: col("number", { defaultValue: 3 }) });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         // The ALTER passes through; only the backfill UPDATE fails.
         const failing = {
             ...harness.exec,
@@ -124,10 +130,8 @@ describe("adding a required field to a populated .global() table", () => {
             },
         };
 
-        await expect(runSqlGlobalTableMigrations(failing, schema, dialect)).rejects.toThrow("connection lost");
-
-        await runSqlGlobalTableMigrations(harness.exec, schema, dialect);
-
-        await expect(pick("priority")).resolves.toStrictEqual([[3], [3]]);
+        await expect(runSqlGlobalTableMigrations(failing, withFields({ priority: col("number", { defaultValue: 3 }) }), dialect)).resolves.toBeUndefined();
+        await expect(pick("priority")).resolves.toStrictEqual([[null], [null]]);
+        expect(String(warn.mock.calls[0]?.[0])).toContain("could not backfill");
     });
 });

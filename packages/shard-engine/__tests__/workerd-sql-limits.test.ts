@@ -162,7 +162,7 @@ describe("compound SELECT term cap", () => {
 describe("bound-parameter cap", () => {
     // eslint-disable-next-line no-restricted-syntax -- a drizzle identifier chunk, not a string conversion; the rule misfires on the inner TemplateLiteral
     const fieldRef = (field: string): SQL => dsql`${dsql.identifier(field)}`;
-    const strategy = { fieldRef, inList: sqliteInList, serialize: (value: unknown) => value };
+    const strategy = { fieldRef, inList: sqliteInList, rangeTypeGuard: () => dsql`1 = 1`, serialize: (value: unknown) => value };
 
     it.each([
         ["in", false],
@@ -213,7 +213,7 @@ describe("bound-parameter cap", () => {
         const { params, sql: text } = renderSql("sqlite", compileWhereSql({ blob: { [operator]: items } }, strategy)!);
         const asText = compileWhereSql(
             { blob: { [operator]: items } },
-            { fieldRef: (field) => rawText(`"${field}"`), serialize: (value: unknown) => value },
+            { rangeTypeGuard: () => rawText("1 = 1"), fieldRef: (field) => rawText(`"${field}"`), serialize: (value: unknown) => value },
             textFragments,
         );
 
@@ -499,7 +499,15 @@ describe("expression-depth cap", () => {
     const depthFieldRef = (field: string): SQL => dsql`${dsql.identifier(field)}`;
     const wideWhere = Object.fromEntries(Array.from({ length: 200 }, (_unused, index) => [`f${String(index)}`, index]));
     const compileWide = (): { params: unknown[]; sql: string } =>
-        renderSql("sqlite", compileWhereSql(wideWhere, { fieldRef: depthFieldRef, inList: sqliteInList, serialize: (value: unknown) => value })!);
+        renderSql(
+            "sqlite",
+            compileWhereSql(wideWhere, {
+                rangeTypeGuard: () => dsql`1 = 1`,
+                fieldRef: depthFieldRef,
+                inList: sqliteInList,
+                serialize: (value: unknown) => value,
+            })!,
+        );
 
     it("measures terms per level, not total nesting", () => {
         expect.assertions(2);

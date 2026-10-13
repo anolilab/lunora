@@ -818,10 +818,21 @@ const declaredDefaultOf = (validator: ValidatorLike): unknown => {
     return meta && "defaultValue" in meta ? meta.defaultValue : undefined;
 };
 
+/** Is `column` covered by any UNIQUE index, single or composite, or declared `.unique()`? */
+const isUniqueColumn = (definition: SchemaLike["tables"][string], column: string, validator: ValidatorLike): boolean =>
+    validator._meta?.column?.unique === true || definition.indexes.some((index) => index.unique === true && index.fields.includes(column));
+
 /**
  * Give the rows that predate a newly added REQUIRED column the value its declaration says a row gets when none is
  * supplied. A column that may hold null (`v.optional`, `.nullable()`, `v.any()`, a union with `v.null()`) needs
- * nothing: NULL is a valid value there. A required column with no default is left NULL and reported once.
+ * nothing: NULL is a valid value there. A required column with no default is left NULL and reported once, and so is
+ * one under a UNIQUE constraint: one default written to every old row would collide the moment the index is built
+ * (NULLs are distinct, so leaving them builds it), and that would fail provisioning of the whole plane on every pass.
+ *
+ * Best-effort, like {@link relaxNullAcceptingColumns}: a statement that fails is reported with the `UPDATE` to run,
+ * not thrown. Throwing would leave the column in place, so the next pass would skip the backfill anyway; undoing the
+ * column instead would loop a persistent failure on every pass and could discard what a concurrent request has since
+ * written to it.
  */
 const backfillAddedColumn = async (
     exec: SqlCtxExec,
@@ -835,26 +846,33 @@ const backfillAddedColumn = async (
         return;
     }
 
-    // One generated value written to every row would collide under a UNIQUE column (a per-row id or token), so such a
-    // column is treated as having no default.
-    const perRow =
-        validator._meta?.column?.defaultFn !== undefined && (validator._meta.column.unique === true || fullValueIndexedFields(definition).has(column));
-    const value = perRow ? undefined : declaredDefaultOf(validator);
+    const unique = isUniqueColumn(definition, column, validator);
+    const value = unique ? undefined : declaredDefaultOf(validator);
+    const manual = `UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL`;
 
     if (value === undefined) {
+        const reason = unique ? "is unique, so one default cannot be written to every row" : "has no default";
+
         warnOnce(
             `backfill:${tableName}.${column}`,
-            `"${tableName}.${column}" was added as a required field with ${perRow ? "a per-row default that cannot be backfilled as one shared value" : "no default"}, so rows written before it read NULL. Backfill it with a migration (UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL).`,
+            `"${tableName}.${column}" was added as a required field that ${reason}, so rows written before it read NULL. Backfill it with a migration (${manual}).`,
         );
 
         return;
     }
 
-    await queryRun(
-        exec,
-        dialect,
-        sql`UPDATE ${sql.identifier(tableName)} SET ${sql.identifier(column)} = ${serializeDocumentColumn(definition, column, value)} WHERE ${sql.identifier(column)} IS NULL`,
-    );
+    try {
+        await queryRun(
+            exec,
+            dialect,
+            sql`UPDATE ${sql.identifier(tableName)} SET ${sql.identifier(column)} = ${serializeDocumentColumn(definition, column, value)} WHERE ${sql.identifier(column)} IS NULL`,
+        );
+    } catch (error) {
+        warnOnce(
+            `backfill:${tableName}.${column}`,
+            `could not backfill "${tableName}.${column}" from its default (${error instanceof Error ? error.message : String(error)}); rows written before it read NULL. Run ${manual}.`,
+        );
+    }
 };
 
 /**
@@ -895,7 +913,8 @@ const backfillAddedColumn = async (
  * has that default written to every row that has none, evaluated once. A
  * required field with no default has no value to invent, so its existing rows
  * keep reading NULL and a warning names the column; backfill it with an
- * explicit migration before relying on it. Additive only, like the `CREATE` it
+ * explicit migration before relying on it. The same goes for a column under a UNIQUE constraint, whatever its
+ * default, and for a backfill statement that fails (see {@link backfillAddedColumn}). Additive only, like the `CREATE` it
  * follows — a retype or a drop still needs an explicit migration.
  */
 const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
@@ -943,17 +962,8 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
         await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
 
         if (validator !== undefined) {
-            try {
-                // eslint-disable-next-line no-await-in-loop -- one UPDATE per added column, on the same connection.
-                await backfillAddedColumn(exec, tableName, definition, dialect, column, validator);
-            } catch (error) {
-                // The probe above sees a present column as done, so a failed backfill would never be retried and the
-                // rows would stay NULL silently. Take the column back out so the next pass adds and fills it again.
-                // eslint-disable-next-line no-await-in-loop -- same connection; must finish before the error surfaces.
-                await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} DROP COLUMN ${sql.identifier(column)}`).catch(() => {});
-
-                throw error;
-            }
+            // eslint-disable-next-line no-await-in-loop -- one UPDATE per added column, on the same connection.
+            await backfillAddedColumn(exec, tableName, definition, dialect, column, validator);
         }
     }
 };

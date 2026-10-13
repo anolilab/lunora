@@ -17,7 +17,8 @@ import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { renderSql } from "@lunora/shard-engine";
 import { SQL, sql } from "drizzle-orm";
 
-import { FieldPathError, isFieldPath, splitFieldPath } from "../../../shared/json-field-path";
+import type { RangeOperandType } from "../../../shared/json-field-path";
+import { FieldPathError, isFieldPath, splitFieldPath, SQLITE_JSON_TYPE_NAMES } from "../../../shared/json-field-path";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { needsWireEncoding } from "../../../shared/wire-codec";
 import type { SqlDialect, SqlRunResult } from "./dialect";
@@ -104,6 +105,19 @@ const pathContainsNeedle = (engine: "mysql" | "postgres", term: SQL): SQL =>
     engine === "postgres" ? sql`(${term})::jsonb #>> '{}'` : sql`JSON_UNQUOTE(${term})`;
 
 /**
+ * SQLite: `fn(column, '$.path')` over the object column, guarded by `json_valid`. SQLite raises on text that is not
+ * valid JSON instead of returning NULL, and a column can hold such text: a bigint, bytes or Date inside an object is
+ * stored wire-encoded, a string or id column is not JSON at all. The Durable Object store always keeps valid JSON
+ * and reads NULL there, so the read is guarded to agree with it. The path is one bound parameter.
+ */
+const sqliteJsonCall = (fn: "json_extract" | "json_type", field: string): SQL => {
+    const [root = "", ...rest] = pathSegments(field);
+    const column = columnRefSql(root);
+
+    return sql`CASE WHEN json_valid(${column}) THEN ${sql.raw(fn)}(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END`;
+};
+
+/**
  * A `where`/`orderBy` field as SQL: a column, or a dotted path into an object column
  * (`profile.plan` → `json_extract("profile", '$.plan')`).
  *
@@ -117,17 +131,12 @@ const fieldRefSql = (dialect: SqlDialect, field: string): SQL => {
         return columnRefSql(field);
     }
 
-    const [root = "", ...rest] = pathSegments(field);
-
-    // SQLite raises on text that is not valid JSON instead of returning NULL, and a column can hold such text: a
-    // bigint, bytes or Date inside an object is stored wire-encoded, a string or id column is not JSON at all. The
-    // Durable Object store always keeps valid JSON and reads NULL there, so guard the read to agree with it.
-    const column = columnRefSql(root);
-
     if (dialect.name === "sqlite") {
-        return sql`CASE WHEN json_valid(${column}) THEN json_extract(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END`;
+        return sqliteJsonCall("json_extract", field);
     }
 
+    const [root = "", ...rest] = pathSegments(field);
+    const column = columnRefSql(root);
     const postgres = dialect.name === "postgres";
     const reference = postgres ? postgresPathSql(column, rest) : mysqlPathSql(column, rest);
 
@@ -154,13 +163,9 @@ const pgJsonParam = (json: string): SQL => sql`CAST(CAST(${json} AS text) AS jso
  * SQLite reads `json_type`, because `json_extract` flattens `true` to `1`. Postgres and MySQL read the type of the
  * `jsonb`/`JSON` reference the comparison already uses, which is NULL for text that is not JSON.
  */
-const pathTypeGuardSql = (dialect: SqlDialect, field: string, type: "boolean" | "number" | "string"): SQL => {
+const pathTypeGuardSql = (dialect: SqlDialect, field: string, type: RangeOperandType): SQL => {
     if (dialect.name === "sqlite") {
-        const [root = "", ...rest] = pathSegments(field);
-        const column = columnRefSql(root);
-        const names = { boolean: "'true', 'false'", number: "'integer', 'real'", string: "'text'" }[type];
-
-        return sql`NULLIF(CASE WHEN json_valid(${column}) THEN json_type(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END, 'null') IN (${sql.raw(names)})`;
+        return sql`NULLIF(${sqliteJsonCall("json_type", field)}, 'null') IN (${sql.raw(SQLITE_JSON_TYPE_NAMES[type])})`;
     }
 
     const reference = fieldRefSql(dialect, field);

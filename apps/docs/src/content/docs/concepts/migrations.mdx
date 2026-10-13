@@ -124,10 +124,11 @@ field as required, so rows written before it need a value:
   `.$defaultFn(fn)`) is backfilled on a `.global()` table when the runtime adds
   the column: every row without a value gets the default, evaluated once. That
   includes the `updatedAt` column `.timestamps()` adds, which starts at the time
-  of the deploy. A `.$defaultFn` on a `.unique()` column is the exception: one
-  generated value cannot be shared by every row, so it is treated as having no
-  default. If the backfill statement itself fails, the added column is dropped
-  again so the next provisioning pass adds and fills it afresh.
+  of the deploy. A column under a unique constraint (`.unique()`, or part of any unique index) is the
+  exception, whatever its default: one value written to every row would collide
+  when the index is built, so it is treated as having no default. If the backfill
+  statement itself fails, the runtime logs the `UPDATE` to run and carries on with
+  the column in place.
 - **A required field with no default** has no value to invent. Its existing rows
   keep reading `NULL`, and the runtime logs one warning naming the column. Add a
   backfilling `UPDATE` (the generated migration file shows the statement) before

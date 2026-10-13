@@ -961,7 +961,6 @@ interface FanoutTopicStat {
 ```ts
 interface FieldOperators {
     contains?: string;
-    crossType?: boolean;
     eq?: unknown;
     gt?: unknown;
     gte?: unknown;
@@ -3474,7 +3473,7 @@ interface WhereSqlStrategy<T = SQL> {
     containsExpr?: (reference: T, term: T) => T;
     fieldRef: FieldRefSql<T>;
     inList?: (reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => T;
-    rangeTypeGuard?: (field: string, type: RangeOperandType) => T;
+    rangeTypeGuard: (field: string, type: RangeOperandType) => T;
     relationExists?: (request: unknown) => T;
     serialize: SerializeValue;
 }

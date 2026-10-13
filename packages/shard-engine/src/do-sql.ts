@@ -19,14 +19,16 @@ import { sql as dsql } from "drizzle-orm";
 
 import type { KindedValidator } from "../../../shared/effective-kind";
 import { effectiveKind } from "../../../shared/effective-kind";
-import { FieldPathError, isFieldPath, splitFieldPath } from "../../../shared/json-field-path";
+import type { RangeOperandType } from "../../../shared/json-field-path";
+import { FieldPathError, isFieldPath, splitFieldPath, SQLITE_JSON_TYPE_NAMES } from "../../../shared/json-field-path";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { serializeSqlValue } from "./serialize-sql";
 import { sqlComparableProjection } from "./sql-projection";
-import type { RangeOperandType } from "./where-sql";
+import type { WhereSqlStrategy } from "./where-sql";
 
 /** The stored JSON document column every DO table carries alongside `id` / `_creationTime`. */
 const DOC_COLUMN = "__doc__";
@@ -199,6 +201,24 @@ const pathSegments = (field: string): string[] => {
  * expose them via the dedicated stored column so SQLite can hit the regular
  * index lookup path instead of decoding JSON.
  */
+
+/**
+ * The SQL string literal of a document path: `'$.profile.plan'`. Two grammars, both owed, in this order:
+ * `jsonPathSegment` quotes each key for SQLite's JSON-path grammar, then `'` doubling escapes the finished path for
+ * the literal it sits in. A dotted name is a path into an object column (`profile.plan`): each segment is quoted
+ * on its own and the dots between them stay, so SQLite descends through the objects. A column name is an
+ * identifier, so a dot is never part of one.
+ */
+const jsonPathLiteral = (field: string): string => {
+    const path = isFieldPath(field)
+        ? pathSegments(field)
+              .map((segment) => jsonPathSegment(segment))
+              .join(".")
+        : jsonPathSegment(field);
+
+    return `'$.${path.replaceAll("'", "''")}'`;
+};
+
 const documentPath = (prefix: string, field: string): string => {
     if (field === "_id" || field === "id") {
         return `${prefix}id`;
@@ -208,34 +228,20 @@ const documentPath = (prefix: string, field: string): string => {
         return `${prefix}_creationTime`;
     }
 
-    // Two grammars, both owed, in this order: `jsonPathSegment` quotes each key for SQLite's
-    // JSON-path grammar, then `'` doubling escapes the finished path for the SQL string literal it
-    // sits in. A dotted name is a path into an object column (`profile.plan`): each segment is
-    // quoted on its own and the dots between them stay, so SQLite descends through the objects.
-    // A column name is an identifier, so a dot is never part of one.
-    const path = isFieldPath(field)
-        ? pathSegments(field)
-              .map((segment) => jsonPathSegment(segment))
-              .join(".")
-        : jsonPathSegment(field);
-
-    return `json_extract(${prefix}${DOC_COLUMN}, '$.${path.replaceAll("'", "''")}')`;
+    return `json_extract(${prefix}${DOC_COLUMN}, ${jsonPathLiteral(field)})`;
 };
 
 const jsonPath = (field: string): string => documentPath("", field);
 
-/** SQLite's `json_type` names for each JSON type a range over a path can be bracketed to; a boolean is `true` or `false`, a number `integer` or `real`. */
-const JSON_EXTRACT_PREFIX = /^json_extract\(/u;
-const JSON_TYPE_NAMES: Record<RangeOperandType, string> = { boolean: "'true', 'false'", number: "'integer', 'real'", string: "'text'" };
-
 /**
  * The test that the leaf at path `field` is a JSON value of `type`: `json_type(__doc__, '$.a.b') IN (…)`, built from
- * the same path text as {@link jsonPath} so it addresses the leaf the comparison reads. `json_extract` flattens a
+ * the same path literal as {@link jsonPath} so it addresses the leaf the comparison reads. `json_extract` flattens a
  * boolean to `1` or `0`, so the comparison alone cannot tell `true` from the number `1`; the type can. A JSON `null`
  * leaf is NULL here, as it is in the comparison, so a `NOT` over the range treats it like a missing key.
+ * @throws LunoraError `VALIDATION_ERROR` for a malformed or too-deep path.
  */
 const jsonTypeGuard = (field: string, type: RangeOperandType): string =>
-    `NULLIF(${jsonPath(field).replace(JSON_EXTRACT_PREFIX, "json_type(")}, 'null') IN (${JSON_TYPE_NAMES[type]})`;
+    `NULLIF(json_type(${DOC_COLUMN}, ${jsonPathLiteral(field)}), 'null') IN (${SQLITE_JSON_TYPE_NAMES[type]})`;
 
 /**
  * Drizzle field reference for the DO store. Wraps the string {@link jsonPath} in
@@ -253,7 +259,7 @@ const jsonTypeGuard = (field: string, type: RangeOperandType): string =>
  */
 const jsonPathSql = (field: string): SQL => dsql.raw(jsonPath(field));
 
-/** Drizzle form of {@link jsonTypeGuard}, the `rangeTypeGuard` of every flat DO `where` strategy. */
+/** Drizzle form of {@link jsonTypeGuard}, the `rangeTypeGuard` of the DO `where` strategy. */
 const jsonTypeGuardSql = (field: string, type: RangeOperandType): SQL => dsql.raw(jsonTypeGuard(field, type));
 
 /**
@@ -451,6 +457,9 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
     return available;
 };
 
+/** DO drizzle `where` strategy (flat): fields via `json_extract`, ranges bracketed by `json_type`, values via {@link serializeSqlValue}. The one root every DO `where` strategy extends. */
+const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, rangeTypeGuard: jsonTypeGuardSql, serialize: serializeSqlValue };
+
 export { quoteIdentifier } from "../../../shared/quote-identifier";
 export {
     AGG_COUNT,
@@ -462,6 +471,7 @@ export {
     decodeGroupKeyValue,
     DOC_COLUMN,
     DOC_ORIGINALS_KEY,
+    doWhereSqlStrategy,
     encodeDocJson,
     geoTableName,
     isFtsAvailable,

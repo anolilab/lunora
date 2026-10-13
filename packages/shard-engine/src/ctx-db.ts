@@ -72,13 +72,11 @@ import {
     AGG_VALUE,
     decodeGroupKeyValue,
     DOC_COLUMN,
+    doWhereSqlStrategy,
     encodeDocJson,
     geoTableName,
     isFtsAvailable,
-    jsonPath,
     jsonPathSql,
-    jsonTypeGuard,
-    jsonTypeGuardSql,
     qualifiedJsonPath,
     qualifiedJsonPathSql,
     quoteIdentifier,
@@ -979,9 +977,6 @@ const runGeoTerminalScored = (
     return filtered ? takeMatching(entries, filters, limit, (entry) => entry.document) : entries;
 };
 
-/** DO drizzle `where` strategy (flat): fields via `json_extract`, values via {@link serializeSqlValue}. */
-const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, rangeTypeGuard: jsonTypeGuardSql, serialize: serializeSqlValue };
-
 /**
  * Refuse a SQL-side reduce or group over a column that MAY be stored as an
  * order-preserving sort key. `json_extract` hands SQL the key, not the value:
@@ -1033,8 +1028,7 @@ const makeRelationExistsSqlStrategy = (onRead: ReadHook): WhereSqlStrategy => {
     const scopeStack: string[] = [];
 
     const strategy: WhereSqlStrategy = {
-        fieldRef: jsonPathSql,
-        rangeTypeGuard: jsonTypeGuardSql,
+        ...doWhereSqlStrategy,
         relationExists: (request) => {
             const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
             const alias = `__rel_${String(aliasCounter)}`;
@@ -1058,7 +1052,6 @@ const makeRelationExistsSqlStrategy = (onRead: ReadHook): WhereSqlStrategy => {
 
             return negated ? dsql`NOT ${body}` : body;
         },
-        serialize: serializeSqlValue,
     };
 
     return strategy;
@@ -1075,8 +1068,7 @@ const makeRelationExistsTextStrategy = (onRead: ReadHook): WhereSqlStrategy<Text
     const scopeStack: string[] = [];
 
     const strategy: WhereSqlStrategy<TextFragment> = {
-        fieldRef: (field) => rawText(jsonPath(field)),
-        rangeTypeGuard: (field, type) => rawText(jsonTypeGuard(field, type)),
+        ...doWhereTextStrategy,
         relationExists: (request) => {
             const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
             const alias = `__rel_${String(aliasCounter)}`;
@@ -1100,7 +1092,6 @@ const makeRelationExistsTextStrategy = (onRead: ReadHook): WhereSqlStrategy<Text
 
             return negated ? joinText("NOT ", body) : body;
         },
-        serialize: serializeSqlValue,
     };
 
     return strategy;

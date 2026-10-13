@@ -28,10 +28,11 @@
 import { LunoraError } from "@lunora/errors";
 
 import { validatorAcceptsNull } from "../../../shared/accepts-null";
-import { isFieldPath, readFieldPath } from "../../../shared/json-field-path";
+import { readFieldPath } from "../../../shared/json-field-path";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { NullPlacement, OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
+import { SEEK_RANGE } from "./where-types";
 
 /** The implicit tiebreak appended to every sort so the order is total. */
 const TIEBREAK_FIELD = "id";
@@ -516,8 +517,8 @@ const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, in
         operator = greaterWanted ? "gte" : "lte";
     }
 
-    // `crossType`: the seek continues the ORDER BY, which sorts every JSON type of a path together.
-    const comparison: WhereInput = { [field]: isFieldPath(field) ? { [operator]: value, crossType: true } : { [operator]: value } };
+    // `SEEK_RANGE`: the seek continues the ORDER BY, which sorts every JSON type of a path together.
+    const comparison: WhereInput = { [field]: { [operator]: value, [SEEK_RANGE]: true } };
 
     // NULL rows are on the wanted side of a non-null pivot when the NULL group is ahead of the seek.
     // Otherwise a comparator reaches everything wanted, and a column that never holds NULL has

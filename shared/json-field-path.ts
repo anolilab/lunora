@@ -132,4 +132,22 @@ const expandFieldPaths = (patch: Record<string, unknown>, current: Record<string
     return expanded;
 };
 
-export { expandFieldPaths, FieldPathError, isFieldPath, readFieldPath, rootOfFieldPath, splitFieldPath };
+/** The JSON types a range (`gt`/`gte`/`lt`/`lte`) over a path can be bracketed to. */
+type RangeOperandType = "boolean" | "number" | "string";
+
+/**
+ * The JSON type a range over a path is bracketed to, from its operand, or `undefined` for an operand that is none of
+ * them (a Date, a bigint, an object): it has no leaf to match. Every store, SQL or in-memory, reads the rule here so
+ * they cannot drift.
+ */
+const rangeOperandType = (operand: unknown): RangeOperandType | undefined => {
+    const type = typeof operand;
+
+    return type === "number" || type === "string" || type === "boolean" ? type : undefined;
+};
+
+/** SQLite's `json_type` names of each {@link RangeOperandType}: a boolean is `true` or `false`, a number `integer` or `real`. */
+const SQLITE_JSON_TYPE_NAMES: Record<RangeOperandType, string> = { boolean: "'true', 'false'", number: "'integer', 'real'", string: "'text'" };
+
+export type { RangeOperandType };
+export { expandFieldPaths, FieldPathError, isFieldPath, rangeOperandType, readFieldPath, rootOfFieldPath, SQLITE_JSON_TYPE_NAMES, splitFieldPath };

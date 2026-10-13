@@ -11,6 +11,15 @@
  */
 
 /**
+ * Marks an operator object as a keyset seek: its ranges over a path compare across JSON types, in the engine's own
+ * order, instead of being bracketed to the operand's type. A seek continues the `ORDER BY` that produced the cursor,
+ * which sorts every type of a path together, so a bracketed seek would skip the rows of other types and the next page
+ * could never reach them. A symbol rather than an operator key: it is not part of the filter vocabulary, so no user
+ * `where` can set it and no operator list has to know it.
+ */
+const SEEK_RANGE: unique symbol = Symbol("lunora.seekRange");
+
+/**
  * Comparison operators applicable to a single field. Absent keys are skipped;
  * a value whose every own key is one of these is treated as an operator object,
  * anything else as an equality literal.
@@ -18,12 +27,6 @@
 interface FieldOperators {
     contains?: string;
 
-    /**
-     * Compare a path's leaves across JSON types, in the engine's own order. Set on a keyset seek only: it has to
-     * agree with the `ORDER BY` that produced the cursor, which sorts every type, so a type-bracketed range would
-     * skip the rows of the other types and the next page could never reach them.
-     */
-    crossType?: boolean;
     eq?: unknown;
     gt?: unknown;
     gte?: unknown;
@@ -65,5 +68,5 @@ interface WhereInput {
  */
 const RELATION_EXISTS_KEY = "__relationExists";
 
-export { RELATION_EXISTS_KEY };
+export { RELATION_EXISTS_KEY, SEEK_RANGE };
 export type { FieldOperators, WhereInput };

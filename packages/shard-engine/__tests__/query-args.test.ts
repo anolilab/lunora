@@ -25,7 +25,7 @@ const doFieldRef = (field: string): string => {
     return json(field);
 };
 
-const doStrategy: WhereSqlStrategy = { fieldRef: (field) => sql.raw(doFieldRef(field)), serialize: (value) => value };
+const doStrategy: WhereSqlStrategy = { rangeTypeGuard: () => sql`1 = 1`, fieldRef: (field) => sql.raw(doFieldRef(field)), serialize: (value) => value };
 
 /** Compile a `where` tree through the drizzle compiler + render it for SQLite — the rendering path `buildSeekWhere`'s output flows through in production. */
 const compile = (where: WhereInput): { params: unknown[]; sql: string } => renderSql("sqlite", compileWhereSql(where, doStrategy) ?? sql``);

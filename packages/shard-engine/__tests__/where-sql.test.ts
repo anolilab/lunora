@@ -17,18 +17,21 @@ const serialize = (value: unknown): unknown => {
 };
 
 const baseStrategy: WhereSqlStrategy = {
+    rangeTypeGuard: () => sql`1 = 1`,
     fieldRef: (field) => sql`${sql.identifier(field)}`,
     serialize,
 };
 
 const mysqlStrategy: WhereSqlStrategy = {
     containsExpr: (reference, term) => sql`LOCATE(${term}, ${reference}) > 0`,
+    rangeTypeGuard: () => sql`1 = 1`,
     fieldRef: (field) => sql`${sql.identifier(field)}`,
     serialize,
 };
 
 const postgresStrategy: WhereSqlStrategy = {
     containsExpr: (reference, term) => sql`strpos(${reference}, ${term}) > 0`,
+    rangeTypeGuard: () => sql`1 = 1`,
     fieldRef: (field) => sql`${sql.identifier(field)}`,
     serialize,
 };
@@ -197,6 +200,7 @@ describe("compileWhereSql — per-engine rendering", () => {
     describe("relationExists push-down hook", () => {
         // A test strategy whose relationExists builds a correlated `[NOT] EXISTS (…)` subquery.
         const existsStrategy: WhereSqlStrategy = {
+            rangeTypeGuard: () => sql`1 = 1`,
             fieldRef: (field) => sql`${sql.identifier(field)}`,
             relationExists: (request) => {
                 const { negated, table } = request as { negated: boolean; table: string };
