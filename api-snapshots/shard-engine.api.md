@@ -661,7 +661,7 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
-    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
+    explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -3855,6 +3855,17 @@ const compactCdcDocs: (sql: SqlExec, throughSeq: number, maxRows: number) => voi
 const compileWhereSql: <T = SQL>(where: WhereInput | undefined, strategy: WhereSqlStrategy<T>, fragments?: WhereFragments<T>, reservedParams?: number) => T | undefined;
 ```
 
+### `composeReadPredicate` (const)
+
+```ts
+const composeReadPredicate: (definition: TableDefinitionLike, args: QueryArgs, relation: Omit<ResolveRelationPredicatesOptions, "relationBaseWhere">) => Promise<{
+    fetchLimit: number | undefined;
+    limit: number | undefined;
+    orderKeys: OrderKey[];
+    predicate: WhereInput | undefined;
+}>;
+```
+
 ### `computeRankPage` (const)
 
 ```ts
@@ -4567,6 +4578,12 @@ const normalizeSourceValue: (value: unknown) => unknown;
 
 ```ts
 const nullsFirstOf: (key: Pick<OrderKey, "direction" | "nulls">) => boolean;
+```
+
+### `nullsOrderSuffix` (const)
+
+```ts
+const nullsOrderSuffix: (nullsFirst: boolean) => string;
 ```
 
 ### `operatorFields` (const)

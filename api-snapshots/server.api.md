@@ -617,7 +617,7 @@ interface FacadeWriterLike {
     }): Promise<{
         deleted: number;
     }>;
-    explain?(tableName: string, args?: unknown): Promise<unknown>;
+    explain(tableName: string, args?: unknown): Promise<unknown>;
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
@@ -5836,7 +5836,7 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
-    explain?: (tableName: string, args?: QueryArgs$1) => Promise<QueryPlan>;
+    explain: (tableName: string, args?: QueryArgs$1) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs$1) => Promise<QueryPage$1>;
@@ -6155,7 +6155,7 @@ interface MaskDatabase {
     }) => Promise<{
         deleted: number;
     }>;
-    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
+    explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
