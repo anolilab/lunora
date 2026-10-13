@@ -105,7 +105,7 @@
     },
     "vars": {
         // The Cloudflare account this cell provisions into.
-        "CLOUDFLARE_ACCOUNT_ID": "71929d20992f1f7ec04e20047a737f24",
+        "CLOUDFLARE_ACCOUNT_ID": "29920166f7810f9970e4ef89a71f6765",
         // Cell id + the apex the dispatcher routes tenant scripts under.
         "LUNORA_CELL": "default",
         "LUNORA_APP_DOMAIN": "lunora.run",
@@ -297,11 +297,11 @@
                     "max_instances": 3,
                 },
             ],
-            "d1_databases": [{ "binding": "DB", "database_id": "c69052e4-3d89-4693-a1e5-c042ef8df04e", "database_name": "lunora-cloud-staging" }],
+            "d1_databases": [{ "binding": "DB", "database_id": "80084919-a895-439a-af22-657a3993087c", "database_name": "lunora-cloud-staging" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-staging" }],
             "triggers": { "crons": ["0 */1 * * *", "*/1 * * * *", "0 */6 * * *"] },
             "vars": {
-                "CLOUDFLARE_ACCOUNT_ID": "71929d20992f1f7ec04e20047a737f24",
+                "CLOUDFLARE_ACCOUNT_ID": "dbd3706787e98455306c2ecf35769227",
                 "LUNORA_APP_DOMAIN": "staging.lunora.run",
                 "LUNORA_BOX_DOMAIN": "boxes.staging.lunora.run",
                 "LUNORA_CELL": "staging",
@@ -376,11 +376,11 @@
                     "max_instances": 3,
                 },
             ],
-            "d1_databases": [{ "binding": "DB", "database_id": "6f92aaa9-23c5-4482-a9aa-a8d7b4bcdc2e", "database_name": "lunora-cloud" }],
+            "d1_databases": [{ "binding": "DB", "database_id": "525d6b6c-46b6-42fe-acd0-667768570628", "database_name": "lunora-cloud" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
             "triggers": { "crons": ["0 */1 * * *", "*/1 * * * *", "0 */6 * * *"] },
             "vars": {
-                "CLOUDFLARE_ACCOUNT_ID": "71929d20992f1f7ec04e20047a737f24",
+                "CLOUDFLARE_ACCOUNT_ID": "29920166f7810f9970e4ef89a71f6765",
                 "LUNORA_APP_DOMAIN": "lunora.run",
                 "LUNORA_BOX_DOMAIN": "boxes.lunora.run",
                 "LUNORA_CELL": "default",
