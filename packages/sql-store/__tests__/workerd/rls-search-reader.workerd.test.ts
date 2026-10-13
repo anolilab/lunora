@@ -15,31 +15,11 @@
 import type { SchemaLike, TableReaderLike, ValidatorLike, WhereInput } from "@lunora/shard-engine";
 import { whereFilter } from "@lunora/shard-engine";
 import { env } from "cloudflare:test";
-import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../../src/ctx-db";
 import { createSqlCtxDb } from "../../src/ctx-db";
-import type { SqlDialect } from "../../src/dialect";
-
-const UNIQUE_VIOLATION_RE = /unique constraint failed/iu;
-const SQL_AFFINITY: Record<string, string> = { boolean: "INTEGER", number: "REAL" };
-
-/** `@lunora/d1`'s dialect, FTS5 included — the layout D1 actually uses. */
-const d1Dialect: SqlDialect = {
-    columnType: (kind) => SQL_AFFINITY[kind ?? ""] ?? "TEXT",
-    companionTypes: { autoincrementPrimaryKey: "INTEGER PRIMARY KEY AUTOINCREMENT", integer: "INTEGER", key: "TEXT", real: "REAL", text: "TEXT" },
-    frameworkColumns: () => [
-        { name: "id", type: "TEXT PRIMARY KEY" },
-        { name: "_creationTime", type: "REAL NOT NULL" },
-    ],
-    isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
-    maxTableColumns: 100,
-    name: "sqlite",
-    supportsFts5: true,
-    supportsReturning: true,
-    tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
-};
+import { d1FtsDialect } from "./_helpers/d1";
 
 const ROWS = 510;
 
@@ -158,7 +138,7 @@ const setup = async (table: string): Promise<{ meter: Meter; writer: ReturnType<
 
             return now;
         },
-        dialect: d1Dialect,
+        dialect: d1FtsDialect,
         exec: d1Exec((rowsRead, handedBack) => {
             meter.rowsRead += rowsRead;
             meter.handedBack += handedBack;
@@ -281,7 +261,7 @@ describe("global search reader: a pushed policy within D1's parameter cap", () =
 
                 return now;
             },
-            dialect: d1Dialect,
+            dialect: d1FtsDialect,
             exec: d1Exec(() => undefined),
             schema: {
                 tables: {

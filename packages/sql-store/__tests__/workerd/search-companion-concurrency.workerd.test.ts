@@ -16,34 +16,14 @@
  */
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { env } from "cloudflare:test";
-import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../../src/ctx-db";
 import { createSqlCtxDb } from "../../src/ctx-db";
 import { backfillSqlSearchIndexes, runSqlSearchMigrations } from "../../src/ctx-db-search";
 import { migrateSearchState, writeSearchBackfillState } from "../../src/ctx-db-search-state";
-import type { SqlDialect } from "../../src/dialect";
 import { companionProfile } from "../../src/search-layout";
-
-const UNIQUE_VIOLATION_RE = /unique constraint failed/iu;
-const SQL_AFFINITY: Record<string, string> = { boolean: "INTEGER", number: "REAL" };
-
-/** `@lunora/d1`'s dialect, FTS5 included — the layout D1 actually uses. */
-const d1Dialect: SqlDialect = {
-    columnType: (kind) => SQL_AFFINITY[kind ?? ""] ?? "TEXT",
-    companionTypes: { autoincrementPrimaryKey: "INTEGER PRIMARY KEY AUTOINCREMENT", integer: "INTEGER", key: "TEXT", real: "REAL", text: "TEXT" },
-    frameworkColumns: () => [
-        { name: "id", type: "TEXT PRIMARY KEY" },
-        { name: "_creationTime", type: "REAL NOT NULL" },
-    ],
-    isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
-    maxTableColumns: 100,
-    name: "sqlite",
-    supportsFts5: true,
-    supportsReturning: true,
-    tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
-};
+import { d1FtsDialect } from "./_helpers/d1";
 
 const INDEX = { field: "body", filterFields: [], name: "by_body" };
 const ROWS = 250;
@@ -112,7 +92,7 @@ const companionOf = (table: string): string => `${table}__fts_${INDEX.name}`;
 
 /** Write `ROWS` rows while the table has no search index, so none of them is indexed. */
 const seed = async (table: string, body: (n: number) => string): Promise<void> => {
-    const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table) });
+    const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table) });
 
     for (let n = 0; n < ROWS; n += 1) {
         // eslint-disable-next-line no-await-in-loop -- rows are seeded in order
@@ -182,7 +162,7 @@ const distinctIndexed = async (table: string): Promise<number> => {
 };
 
 const search = async (table: string, term: string): Promise<unknown[]> => {
-    const reader = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+    const reader = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
     const hits = await reader
         .query(table)
         .withSearchIndex(INDEX.name, (q) => q.search("body", term))
@@ -204,18 +184,18 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
             // Isolate A: the cold-start page, held at the target row.
             const hold = holdAt(holdPoints(table, target)[at]![1]);
-            const isolateA = runSqlSearchMigrations(d1Exec(hold.gate), schemaFor(table, INDEX), d1Dialect);
+            const isolateA = runSqlSearchMigrations(d1Exec(hold.gate), schemaFor(table, INDEX), d1FtsDialect);
 
             await hold.reached;
 
             // Isolate B: its own cold start, then a write to the row A already read.
-            const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+            const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
             await isolateB.patch(target, { body: "freshword common" });
 
             hold.release();
             await isolateA;
-            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
             await expect(search(table, "freshword")).resolves.toStrictEqual([target]);
             await expect(search(table, "staleword")).resolves.toStrictEqual([]);
@@ -245,11 +225,13 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
                 await atRecheck.gate(text, parameters);
             }),
             schemaFor(table, INDEX),
-            d1Dialect,
+            d1FtsDialect,
         );
 
         await atRow.reached;
-        await createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) }).patch(target, { body: "freshword common" });
+        await createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) }).patch(target, {
+            body: "freshword common",
+        });
         atRow.release();
         await atRecheck.reached;
 
@@ -278,11 +260,11 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         await seed(table, (n) => (n === 210 ? "needle common" : `other${String(n)} common`));
 
         const hold = holdAt(holdPoints(table, target)[0]![1]);
-        const isolateA = backfillSqlSearchIndexes(d1Exec(hold.gate), schemaFor(table, staged), d1Dialect);
+        const isolateA = backfillSqlSearchIndexes(d1Exec(hold.gate), schemaFor(table, staged), d1FtsDialect);
 
         await hold.reached;
 
-        const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, staged) });
+        const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, staged) });
 
         await isolateB.patch(target, { title: "renamed" });
 
@@ -306,14 +288,14 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             await seed(table, (n) => (n === 5 || n === 10 ? "apple common" : `other${String(n)} common`));
 
             const hold = holdAt(holdPoints(table, target)[at]![1]);
-            const isolateA = runSqlSearchMigrations(d1Exec(hold.gate), schemaFor(table, INDEX), d1Dialect);
+            const isolateA = runSqlSearchMigrations(d1Exec(hold.gate), schemaFor(table, INDEX), d1FtsDialect);
 
             await hold.reached;
             // Isolate B: a whole cold-start page while A is mid-page.
-            await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+            await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
             hold.release();
             await isolateA;
-            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
             await expect(companionRows(table, target)).resolves.toBe(1);
             await expect(companionRows(table)).resolves.toBe(ROWS);
@@ -326,10 +308,10 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         /** A fully indexed table, and a writer per isolate — each past its own cold start. */
         const livePair = async (table: string, gate: Gate): Promise<[ReturnType<typeof createSqlCtxDb>, ReturnType<typeof createSqlCtxDb>]> => {
             await seed(table, (n) => `word${String(n)} common`);
-            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
-            const isolateA = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(gate), schema: schemaFor(table, INDEX) });
-            const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+            const isolateA = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(gate), schema: schemaFor(table, INDEX) });
+            const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
             await isolateA.count(table);
             await isolateB.count(table);
@@ -448,7 +430,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             const table = `cost_${String(size)}`;
 
             // The table itself, then its rows in bulk — nothing here is under test.
-            await createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table) }).count(table);
+            await createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table) }).count(table);
 
             for (let start = 0; start < size; start += 50) {
                 const values = Array.from({ length: Math.min(50, size - start) }, (_, offset) => {
@@ -461,12 +443,12 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
                 await env.DB.prepare(`INSERT INTO "${table}" ("id", "_creationTime", "title", "body") VALUES ${values.join(", ")}`).run();
             }
 
-            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
             let rowsRead = 0;
             const writer = createSqlCtxDb({
                 clock: CLOCK,
-                dialect: d1Dialect,
+                dialect: d1FtsDialect,
                 exec: d1Exec(undefined, (text, read) => {
                     if (text.includes(`"${companionOf(table)}`)) {
                         rowsRead += read;
@@ -504,20 +486,20 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         const target = pad(40);
 
         await seed(table, (n) => `word${String(n)} common`);
-        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
         // Writer A held at the statement that writes the entry, deleter B held at
         // the one that drops the mapping — the points a pair of separate
         // statements on each side can interleave at.
         const holdA = holdAt((text, parameters) => text.startsWith(`INSERT OR REPLACE INTO "${companion}" `) && parameters.includes(target));
         const holdB = holdAt((text, parameters) => text.startsWith(`DELETE FROM "${companion}__ids"`) && parameters.includes(target));
-        const patching = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(holdA.gate), schema: schemaFor(table, INDEX) }).patch(target, {
+        const patching = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(holdA.gate), schema: schemaFor(table, INDEX) }).patch(target, {
             body: "patched common",
         });
 
         await holdA.reached;
 
-        const deleting = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(holdB.gate), schema: schemaFor(table, INDEX) }).delete(target);
+        const deleting = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(holdB.gate), schema: schemaFor(table, INDEX) }).delete(target);
 
         await holdB.reached;
         holdA.release();
@@ -554,8 +536,8 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             await env.DB.prepare(`INSERT INTO "${companion}" ("__text__", "__id__") VALUES (?, ?)`).bind(text, id).run();
         }
 
-        await migrateSearchState(d1Exec(), d1Dialect);
-        await writeSearchBackfillState(d1Exec(), d1Dialect, companion, pad(ROWS - 1), true, companionProfile(INDEX, d1Dialect));
+        await migrateSearchState(d1Exec(), d1FtsDialect);
+        await writeSearchBackfillState(d1Exec(), d1FtsDialect, companion, pad(ROWS - 1), true, companionProfile(INDEX, d1FtsDialect));
     };
 
     it("migrates a companion built before the rowid map, and serves throughout", async () => {
@@ -564,13 +546,13 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         const table = "legacy_docs";
 
         await legacyCompanion(table, (n) => (n === 5 || n === 10 ? "apple common" : `other${String(n)} common`));
-        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
         await expect(companionRows(table)).resolves.toBe(ROWS);
         await expect(distinctIndexed(table)).resolves.toBe(ROWS);
         await expect(search(table, "apple")).resolves.toStrictEqual([pad(5), pad(10)]);
 
-        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
         await writer.patch(pad(10), { body: "banana common" });
         await writer.delete(pad(20));
@@ -590,7 +572,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
         await legacyCompanion(table, (n) => (n === 10 ? "freshword common" : `other${String(n)} common`), [["staleword common", pad(10)]]);
         // The duplicate sits past the first bounded page, so it takes the whole walk.
-        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
         await expect(search(table, "staleword")).resolves.toStrictEqual([]);
         await expect(search(table, "freshword")).resolves.toStrictEqual([pad(10)]);
@@ -609,7 +591,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         await legacyCompanion(table, (n) => (n === 0 ? "apple common" : `other${String(n)} common`));
         await env.DB.prepare(`CREATE TABLE "${companion}__ids" ("__rowid__" INTEGER PRIMARY KEY, "__id__" TEXT NOT NULL UNIQUE)`).run();
 
-        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
         await writer.insert(table, { _id: "z_new", body: "zebra common", title: "t" }, { allowExplicitId: true });
 
@@ -630,11 +612,11 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         // A is held at its first statement that touches the new map; B runs its
         // whole cold start and writes a new document meanwhile.
         const hold = holdAt((text) => text.includes(`"${companion}__ids"`) && !text.startsWith("CREATE") && !text.startsWith("SELECT name"));
-        const isolateA = runSqlSearchMigrations(d1Exec(hold.gate), schemaFor(table, INDEX), d1Dialect);
+        const isolateA = runSqlSearchMigrations(d1Exec(hold.gate), schemaFor(table, INDEX), d1FtsDialect);
 
         await hold.reached;
 
-        const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+        const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
         await isolateB.insert(table, { _id: "z_new", body: "zebra common", title: "t" }, { allowExplicitId: true });
         hold.release();
@@ -653,7 +635,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         const companion = companionOf(table);
 
         await legacyCompanion(table, (n) => `other${String(n)} common`);
-        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
         // What the previous build does on a write: purge by `__id__`, insert at
         // an FTS5-assigned rowid the map has never seen.
@@ -665,7 +647,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
         await previousBuildWrite(pad(7), "oldbuild common");
 
-        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
         // A new document right after: its entry must not land on the row above.
         await writer.insert(table, { _id: "z_new", body: "zebra common", title: "t" }, { allowExplicitId: true });
@@ -695,7 +677,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         // the first page), rewrites each document just before the drain
         // writes it. Title-only writes: they never re-index a row themselves,
         // so every drain write loses its guard and the page makes no progress.
-        const hotWriter = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+        const hotWriter = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
         await hotWriter.count(table);
 
@@ -709,7 +691,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             }
         };
 
-        const result = await backfillSqlSearchIndexes(d1Exec(rewriteFirst), schemaFor(table, INDEX), d1Dialect);
+        const result = await backfillSqlSearchIndexes(d1Exec(rewriteFirst), schemaFor(table, INDEX), d1FtsDialect);
         const unmigrated = await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${companion}" WHERE "${companion}"."rowid" > 0`).first<{ n: number }>();
 
         // Every row past the first page lost every attempt and is left for a
@@ -731,7 +713,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         // No document has this id — as text or otherwise — so its row has to go.
         await env.DB.prepare(`INSERT INTO "${companion}" ("__text__", "__id__") VALUES ('ghost common', 12345)`).run();
 
-        const result = await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        const result = await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
         const left = await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${companion}" WHERE "${companion}"."rowid" > 0`).first<{ n: number }>();
 
         expect(left?.n).toBe(0);
@@ -754,11 +736,11 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
         const before = await unmigrated();
 
-        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
         const afterOne = await unmigrated();
 
-        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1FtsDialect);
 
         expect(before).toBe(ROWS);
         // One cold start moves one bounded page, and leaves the rest for later.

@@ -6,49 +6,13 @@
  * table name: D1 storage is shared across the tests in this file.
  */
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
-import { env } from "cloudflare:test";
-import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
-import type { SqlCtxExec } from "../../src/ctx-db";
 import { createSqlCtxDb } from "../../src/ctx-db";
-import type { SqlDialect } from "../../src/dialect";
-
-const UNIQUE_VIOLATION_RE = /unique constraint failed/iu;
-const SQL_AFFINITY: Record<string, string> = { boolean: "INTEGER", number: "REAL" };
-
-const d1Dialect: SqlDialect = {
-    columnType: (kind) => SQL_AFFINITY[kind ?? ""] ?? "TEXT",
-    companionTypes: { autoincrementPrimaryKey: "INTEGER PRIMARY KEY AUTOINCREMENT", integer: "INTEGER", key: "TEXT", real: "REAL", text: "TEXT" },
-    frameworkColumns: () => [
-        { name: "id", type: "TEXT PRIMARY KEY" },
-        { name: "_creationTime", type: "REAL NOT NULL" },
-    ],
-    isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
-    maxTableColumns: 100,
-    name: "sqlite",
-    supportsFts5: false,
-    supportsReturning: true,
-    tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
-};
+import { d1Dialect, d1Exec } from "./_helpers/d1";
 
 const leaf = (kind: string): ValidatorLike => {
     return { _meta: { column: { notNull: true } }, kind };
-};
-
-const d1Exec: SqlCtxExec = {
-    all: async (query, parameters) => {
-        const result = await env.DB.prepare(query)
-            .bind(...parameters)
-            .all();
-
-        return result.results;
-    },
-    run: async (query, parameters) => {
-        await env.DB.prepare(query)
-            .bind(...parameters)
-            .run();
-    },
 };
 
 const schemaFor = (table: string): SchemaLike =>
