@@ -661,6 +661,7 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
+    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -1649,6 +1650,16 @@ interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+}
+```
+
+### `QueryPlan` (interface)
+
+```ts
+interface QueryPlan {
+    params: unknown[];
+    plan: string[];
+    sql: string;
 }
 ```
 

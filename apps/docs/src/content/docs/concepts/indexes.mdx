@@ -108,6 +108,31 @@ at build time and surface these in the Studio:
 At runtime, **`index_utilization`** flags a dead index (zero recorded reads) and
 a hot unindexed scan (a table full-scanned many times with no index).
 
+## Checking a read with `explain`
+
+`ctx.db.<table>.explain(args)` takes the same arguments as `findMany` and reports how the
+database would run it, without running it:
+
+```ts
+const { sql, params, plan } = await ctx.db.messages.explain({ where: { room: "lobby" } });
+// plan: ["SEARCH messages USING INDEX by_room (room=?)"]
+```
+
+An index serves the read when the plan says `SEARCH … USING INDEX`; `SCAN` means every row is
+read. `sql` and `params` are the exact statement and bound values. `explain` honors RLS and
+soft delete like the read does, so the plan is the one your caller would get. A relation filter in
+`where` is resolved first, which reads the related table. It subscribes to nothing, so a live query
+that explains does not become reactive to the table.
+
+`params` includes values your RLS policies injected (a user id, a tenant), and a relation filter
+inlines the ids it matched, so keep `explain` output on the server rather than returning it to a
+client. A filter on a [masked](/docs/concepts/masking) column is refused, as it is for `findMany`.
+
+Plan lines are the database's own text: SQLite's `EXPLAIN QUERY PLAN` for shard tables and D1, and
+`EXPLAIN` on a Postgres or MySQL `.global()` backend, whose lines differ. Only SQLite and D1 are
+run against the real engine in the test suite; the Postgres and MySQL path is checked against
+canned plan rows.
+
 ## Aggregate indexes
 
 Beyond ordinary secondary indexes, a table can declare an **aggregate index**

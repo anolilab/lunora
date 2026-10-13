@@ -35,6 +35,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "json_extract over the Durable Object's document, and over the JSON-text column of a .global() table on D1; both run against the real engines (workerd and a D1 binding) in the test suite. A Hyperdrive Postgres or MySQL .global() backend refuses a path filter with NOT_IMPLEMENTED",
         },
+        queryExplain: {
+            level: "native",
+            note: "EXPLAIN QUERY PLAN over state.storage.sql for a shard-local table and over the D1 binding for .global(); both run against the real engines (workerd and a D1 binding) in the test suite",
+        },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         serverReactors: {
             level: "emulated",

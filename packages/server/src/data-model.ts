@@ -451,6 +451,18 @@ export interface TableReaderFacade<
 
     /** `true` when at least one row matches `where` (any row when omitted). RLS-filtered exactly like `findFirst`. */
     exists: (where?: WhereOf<DM, REL, T>) => Promise<boolean>;
+
+    /**
+     * Describe how this table would run `findMany(args)` without running it: the SQL, its bound
+     * parameters, and the database's own plan, one line per step. Use it to check that a filter is
+     * served by an index (`SEARCH … USING INDEX by_room`) rather than a scan (`SCAN …`).
+     *
+     * Honors RLS and soft delete exactly like the read, so the plan is the one your caller would get.
+     * A relation filter in `where` is resolved first, which reads the related table. It subscribes to
+     * nothing, so a live query that explains does not become reactive to the table. `with` and `select`
+     * do not change the statement and are ignored.
+     */
+    explain: (args?: QueryArgsOf<DM, REL, T>) => Promise<QueryPlan>;
     findFirst: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
         args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
@@ -635,6 +647,16 @@ type OperatorFor<T> = [T] extends [number]
           ? BooleanFieldOperator
           : never
       : never;
+
+/** What `explain` returns: the SQL a read compiles to, its bound parameters, and the database's plan for it. */
+export interface QueryPlan {
+    /** The bound parameters, in order. */
+    params: unknown[];
+    /** One line per plan step, as the database reports it. */
+    plan: string[];
+    /** The statement the read compiles to. */
+    sql: string;
+}
 
 /** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
 export type DatabaseReaderFacade<

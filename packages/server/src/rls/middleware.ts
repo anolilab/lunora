@@ -256,6 +256,7 @@ interface DatabaseWriterLike {
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
+    explain?: (tableName: string, args?: QueryArgs) => Promise<unknown>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -1330,6 +1331,22 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             const { baseWhere } = readBase(tableName);
 
             return route(tableName).findFirstOrThrow(tableName, {
+                ...args,
+                baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
+        },
+
+        // Describes the read the caller would get, so the policy scope is merged exactly as `findMany` does.
+        async explain(tableName, args) {
+            const { baseWhere } = readBase(tableName);
+            const target = route(tableName);
+
+            if (target.explain === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.explain on "${tableName}" is unsupported: this writer cannot describe a query`);
+            }
+
+            return target.explain(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,

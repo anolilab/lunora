@@ -191,6 +191,8 @@ const WRITER_METHOD_GATING = {
     deleteAll: "loop-gated",
     deleteMany: "id-gated",
     deleteWhere: "inline-table-gated",
+    /** Table-name-first, and it compiles a read of that table, so the loop's table gate covers it. */
+    explain: "loop-gated",
     findFirst: "loop-gated",
     findFirstOrThrow: "loop-gated",
     findMany: "loop-gated",

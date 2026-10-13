@@ -49,6 +49,7 @@ const RESERVED_TABLE_NAMES = new Set([
     "deleteAll",
     "deleteMany",
     "deleteWhere",
+    "explain",
     "findFirst",
     "findFirstOrThrow",
     "findMany",

@@ -556,6 +556,7 @@ interface FacadeEntry {
         }>;
     };
     exists: (where?: unknown) => Promise<boolean>;
+    explain: (args?: unknown) => Promise<unknown>;
     findFirst: (args?: unknown) => Promise<unknown>;
     findFirstOrThrow: (args?: unknown) => Promise<unknown>;
     findMany: (args?: unknown) => Promise<unknown>;
@@ -616,6 +617,7 @@ interface FacadeWriterLike {
     }): Promise<{
         deleted: number;
     }>;
+    explain?(tableName: string, args?: unknown): Promise<unknown>;
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
@@ -3726,6 +3728,16 @@ interface QueryPage<TDocument> {
 }
 ```
 
+### `QueryPlan` (interface)
+
+```ts
+interface QueryPlan {
+    params: unknown[];
+    plan: string[];
+    sql: string;
+}
+```
+
 ### `RankPage` (interface)
 
 ```ts
@@ -3855,6 +3867,7 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
     aggregate: (options: TableAggregateOptionsOf<DM, REL, T>) => Promise<null | number>;
     count: (where?: RestrictableQueryOptionsOf<DM, REL, T> | WhereOf<DM, REL, T>) => Promise<number>;
     exists: (where?: WhereOf<DM, REL, T>) => Promise<boolean>;
+    explain: (args?: QueryArgsOf<DM, REL, T>) => Promise<QueryPlan>;
     findFirst: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: QueryArgsOf<DM, REL, T> & {
         select?: S;
         with?: W;
@@ -5769,6 +5782,7 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
+    explain?: (tableName: string, args?: QueryArgs$1) => Promise<unknown>;
     findFirst: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs$1) => Promise<QueryPage$1>;
@@ -6087,6 +6101,7 @@ interface MaskDatabase {
     }) => Promise<{
         deleted: number;
     }>;
+    explain?: (tableName: string, args?: QueryArgs) => Promise<unknown>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;

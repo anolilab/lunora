@@ -36,6 +36,7 @@ import type {
     GroupByEntry,
     GroupByOptions,
     PatchWriteOptions,
+    QueryArgs,
     QueryPage,
     RankIndexDefinitionLike,
     RankPage,
@@ -380,6 +381,16 @@ const applyInsertDefaults = (
     }
 
     return result;
+};
+
+/**
+ * One `EXPLAIN` row as a line of text. SQLite and D1 report a `detail` column, Postgres one
+ * `QUERY PLAN` column; MySQL reports a wide table row, joined so no column is dropped.
+ */
+const planStepText = (step: Record<string, unknown>): string => {
+    const text = step["detail"] ?? step["QUERY PLAN"];
+
+    return typeof text === "string" ? text : Object.values(step).map(String).join(" | ");
 };
 
 /** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place. */
@@ -2903,6 +2914,64 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         return byId;
     });
 
+    /**
+     * Compile a `findMany` read down to its SQL: ordering, the keyset seek, the policy and
+     * soft-delete scopes, and relation predicates (resolved first, so those do read). Shared by
+     * `findMany` and `explain`, so the statement a plan describes is the one a read runs.
+     */
+    const compileFindMany = async (tableName: string, definition: TableDefinitionLike, args: QueryArgs) => {
+        const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
+            pinned: equalityPinnedFields(args.where),
+            uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
+        });
+        const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+
+        // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
+        // before the keyset seek so policy + cursor compose cleanly.
+        let predicate: undefined | WhereInput = mergeWhere(args.baseWhere, args.where);
+
+        // Soft delete: hide rows whose marker column is set unless the caller
+        // opted in via `includeDeleted`. Relation `with` loads route back
+        // through this `findMany`, so they inherit the scope automatically.
+        predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
+
+        // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
+        // backend-routed child fetch before compiling. `relationBaseWhere` is
+        // threaded through so a child table's RLS read filter applies on the
+        // hop — as it is on the `with`-load `resolveWith` calls below.
+        predicate = await resolveRelationPredicates(predicate, {
+            fetcher: relationPredicateFetcher,
+            maxRelationKeys,
+            relationBaseWhere: args.relationBaseWhere,
+            schema,
+            tableName,
+        });
+
+        if (seek) {
+            predicate = predicate ? { AND: [predicate, seek] } : seek;
+        }
+
+        const whereCondition = compileWhereSql(predicate, whereSqlStrategyFor(definition));
+        const orderBy = compileOrderBySql(orderKeys, dialect);
+
+        let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
+
+        if (whereCondition) {
+            query = sql`${query} WHERE ${whereCondition}`;
+        }
+
+        query = sql`${query} ORDER BY ${orderBy}`;
+
+        const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+
+        if (limit !== undefined) {
+            // Over-fetch by one row to learn whether another page exists.
+            query = sql`${query} LIMIT ${sql.raw(String(limit + 1))}`;
+        }
+
+        return { limit, orderKeys, query };
+    };
+
     const writer: DatabaseWriterLike = {
         /**
          * Which tables the changelog saw a write to after `sinceSeq` (see
@@ -3221,12 +3290,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // fresh database returns an empty page instead of `no such table`.
             await ensureMigrated();
 
-            const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
-                pinned: equalityPinnedFields(args.where),
-                uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
-            });
-            const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
-
             // Relation reads routed by the child's backend (shard-local child of
             // this global parent → injected cross-shard reader; global/same-
             // backend → local D1 writer). Shared with the aggregate/count paths
@@ -3310,48 +3373,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 return result;
             };
 
-            // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
-            // before the keyset seek so policy + cursor compose cleanly.
-            let predicate: undefined | WhereInput = mergeWhere(args.baseWhere, args.where);
-
-            // Soft delete: hide rows whose marker column is set unless the caller
-            // opted in via `includeDeleted`. Relation `with` loads route back
-            // through this `findMany`, so they inherit the scope automatically.
-            predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
-
-            // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
-            // backend-routed child fetch before compiling. `relationBaseWhere` is
-            // threaded through so a child table's RLS read filter applies on the
-            // hop — as it is on the `with`-load `resolveWith` calls below.
-            predicate = await resolveRelationPredicates(predicate, {
-                fetcher: relationFetcher,
-                maxRelationKeys,
-                relationBaseWhere: args.relationBaseWhere,
-                schema,
-                tableName,
-            });
-
-            if (seek) {
-                predicate = predicate ? { AND: [predicate, seek] } : seek;
-            }
-
-            const whereCondition = compileWhereSql(predicate, whereSqlStrategyFor(definition));
-            const orderBy = compileOrderBySql(orderKeys, dialect);
-
-            let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
-
-            if (whereCondition) {
-                query = sql`${query} WHERE ${whereCondition}`;
-            }
-
-            query = sql`${query} ORDER BY ${orderBy}`;
-
-            const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-
-            if (limit !== undefined) {
-                // Over-fetch by one row to learn whether another page exists.
-                query = sql`${query} LIMIT ${sql.raw(String(limit + 1))}`;
-            }
+            const { limit, orderKeys, query } = await compileFindMany(tableName, definition, args);
 
             const rows = await queryAll(exec, dialect, query);
             const documents = decodeRows(definition, rows);
@@ -3397,6 +3419,24 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 isDone: !hasMore,
                 page: applySelect(page, args.select, args.with),
             };
+        },
+
+        async explain(tableName, args = {}) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+            }
+
+            await ensureMigrated();
+
+            const { query } = await compileFindMany(tableName, definition, args);
+            // SQLite and D1 spell it `EXPLAIN QUERY PLAN`; Postgres and MySQL, plain `EXPLAIN`.
+            const prefix = dialect.name === "sqlite" ? "EXPLAIN QUERY PLAN" : "EXPLAIN";
+            const steps = await queryAll(exec, dialect, sql`${sql.raw(prefix)} ${query}`);
+            const { params, sql: text } = renderSql(dialect.name, query);
+
+            return { params, plan: steps.map((step) => planStepText(step)), sql: text };
         },
 
         async get(id, expectedTable) {

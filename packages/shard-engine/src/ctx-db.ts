@@ -2902,6 +2902,64 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return { applied: true, doc: locateRowById(id, tableName)?.row ?? null };
     };
 
+    /**
+     * Compile a `findMany` read down to its SQL statement: ordering, the keyset seek, the policy and
+     * soft-delete scopes, and relation predicates (resolved first, so those do read, through `read`).
+     * Dependency stamping for the main table is the caller's: `findMany` does it, `explain` does not,
+     * because describing a query must not make a live query subscribe to the table it describes.
+     */
+    const compileFindMany = async (tableName: string, definition: TableDefinitionLike, args: QueryArgs, read: typeof onRead) => {
+        const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
+            pinned: equalityPinnedFields(args.where),
+            uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
+        });
+        const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+
+        // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
+        // before the keyset seek so policy + cursor compose cleanly.
+        let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
+
+        // Soft delete: hide rows whose marker column is set, unless the caller
+        // opted in via `includeDeleted`. AND-merged like a baseWhere so it
+        // composes with RLS + the keyset seek; relation `with` loads route back
+        // through this `findMany`, so they inherit the scope automatically.
+        predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
+
+        // Rewrite any relation-crossing predicate (`{ author: { is: W } }`,
+        // `{ posts: { some: W } }`, …) into a flat `IN`/`NOT IN` via a
+        // backend-routed child fetch, *before* compiling — the predicate may
+        // arrive from caller `where` or an injected RLS `baseWhere`. A read
+        // with no relation predicates returns unchanged (no extra query).
+        predicate = await resolveRelationPredicates(predicate, {
+            canPushExists: relationExistsPushDownEnabled ? canPushRelationExists : undefined,
+            existsPushMode: relationExistsPushDown === "always" ? "always" : "auto",
+            fetcher: relationPredicateFetcher,
+            maxRelationKeys,
+            relationBaseWhere: args.relationBaseWhere,
+            schema,
+            tableName,
+        });
+
+        if (seek) {
+            predicate = predicate ? { AND: [predicate, seek] } : seek;
+        }
+
+        // A pushed-down relation node leaves a `__relationExists` marker in
+        // the tree; compile it with the EXISTS-aware strategy. Without the
+        // fast path (or with no relation predicates) the flat strategy is
+        // equivalent and cheaper, so only build the per-query strategy when
+        // the push-down is enabled.
+        const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsTextStrategy(read) : doWhereTextStrategy;
+        const whereCondition = compileWhereSql(predicate, whereStrategy, textFragments);
+
+        const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+        // Over-fetch by one row to learn whether another page exists without
+        // issuing a second query.
+        const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), limit === undefined ? undefined : limit + 1);
+
+        return { limit, orderKeys, statement };
+    };
+
     const writer: DatabaseWriterLike = {
         // `ctx.db.system` — best-effort read-only system tables. Assigned here so
         // it rides along on the same `DatabaseWriterLike` the generated ctx hands
@@ -3410,53 +3468,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 onRead(tableName);
             }
 
-            const orderKeys = normalizeOrderKeys(args.orderBy, findManyDefinition.shape, {
-                pinned: equalityPinnedFields(args.where),
-                uniqueBy: uniqueIndexFields(findManyDefinition.indexes, findManyDefinition.shape),
-            });
-            const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+            const { limit, orderKeys, statement } = await compileFindMany(tableName, findManyDefinition, args, onRead);
 
-            // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
-            // before the keyset seek so policy + cursor compose cleanly.
-            let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
-
-            // Soft delete: hide rows whose marker column is set, unless the caller
-            // opted in via `includeDeleted`. AND-merged like a baseWhere so it
-            // composes with RLS + the keyset seek; relation `with` loads route back
-            // through this `findMany`, so they inherit the scope automatically.
-            predicate = mergeWhere(predicate, softDeleteScope(findManyDefinition.softDeleteMode, args.includeDeleted));
-
-            // Rewrite any relation-crossing predicate (`{ author: { is: W } }`,
-            // `{ posts: { some: W } }`, …) into a flat `IN`/`NOT IN` via a
-            // backend-routed child fetch, *before* compiling — the predicate may
-            // arrive from caller `where` or an injected RLS `baseWhere`. A read
-            // with no relation predicates returns unchanged (no extra query).
-            predicate = await resolveRelationPredicates(predicate, {
-                canPushExists: relationExistsPushDownEnabled ? canPushRelationExists : undefined,
-                existsPushMode: relationExistsPushDown === "always" ? "always" : "auto",
-                fetcher: relationPredicateFetcher,
-                maxRelationKeys,
-                relationBaseWhere: args.relationBaseWhere,
-                schema,
-                tableName,
-            });
-
-            if (seek) {
-                predicate = predicate ? { AND: [predicate, seek] } : seek;
-            }
-
-            // A pushed-down relation node leaves a `__relationExists` marker in
-            // the tree; compile it with the EXISTS-aware strategy. Without the
-            // fast path (or with no relation predicates) the flat strategy is
-            // equivalent and cheaper, so only build the per-query strategy when
-            // the push-down is enabled.
-            const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsTextStrategy(onRead) : doWhereTextStrategy;
-            const whereCondition = compileWhereSql(predicate, whereStrategy, textFragments);
-
-            const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-            // Over-fetch by one row to learn whether another page exists without
-            // issuing a second query.
-            const statement = selectPageSql(tableName, whereCondition, compileOrderByText(orderKeys), limit === undefined ? undefined : limit + 1);
             const rows = runSql(sql, statement.text, ...statement.params).toArray();
 
             // A full scan stamps ONE `*scan` dep instead of a dep per row, so the
@@ -3527,6 +3540,29 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 isDone: !hasMore,
                 page: applySelect(page, args.select, args.with),
             };
+        },
+
+        async explain(tableName, args = {}) {
+            const global = globalWriterFor(tableName, "explain");
+
+            if (global) {
+                if (global.explain === undefined) {
+                    throw new LunoraError("INTERNAL", `ctx.db.explain on global table '${tableName}' is unsupported: its backend cannot describe a query`);
+                }
+
+                return global.explain(tableName, args);
+            }
+
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+            }
+
+            const { statement } = await compileFindMany(tableName, definition, args, () => undefined);
+            const steps = runSql(sql, `EXPLAIN QUERY PLAN ${statement.text}`, ...statement.params).toArray();
+
+            return { params: statement.params, plan: steps.map((step) => String(step["detail"])), sql: statement.text };
         },
 
         async get(id, expectedTable) {

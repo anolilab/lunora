@@ -6513,6 +6513,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `QueryPlan` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RankPage` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.

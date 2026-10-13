@@ -317,6 +317,7 @@ interface PlatformCapabilities {
         objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
         pointInTimeRecovery?: Capability;
+        queryExplain?: Capability;
         queues?: Capability;
         relationGraph?: Capability;
         requestOrigin?: Capability;

@@ -187,6 +187,15 @@ export interface PatchWriteOptions {
 }
 
 /** Structural mirror of `@lunora/server`'s `TableDefinition`. */
+/** What `explain` returns: the SQL a read compiles to and the database's plan for it. */
+export interface QueryPlan {
+    /** The bound parameters, in order. */
+    params: unknown[];
+    /** One line per plan step, as the database reports it (`SEARCH messages USING INDEX by_room (room=?)`). */
+    plan: string[];
+    /** The statement the read compiles to. */
+    sql: string;
+}
 
 export interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
@@ -769,6 +778,13 @@ export interface DatabaseWriterLike {
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
     deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    /**
+     * Describe how the store would run `findMany(tableName, args)`: the statement, its bound
+     * parameters, and the database's own plan for it, one line per step. Optional because a writer
+     * whose backend cannot describe a query omits it; callers raise an explicit unsupported error.
+     */
+    explain?: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;

@@ -384,6 +384,7 @@ export type {
     PatchWriteOptions,
     QueryArgs,
     QueryPage,
+    QueryPlan,
     RankBeforeOptions,
     RankBeforeResult,
     RankDirection,

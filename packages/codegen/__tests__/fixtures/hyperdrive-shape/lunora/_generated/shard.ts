@@ -152,6 +152,9 @@ const globalDbStub: DatabaseWriterLike = {
     delete: async () => {
         throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
+    explain: async () => {
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
+    },
     findFirst: async () => {
         throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },

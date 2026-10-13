@@ -368,3 +368,23 @@ describe("bindTableFacade — findUnique", () => {
         await expect(entry.findUnique({ where: { slug: "s" } })).rejects.toThrow(LunoraError);
     });
 });
+
+describe("bindTableFacade — explain", () => {
+    it("describes findMany for the bound table, forwarding the args untouched", async () => {
+        expect.assertions(2);
+
+        const explain = vi.fn<NonNullable<FacadeWriterLike["explain"]>>().mockResolvedValue({ params: [], plan: ["SCAN messages"], sql: "SELECT 1" });
+        const entry = bindTableFacade({ explain } as unknown as FacadeWriterLike, "messages");
+
+        await expect(entry.explain({ where: { room: "lobby" } })).resolves.toStrictEqual({ params: [], plan: ["SCAN messages"], sql: "SELECT 1" });
+        expect(explain).toHaveBeenCalledWith("messages", { where: { room: "lobby" } });
+    });
+
+    it("refuses clearly when the writer cannot describe a query", async () => {
+        expect.assertions(1);
+
+        const entry = bindTableFacade({} as unknown as FacadeWriterLike, "messages");
+
+        await expect(entry.explain()).rejects.toThrow(/messages\.explain is unsupported/u);
+    });
+});

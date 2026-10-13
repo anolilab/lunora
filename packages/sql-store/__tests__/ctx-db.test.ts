@@ -3361,4 +3361,55 @@ describe("createSqlCtxDb — $onUpdateFn on a .global() table", () => {
 
         expect(row?.touched).toBe(99);
     });
+
+    describe("explain", () => {
+        it("describes the statement a read runs, using the engine's own plan", async () => {
+            expect.assertions(4);
+
+            const writer = makeWriter();
+
+            await writer.insert("counters", { name: "a", value: 1 });
+
+            const indexed = await writer.explain?.("counters", { where: { name: "a" } });
+            const scanned = await writer.explain?.("counters", { where: { value: 1 } });
+
+            expect(indexed?.sql).toMatch(/^SELECT .* FROM "counters"/u);
+            expect(indexed?.params).toContain("a");
+            expect(indexed?.plan.join("\n")).toContain("by_name");
+            expect(scanned?.plan.join("\n")).not.toContain("by_name");
+        });
+
+        it("writes nothing and returns no rows", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+
+            await writer.explain?.("counters", { where: { name: "a" } });
+
+            await expect(writer.findMany("counters")).resolves.toMatchObject({ page: [] });
+        });
+
+        it.each([
+            ["postgres", "EXPLAIN SELECT", { "QUERY PLAN": "Seq Scan on counters" }, "Seq Scan on counters"],
+            ["mysql", "EXPLAIN SELECT", { id: 1, key: null, table: "counters" }, "1 | null | counters"],
+        ] as const)("uses plain EXPLAIN on %s and reads that dialect's plan row", async (name, prefix, row, line) => {
+            expect.assertions(2);
+
+            const statements: string[] = [];
+            const base = execOver(database);
+            const exec: SqlCtxExec = {
+                ...base,
+                all: async (query, parameters) => {
+                    statements.push(query);
+
+                    return query.startsWith("EXPLAIN") ? [row] : base.all(query, parameters);
+                },
+            };
+            const writer = makeWriter({ ...makeSqliteDialect(), name }, exec);
+            const result = await writer.explain?.("counters", {});
+
+            expect(statements.some((statement) => statement.startsWith(prefix))).toBe(true);
+            expect(result?.plan).toStrictEqual([line]);
+        });
+    });
 });

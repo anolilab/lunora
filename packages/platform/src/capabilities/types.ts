@@ -39,7 +39,7 @@
  *
  * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
- * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`,
+ * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
  * `websocketHibernation` — is
@@ -302,6 +302,7 @@ export interface PlatformCapabilities {
          * fires. One rating covering both is how that shipped as green.
          */
         cronTriggers?: Capability;
+
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -398,6 +399,7 @@ export interface PlatformCapabilities {
          * host either populates or does not.
          */
         identityProxy?: Capability;
+
         /** Image transforms (resize/format/optimize) via an Images binding. */
         images?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */
@@ -509,6 +511,19 @@ export interface PlatformCapabilities {
          * (`lunora backup`) is {@link PlatformCapabilities.features.objectStorageBackups}.
          */
         pointInTimeRecovery?: Capability;
+
+        /**
+         * Query plans — `ctx.db.<table>.explain(args)`, which returns the SQL a `findMany`
+         * compiles to and the database's own plan for it.
+         *
+         * Carried by no host contract: it prefixes a statement the engines already build with
+         * `EXPLAIN QUERY PLAN` (SQLite, D1) or `EXPLAIN` (Postgres, MySQL), on `localSql` for a
+         * shard-local table and through `@lunora/sql-store` on the `globalTables` backend. The plan
+         * text is the database's own, so its wording differs by backend. A writer that cannot
+         * describe a query omits the method and the call is refused. Advisory by nature (see the
+         * module header).
+         */
+        queryExplain?: Capability;
         /** Queue-backed workpools. */
         queues?: Capability;
 

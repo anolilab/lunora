@@ -75,6 +75,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "json_extract on both paths, over better-sqlite3. It is the same SQLite statement the engine tests run on node:sqlite; it has not been run through better-sqlite3 itself in this host's suite",
         },
+        queryExplain: {
+            level: "native",
+            note: "EXPLAIN QUERY PLAN on better-sqlite3 for both paths. It is the same SQLite statement the engine tests run on node:sqlite; it has not been run through better-sqlite3 itself in this host's suite",
+        },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         serverReactors: {
             level: "emulated",

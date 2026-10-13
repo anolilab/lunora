@@ -420,6 +420,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
                   "aggregate",
                   "count",
                   "delete",
+                  "explain",
                   "findFirst",
                   "findFirstOrThrow",
                   "findMany",

@@ -42,6 +42,7 @@ interface FakeDatabase {
         delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
         deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
         deleteWhere: (tableName: string, args: { limit?: number; where: Record<string, unknown> }) => Promise<{ deleted: number }>;
+        explain: (tableName: string, args?: unknown) => Promise<{ params: unknown[]; plan: string[]; sql: string }>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
@@ -149,6 +150,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
                 }
 
                 return result;
+            },
+            async explain(tableName, args) {
+                calls.push({ args, method: "explain", tableOrId: tableName });
+
+                return { params: [], plan: [], sql: "" };
             },
             async findMany(tableName, args) {
                 calls.push({ args, method: "findMany", tableOrId: tableName });
@@ -332,6 +338,31 @@ describe("rls — read path", () => {
         const findManyCall = database.calls.find((call) => call.method === "findMany");
 
         expect(findManyCall?.args).toMatchObject({
+            baseWhere: { ownerId: "u1" },
+            where: { archived: false },
+        });
+    });
+
+    it("merges the read policy into explain, so the plan is the one this caller's read gets", async () => {
+        expect.assertions(1);
+
+        const policies = definePolicies([
+            definePolicy<TestContext>({
+                on: "read",
+                table: "documents",
+                when: ({ auth }) => {
+                    return { ownerId: auth.userId };
+                },
+            }),
+        ]);
+        const database = createFakeDatabase([]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(policies))
+            .query(async ({ ctx }) => ctx.db.explain("documents", { where: { archived: false } }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.find((call) => call.method === "explain")?.args).toMatchObject({
             baseWhere: { ownerId: "u1" },
             where: { archived: false },
         });

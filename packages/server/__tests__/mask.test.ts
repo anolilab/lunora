@@ -88,6 +88,7 @@ interface FakeDatabase {
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
         delete: (id: string) => Promise<void>;
         deleteWhere: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+        explain: (tableName: string, args?: unknown) => Promise<{ params: unknown[]; plan: string[]; sql: string }>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
@@ -179,6 +180,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
                 }
 
                 return result;
+            },
+            async explain(tableName, args) {
+                calls.push({ args, method: "explain", tableOrId: tableName });
+
+                return { params: [], plan: [], sql: "" };
             },
             async findMany(tableName, args) {
                 calls.push({ args, method: "findMany", tableOrId: tableName });
@@ -1055,6 +1061,21 @@ describe("mask — relation-depth value oracle fails closed (regression)", () =>
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("posts", { with: { author: { where: { ssn: { eq: SSN } } } } }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("refuses explain with a relation PREDICATE on a masked column, since it would inline the matching ids into params", async () => {
+        expect.assertions(2);
+
+        const database = oracleDatabase();
+        const run = async (where: Record<string, unknown>) =>
+            lunora.query
+                .use(maskForTest({ users: { ssn: "redact" } }))
+                .query(async ({ ctx }) => (ctx as unknown as TestContext).db.explain("posts", { where }))
+                .handler(makeContext(database, "u1"), {});
+
+        await expect(run({ author: { is: { ssn: { eq: SSN } } } })).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        // An unmasked filter is described normally.
+        await expect(run({ authorId: "u1" })).resolves.toStrictEqual({ params: [], plan: [], sql: "" });
     });
 
     it("refuses the same filter nested one level deeper in `with`", async () => {
