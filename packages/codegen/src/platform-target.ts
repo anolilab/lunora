@@ -44,6 +44,7 @@ import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { CapabilityKey } from "./capabilities";
 import type { FeatureUsage } from "./discover/feature-usage";
+import type { VectorIndexIR } from "./ir";
 import { readProjectConfigLiterals } from "./project-config-file";
 
 /** The default codegen target — today's behavior, byte-identical goldens. */
@@ -117,6 +118,41 @@ const readTargetDiagnostics = (projectRoot: string, explicit?: string): Platform
             target: DEFAULT_TARGET,
         },
     ];
+};
+
+/** Cloudflare Vectorize's per-index dimension range; `@lunora/ai/rag`'s `maxDimensions` is the same 1536. */
+const VECTORIZE_DIMENSIONS_RANGE = { max: 1536, min: 32 } as const;
+
+/**
+ * A vector index whose `dimensions` Cloudflare Vectorize would reject at index
+ * creation (`IndexInvalidConfig`), which otherwise first surfaces at deploy,
+ * after the Workers that depend on the index are already blocked.
+ *
+ * A warning, not an error: the schema does not say which store backs an index
+ * (`config.vectors(env)` does), and a `cloudflare` app can back it with
+ * pgvector, which accepts other widths. Silent off `cloudflare`: Vectorize is
+ * the only vector store a registered target backs, and the other targets
+ * already reject the index as `platform_unsupported_feature`.
+ */
+const vectorizeDimensionDiagnostics = (target: string, indexes: ReadonlyArray<Pick<VectorIndexIR, "dimensions" | "name">>): PlatformDiagnostic[] => {
+    if (target !== "cloudflare") {
+        return [];
+    }
+
+    const { max, min } = VECTORIZE_DIMENSIONS_RANGE;
+    const range = `${String(min)}-${String(max)}`;
+
+    return indexes
+        .filter(({ dimensions }) => dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions < min || dimensions > max))
+        .map(({ dimensions, name }) => {
+            return {
+                level: "warn",
+                message: `Vector index "${name}" declares ${String(dimensions)} dimensions; Cloudflare Vectorize accepts ${range}, so creating a Vectorize index for it fails at deploy.`,
+                name: "platform_vector_dimensions_out_of_range",
+                remediation: `If a Vectorize index backs "${name}", use ${range} dimensions (many embedding models can truncate output to fit). Ignore this if another store, such as pgvector, backs it.`,
+                target,
+            };
+        });
 };
 
 /**
@@ -349,12 +385,17 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
 interface PlatformDiagnostic {
     /** The codegen capability this concerns, when it is feature-specific. */
     feature?: CapabilityKey;
-    /** Severity. All three names are errors — each drops or misdirects an emitted surface. */
+    /** Severity. Error when the emitted surface would be wrong; warn when codegen fell back to a default or can only suspect a deploy failure. */
     level: "error" | "warn";
     /** Human-readable explanation of the gap. */
     message: string;
-    /** The lint id: `platform_unsupported_feature`, `platform_undeclared_feature`, or `platform_unknown_target`. */
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature";
+    /** The lint id: `platform_unsupported_feature`, `platform_undeclared_feature`, `platform_unknown_target`, `platform_unreadable_target` or `platform_vector_dimensions_out_of_range`. */
+    name:
+        | "platform_undeclared_feature"
+        | "platform_unknown_target"
+        | "platform_unreadable_target"
+        | "platform_unsupported_feature"
+        | "platform_vector_dimensions_out_of_range";
     /** How to resolve it. */
     remediation: string;
     /** The requested deploy target. */
@@ -598,4 +639,5 @@ export {
     readTargetDiagnostics,
     resolveCodegenTarget,
     studioPlatformFor,
+    vectorizeDimensionDiagnostics,
 };

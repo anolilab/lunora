@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.388](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.387...@lunora/cli@1.0.0-alpha.388) (2026-10-13)
+
+### Features
+
+* **codegen:** warn on vector dimensions outside Vectorize's 32-1536 range ([#1145](https://github.com/anolilab/lunora/issues/1145)) ([31fc527](https://github.com/anolilab/lunora/commit/31fc52741a99e7daa0224f3121affdf4d284cb1f))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.295
+* **@lunora/config:** upgraded to 1.0.0-alpha.342
+
 ## @lunora/cli [1.0.0-alpha.387](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.386...@lunora/cli@1.0.0-alpha.387) (2026-10-12)
 
 ### Features

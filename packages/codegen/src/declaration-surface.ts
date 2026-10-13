@@ -70,7 +70,7 @@ import type {
 } from "./ir";
 import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
-import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
+import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget, vectorizeDimensionDiagnostics } from "./platform-target";
 import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
@@ -275,7 +275,8 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // the BROWSER binding — on a target with no headless browser at all.
     usage.browser = usage.browser || sandboxUsage.usesSandboxBrowser;
 
-    const platformGate = gatePlatformFeatures(usage, resolveCodegenTarget(projectRoot, options.target), {
+    const target = resolveCodegenTarget(projectRoot, options.target);
+    const platformGate = gatePlatformFeatures(usage, target, {
         // An agent needs both a workflow engine to mount its generated class and
         // model inference to run its loop, which is why it is rated on its own
         // key rather than inherited from `workflows`.
@@ -371,7 +372,11 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             ...platformGate,
             // Prepended, not appended: "your target was not read" explains every
             // feature diagnostic that follows it, so it has to be read first.
-            diagnostics: [...readTargetDiagnostics(projectRoot, options.target), ...platformGate.diagnostics],
+            diagnostics: [
+                ...readTargetDiagnostics(projectRoot, options.target),
+                ...platformGate.diagnostics,
+                ...vectorizeDimensionDiagnostics(target, schema.vectorIndexes),
+            ],
         },
         queues,
         serverContent: emitServer({

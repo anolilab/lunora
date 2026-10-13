@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.294...@lunora/codegen@1.0.0-alpha.295) (2026-10-13)
+
+### Features
+
+* **codegen:** warn on vector dimensions outside Vectorize's 32-1536 range ([#1145](https://github.com/anolilab/lunora/issues/1145)) ([31fc527](https://github.com/anolilab/lunora/commit/31fc52741a99e7daa0224f3121affdf4d284cb1f))
+
 ## @lunora/codegen [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.293...@lunora/codegen@1.0.0-alpha.294) (2026-10-12)
 
 ### Features
