@@ -132,8 +132,23 @@ describe("discoverSchema — table modes", () => {
             ],
             [
                 "a declared column that does not restamp",
-                "export const schema = defineSchema({ a: defineTable({ updatedAt: v.number() }).timestamps() });",
-                "without `$onUpdateFn`",
+                "export const schema = defineSchema({ a: defineTable({ updatedAt: v.timestamp().defaultNow() }).timestamps() });",
+                "already declares it",
+            ],
+            [
+                "a declared column with no insert default",
+                "export const schema = defineSchema({ a: defineTable({ updatedAt: v.timestamp().$onUpdateFn(() => 1) }).timestamps() });",
+                "already declares it",
+            ],
+            [
+                "a declared column that is not a timestamp",
+                "export const schema = defineSchema({ a: defineTable({ updatedAt: v.string().$onUpdateFn(() => 'x') }).timestamps() });",
+                "already declares it",
+            ],
+            [
+                "options that are not an object literal",
+                'const O = { field: "modifiedAt" }; export const schema = defineSchema({ a: defineTable({ s: v.string() }).timestamps(O) });',
+                "object literal",
             ],
         ])("refuses %s, as the runtime builder does", (_label, source, message) => {
             expect.assertions(1);
@@ -149,7 +164,7 @@ describe("discoverSchema — table modes", () => {
 
                 export const schema = defineSchema({
                     a: defineTable({ status: v.string() }).timestamps({ field: "modifiedAt" }),
-                    b: defineTable({ updatedAt: v.timestamp().$onUpdateFn(() => 1) }).timestamps(),
+                    b: defineTable({ updatedAt: v.timestamp().defaultNow().$onUpdateFn(() => 1) }).timestamps(),
                 });
             `);
 

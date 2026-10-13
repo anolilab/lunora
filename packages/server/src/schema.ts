@@ -749,14 +749,21 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
                 throw new LunoraError("INTERNAL", `defineTable: .softDelete() and .timestamps() both use "${field}"; give one of them another field`);
             }
 
-            // A column the author declared is kept, but only if it already restamps on update: a plain
-            // `updatedAt: v.number()` would make this call silently do nothing.
-            const declared = (shape as Record<string, { _meta?: { column?: { onUpdateFn?: unknown } } }>)[field];
+            // A column the author declared is kept, but only if it already honours the contract `.timestamps()`
+            // promises: epoch milliseconds, stamped on insert and restamped on every update. Anything less would make
+            // this call silently do nothing, or stamp a column of the wrong type.
+            const declared = (
+                shape as Record<string, { _meta?: { column?: { defaultFn?: unknown; defaultValue?: unknown; onUpdateFn?: unknown } }; kind?: string }>
+            )[field];
+            const column = declared?._meta?.column;
 
-            if (declared !== undefined && declared._meta?.column?.onUpdateFn === undefined) {
+            if (
+                declared !== undefined &&
+                (declared.kind !== "timestamp" || column?.onUpdateFn === undefined || (column.defaultFn === undefined && column.defaultValue === undefined))
+            ) {
                 throw new LunoraError(
                     "INTERNAL",
-                    `defineTable: .timestamps() would add "${field}", but the table already declares it without $onUpdateFn; remove the column or add .$onUpdateFn(() => Date.now())`,
+                    `defineTable: .timestamps() would add "${field}", but the table already declares it as something other than v.timestamp().defaultNow().$onUpdateFn(() => Date.now()); remove the column or declare it that way`,
                 );
             }
 

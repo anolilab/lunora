@@ -469,8 +469,15 @@ interface TableBuilderAccumulator {
  * never creates, so a `field` that is not a string literal is refused.
  */
 const fieldOptionOf = (optionsArgument: Node | undefined, fallback: string): string => {
-    if (!optionsArgument || !Node.isObjectLiteralExpression(optionsArgument)) {
+    if (optionsArgument === undefined) {
         return fallback;
+    }
+
+    if (!Node.isObjectLiteralExpression(optionsArgument)) {
+        throw diagnosticAt(
+            optionsArgument,
+            "the options must be an object literal — codegen reads the column name from the source and cannot evaluate a variable or an expression here.",
+        );
     }
 
     const fieldProperty = findObjectProperty(optionsArgument, "field");
@@ -758,10 +765,10 @@ const withInjectedColumns = (expression: Expression, shape: Record<string, Valid
 
     if (declared === undefined) {
         injected[timestamps] = { column: { hasDefault: true, hasOnUpdate: true, notNull: true }, kind: "timestamp" };
-    } else if (declared.column?.hasOnUpdate !== true) {
+    } else if (declared.kind !== "timestamp" || declared.column?.hasOnUpdate !== true || declared.column.hasDefault !== true) {
         throw diagnosticAt(
             expression,
-            `\`.timestamps()\` would add "${timestamps}", but the table already declares it without \`$onUpdateFn\`; remove the column or add \`.$onUpdateFn(() => Date.now())\`.`,
+            `\`.timestamps()\` would add "${timestamps}", but the table already declares it as something other than \`v.timestamp().defaultNow().$onUpdateFn(() => Date.now())\`; remove the column or declare it that way.`,
         );
     }
 

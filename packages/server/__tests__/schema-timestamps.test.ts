@@ -41,10 +41,14 @@ describe("defineTable().timestamps()", () => {
         expect(table.shape["updatedAt"]).toBe(declared);
     });
 
-    it("refuses a declared column that would not restamp, instead of silently doing nothing", () => {
+    it.each([
+        ["one that does not restamp", v.timestamp().defaultNow()],
+        ["one with no insert default", v.timestamp().$onUpdateFn(() => 1)],
+        ["one that is not a timestamp", v.string().$onUpdateFn(() => "now")],
+    ])("refuses a declared column that breaks the contract (%s), instead of silently doing nothing", (_label, declared) => {
         expect.assertions(1);
 
-        expect(() => defineTable({ title: v.string(), updatedAt: v.timestamp() }).timestamps()).toThrow("without $onUpdateFn");
+        expect(() => defineTable({ title: v.string(), updatedAt: declared }).timestamps()).toThrow("already declares it");
     });
 
     it("composes with softDelete on different fields", () => {
