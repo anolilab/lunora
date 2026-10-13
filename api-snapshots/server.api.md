@@ -2518,6 +2518,9 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
         field?: string;
     }) => TableBuilder<Shape>;
     source: (definition: ExternalSourceDefinition) => TableBuilder<Shape>;
+    timestamps: <Field extends string = "updatedAt">(options?: {
+        field?: Field;
+    }) => TableBuilder<string extends Field ? Shape : Field extends keyof Shape ? Shape : Record<Field, ColumnValidator<number, number | undefined>> & Shape>;
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
     ttl: (field: keyof Shape & string, options?: {
         after?: number;

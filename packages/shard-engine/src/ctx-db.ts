@@ -3130,7 +3130,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Soft delete unless the caller forced a physical removal (`hard`).
             // `softField` undefined ⇒ the legacy physical path.
             const hard = deleteOptions?.hard === true;
-            const softField = !hard && definition?.softDeleteMode ? definition.softDeleteMode.field : undefined;
+            const softDeleteTable = !hard && definition?.softDeleteMode ? definition : undefined;
+            const softField = softDeleteTable?.softDeleteMode?.field;
 
             // Idempotent: a second soft delete of an already-soft-deleted row is a
             // no-op (re-running the cascade + broadcast would be spurious).
@@ -3177,7 +3178,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
 
-            if (softField) {
+            if (softDeleteTable && softField) {
                 // Soft delete: keep the row, stamp the marker column. Mechanically
                 // an UPDATE, so companions re-sync to the merged doc and the delta
                 // broadcasts as `update` — live LIST queries re-run and drop the
@@ -3191,7 +3192,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // the row and advances `_commitSeq` like any other — otherwise a
                 // changefeed paging on the sequence would never observe the
                 // tombstone and would keep serving a row its source considers gone.
-                const merged: Record<string, unknown> = { ...existing, ...commitSeqFields(tableName), [softField]: clock(), _id: id };
+                const marker = { [softField]: clock() };
+                const merged: Record<string, unknown> = { ...existing, ...commitSeqFields(tableName), ...marker, _id: id };
+
+                // The marker is this write's explicit field; every other `$onUpdateFn` column restamps like any other update.
+                applyOnUpdate(softDeleteTable, marker, merged, auth);
 
                 runGuardedWrite(sql, tableName, patchRowSql(tableName), [encodeDocJson(merged), id, existingJson]);
 

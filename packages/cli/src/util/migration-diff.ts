@@ -150,8 +150,14 @@ const renderCreateTable = (table: TableSnapshot): string => {
 
 const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 
+/**
+ * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
+ * that already has rows, and D1 is SQLite, so a NOT NULL add fails exactly when it matters. The runtime
+ * auto-provisioner makes the same choice (see `alterGlobalTableDrift` in `@lunora/sql-store`), and the declared
+ * `notNull` is still enforced on write. Existing rows read the new column as NULL until they are written.
+ */
 const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string =>
-    `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, column)};`;
+    `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, { ...column, nullable: true })};`;
 
 const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     const fields = index.fields.map((field) => columnRef(field)).join(", ");

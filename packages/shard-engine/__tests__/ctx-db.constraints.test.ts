@@ -239,6 +239,43 @@ describe("ctx-db constraints", () => {
     });
 
     describe("$onUpdateFn", () => {
+        it("restamps the column when delete flips the marker", async () => {
+            expect.assertions(2);
+
+            let revs = 0;
+            const schema: SchemaLike = {
+                tables: {
+                    items: {
+                        indexes: [],
+                        shape: {
+                            deletedAt: col("number", { notNull: false }),
+                            rev: col("number", {
+                                onUpdateFn: () => {
+                                    revs += 1;
+
+                                    return revs;
+                                },
+                            }),
+                            title: col("string"),
+                        },
+                        softDeleteMode: { field: "deletedAt" },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            const writer = createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+
+            await writer.insert("items", { _id: "i1", title: "first" }, { allowExplicitId: true });
+            await writer.delete("i1");
+
+            const doc = await writer.get("i1");
+
+            expect(doc?.["deletedAt"]).toBe(FIXED_CLOCK);
+            expect(doc?.["rev"]).toBe(1);
+        });
+
         it("recomputes on each patch that omits the field", async () => {
             expect.assertions(3);
 
@@ -258,6 +295,27 @@ describe("ctx-db constraints", () => {
 
             expect(afterSecondPatch?.["rev"]).toBe(2);
             expect(revCalls()).toBe(2);
+        });
+
+        it("recomputes through patchIf and patchWhere as well", async () => {
+            expect.assertions(3);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patchIf?.("items", "i1", { patch: { title: "second" }, where: { title: "first" } });
+
+            const afterPatchIf = await writer.get("i1");
+
+            expect(afterPatchIf?.["rev"]).toBe(1);
+
+            await writer.patchWhere?.("items", { patch: { title: "third" }, where: { slug: "a" } });
+
+            const afterPatchWhere = await writer.get("i1");
+
+            expect(afterPatchWhere?.["rev"]).toBe(2);
+            expect(afterPatchWhere?.["title"]).toBe("third");
         });
 
         it("is skipped when the patch sets the field explicitly", async () => {

@@ -3305,3 +3305,60 @@ describe("createSqlCtxDb — dotted paths into an object column", () => {
         });
     });
 });
+
+describe("createSqlCtxDb — $onUpdateFn on a .global() table", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("patchIf restamps an `$onUpdateFn` column", async () => {
+        expect.assertions(1);
+
+        const touchedSchema = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: { slug: col("string"), touched: col("number", { defaultValue: 0, onUpdateFn: () => 99 }) },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: touchedSchema });
+        const id = await writer.insert("notes", { slug: "a" });
+
+        await writer.patchIf?.("notes", id, { patch: { slug: "b" }, where: { slug: "a" } });
+
+        const row = await writer.get(id);
+
+        expect(row?.touched).toBe(99);
+    });
+
+    it("soft delete restamps an `$onUpdateFn` column like any other update", async () => {
+        expect.assertions(1);
+
+        const touchedSchema = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: { deletedAt: optionalCol("number"), slug: col("string"), touched: col("number", { defaultValue: 0, onUpdateFn: () => 99 }) },
+                    shardMode: { kind: "global" },
+                    softDeleteMode: { field: "deletedAt" },
+                },
+            },
+        } as never;
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: touchedSchema });
+        const id = await writer.insert("notes", { slug: "a" });
+
+        await writer.delete(id);
+
+        const row = await writer.findFirst("notes", { includeDeleted: true, where: { slug: "a" } });
+
+        expect(row?.touched).toBe(99);
+    });
+});

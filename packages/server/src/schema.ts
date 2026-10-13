@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "@lunora/search-core";
-import type { Validator } from "@lunora/values";
+import type { ColumnValidator, Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 
 import { effectiveKind } from "../../../shared/effective-kind";
@@ -346,6 +346,28 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      */
     source: (definition: ExternalSourceDefinition) => TableBuilder<Shape>;
 
+    /**
+     * Track when a row last changed. Adds an epoch-millisecond column
+     * (`options.field`, default `updatedAt`) that is stamped on insert and
+     * restamped on every update (any `patch` or `replace`, including a soft delete
+     * and `restore()`) unless the write sets it explicitly. Shorthand for
+     * `v.timestamp().defaultNow().$onUpdateFn(() => Date.now())`. Creation time is
+     * already on every row as `_creationTime`.
+     *
+     * A column of the same name that you declare yourself is kept only if it already
+     * recomputes on update (`$onUpdateFn`); otherwise this throws, since a plain
+     * column of that name would make the call do nothing. It also throws when called
+     * twice, or on the field `.softDelete()` uses.
+     *
+     * Call it **before** `.index()` / `.ttl()` to reference the column there
+     * (`.timestamps().index("by_updated", ["updatedAt"])`): the chain's types only
+     * know the columns added so far. Rows written before the column existed read back
+     * without it until their next write.
+     */
+    timestamps: <Field extends string = "updatedAt">(options?: {
+        field?: Field;
+    }) => TableBuilder<string extends Field ? Shape : Field extends keyof Shape ? Shape : Record<Field, ColumnValidator<number, number | undefined>> & Shape>;
+
     /** Declare named lifecycle triggers fired inline within the write path. */
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
 
@@ -437,8 +459,8 @@ interface VectorIndexOptions {
  * `defineSchema`) and a fluent builder for indexes + sharding metadata.
  */
 const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape): TableBuilder<Shape> => {
-    // Work on a shallow copy so `.softDelete()` can inject its marker column
-    // without mutating the caller's object literal.
+    // Work on a shallow copy so `.softDelete()` and `.timestamps()` can inject their
+    // columns without mutating the caller's object literal.
     const shape = { ...inputShape };
 
     const aggregateIndexes: AggregateIndexDefinition[] = [];
@@ -458,6 +480,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     let isPublic = false;
     let ownerField: string | undefined;
     let softDelete: { field: string } | undefined;
+    let timestampsField: string | undefined;
+
+    /** Add a column the author did not write. A column of the same name that the author declared wins. */
+    const injectColumn = (field: string, validator: Validator): void => {
+        if (!(field in shape)) {
+            (shape as Record<string, Validator>)[field] = validator;
+        }
+    };
     let ttl: TtlDefinition | undefined;
     let externalSource: ExternalSourceDefinition | undefined;
 
@@ -697,11 +727,50 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             // and nullable so `restore()` can clear it with `patch({ [field]: null })`;
             // set to `Date.now()` on soft delete. Idempotent — if the user already
             // declared the column, their validator wins.
-            if (!(field in shape)) {
-                (shape as Record<string, Validator>)[field] = v.optional(v.number().nullable());
+            if (field === timestampsField) {
+                throw new LunoraError("INTERNAL", `defineTable: .softDelete() and .timestamps() both use "${field}"; give one of them another field`);
             }
 
+            injectColumn(field, v.optional(v.number().nullable()));
+
             return builder;
+        },
+        timestamps(options) {
+            const field = options?.field ?? "updatedAt";
+
+            if (timestampsField !== undefined) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineTable: .timestamps() was called twice ("${timestampsField}" and "${field}"); one table tracks one last-change column`,
+                );
+            }
+
+            if (field === softDelete?.field) {
+                throw new LunoraError("INTERNAL", `defineTable: .softDelete() and .timestamps() both use "${field}"; give one of them another field`);
+            }
+
+            // A column the author declared is kept, but only if it already restamps on update: a plain
+            // `updatedAt: v.number()` would make this call silently do nothing.
+            const declared = (shape as Record<string, { _meta?: { column?: { onUpdateFn?: unknown } } }>)[field];
+
+            if (declared !== undefined && declared._meta?.column?.onUpdateFn === undefined) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineTable: .timestamps() would add "${field}", but the table already declares it without $onUpdateFn; remove the column or add .$onUpdateFn(() => Date.now())`,
+                );
+            }
+
+            timestampsField = field;
+            injectColumn(
+                field,
+                v
+                    .timestamp()
+                    .defaultNow()
+                    .$onUpdateFn(() => Date.now()),
+            );
+
+            // The widened return type adds the column to `Shape`; the runtime object is the same builder.
+            return builder as never;
         },
         get triggerMap() {
             return triggers;

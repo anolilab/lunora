@@ -3143,7 +3143,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // Soft delete: keep the row, stamp the marker via an all-column
                 // UPDATE (same encoding as `patch`). Companions re-sync to the
                 // merged row; read scoping (not companion removal) hides it.
-                const merged: Record<string, unknown> = { ...existing, [softField]: clock() };
+                const marker = { [softField]: clock() };
+                const merged: Record<string, unknown> = { ...existing, ...marker };
+
+                // The marker is this write's explicit field; every other `$onUpdateFn` column restamps like any other update.
+                applyOnUpdate(definition, marker, merged, auth);
                 const assignments = sql.join(
                     Object.keys(definition.shape).map(
                         // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.

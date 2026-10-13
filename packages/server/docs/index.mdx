@@ -41,6 +41,7 @@ Create a `TableBuilder`. Fluent methods:
 - `.searchIndex(name, { field, filterFields?, language?, staged? })`: full-text index over `field` (a dot path reads a nested field); `filterFields` (≤16) are the columns `.eq()` may narrow by inside the search; `language` adds that language's stopwords to the always-on accent folding (`de`/`en`/`es`/`fr`/`it`/`nl`/`pt`); `staged: true` skips the migration-time backfill on a large table; `strategy: "native"` uses the engine's own full-text index where it has one (Postgres `tsvector` + GIN), which is faster on large corpora, but the engine ranks, so ordering no longer matches the other backends
 - `.public()`: exempt this table from `.rls("required")` (when secure-by-default is on)
 - `.softDelete({ field? })`: `delete()` flips a marker column (default `deletedAt`) instead of removing the row, and list reads hide soft-deleted rows
+- `.timestamps({ field? })`: adds an epoch-millisecond column (default `updatedAt`) stamped on insert and restamped on every update (any `patch` or `replace`, including soft delete and `restore()`) unless the write sets it. Creation time is already on every row as `_creationTime`
 
 ## Validators (`v.*`)
 
