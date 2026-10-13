@@ -22,6 +22,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { readFieldPath } from "../../../../shared/json-field-path";
 import { isRelationPredicate } from "../../../../shared/relation-operators";
 // `isPlainObject` comes from the wire codec rather than being re-declared here.
 // The prototype check it carries is load-bearing: a local `typeof === "object"`
@@ -401,7 +402,8 @@ const evaluateWhere = (document: Record<string, unknown>, where: WhereInput): Te
             continue;
         }
 
-        const documentValue = document[key];
+        // A dotted key reads into an object column, the same way the SQL path does.
+        const documentValue = readFieldPath(document, key);
 
         if (isOperatorBag(value)) {
             result = kleeneAnd(result, matchesOperators(key, documentValue, value));

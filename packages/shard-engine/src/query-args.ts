@@ -27,6 +27,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { readFieldPath } from "../../../shared/json-field-path";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
@@ -351,7 +352,7 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
     // `where: { col: { eq: undefined } }` keeps failing loudly instead of
     // quietly becoming `col IS NULL`.
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the domain value a cursor carries, not a JS absence
-    const values: unknown[] = keys.map((key) => record[key.field] ?? null);
+    const values: unknown[] = keys.map((key) => readFieldPath(record, key.field) ?? null);
 
     values.push(record["_id"]);
 

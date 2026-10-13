@@ -71,6 +71,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "SQLite decides it on both paths: shard-local in one synchronous better-sqlite3 run, .global() in one conditional UPDATE on the host's own SQLite file (one node, so nothing to replicate)",
         },
+        objectColumnPaths: {
+            level: "native",
+            note: "json_extract on both paths, over better-sqlite3. It is the same SQLite statement the engine tests run on node:sqlite; it has not been run through better-sqlite3 itself in this host's suite",
+        },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         serverReactors: {
             level: "emulated",

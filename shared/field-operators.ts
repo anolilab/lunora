@@ -16,6 +16,7 @@
  * RLS write gate all need the same rule and none depends on another. Inlined by
  * the bundler; keep it dependency-free.
  */
+import { expandFieldPaths, FieldPathError } from "./json-field-path";
 import { isPlainObject } from "./wire-codec";
 
 /** What a column has to be for an operator to apply to it. */
@@ -142,12 +143,13 @@ const resolveFieldOperators = (
 };
 
 /**
- * The same resolution without a schema, for a layer that only holds the row: the RLS write gate previewing the
- * post-image a policy is checked against, and the client applying a plan to its local copy. The kind is taken from
- * the row's current value. Each field is resolved on its own, and one that cannot be applied is left as it was:
- * the store that performs the write is authoritative and raises the error.
+ * The patch as the store will apply it, resolved without a schema, for a layer that only holds the row: the RLS
+ * write gate previewing the post-image a policy is checked against, and the client applying a plan to its local
+ * copy. The kind of an operator column is taken from the row's current value. Each field is resolved on its own
+ * and one that cannot be applied is left as it was, since the store that performs the write is authoritative and
+ * raises the error; dotted paths are folded into their columns the same way.
  */
-const previewFieldOperators = (patch: Record<string, unknown>, current: Record<string, unknown>): Record<string, unknown> => {
+const previewPatch = (patch: Record<string, unknown>, current: Record<string, unknown>): Record<string, unknown> => {
     const kindOf = (field: string): OperatorKind | undefined => {
         const value = current[field];
 
@@ -165,8 +167,16 @@ const previewFieldOperators = (patch: Record<string, unknown>, current: Record<s
         }
     }
 
-    return resolved;
+    try {
+        return expandFieldPaths(resolved, current);
+    } catch (error) {
+        if (error instanceof FieldPathError) {
+            return resolved;
+        }
+
+        throw error;
+    }
 };
 
 export type { OperatorKind };
-export { FieldOperatorError, isFieldOperator, operatorFields, previewFieldOperators, resolveFieldOperators };
+export { FieldOperatorError, isFieldOperator, operatorFields, previewPatch, resolveFieldOperators };

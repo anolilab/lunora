@@ -1216,6 +1216,39 @@ describe("mask — value oracle via filter/sort fails closed (regression)", () =
         expect(database.calls.some((call) => call.method === "findMany")).toBe(false);
     });
 
+    it.each([
+        ["a where key", (db: TestContext["db"]) => db.findMany("users", { where: { "profile.ssn": { eq: "123-45-6789" } } })],
+        ["a where key under OR", (db: TestContext["db"]) => db.findMany("users", { where: { OR: [{ "profile.ssn": "123-45-6789" }] } })],
+        ["an orderBy key", (db: TestContext["db"]) => db.findMany("users", { orderBy: [{ "profile.ssn": "asc" }] })],
+        ["an aggregate field", (db: TestContext["db"]) => db.aggregate("users", { field: "profile.ssn", op: "sum" })],
+        ["a count where", (db: TestContext["db"]) => db.count("users", { "profile.ssn": "123-45-6789" })],
+    ])("a dotted path into a masked column is rejected as %s", async (_label, read) => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "u1", profile: { ssn: "123-45-6789" }, table: "users" }]);
+
+        const handler = lunora.query.use(maskForTest({ users: { profile: "redact" } })).query(async ({ ctx }) => read((ctx as unknown as TestContext).db));
+
+        // `profile.ssn` is a probe of the masked `profile` column just as `profile` is: the path must not
+        // slip past a guard that compares whole field names.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+        expect(database.calls).toHaveLength(0);
+    });
+
+    it("lets a dotted path into an unmasked column through", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "u1", profile: { plan: "pro" }, table: "users" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { ssn: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("users", { where: { "profile.plan": "pro" } }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.some((call) => call.method === "findMany")).toBe(true);
+    });
+
     it("a masked column nested under an OR/NOT where is still rejected", async () => {
         expect.assertions(1);
 

@@ -124,7 +124,7 @@ describe("deriveRelationEdges", () => {
                     // that a nested id is NOT an edge however it is spelled.
                     shape: {
                         body: text,
-                        meta: { _meta: { shape: { ownerId: idColumn("users") } } as never, kind: "object" },
+                        meta: { _meta: { shape: { ownerId: idColumn("users") } }, kind: "object" },
                     },
                 },
                 users: { indexes: [], shape: { name: text } },

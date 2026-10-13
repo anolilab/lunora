@@ -13,6 +13,7 @@
 
 import { LunoraError } from "@lunora/errors";
 
+import { readFieldPath } from "../../../shared/json-field-path";
 import type { RestrictableQueryOptions, SchedulerLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
@@ -44,7 +45,7 @@ const noScheduler = (): never => {
 export const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record<string, unknown>): boolean => {
     for (const [field, expected] of Object.entries(predicate)) {
         // eslint-disable-next-line unicorn/no-null -- an absent document field IS SQL NULL to the read path; see the note above
-        const actual = document[field] ?? null;
+        const actual = readFieldPath(document, field) ?? null;
 
         if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
             const operatorKeys = Object.keys(expected);

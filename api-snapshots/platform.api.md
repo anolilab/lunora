@@ -311,6 +311,7 @@ interface PlatformCapabilities {
         logArchive?: Capability;
         mail?: Capability;
         memoryTables?: Capability;
+        objectColumnPaths?: Capability;
         objectStorage?: Capability;
         objectStorageBackups?: Capability;
         objectStorageCdcArchive?: Capability;

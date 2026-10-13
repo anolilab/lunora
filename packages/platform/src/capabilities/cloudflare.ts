@@ -31,6 +31,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "Shard-local: one synchronous state.storage.sql run. .global(): one conditional UPDATE on D1, so concurrent callers stay atomic although D1 calls do not hold the Durable Object's input gate",
         },
+        objectColumnPaths: {
+            level: "native",
+            note: "json_extract over the Durable Object's document, and over the JSON-text column of a .global() table on D1; both run against the real engines (workerd and a D1 binding) in the test suite. A Hyperdrive Postgres or MySQL .global() backend refuses a path filter with NOT_IMPLEMENTED",
+        },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         serverReactors: {
             level: "emulated",

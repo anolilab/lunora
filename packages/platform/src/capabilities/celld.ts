@@ -123,6 +123,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "The same two statements as on Cloudflare: shard-local over the cell's state.storage.sql, .global() as one conditional UPDATE on the fleet-backed D1 binding",
         },
+        objectColumnPaths: {
+            level: "native",
+            note: "The same json_extract statements as on Cloudflare, over the cell's state.storage.sql and the fleet-backed D1 binding. Not run against a live celld node in this change",
+        },
         localSql: {
             level: "native",
             note: "`state.storage.sql` over the cell's own SQLite database, replicated to the fleet bucket. One edge: `Cursor.toArray()` raises a celld-specific error when the isolate is near its 128 MB V8 heap limit rather than materialising the set",

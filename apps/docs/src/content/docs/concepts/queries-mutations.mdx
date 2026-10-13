@@ -89,6 +89,25 @@ dropped as stale because the counter it increments moved.
 optimistic body and server body share a plan stays in agreement. In a hand-written
 optimistic update you do the arithmetic yourself.
 
+### Updating one key inside an object column
+
+A dotted key in `patch` sets one value inside an object column and keeps the rest of the object:
+
+```ts
+await ctx.db.users.patch(id, { "profile.plan": "team", "profile.address.city": "Paris" });
+```
+
+Several paths into the same column fold into one write. Missing objects on the way down are created. Every
+path is checked against the schema first (each step must name a field of the nested `v.object`, and the
+value must satisfy its validator), so a typo or a wrong type is a `VALIDATION_ERROR` rather than a stray key.
+Setting a column and a path into it in the same patch is refused as ambiguous, and an operator such as
+`increment` applies to a top-level column only.
+
+The merge is made against the row the store reads when the write runs, and on a `.global()` table a
+lost version check re-reads and re-applies it rather than reporting a conflict. A path patch works with `patchIf`
+and `patchMany`, your RLS update policy sees the merged row, and `.dropStalePatches()` judges it by
+the value at the end of the path, so someone else editing a different key of the same object is not a conflict.
+
 ### Batch writes
 
 `insertMany` / `deleteMany` / `patchMany` apply many rows in **one** call. That

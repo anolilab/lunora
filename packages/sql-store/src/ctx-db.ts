@@ -89,14 +89,14 @@ import {
     normalizeOrderKeys,
     NotFoundError,
     NotUniqueError,
-    operatorFields,
+    patchDependsOnRow,
     RANK_TIEBREAK,
     rankPivotConditionSql,
     rankTableName,
     readAggregateValue,
     relationHooks,
     renderSql,
-    resolvePatchOperators,
+    resolvePatch,
     resolveRankPartition,
     resolveRankSeekTuple,
     resolveRelationPredicates,
@@ -120,6 +120,7 @@ import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { readFieldPath } from "../../../shared/json-field-path";
 import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import { runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
 import type { SearchStage } from "./ctx-db-search";
@@ -134,6 +135,7 @@ import {
     createIndexIfNotExists,
     decodeRow,
     decodeRows,
+    fieldRefSql,
     forEachRowPaged,
     nextRowVersion,
     nullSafeEqualsSql,
@@ -197,7 +199,9 @@ const nullsPlacement = (dialect: SqlDialect, key: { direction?: string; nullable
  * NULL placement is the other half of that agreement — see {@link nullsPlacement}.
  */
 const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string; nullable?: boolean }>, dialect: SqlDialect): SQL => {
-    const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(`${key.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, key)}`)}`);
+    const parts = keys.map(
+        (key) => sql`${fieldRefSql(dialect, key.field)} ${sql.raw(`${key.direction === "desc" ? "DESC" : "ASC"}${nullsPlacement(dialect, key)}`)}`,
+    );
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
         // No adaptation: the helper reads `direction` off the last key and
@@ -556,7 +560,8 @@ const mapGroupByRows = (definition: TableDefinitionLike, by: ReadonlyArray<strin
 const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
     const fields = [...(index.partitionBy ?? []), ...index.sortBy.map((key) => key.field), ...(index.where ? Object.keys(index.where) : [])];
 
-    return fields.every((field) => previous[field] === next[field]);
+    // `where` keys may be dotted paths into an object column; read them the way the SQL and the matcher do.
+    return fields.every((field) => readFieldPath(previous, field) === readFieldPath(next, field));
 };
 
 /**
@@ -1550,7 +1555,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // and (on D1) the bound-parameter budget. `serialize` is per-TABLE — see
     // {@link whereSqlStrategyFor}.
     const whereSqlStrategyBase: Omit<WhereSqlStrategy, "serialize"> = {
-        fieldRef: columnRefSql,
+        fieldRef: (field) => fieldRefSql(dialect, field),
         // `contains` keeps whatever case behaviour each engine's substring test
         // already gives callers, which is NOT the same across the three: SQLite is
         // ASCII-case-insensitive (the compiler's `instr(lower(…), lower(…))`
@@ -1971,8 +1976,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         for (const [key, expected] of Object.entries(index.where ?? {})) {
             const literal = expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected;
             const value = serialize(key, literal);
+            // A static `where` key may be a dotted path into an object column.
+            const reference = fieldRefSql(dialect, key);
 
-            conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
+            conditions.push(value === null ? sql`${reference} IS NULL` : sql`${reference} = ${value}`);
         }
 
         const whereSql = conditions.length > 0 ? sql` WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
@@ -2629,7 +2636,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         // Atomic field operators resolve against THIS read; the version check below
         // rejects the write if the row has moved since, and `patch` re-reads.
-        const effectivePatch = resolvePatchOperators(definition, patch, existing);
+        const effectivePatch = resolvePatch(definition, patch, existing);
         const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(effectivePatch), _id: id };
 
         applyOnUpdate(definition, effectivePatch, merged, auth);
@@ -3614,7 +3621,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // can let a concurrent write slip in. A plain patch that loses the version check is a real
             // conflict. An operator patch (`{ increment: 1 }`) is a function of the row, not a value the
             // caller saw, so it re-reads and re-resolves: concurrent counters must not throw.
-            const attempts = operatorFields(definition, patch).size > 0 ? OCC_RETRY_ATTEMPTS : 1;
+            const attempts = patchDependsOnRow(definition, patch) ? OCC_RETRY_ATTEMPTS : 1;
 
             for (let attempt = 0; attempt < attempts; attempt += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row a lost race moved

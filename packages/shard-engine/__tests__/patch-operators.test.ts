@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { operatorFields, resolvePatchOperators } from "../src/patch-operators";
+import { operatorFields, resolvePatch } from "../src/patch-operators";
 import type { TableDefinitionLike, ValidatorLike } from "../src/schema-types";
 
 const col = (kind: string): ValidatorLike => {
@@ -31,35 +31,35 @@ const definition: TableDefinitionLike = {
 
 const row = { flag: false, label: "x", maybe: 4, maybeUnion: 8, meta: {}, mixed: 1, n: 10, optionalUnion: 6, startsOn: 1000, tier: 1, updatedAt: 2000 };
 
-describe("resolvePatchOperators", () => {
+describe("resolvePatch", () => {
     it("applies the arithmetic operators against the current value", () => {
         expect.assertions(4);
 
-        expect(resolvePatchOperators(definition, { n: { increment: 5 } }, row)).toStrictEqual({ n: 15 });
-        expect(resolvePatchOperators(definition, { n: { decrement: 3 } }, row)).toStrictEqual({ n: 7 });
-        expect(resolvePatchOperators(definition, { n: { multiply: 2 } }, row)).toStrictEqual({ n: 20 });
-        expect(resolvePatchOperators(definition, { n: { divide: 4 } }, row)).toStrictEqual({ n: 2.5 });
+        expect(resolvePatch(definition, { n: { increment: 5 } }, row)).toStrictEqual({ n: 15 });
+        expect(resolvePatch(definition, { n: { decrement: 3 } }, row)).toStrictEqual({ n: 7 });
+        expect(resolvePatch(definition, { n: { multiply: 2 } }, row)).toStrictEqual({ n: 20 });
+        expect(resolvePatch(definition, { n: { divide: 4 } }, row)).toStrictEqual({ n: 2.5 });
     });
 
     it("toggles a boolean and sees through v.optional", () => {
         expect.assertions(2);
 
-        expect(resolvePatchOperators(definition, { flag: { toggle: true } }, row)).toStrictEqual({ flag: true });
-        expect(resolvePatchOperators(definition, { maybe: { increment: 1 } }, row)).toStrictEqual({ maybe: 5 });
+        expect(resolvePatch(definition, { flag: { toggle: true } }, row)).toStrictEqual({ flag: true });
+        expect(resolvePatch(definition, { maybe: { increment: 1 } }, row)).toStrictEqual({ maybe: 5 });
     });
 
     it("treats timestamps, dates and a nullable-number union as number columns", () => {
         expect.assertions(3);
 
-        expect(resolvePatchOperators(definition, { updatedAt: { increment: 500 } }, row)).toStrictEqual({ updatedAt: 2500 });
-        expect(resolvePatchOperators(definition, { startsOn: { decrement: 1 } }, row)).toStrictEqual({ startsOn: 999 });
-        expect(resolvePatchOperators(definition, { maybeUnion: { multiply: 2 } }, row)).toStrictEqual({ maybeUnion: 16 });
+        expect(resolvePatch(definition, { updatedAt: { increment: 500 } }, row)).toStrictEqual({ updatedAt: 2500 });
+        expect(resolvePatch(definition, { startsOn: { decrement: 1 } }, row)).toStrictEqual({ startsOn: 999 });
+        expect(resolvePatch(definition, { maybeUnion: { multiply: 2 } }, row)).toStrictEqual({ maybeUnion: 16 });
     });
 
     it("sees through an optional wrapper around a nullable-number union", () => {
         expect.assertions(1);
 
-        expect(resolvePatchOperators(definition, { optionalUnion: { increment: 1 } }, row)).toStrictEqual({ optionalUnion: 7 });
+        expect(resolvePatch(definition, { optionalUnion: { increment: 1 } }, row)).toStrictEqual({ optionalUnion: 7 });
     });
 
     it("does not treat a literal column as a number column", () => {
@@ -67,7 +67,7 @@ describe("resolvePatchOperators", () => {
 
         const patch = { tier: { increment: 1 } };
 
-        expect(resolvePatchOperators(definition, patch, row)).toBe(patch);
+        expect(resolvePatch(definition, patch, row)).toBe(patch);
         expect(operatorFields(definition, patch).size).toBe(0);
     });
 
@@ -85,7 +85,7 @@ describe("resolvePatchOperators", () => {
 
         const patch = { mixed: { increment: 1 } };
 
-        expect(resolvePatchOperators(definition, patch, row)).toBe(patch);
+        expect(resolvePatch(definition, patch, row)).toBe(patch);
     });
 
     it("leaves untouched fields alone and returns the same patch when nothing resolved", () => {
@@ -93,8 +93,8 @@ describe("resolvePatchOperators", () => {
 
         const plain = { label: "y", n: 3 };
 
-        expect(resolvePatchOperators(definition, plain, row)).toBe(plain);
-        expect(resolvePatchOperators(definition, { label: "y", n: { increment: 1 } }, row)).toStrictEqual({ label: "y", n: 11 });
+        expect(resolvePatch(definition, plain, row)).toBe(plain);
+        expect(resolvePatch(definition, { label: "y", n: { increment: 1 } }, row)).toStrictEqual({ label: "y", n: 11 });
         expect(operatorFields(definition, plain).size).toBe(0);
     });
 
@@ -103,7 +103,7 @@ describe("resolvePatchOperators", () => {
 
         const patch = { label: { increment: 1 }, meta: { increment: 1 } };
 
-        expect(resolvePatchOperators(definition, patch, row)).toBe(patch);
+        expect(resolvePatch(definition, patch, row)).toBe(patch);
         // Kind-aware: neither column takes operators, so neither field is relative to the stored row.
         expect(operatorFields(definition, patch).size).toBe(0);
     });
@@ -114,7 +114,7 @@ describe("resolvePatchOperators", () => {
         const reject =
             (patch: Record<string, unknown>, current: Record<string, unknown> = row) =>
             () =>
-                resolvePatchOperators(definition, patch, current);
+                resolvePatch(definition, patch, current);
 
         expect(reject({ n: { divide: 0 } })).toThrow("by zero");
         expect(reject({ n: { increment: Number.NaN } })).toThrow("finite number");
@@ -130,6 +130,6 @@ describe("resolvePatchOperators", () => {
     it("raises a VALIDATION_ERROR", () => {
         expect.assertions(1);
 
-        expect(() => resolvePatchOperators(definition, { n: { divide: 0 } }, row)).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
+        expect(() => resolvePatch(definition, { n: { divide: 0 } }, row)).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
     });
 });

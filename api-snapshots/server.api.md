@@ -3678,13 +3678,13 @@ interface OneRelationWhere<W> {
 ### `OrderBy` (type)
 
 ```ts
-type OrderBy<TDocument> = Partial<Record<keyof TDocument, "asc" | "desc">>;
+type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc">>;
 ```
 
 ### `PatchValues` (type)
 
 ```ts
-type PatchValues<Row> = {
+type PatchValues<Row> = PathPatch<Row> & {
     [K in keyof Row]?: Row[K] | OperatorFor<NonNullable<Row[K]>>;
 };
 ```
@@ -3964,7 +3964,7 @@ type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string
 ### `Where` (type)
 
 ```ts
-type Where<TDocument> = {
+type Where<TDocument> = PathWhere<TDocument> & {
     [K in keyof TDocument]?: TDocument[K] | WhereOperators<TDocument[K]>;
 } & {
     AND?: Where<TDocument>[];
@@ -3976,7 +3976,7 @@ type Where<TDocument> = {
 ### `WhereOf` (type)
 
 ```ts
-type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = RelationWhere<DM, REL, T> & {
+type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = PathWhere<DM[T]> & RelationWhere<DM, REL, T> & {
     [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
 } & {
     AND?: WhereOf<DM, REL, T>[];
@@ -5684,6 +5684,19 @@ interface BooleanFieldOperator {
 }
 ```
 
+### `ColumnPaths` (type)
+
+```ts
+type ColumnPaths<Doc> = {
+    [K in keyof Doc & string]-?: [
+        IsPlainObject<NonNullable<Doc[K]>>
+    ] extends [
+        true
+    ] ? `${K}.${SubPaths<NonNullable<Doc[K]>, [
+    ]>}` : never;
+}[keyof Doc & string];
+```
+
 ### `ComposedOut` (type)
 
 ```ts
@@ -5848,6 +5861,12 @@ interface DefinePluginFunction {
 }
 ```
 
+### `DocPathValue` (type)
+
+```ts
+type DocPathValue<Doc, P extends string> = P extends `${infer Column}.${infer Rest}` ? Column extends keyof Doc ? PathValue<NonNullable<Doc[Column]>, Rest> : never : never;
+```
+
 ### `Exception` (type)
 
 ```ts
@@ -5981,6 +6000,12 @@ type InstalledTables<T extends Record<string, TableDefinition>, Plugins extends 
     infer Head,
     ...infer Rest
 ] ? InstalledTables<ExtensionTablesOf<Head> & T, Rest> : T;
+```
+
+### `IsPlainObject` (type)
+
+```ts
+type IsPlainObject<V> = V extends string | number | boolean | bigint | symbol ? false : V extends ReadonlyArray<unknown> ? false : V extends Date | Uint8Array | ArrayBuffer | bigint | ((...arguments_: never[]) => unknown) ? false : V extends object ? true : false;
 ```
 
 ### `Link` (interface)
@@ -6206,6 +6231,36 @@ type PatchVerifier = (previous: Record<string, unknown>, next: Record<string, un
 interface PatchWriteOptions {
     verify?: PatchVerifier;
 }
+```
+
+### `PathPatch` (type)
+
+```ts
+type PathPatch<Doc, Paths extends string = ColumnPaths<Doc>> = [
+    Paths
+] extends [
+    never
+] ? unknown : {
+    [P in Paths]?: DocPathValue<Doc, P>;
+};
+```
+
+### `PathValue` (type)
+
+```ts
+type PathValue<V, P extends string> = P extends `${infer Head}.${infer Rest}` ? Head extends keyof V ? PathValue<NonNullable<V[Head]>, Rest> : never : P extends keyof V ? V[P] : never;
+```
+
+### `PathWhere` (type)
+
+```ts
+type PathWhere<Doc, Paths extends string = ScalarPaths<Doc>> = [
+    Paths
+] extends [
+    never
+] ? unknown : {
+    [P in Paths]?: DocPathValue<Doc, P> | WhereOperators<DocPathValue<Doc, P>>;
+};
 ```
 
 ### `ProjectDoc` (type)
@@ -6473,6 +6528,24 @@ const SYSTEM_INDEX_FIELDS: readonly [
 ];
 ```
 
+### `ScalarLeaf` (type)
+
+```ts
+type ScalarLeaf = boolean | number | string | null | undefined;
+```
+
+### `ScalarPaths` (type)
+
+```ts
+type ScalarPaths<Doc> = {
+    [P in ColumnPaths<Doc>]: [
+        DocPathValue<Doc, P>
+    ] extends [
+        ScalarLeaf
+    ] ? P : never;
+}[ColumnPaths<Doc>];
+```
+
 ### `SchedulableTarget` (type)
 
 ```ts
@@ -6698,6 +6771,21 @@ interface StorageRange {
 interface StreamOptions {
     durable?: boolean | DurableStreamOptions;
 }
+```
+
+### `SubPaths` (type)
+
+```ts
+type SubPaths<V, Depth extends unknown[]> = Depth["length"] extends 3 ? never : [
+    IsPlainObject<V>
+] extends [
+    true
+] ? {
+    [K in keyof V & string]-?: K | `${K}.${SubPaths<NonNullable<V[K]>, [
+        ...Depth,
+        0
+    ]>}`;
+}[keyof V & string] : never;
 ```
 
 ### `SystemDocMap` (interface)

@@ -3366,6 +3366,7 @@ interface ValidatorLike {
         readonly column?: ColumnMetaLike;
         readonly inner?: ValidatorLike;
         readonly members?: ReadonlyArray<ValidatorLike>;
+        readonly shape?: Readonly<Record<string, ValidatorLike>>;
         readonly tableName?: string;
         readonly value?: unknown;
     };
@@ -4545,6 +4546,12 @@ const parseExportShardArgs: (args: Record<string, unknown>) => ExportShardAdminA
 const parseImportShardArgs: (args: Record<string, unknown>) => ImportShardAdminArgs;
 ```
 
+### `patchDependsOnRow` (const)
+
+```ts
+const patchDependsOnRow: (definition: TableDefinitionLike, patch: Record<string, unknown>) => boolean;
+```
+
 ### `planAggregateLookup` (const)
 
 ```ts
@@ -4765,6 +4772,12 @@ const readIdempotent: (sql: SqlExec, identity: string, mutationId: string) => Id
 const readMigrationStatus: (sql: SqlExec, id?: string) => MigrationStatusRow[];
 ```
 
+### `readPatchField` (const)
+
+```ts
+const readPatchField: (document: Record<string, unknown>, field: string) => unknown;
+```
+
 ### `readQueueMessageById` (const)
 
 ```ts
@@ -4915,10 +4928,10 @@ const reprojectionMigrationId: (table: string) => string;
 const reprojectionTables: (schema: SchemaLike) => string[];
 ```
 
-### `resolvePatchOperators` (const)
+### `resolvePatch` (const)
 
 ```ts
-const resolvePatchOperators: (definition: TableDefinitionLike, patch: Record<string, unknown>, current: Record<string, unknown>) => Record<string, unknown>;
+const resolvePatch: (definition: TableDefinitionLike, patch: Record<string, unknown>, current: Record<string, unknown>) => Record<string, unknown>;
 ```
 
 ### `resolveRankPartition` (const)

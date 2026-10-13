@@ -3071,3 +3071,237 @@ describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
         });
     });
 });
+
+describe("createSqlCtxDb — dotted paths into an object column", () => {
+    const leaf = (kind: string, accepts: (value: unknown) => boolean): ValidatorLike => {
+        return {
+            _meta: { column: { notNull: true } },
+            kind,
+            parse: (value: unknown) => {
+                if (!accepts(value)) {
+                    throw new Error(`must be a ${kind}`);
+                }
+
+                return value;
+            },
+        };
+    };
+    const pathSchema: SchemaLike = {
+        tables: {
+            users: {
+                indexes: [],
+                shape: {
+                    name: col("string"),
+                    profile: {
+                        _meta: {
+                            column: { notNull: false },
+                            shape: {
+                                age: leaf("number", (value) => typeof value === "number"),
+                                plan: leaf("string", (value) => typeof value === "string"),
+                            },
+                        },
+                        kind: "object",
+                    },
+                },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const seed = async (dialect: SqlDialect = makeSqliteDialect(), exec: SqlCtxExec = harness.exec) => {
+        let now = 1_700_000_000_000;
+        const writer = createSqlCtxDb({
+            clock: () => {
+                now += 1000;
+
+                return now;
+            },
+            dialect,
+            exec,
+            schema: pathSchema,
+        });
+
+        await writer.insert("users", { _id: "a", name: "a", profile: { age: 30, plan: "pro" } }, { allowExplicitId: true });
+        await writer.insert("users", { _id: "b", name: "b", profile: { plan: "free" } }, { allowExplicitId: true });
+        await writer.insert("users", { _id: "c", name: "c", profile: { age: "30", plan: "pro" } }, { allowExplicitId: true });
+        await writer.insert("users", { _id: "d", name: "d" }, { allowExplicitId: true });
+
+        return writer;
+    };
+
+    const idsOf = (page: { page: Record<string, unknown>[] }): string[] =>
+        page.page.map((row) => String(row["_id"])).toSorted((left, right) => left.localeCompare(right));
+
+    it.each([
+        ["a string leaf", { "profile.plan": "pro" }, ["a", "c"]],
+        ["a number, not the same digits as text", { "profile.age": 30 }, ["a"]],
+        ["a missing leaf or missing object as null", { "profile.age": null }, ["b", "d"]],
+        ["an in-list on a path", { "profile.plan": { in: ["free"] } }, ["b"]],
+        ["a path beside a column", { name: "c", "profile.plan": "pro" }, ["c"]],
+    ])("finds %s", async (_label, where, expected) => {
+        expect.assertions(1);
+
+        const writer = await seed();
+
+        expect(idsOf(await writer.findMany("users", { where }))).toStrictEqual(expected);
+    });
+
+    it("orders by a path", async () => {
+        expect.assertions(1);
+
+        const writer = await seed();
+        const page = await writer.findMany("users", { orderBy: [{ "profile.plan": "asc" }], where: { "profile.plan": { in: ["free", "pro"] } } } as never);
+
+        expect(page.page.map((row) => row["_id"])).toStrictEqual(["b", "a", "c"]);
+    });
+
+    it.each(["postgres", "mysql"] as const)("refuses a path on %s rather than guessing its JSON operators", async (name) => {
+        expect.assertions(1);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: { ...makeSqliteDialect(), name }, exec: harness.exec, schema: pathSchema });
+
+        await expect(writer.findMany("users", { where: { "profile.plan": "pro" } })).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+    });
+
+    it("rejects a path that is too deep before building any SQL", async () => {
+        expect.assertions(1);
+
+        const writer = await seed();
+
+        await expect(writer.findMany("users", { where: { "profile.a.b.c.d": "x" } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("does not let a hostile segment break out of the path", async () => {
+        expect.assertions(2);
+
+        const writer = await seed();
+        const hostile = await writer.findMany("users", { where: { "profile.plan') OR 1=1 --": "x" } });
+
+        expect(hostile.page).toStrictEqual([]);
+        expect(idsOf(await writer.findMany("users"))).toStrictEqual(["a", "b", "c", "d"]);
+    });
+
+    it("reads NULL, not an error, where the column holds text that is not JSON (a wire-encoded bigint)", async () => {
+        expect.assertions(2);
+
+        const writer = await seed();
+
+        // A bigint inside an object is stored in a marked, non-JSON form. One such row must not break a path filter
+        // for every other row, the way it would if SQLite's json_extract were left to raise on it.
+        await writer.insert("users", { _id: "e", name: "e", profile: { big: 10n, plan: "pro" } }, { allowExplicitId: true });
+
+        const page = await writer.findMany("users", { where: { "profile.plan": "pro" } });
+
+        expect(idsOf(page)).toStrictEqual(["a", "c"]);
+        expect(idsOf(await writer.findMany("users", { where: { "profile.plan": null } }))).toContain("e");
+    });
+
+    it("pages by a path with no gap and no repeat", async () => {
+        expect.assertions(1);
+
+        const writer = await seed();
+        const ids: string[] = [];
+        let cursor: null | string | undefined;
+
+        for (let guard = 0; guard < 10; guard += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
+            const page = await writer.findMany("users", { cursor, limit: 2, orderBy: [{ "profile.plan": "asc" }] } as never);
+
+            ids.push(...page.page.map((row) => String(row["_id"])));
+
+            if (page.isDone) {
+                break;
+            }
+
+            cursor = page.continueCursor;
+        }
+
+        // `d` has no profile (NULL, first), then free (b), then pro (a, c).
+        expect(ids).toStrictEqual(["d", "b", "a", "c"]);
+    });
+
+    describe("patch", () => {
+        it("sets one nested key and keeps its siblings", async () => {
+            expect.assertions(2);
+
+            const writer = await seed();
+
+            await writer.patch("a", { "profile.plan": "team" });
+
+            const row = await writer.get("a");
+            const untouched = await writer.get("b");
+
+            expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "team" });
+            expect(untouched?.["profile"]).toStrictEqual({ plan: "free" });
+        });
+
+        it("creates the object when the column was empty, and is found by a path filter afterwards", async () => {
+            expect.assertions(2);
+
+            const writer = await seed();
+
+            await writer.patch("d", { "profile.plan": "pro" });
+
+            const row = await writer.get("d");
+
+            expect(row?.["profile"]).toStrictEqual({ plan: "pro" });
+            expect(idsOf(await writer.findMany("users", { where: { "profile.plan": "pro" } }))).toStrictEqual(["a", "c", "d"]);
+        });
+
+        it("re-applies a path patch after losing the version check instead of reporting a conflict", async () => {
+            expect.assertions(2);
+
+            const base = harness.exec;
+            let updates = 0;
+            // The first UPDATE finds a concurrent writer already moved the row's version.
+            const contended: SqlCtxExec = {
+                ...base,
+                all: async (query, parameters) => {
+                    if (/^update/iu.test(query)) {
+                        updates += 1;
+
+                        if (updates === 1) {
+                            await base.all(`UPDATE "users" SET "_version" = COALESCE("_version", 0) + 1`, []);
+                        }
+                    }
+
+                    return base.all(query, parameters);
+                },
+            };
+            const writer = await seed(makeSqliteDialect(), contended);
+
+            await writer.patch("a", { "profile.plan": "team" });
+
+            const row = await writer.get("a");
+
+            expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "team" });
+            expect(updates).toBe(2);
+        });
+
+        it.each([
+            ["a path the schema does not declare", { "profile.nope": 1 }],
+            ["a value of the wrong type", { "profile.age": "old" }],
+            ["a column and a path into it together", { profile: {}, "profile.plan": "x" }],
+        ])("rejects %s and leaves the row alone", async (_label, patch) => {
+            expect.assertions(2);
+
+            const writer = await seed();
+
+            await expect(writer.patch("a", patch as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+            const row = await writer.get("a");
+
+            expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "pro" });
+        });
+    });
+});

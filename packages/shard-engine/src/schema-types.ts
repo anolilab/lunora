@@ -98,6 +98,9 @@ export interface ValidatorLike {
         readonly column?: ColumnMetaLike;
         readonly inner?: ValidatorLike;
         readonly members?: ReadonlyArray<ValidatorLike>;
+
+        /** A `v.object({...})`'s fields: what a dotted path into the column is checked against. */
+        readonly shape?: Readonly<Record<string, ValidatorLike>>;
         readonly tableName?: string;
         readonly value?: unknown;
     };

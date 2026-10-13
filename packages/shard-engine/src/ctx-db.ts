@@ -88,7 +88,7 @@ import {
 import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
-import { assertPatchAllowed, operatorFields, resolvePatchOperators } from "./patch-operators";
+import { assertPatchAllowed, operatorFields, readPatchField, resolvePatch } from "./patch-operators";
 import {
     applySelect,
     buildSeekWhere,
@@ -2292,8 +2292,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // the counter, and report success.
         const relative = operatorFields(definition, patch);
 
+        // A dotted key is judged by the value at the end of its path, so a sibling edit inside the same object column is not a conflict.
         return Object.keys(stripReservedPatchFields(patch)).some(
-            (field) => !relative.has(field) && stableWireKey(seen[field]) !== stableWireKey(current[field]),
+            (field) => !relative.has(field) && stableWireKey(readPatchField(seen, field)) !== stableWireKey(readPatchField(current, field)),
         );
     };
 
@@ -4076,7 +4077,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             // Atomic field operators (`{ increment: 1 }`, …) resolve against the row just
             // read; the DO runs one mutation at a time, so no other write can land between.
-            const effectivePatch = resolvePatchOperators(tableDefinition, patch, existing);
+            const effectivePatch = resolvePatch(tableDefinition, patch, existing);
             const merged = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
 
             applyOnUpdate(tableDefinition, effectivePatch, merged, auth);

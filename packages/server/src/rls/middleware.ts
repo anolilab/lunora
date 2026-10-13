@@ -69,7 +69,7 @@ import { findRelated, whereFilter } from "@lunora/shard-engine";
 // `isPlainObject` comes from the wire codec rather than being re-declared here;
 // its prototype check is what keeps a `Date` or a `Map` from passing as an
 // options bag. See `./where-match` for the full story.
-import { previewFieldOperators } from "../../../../shared/field-operators";
+import { previewPatch } from "../../../../shared/field-operators";
 import { isPlainObject } from "../../../../shared/wire-codec";
 import type { Middleware } from "../builder/types";
 import type { FacadeEntry } from "../facade";
@@ -1152,7 +1152,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             "update",
             (writer, table) => write(writer, { verify: table === undefined ? undefined : (previous, next) => allowsWrite(table, "update", previous, next) }),
             (preRow) => {
-                return { ...preRow, ...previewFieldOperators(patch, preRow) };
+                return { ...preRow, ...previewPatch(patch, preRow) };
             },
             expectedTable,
         );

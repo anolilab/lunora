@@ -19,6 +19,7 @@ import { sql as dsql } from "drizzle-orm";
 
 import type { KindedValidator } from "../../../shared/effective-kind";
 import { effectiveKind } from "../../../shared/effective-kind";
+import { FieldPathError, isFieldPath, splitFieldPath } from "../../../shared/json-field-path";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
@@ -178,6 +179,19 @@ const decodeDocJson = (raw: string): Record<string, unknown> => {
 /** The geohash-companion table name for `.geoIndex(name)` on `table` (mirrors `ftsTableName`'s `__fts_` convention). */
 const geoTableName = (table: string, indexName: string): string => `${table}__geo_${indexName}`;
 
+/** The segments of a dotted field name, as a `VALIDATION_ERROR` when it is malformed or too deep. */
+const pathSegments = (field: string): string[] => {
+    try {
+        return splitFieldPath(field);
+    } catch (error) {
+        if (error instanceof FieldPathError) {
+            throw new LunoraError("VALIDATION_ERROR", error.message);
+        }
+
+        throw error;
+    }
+};
+
 /**
  * Shared body of {@link jsonPath} / {@link qualifiedJsonPath}; `prefix` is `""`
  * or a quoted `"table".` qualifier. Internal columns live alongside the doc;
@@ -193,11 +207,18 @@ const documentPath = (prefix: string, field: string): string => {
         return `${prefix}_creationTime`;
     }
 
-    // Two grammars, both owed, in this order: `jsonPathSegment` quotes for
-    // SQLite's JSON-path grammar (`a.b` is one key, not a nested lookup), then
-    // `'` doubling escapes the finished path for the SQL string literal it sits
-    // in. Doing only the second is what let `$.a.b` read the wrong slot.
-    return `json_extract(${prefix}${DOC_COLUMN}, '$.${jsonPathSegment(field).replaceAll("'", "''")}')`;
+    // Two grammars, both owed, in this order: `jsonPathSegment` quotes each key for SQLite's
+    // JSON-path grammar, then `'` doubling escapes the finished path for the SQL string literal it
+    // sits in. A dotted name is a path into an object column (`profile.plan`): each segment is
+    // quoted on its own and the dots between them stay, so SQLite descends through the objects.
+    // A column name is an identifier, so a dot is never part of one.
+    const path = isFieldPath(field)
+        ? pathSegments(field)
+              .map((segment) => jsonPathSegment(segment))
+              .join(".")
+        : jsonPathSegment(field);
+
+    return `json_extract(${prefix}${DOC_COLUMN}, '$.${path.replaceAll("'", "''")}')`;
 };
 
 const jsonPath = (field: string): string => documentPath("", field);

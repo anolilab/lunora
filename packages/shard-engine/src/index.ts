@@ -274,7 +274,7 @@ export {
 export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export { NotFoundError } from "./not-found-error";
-export { assertPatchAllowed, operatorFields, resolvePatchOperators } from "./patch-operators";
+export { assertPatchAllowed, operatorFields, patchDependsOnRow, readPatchField, resolvePatch } from "./patch-operators";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
 export {

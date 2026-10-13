@@ -297,6 +297,13 @@ const insertWithPolicy = (policy: Policy<TestContext>) => (document: Record<stri
  * Tests
  * ---------------------------------------------------------------------- */
 
+/** Runs `patch("a1", …)` through the RLS middleware as user `u1`, against `database`. */
+const patchAccount = (policy: ReturnType<typeof definePolicy<TestContext>>, database: FakeDatabase) => async (patch: Record<string, unknown>) =>
+    lunora.mutation
+        .use(rlsForTest<TestContext>([policy]))
+        .mutation(async ({ ctx }) => ctx.db.patch("a1", patch))
+        .handler(makeContext(database, "u1"), {});
+
 describe("rls — read path", () => {
     it("and-merges a policy WhereInput into findMany via baseWhere", async () => {
         expect.assertions(1);
@@ -1018,11 +1025,7 @@ describe("rls — write path", () => {
             when: ({ row }) => typeof row?.["balance"] === "number" && row["balance"] >= 0,
         });
         const database = createFakeDatabase([{ _id: "a1", balance: 3, table: "accounts" }]);
-        const run = async (patch: Record<string, unknown>) =>
-            lunora.mutation
-                .use(rlsForTest<TestContext>([policy]))
-                .mutation(async ({ ctx }) => ctx.db.patch("a1", patch))
-                .handler(makeContext(database, "u1"), {});
+        const run = patchAccount(policy, database);
 
         // 3 - 1 = 2 keeps the post-image valid; 3 - 5 = -2 does not.
         await expect(run({ balance: { decrement: 1 } })).resolves.toBeUndefined();
@@ -1041,6 +1044,28 @@ describe("rls — write path", () => {
         expect(operatorCall?.verify?.({ balance: 3 }, { balance: 2 })).toBe(true);
         expect(operatorCall?.verify?.({ balance: 1 }, { balance: -4 })).toBe(false);
         expect(operatorCall?.verify?.({ balance: 3 }, { balance: "x" })).toBe(false);
+    });
+
+    it("checks the merged post-image of a path patch, and hands the store a verdict for it", async () => {
+        expect.assertions(4);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "accounts",
+            when: ({ row }) => (row?.["profile"] as { plan?: string } | undefined)?.plan !== "banned",
+        });
+        const database = createFakeDatabase([{ _id: "a1", profile: { age: 3, plan: "pro" }, table: "accounts" }]);
+        const run = patchAccount(policy, database);
+
+        // The post-image is `{ age: 3, plan: "banned" }`: the policy refuses it, though no column was named.
+        await expect(run({ "profile.plan": "banned" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(run({ "profile.plan": "team" })).resolves.toBeUndefined();
+
+        const call = database.calls.find((entry) => entry.method === "patch");
+
+        expect(call?.args).toStrictEqual({ "profile.plan": "team" });
+        // The store takes the verdict on the row IT reads: a path patch is merged into whatever the column holds then.
+        expect(call?.verify?.({ profile: { plan: "pro" } }, { profile: { plan: "banned" } })).toBe(false);
     });
 
     it("boolean update policy denies a patch that reassigns the policy column (WITH-CHECK post-image)", async () => {

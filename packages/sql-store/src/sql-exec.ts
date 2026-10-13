@@ -12,11 +12,14 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "sql-exec" sits beside "ctx-db", the established module naming in this package. */
 /* eslint-disable no-restricted-syntax -- `sql\`…\` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 
+import { LunoraError } from "@lunora/errors";
 import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { renderSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { FieldPathError, isFieldPath, splitFieldPath } from "../../../shared/json-field-path";
+import { jsonPathSegment } from "../../../shared/json-path-segment";
 import type { SqlDialect, SqlRunResult } from "./dialect";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 
@@ -25,6 +28,46 @@ const physicalColumn = (field: string): string => (field === "_id" || field === 
 
 /** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
 const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
+
+/** The segments of a dotted field path, with a malformed one reported as the `VALIDATION_ERROR` a caller expects. */
+const pathSegments = (field: string): string[] => {
+    try {
+        return splitFieldPath(field);
+    } catch (error) {
+        if (!(error instanceof FieldPathError)) {
+            throw error;
+        }
+
+        throw new LunoraError("VALIDATION_ERROR", error.message);
+    }
+};
+
+/**
+ * A `where`/`orderBy` field as SQL: a column, or a dotted path into an object column
+ * (`profile.plan` → `json_extract("profile", '$.plan')`).
+ *
+ * Object columns are stored as JSON text, which SQLite and D1 can read into with `json_extract`. Postgres
+ * and MySQL would need their own operators and casts, so a path there is refused rather than guessed at.
+ * @throws LunoraError `NOT_IMPLEMENTED` for a path on a dialect other than SQLite; `VALIDATION_ERROR` for a malformed or too-deep one.
+ */
+const fieldRefSql = (dialect: SqlDialect, field: string): SQL => {
+    if (!isFieldPath(field)) {
+        return columnRefSql(field);
+    }
+
+    if (dialect.name !== "sqlite") {
+        throw new LunoraError("NOT_IMPLEMENTED", `filtering or ordering by a path into an object column ("${field}") is not supported on ${dialect.name}`);
+    }
+
+    const [root = "", ...rest] = pathSegments(field);
+
+    // SQLite raises on text that is not valid JSON instead of returning NULL, and a column can hold such text: a
+    // bigint, bytes or Date inside an object is stored wire-encoded, a string or id column is not JSON at all. The
+    // Durable Object store always keeps valid JSON and reads NULL there, so guard the read to agree with it.
+    const column = columnRefSql(root);
+
+    return sql`CASE WHEN json_valid(${column}) THEN json_extract(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END`;
+};
 
 /**
  * Table-qualified twin of {@link columnRefSql}, for the one thing an unqualified
@@ -567,6 +610,7 @@ export {
     decodeRow,
     decodeRows,
     dropIndexIfExists,
+    fieldRefSql,
     forEachRowPaged,
     indexState,
     nextRowVersion,

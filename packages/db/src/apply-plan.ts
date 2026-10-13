@@ -37,7 +37,7 @@
 
 import type { Collection } from "@tanstack/db";
 
-import { isFieldOperator, previewFieldOperators } from "../../../shared/field-operators";
+import { isFieldOperator, previewPatch } from "../../../shared/field-operators";
 import type { Row } from "./internals";
 
 /** One row to insert. `_id` may be pre-minted client-side so the optimistic row keys match the persisted one. */
@@ -121,7 +121,7 @@ export const applyPlanToCollections = (collections: Record<string, Collection<Ro
             // draft is that row's local copy, so the prediction matches the correction. A field the copy
             // cannot resolve (absent, null) is left out rather than shown as the operator object: the row
             // keeps its old value until the server's arrives.
-            const kept = Object.entries(previewFieldOperators(entry.fields, draft)).filter(([field, value]) => {
+            const kept = Object.entries(previewPatch(entry.fields, draft)).filter(([field, value]) => {
                 const stored: unknown = draft[field];
 
                 return !isFieldOperator(value) || (typeof stored === "object" && stored !== null);

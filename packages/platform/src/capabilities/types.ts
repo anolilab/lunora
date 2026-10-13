@@ -39,7 +39,7 @@
  *
  * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
- * `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`,
+ * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`,
  * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
  * `websocketHibernation` — is
@@ -439,6 +439,19 @@ export interface PlatformCapabilities {
          * which is a per-target fact.
          */
         memoryTables?: Capability;
+
+        /**
+         * Paths into an object column — `where: { "profile.plan": "pro" }` and
+         * `patch(id, { "profile.plan": "pro" })`.
+         *
+         * Carried by no host contract: a shard-local table reads into its JSON document with SQLite's
+         * `json_extract`, and a `.global()` table does the same over its JSON-text column through
+         * `@lunora/sql-store`, so it follows the `globalTables` backend. A backend whose SQL is not
+         * SQLite's (Postgres or MySQL behind Hyperdrive) refuses a path filter with `NOT_IMPLEMENTED`
+         * rather than guessing its JSON operators; the partial update is made in the engine and works
+         * everywhere. Advisory by nature (see the module header).
+         */
+        objectColumnPaths?: Capability;
 
         /**
          * Object storage (R2 / S3 / MinIO).

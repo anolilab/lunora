@@ -101,6 +101,21 @@ describe(applyPlanToCollections, () => {
         expect("missing" in draft).toBe(false);
     });
 
+    it("folds a dotted path into the local row's object, keeping its other keys", () => {
+        expect.assertions(1);
+
+        const draft: Record<string, unknown> = { profile: { age: 3, plan: "pro" } };
+        const collection = {
+            update: (_id: string, updater: (row: Record<string, unknown>) => void) => {
+                updater(draft);
+            },
+        } as unknown as Collection<Row, string>;
+
+        applyPlanToCollections({ nodes: collection }, { patches: [{ fields: { "profile.plan": "team" }, id: "p1", table: "nodes" }] });
+
+        expect(draft["profile"]).toStrictEqual({ age: 3, plan: "team" });
+    });
+
     it("skips a table with no wired collection rather than throwing", () => {
         expect.assertions(1);
 

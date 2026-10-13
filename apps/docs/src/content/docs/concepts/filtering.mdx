@@ -100,3 +100,32 @@ scans shows up as a latency outlier long before it shows up as an outage.
 terminal (`.collect()`, `.first()`, `.take(n)`, `.unique()`, `.paginate()`).
 Applying `.take(n)` after a filter still reads whatever the index range
 produced, because the predicate has to run before the limit can be counted.
+
+## Inside an object column
+
+A key with dots reaches into an object column: `"profile.address.city"` is `city` inside `address` inside
+`profile`. It works anywhere a column name does in a `where`:
+
+```ts
+await ctx.db.users.findMany({
+    where: { "profile.plan": "pro", "profile.address.city": { in: ["Berlin", "Paris"] } },
+});
+```
+
+The keys are typed from the nested object types, so a misspelt path is a compile error. Only paths that end
+at a string, number or boolean are offered; an array, date, bigint, bytes or whole object has no single
+comparison. A path has at most four segments, the column included.
+
+- A missing key, or a step through something that is not an object, reads as `null`, so
+  `{ "profile.address.city": null }` matches a row with no `address` at all.
+- `30` and `"30"` are different values: a number does not equal the same digits stored as text.
+- `orderBy` takes a path too (`orderBy: [{ "profile.plan": "asc" }]`), and paging with a cursor works across it.
+- It is not indexed. A declared index covers top-level columns, so a path filter reads the rows the rest of
+  the `where` selects; pair it with an indexed column.
+- On a `.global()` table the path is read with SQLite's `json_extract`, which D1 and the Node host provide.
+  A Postgres or MySQL backend refuses a path with `NOT_IMPLEMENTED` rather than guessing its JSON operators.
+- A path into a [masked](/docs/concepts/masking) column is refused like the column itself, whichever path.
+
+To change one nested key without rewriting the object, patch the path:
+`ctx.db.users.patch(id, { "profile.plan": "team" })` keeps the object's other keys. See
+[Atomic updates](/docs/concepts/queries-mutations#atomic-updates).

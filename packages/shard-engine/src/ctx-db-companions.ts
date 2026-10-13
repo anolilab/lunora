@@ -29,6 +29,7 @@ import { analyzedSearchText, ftsTableName, searchTextUnchanged } from "@lunora/s
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { readFieldPath } from "../../../shared/json-field-path";
 import { aggregateSqlFunction, matchesStaticWhere } from "./aggregate-sql";
 import type { AggregateTally } from "./aggregate-tally";
 import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
@@ -55,7 +56,8 @@ import type { MutationDelta } from "./types";
 const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
     const fields = [...(index.partitionBy ?? []), ...index.sortBy.map((key) => key.field), ...(index.where ? Object.keys(index.where) : [])];
 
-    return fields.every((field) => previous[field] === next[field]);
+    // `where` keys may be dotted paths into an object column; read them the way the SQL and the matcher do.
+    return fields.every((field) => readFieldPath(previous, field) === readFieldPath(next, field));
 };
 
 /** The rank companion's column list: `__id__, __partition__, __sort_k<i>__…`. */

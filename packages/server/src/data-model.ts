@@ -42,8 +42,72 @@ export interface WhereOperators<T> {
     notIn?: T[];
 }
 
+/**
+ * A value stored as a plain JS object: not a scalar (an `Id<T>` is a branded string, which is an `object` to
+ * TypeScript but has no keys worth offering), an array, a date, bytes, a bigint or a function.
+ */
+type IsPlainObject<V> = V extends string | number | boolean | bigint | symbol
+    ? false
+    : V extends ReadonlyArray<unknown>
+      ? false
+      : V extends Date | Uint8Array | ArrayBuffer | bigint | ((...arguments_: never[]) => unknown)
+        ? false
+        : V extends object
+          ? true
+          : false;
+
+/** The dotted paths below an object, to three steps. */
+type SubPaths<V, Depth extends unknown[]> = Depth["length"] extends 3
+    ? never
+    : [IsPlainObject<V>] extends [true]
+      ? { [K in keyof V & string]-?: K | `${K}.${SubPaths<NonNullable<V[K]>, [...Depth, 0]>}` }[keyof V & string]
+      : never;
+
+/** The type at the end of dotted path `P` below `V`. */
+type PathValue<V, P extends string> = P extends `${infer Head}.${infer Rest}`
+    ? Head extends keyof V
+        ? PathValue<NonNullable<V[Head]>, Rest>
+        : never
+    : P extends keyof V
+      ? V[P]
+      : never;
+
+/**
+ * Every dotted path into an object-valued column of `Doc` (`"profile.address.city"`), at most four segments
+ * counting the column. A column that is not a plain object contributes none.
+ */
+type ColumnPaths<Doc> = {
+    [K in keyof Doc & string]-?: [IsPlainObject<NonNullable<Doc[K]>>] extends [true] ? `${K}.${SubPaths<NonNullable<Doc[K]>, []>}` : never;
+}[keyof Doc & string];
+
+/** The type at the end of a {@link ColumnPaths} path. */
+type DocPathValue<Doc, P extends string> = P extends `${infer Column}.${infer Rest}`
+    ? Column extends keyof Doc
+        ? PathValue<NonNullable<Doc[Column]>, Rest>
+        : never
+    : never;
+
+type ScalarLeaf = boolean | number | string | null | undefined;
+
+/** The dotted paths into an object column that end at a string, number or boolean. */
+type ScalarPaths<Doc> = { [P in ColumnPaths<Doc>]: [DocPathValue<Doc, P>] extends [ScalarLeaf] ? P : never }[ColumnPaths<Doc>];
+
+/**
+ * `where` keys that reach into an object column: `{ "profile.plan": "pro" }`. Only paths that end at a string,
+ * number or boolean are offered — an object, array, date, bigint or bytes leaf has no single SQL comparison.
+ *
+ * `unknown` (the identity for `&`) when there are none, never `{}`: intersecting with an empty object type
+ * switches off the weak-type check that rejects a `where` key naming nothing.
+ */
+type PathWhere<Doc, Paths extends string = ScalarPaths<Doc>> = [Paths] extends [never]
+    ? unknown
+    : { [P in Paths]?: DocPathValue<Doc, P> | WhereOperators<DocPathValue<Doc, P>> };
+
+/** `patch` keys that set one value inside an object column, keeping its siblings: `{ "profile.plan": "pro" }`. */
+type PathPatch<Doc, Paths extends string = ColumnPaths<Doc>> = [Paths] extends [never] ? unknown : { [P in Paths]?: DocPathValue<Doc, P> };
+
 /** A typed `where` tree over a document's columns. */
-export type Where<TDocument> = {
+export type Where<TDocument> = PathWhere<TDocument> & {
     [K in keyof TDocument]?: TDocument[K] | WhereOperators<TDocument[K]>;
 } & {
     AND?: Where<TDocument>[];
@@ -52,7 +116,7 @@ export type Where<TDocument> = {
 };
 
 /** One `{ field: "asc" | "desc" }` ordering entry; `orderBy` is an ordered list. */
-export type OrderBy<TDocument> = Partial<Record<keyof TDocument, "asc" | "desc">>;
+export type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc">>;
 
 export interface QueryArgs<TDocument> {
     cursor?: null | string;
@@ -110,13 +174,14 @@ type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM>
  * `Where<DM[T]>` stays the column-only structural mirror for back-compat; the
  * table facade threads `REL` through this richer form.
  */
-export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = RelationWhere<DM, REL, T> & {
-    [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
-} & {
-    AND?: WhereOf<DM, REL, T>[];
-    NOT?: WhereOf<DM, REL, T>;
-    OR?: WhereOf<DM, REL, T>[];
-};
+export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = PathWhere<DM[T]> &
+    RelationWhere<DM, REL, T> & {
+        [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
+    } & {
+        AND?: WhereOf<DM, REL, T>[];
+        NOT?: WhereOf<DM, REL, T>;
+        OR?: WhereOf<DM, REL, T>[];
+    };
 
 /** {@link QueryArgs} with the relation-aware {@link WhereOf} `where` typing. */
 export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
@@ -552,7 +617,7 @@ interface BooleanFieldOperator {
  * The values a `patch` accepts: any column's own type, and for a number or boolean
  * column also an atomic operator ({@link NumberFieldOperator}, {@link BooleanFieldOperator}).
  */
-export type PatchValues<Row> = {
+export type PatchValues<Row> = PathPatch<Row> & {
     [K in keyof Row]?: Row[K] | OperatorFor<NonNullable<Row[K]>>;
 };
 
