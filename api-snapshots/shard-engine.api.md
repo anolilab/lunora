@@ -634,6 +634,7 @@ type DataMigrationTransform = (document: DataMigrationDocument, context: DataMig
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
     asId?: (tableName: string, id: string) => string;
+    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
     cdcChangedTables?: (sinceSeq: number, options?: {
         cursorOnly?: boolean;
     }) => Promise<{

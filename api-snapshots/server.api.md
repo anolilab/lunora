@@ -5816,6 +5816,7 @@ const DOCUMENT_HISTORY_KEY = "documentHistory";
 ```ts
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateArgs$1) => Promise<null | number>;
+    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: {
         hard?: boolean;
