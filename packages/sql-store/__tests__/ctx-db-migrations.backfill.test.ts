@@ -95,4 +95,39 @@ describe("adding a required field to a populated .global() table", () => {
 
         await expect(pick("priority")).resolves.toStrictEqual([[9], [3]]);
     });
+
+    it("does not write one shared value into a unique column with a per-row default", async () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await runSqlGlobalTableMigrations(harness.exec, withFields({ token: col("string", { defaultFn: () => "t", unique: true }) }), dialect);
+
+        await expect(pick("token")).resolves.toStrictEqual([[null], [null]]);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0])).toContain("notes.token");
+    });
+
+    it("retries the whole add when the backfill fails, instead of leaving the rows NULL", async () => {
+        expect.assertions(2);
+
+        const schema = withFields({ priority: col("number", { defaultValue: 3 }) });
+        // The ALTER passes through; only the backfill UPDATE fails.
+        const failing = {
+            ...harness.exec,
+            run: async (statement: string, params: ReadonlyArray<unknown>) => {
+                if (statement.startsWith("UPDATE")) {
+                    throw new Error("connection lost");
+                }
+
+                return harness.exec.run(statement, params);
+            },
+        };
+
+        await expect(runSqlGlobalTableMigrations(failing, schema, dialect)).rejects.toThrow("connection lost");
+
+        await runSqlGlobalTableMigrations(harness.exec, schema, dialect);
+
+        await expect(pick("priority")).resolves.toStrictEqual([[3], [3]]);
+    });
 });

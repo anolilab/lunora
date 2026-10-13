@@ -835,12 +835,16 @@ const backfillAddedColumn = async (
         return;
     }
 
-    const value = declaredDefaultOf(validator);
+    // One generated value written to every row would collide under a UNIQUE column (a per-row id or token), so such a
+    // column is treated as having no default.
+    const perRow =
+        validator._meta?.column?.defaultFn !== undefined && (validator._meta.column.unique === true || fullValueIndexedFields(definition).has(column));
+    const value = perRow ? undefined : declaredDefaultOf(validator);
 
     if (value === undefined) {
         warnOnce(
             `backfill:${tableName}.${column}`,
-            `"${tableName}.${column}" was added as a required field with no default, so rows written before it read NULL. Backfill it with a migration (UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL).`,
+            `"${tableName}.${column}" was added as a required field with ${perRow ? "a per-row default that cannot be backfilled as one shared value" : "no default"}, so rows written before it read NULL. Backfill it with a migration (UPDATE "${tableName}" SET "${column}" = … WHERE "${column}" IS NULL).`,
         );
 
         return;
@@ -939,8 +943,17 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
         await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ADD COLUMN ${sql.identifier(column)} ${sql.raw(type)}`);
 
         if (validator !== undefined) {
-            // eslint-disable-next-line no-await-in-loop -- one UPDATE per added column, on the same connection.
-            await backfillAddedColumn(exec, tableName, definition, dialect, column, validator);
+            try {
+                // eslint-disable-next-line no-await-in-loop -- one UPDATE per added column, on the same connection.
+                await backfillAddedColumn(exec, tableName, definition, dialect, column, validator);
+            } catch (error) {
+                // The probe above sees a present column as done, so a failed backfill would never be retried and the
+                // rows would stay NULL silently. Take the column back out so the next pass adds and fills it again.
+                // eslint-disable-next-line no-await-in-loop -- same connection; must finish before the error surfaces.
+                await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} DROP COLUMN ${sql.identifier(column)}`).catch(() => {});
+
+                throw error;
+            }
         }
     }
 };
