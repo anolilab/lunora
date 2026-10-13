@@ -15,6 +15,9 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import type { RelationWriteInfosLike } from "./relation-writes";
+import { applyToManyRelations, applyToOneRelations, assertNoRelationWrites, splitRelationWrites } from "./relation-writes";
+
 /**
  * Structural detector for `@lunora/do`'s `ConflictError(kind: "unique")`. The
  * facade must not take a runtime dependency on `@lunora/do`, so it recognises a
@@ -101,6 +104,8 @@ export interface FacadeWriterLike {
     };
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
+    /** Per-relation facts for nested relation writes, published by the engine's writer; absent on a writer that declares none. */
+    readonly relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
     replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
     // Optional: only writers over a `.softDelete()` schema implement it.
     restore?(id: string, expectedTable?: string): Promise<void>;
@@ -214,7 +219,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
     // instead of throwing. Routes through the bound `writer.insert`, so when this
     // facade is re-bound over the RLS-wrapped writer the insert policy still runs
     // *before* the constraint check.
-    const insert = async (document: Record<string, unknown>, options?: FacadeInsertOptions): Promise<null | string> => {
+    const insertColumns = async (document: Record<string, unknown>, options?: FacadeInsertOptions): Promise<null | string> => {
         if (options?.skipDuplicates !== true) {
             return writer.insert(tableName, document);
         }
@@ -229,6 +234,61 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
 
             throw error;
         }
+    };
+
+    // Nested relation writes (`{ author: { connect: id } }`, `{ posts: { set: [...] } }`) are composed here from
+    // the bound writer's own reads and patches — see `relation-writes.ts`. A `to-one` becomes a foreign-key column
+    // of the row being written; a `to-many` is applied to the children once the parent exists.
+    const relationInfos = (): RelationWriteInfosLike | undefined => writer.relationWrites?.[tableName];
+
+    // The value a child's foreign key must equal: the parent's `references` column, usually `_id`.
+    const parentValue = async (id: string, references: string, written: Record<string, unknown>): Promise<unknown> => {
+        if (references === "_id") {
+            return id;
+        }
+
+        if (Object.hasOwn(written, references)) {
+            return written[references];
+        }
+
+        return ((await writer.get(id, tableName)) as Record<string, unknown> | null)?.[references];
+    };
+
+    const insert = async (document: Record<string, unknown>, options?: FacadeInsertOptions): Promise<null | string> => {
+        const split = splitRelationWrites(relationInfos(), document);
+
+        if (split.relations.length === 0) {
+            return insertColumns(document, options);
+        }
+
+        const columns = await applyToOneRelations(writer, tableName, split);
+        const id = await insertColumns(columns, options);
+
+        if (id !== null) {
+            await applyToManyRelations(writer, tableName, split, (references) => parentValue(id, references, columns));
+        }
+
+        return id;
+    };
+
+    const patch = async (id: string, values: Record<string, unknown>): Promise<void> => {
+        const split = splitRelationWrites(relationInfos(), values);
+
+        if (split.relations.length === 0) {
+            await writer.patch(id, values, tableName);
+
+            return;
+        }
+
+        const columns = await applyToOneRelations(writer, tableName, split);
+
+        if (Object.keys(columns).length > 0) {
+            await writer.patch(id, columns, tableName);
+        } else if ((await writer.get(id, tableName)) === null) {
+            throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
+        }
+
+        await applyToManyRelations(writer, tableName, split, (references) => parentValue(id, references, columns));
     };
 
     // "Exactly one row" — the assertion `findFirst` drops. The typed surface refuses
@@ -256,14 +316,14 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         const existing = (await writer.findFirst(tableName, { where })) as null | Record<string, unknown>;
 
         if (existing && typeof existing["_id"] === "string") {
-            await writer.patch(existing["_id"], update ?? create, tableName);
+            await patch(existing["_id"], update ?? create);
 
             return { created: false, id: existing["_id"] };
         }
 
-        const id = await writer.insert(tableName, create);
+        const id = await insert(create);
 
-        return { created: true, id };
+        return { created: true, id: id as string };
     };
 
     return {
@@ -315,19 +375,31 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         hardDelete: (id) => writer.delete(id, tableName, { hard: true }),
         insert,
         insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => {
+            for (const document of documents) {
+                assertNoRelationWrites(tableName, relationInfos(), document, "insertMany");
+            }
+
             if (writer.insertMany === undefined) {
                 throw new LunoraError("INTERNAL", `ctx.db.${tableName}.insertMany is unavailable: this writer has no batch insert`);
             }
 
             return writer.insertMany(tableName, documents, options);
         },
-        patch: (id, patch) => writer.patch(id, patch, tableName),
+        patch,
         patchMany: (
             first:
                 | ReadonlyArray<{ id: string; values: Record<string, unknown> }>
                 | { limit?: number; values: Record<string, unknown>; where: Record<string, unknown> },
             options?: { limit?: number },
         ) => {
+            const batch = Array.isArray(first)
+                ? first.map((entry: { values: Record<string, unknown> }) => entry.values)
+                : [(first as { values: Record<string, unknown> }).values];
+
+            for (const values of batch) {
+                assertNoRelationWrites(tableName, relationInfos(), values, "patchMany");
+            }
+
             if (Array.isArray(first)) {
                 if (writer.patchMany === undefined) {
                     throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany is unavailable: this writer has no batch patch`);
@@ -352,7 +424,11 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         },
         rank: (indexName, options) => writer.rank(tableName, indexName, options),
         rankPage: (indexName, options) => writer.rankPage(tableName, indexName, options),
-        replace: (id, document) => writer.replace(id, document, tableName),
+        replace: (id, document) => {
+            assertNoRelationWrites(tableName, relationInfos(), document, "replace");
+
+            return writer.replace(id, document, tableName);
+        },
         restore: async (id) => {
             if (!writer.restore) {
                 throw new LunoraError("INTERNAL", `ctx.db.${tableName}.restore is unavailable: this writer has no restore (is the table .softDelete()?)`);

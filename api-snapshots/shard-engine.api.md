@@ -716,6 +716,7 @@ interface DatabaseWriterLike {
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
     related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
     relationEdges?: ReadonlyArray<RelationEdge>;
+    relationWrites?: RelationWriteMap;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: {
         allowExplicitId?: boolean;
     }) => Promise<void>;
@@ -2160,6 +2161,25 @@ interface RelationExistsMarker {
 
 ```ts
 type RelationGraphReader = Pick<DatabaseWriterLike, "findMany"> & Pick<Partial<DatabaseWriterLike>, "lookupById">;
+```
+
+### `RelationWriteInfo` (interface)
+
+```ts
+interface RelationWriteInfo {
+    readonly field: string;
+    readonly kind: "many" | "one";
+    readonly nullable: boolean;
+    readonly references: string;
+    readonly table: string;
+    readonly writable: boolean;
+}
+```
+
+### `RelationWriteMap` (type)
+
+```ts
+type RelationWriteMap = Readonly<Record<string, Readonly<Record<string, RelationWriteInfo>>>>;
 ```
 
 ### `RelayAttach` (interface)
@@ -4013,6 +4033,12 @@ const depKey: (table: string, idOrScan: string) => string;
 
 ```ts
 const deriveRelationEdges: (schema: SchemaLike) => RelationEdge[];
+```
+
+### `describeRelationWrites` (const)
+
+```ts
+const describeRelationWrites: (schema: SchemaLike) => RelationWriteMap;
 ```
 
 ### `diffExternalSource` (const)

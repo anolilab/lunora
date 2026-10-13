@@ -110,6 +110,7 @@ import { isPushableWhere, whereOfFilter } from "./reader-where-filter";
 import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
+import { describeRelationWrites } from "./relation-writes";
 import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
 import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
@@ -1936,6 +1937,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * already the expensive part.
      */
     const relationEdges = deriveRelationEdges(schema);
+    const relationWrites = describeRelationWrites(schema);
 
     /**
      * This mutation's `_commitSeq`, allocated on first use and reused for every
@@ -4273,6 +4275,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
          * per table can run it itself — see `DatabaseWriterLike.relationEdges`.
          */
         relationEdges,
+
+        /** Published for the table facade's nested relation writes — see `DatabaseWriterLike.relationWrites`. */
+        relationWrites,
 
         query(tableName) {
             const global = globalWriterFor(tableName, "query");

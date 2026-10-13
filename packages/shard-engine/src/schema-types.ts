@@ -1,4 +1,5 @@
 import type { IndexKeyEntry } from "./read-write-set";
+import type { RelationWriteMap } from "./relation-writes";
 import type { SystemDatabaseReader } from "./system-reader";
 import type { SubscriptionIdentity } from "./types";
 import type { WhereInput } from "./where-types";
@@ -889,6 +890,9 @@ export interface DatabaseWriterLike {
      * otherwise gate.
      */
     relationEdges?: ReadonlyArray<RelationEdge>;
+
+    /** Per-relation facts the table facade needs for nested relation writes (`connect`/`disconnect`/`set`). */
+    relationWrites?: RelationWriteMap;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
 

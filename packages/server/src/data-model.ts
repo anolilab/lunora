@@ -570,8 +570,8 @@ export interface TableWriterFacade<
      * instead of throwing — the return type widens to `Id | null` on that overload.
      */
     insert: {
-        (values: IM[T], options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
-        (values: IM[T], options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
+        (values: InsertValues<DM, IM, REL, T>, options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
+        (values: InsertValues<DM, IM, REL, T>, options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
     };
 
     /**
@@ -583,7 +583,7 @@ export interface TableWriterFacade<
         (values: ReadonlyArray<IM[T]>, options: { limit?: number; skipDuplicates: true }): Promise<(Id<string & T> | null)[]>;
         (values: ReadonlyArray<IM[T]>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<Id<string & T>[]>;
     };
-    patch: (id: Id<string & T>, values: PatchValues<IM[T]>) => Promise<void>;
+    patch: (id: Id<string & T>, values: PatchValues<IM[T]> & RelationWrites<DM, REL, T>) => Promise<void>;
 
     /**
      * Patch many rows in this table. Pass an array of `{ id, values }` or
@@ -605,11 +605,15 @@ export interface TableWriterFacade<
      * tuple) used to look it up. Returns the row id and whether it was `created`.
      * Composes `findFirst` + `insert`/`patch`, so RLS gates each step.
      */
-    upsert: (args: { create: IM[T]; target: UpsertTargetOf<DM, T>; update?: PatchValues<IM[T]> }) => Promise<{ created: boolean; id: Id<string & T> }>;
+    upsert: (args: {
+        create: InsertValues<DM, IM, REL, T>;
+        target: UpsertTargetOf<DM, T>;
+        update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T>;
+    }) => Promise<{ created: boolean; id: Id<string & T> }>;
 
     /** Sequential {@link TableWriterFacade.upsert} over many rows sharing one `target`; one result per input row, in order. */
     upsertMany: (args: {
-        rows: ReadonlyArray<{ create: IM[T]; update?: PatchValues<IM[T]> }>;
+        rows: ReadonlyArray<{ create: InsertValues<DM, IM, REL, T>; update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T> }>;
         target: UpsertTargetOf<DM, T>;
     }) => Promise<{ created: boolean; id: Id<string & T> }[]>;
 }
@@ -665,6 +669,50 @@ export interface QueryPlan {
     /** The statement the read compiles to. */
     sql: string;
 }
+
+/** Nested write for a to-one relation: point the row at `Target`, or clear the link. */
+export interface ToOneRelationWrite<TargetId> {
+    connect?: TargetId;
+    /** Needs a foreign key that can be empty, or the write is refused. */
+    disconnect?: true;
+}
+
+/** Nested write for a to-many relation: point `Target` rows at this one, release them, or replace the whole list. */
+export interface ToManyRelationWrite<TargetId> {
+    connect?: ReadonlyArray<TargetId>;
+    /** Needs a foreign key that can be empty, or the write is refused. */
+    disconnect?: ReadonlyArray<TargetId>;
+    /** The complete list: rows not named are released. Cannot be combined with `connect` or `disconnect`. */
+    set?: ReadonlyArray<TargetId>;
+}
+
+/**
+ * Nested relation writes accepted by `insert`, `patch` and `upsert`, keyed by relation name:
+ * `{ author: { connect: userId } }`, `{ posts: { set: [a, b] } }`. A table with no relations contributes none
+ * (`unknown`, the identity for `&`, never `{}`: an empty object type would switch off the weak-type check).
+ */
+export type RelationWrites<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = [keyof REL[T]] extends [never]
+    ? unknown
+    : {
+          [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
+              ? ToOneRelationWrite<Id<string & Target>>
+              : REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
+                ? ToManyRelationWrite<Id<string & Target>>
+                : never;
+      };
+
+/** The foreign-key columns of a table's to-one relations — the keys a nested `connect` supplies. */
+type OneRelationFields<RelT> = {
+    [K in keyof RelT]: RelT[K] extends { __field: infer Field extends string; __relationKind: "one" } ? Field : never;
+}[keyof RelT];
+
+/**
+ * What `insert` accepts: the row as it is, or the row without its to-one foreign keys plus the nested writes that
+ * supply them. Leaving a key out with no `connect` to supply it is not caught by the type — the store's own
+ * validation rejects the missing field.
+ */
+export type InsertValues<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, T extends keyof DM> =
+    IM[T] | (Omit<IM[T], OneRelationFields<REL[T]>> & RelationWrites<DM, REL, T>);
 
 /** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
 export type DatabaseReaderFacade<

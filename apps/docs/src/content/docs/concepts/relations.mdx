@@ -195,6 +195,40 @@ const userWithPosts = await ctx.db.users.findFirst({
 The hydration is driven by the same FK + index, so the same advice applies:
 keep the FK indexed or the loader scans.
 
+## Writing through a relation
+
+`insert`, `patch` and `upsert` accept a nested write under a relation's name, so you point rows at each
+other without reading the foreign key yourself:
+
+```ts
+// to-one: set `posts.authorId` from the user
+await ctx.db.posts.insert({ title: "Hello", author: { connect: userId } });
+await ctx.db.posts.patch(postId, { author: { disconnect: true } });
+
+// to-many: point `posts.authorId` at this user
+await ctx.db.users.insert({ name: "Ada", posts: { connect: [postA, postB] } });
+await ctx.db.users.patch(userId, { posts: { disconnect: [postA] } });
+await ctx.db.users.patch(userId, { posts: { set: [postB, postC] } }); // exactly these; the rest are released
+```
+
+- **`connect`** names the target table's ids. Each must exist and be readable by the caller, or the write is
+  `NOT_FOUND`. A to-many `connect` takes a row from whichever parent held it.
+- **`disconnect`** and **`set`** clear a foreign key, so that key has to be allowed to hold `null`:
+  `v.optional(v.id("users").nullable())`. A key that is merely `v.optional(...)` can be absent but not null, and a
+  required key cannot be cleared; both are refused with `VALIDATION_ERROR`. Disconnecting a row that is not
+  connected to this parent does nothing.
+- On `insert` the key is optional in the type when the relation supplies it. Setting the key and its relation in
+  the same write is refused. `set` cannot be combined with `connect` or `disconnect`, and one write touches at
+  most 500 rows.
+- **Every row goes through its own write**, so RLS policies, triggers and validators run for each child, and
+  live queries see them. The whole thing is one mutation: if the third `connect` fails, the first two are
+  rolled back.
+- **Both tables have to share a backend and shard.** A relation from a shard table to a `.global()` table, or to a
+  table on another shard, is refused with `UNPROCESSABLE`: a D1 write does not roll back with the Durable Object's
+  transaction, and a row on another shard cannot be addressed from this one. Write each side yourself.
+- Not available in `insertMany`, `patchMany` or `replace`: they reject a relation write rather than store it as
+  a column value. A relation many-to-many through a join table is not a relation kind yet; write the join rows.
+
 ## Relations vs the relation graph
 
 The descriptors on this page are **declared**: you name each relationship, give

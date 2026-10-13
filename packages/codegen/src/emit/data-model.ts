@@ -114,7 +114,15 @@ const emitDataModel = (schema: SchemaIR): string => {
                     // quoted rather than emitted as bare (and thus invalid) source.
                     assertIdentifier(relation.table, "relation target table");
 
-                    return `        ${renderPropertyKey(relation.name)}: ${relation.kind === "one" ? "OneRelation" : "ManyRelation"}<"${relation.table}">;`;
+                    // A to-one also carries the column holding its foreign key, so a nested `connect` can make that
+                    // column optional on insert. Field names are identifiers, like every other name interpolated here.
+                    if (relation.kind === "one") {
+                        assertIdentifier(relation.field, "relation foreign-key field");
+
+                        return `        ${renderPropertyKey(relation.name)}: OneRelation<"${relation.table}", "${relation.field}">;`;
+                    }
+
+                    return `        ${renderPropertyKey(relation.name)}: ManyRelation<"${relation.table}">;`;
                 })
                 .join("\n");
 
@@ -218,7 +226,8 @@ export type Insert<T extends keyof DataModel> = InsertModel[T];
  * as type parameters only — there is no runtime value — so the \`with\` argument
  * and its return type can be inferred from {@link Relations}.
  */
-export interface OneRelation<Target extends keyof DataModel> {
+export interface OneRelation<Target extends keyof DataModel, Field extends string = string> {
+    readonly __field: Field;
     readonly __relationKind: "one";
     readonly __target: Target;
 }

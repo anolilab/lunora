@@ -651,6 +651,7 @@ interface FacadeWriterLike {
     };
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
+    readonly relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
     replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
     restore?(id: string, expectedTable?: string): Promise<void>;
 }
@@ -3655,6 +3656,12 @@ type Id<TName extends string> = string & {
 };
 ```
 
+### `InsertValues` (type)
+
+```ts
+type InsertValues<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, T extends keyof DM> = IM[T] | (Omit<IM[T], OneRelationFields<REL[T]>> & RelationWrites<DM, REL, T>);
+```
+
 ### `LoadWith` (type)
 
 ```ts
@@ -3758,6 +3765,24 @@ interface RankResult {
     position: number;
     total: number;
 }
+```
+
+### `RelationWrites` (type)
+
+```ts
+type RelationWrites<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = [
+    keyof REL[T]
+] extends [
+    never
+] ? unknown : {
+    [K in keyof REL[T]]?: REL[T][K] extends {
+        __relationKind: "one";
+        __target: infer Target extends keyof DM;
+    } ? ToOneRelationWrite<Id<string & Target>> : REL[T][K] extends {
+        __relationKind: "many";
+        __target: infer Target extends keyof DM;
+    } ? ToManyRelationWrite<Id<string & Target>> : never;
+};
 ```
 
 ### `RestrictableQueryOptions` (interface)
@@ -3916,10 +3941,10 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
     };
     hardDelete: (id: Id<string & T>) => Promise<void>;
     insert: {
-        (values: IM[T], options: {
+        (values: InsertValues<DM, IM, REL, T>, options: {
             skipDuplicates: true;
         }): Promise<Id<string & T> | null>;
-        (values: IM[T], options?: {
+        (values: InsertValues<DM, IM, REL, T>, options?: {
             skipDuplicates?: boolean;
         }): Promise<Id<string & T>>;
     };
@@ -3933,7 +3958,7 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
             skipDuplicates?: boolean;
         }): Promise<Id<string & T>[]>;
     };
-    patch: (id: Id<string & T>, values: PatchValues<IM[T]>) => Promise<void>;
+    patch: (id: Id<string & T>, values: PatchValues<IM[T]> & RelationWrites<DM, REL, T>) => Promise<void>;
     patchMany: {
         (patches: ReadonlyArray<{
             id: Id<string & T>;
@@ -3954,23 +3979,42 @@ interface TableWriterFacade<DM, IM extends Record<keyof DM, object>, REL extends
     replace: (id: Id<string & T>, values: IM[T]) => Promise<void>;
     restore: (id: Id<string & T>) => Promise<void>;
     upsert: (args: {
-        create: IM[T];
+        create: InsertValues<DM, IM, REL, T>;
         target: UpsertTargetOf<DM, T>;
-        update?: PatchValues<IM[T]>;
+        update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T>;
     }) => Promise<{
         created: boolean;
         id: Id<string & T>;
     }>;
     upsertMany: (args: {
         rows: ReadonlyArray<{
-            create: IM[T];
-            update?: PatchValues<IM[T]>;
+            create: InsertValues<DM, IM, REL, T>;
+            update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T>;
         }>;
         target: UpsertTargetOf<DM, T>;
     }) => Promise<{
         created: boolean;
         id: Id<string & T>;
     }[]>;
+}
+```
+
+### `ToManyRelationWrite` (interface)
+
+```ts
+interface ToManyRelationWrite<TargetId> {
+    connect?: ReadonlyArray<TargetId>;
+    disconnect?: ReadonlyArray<TargetId>;
+    set?: ReadonlyArray<TargetId>;
+}
+```
+
+### `ToOneRelationWrite` (interface)
+
+```ts
+interface ToOneRelationWrite<TargetId> {
+    connect?: TargetId;
+    disconnect?: true;
 }
 ```
 
@@ -6212,6 +6256,17 @@ type NumberFieldOperator = {
 };
 ```
 
+### `OneRelationFields` (type)
+
+```ts
+type OneRelationFields<RelT> = {
+    [K in keyof RelT]: RelT[K] extends {
+        __field: infer Field extends string;
+        __relationKind: "one";
+    } ? Field : never;
+}[keyof RelT];
+```
+
 ### `OperatorFor` (type)
 
 ```ts
@@ -6458,6 +6513,25 @@ type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM>
         __target: infer Target extends keyof DM;
     } ? ManyRelationWhere<WhereOf<DM, REL, Target>> : never;
 };
+```
+
+### `RelationWriteInfoLike` (interface)
+
+```ts
+interface RelationWriteInfoLike {
+    readonly field: string;
+    readonly kind: "many" | "one";
+    readonly nullable: boolean;
+    readonly references: string;
+    readonly table: string;
+    readonly writable: boolean;
+}
+```
+
+### `RelationWriteInfosLike` (type)
+
+```ts
+type RelationWriteInfosLike = Readonly<Record<string, RelationWriteInfoLike>>;
 ```
 
 ### `RestCachePolicy` (interface)

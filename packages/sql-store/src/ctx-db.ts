@@ -74,6 +74,7 @@ import {
     CURSOR_PREFIX,
     cursorBelowRetainedFloor,
     decodeCursor,
+    describeRelationWrites,
     encodeAggregateKey,
     encodeCursor,
     encodePartitionKey,
@@ -3008,7 +3009,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         return { limit, orderKeys, query };
     };
 
+    const relationWrites = describeRelationWrites(schema);
+
     const writer: DatabaseWriterLike = {
+        relationWrites,
+
         /**
          * Which tables the changelog saw a write to after `sinceSeq` (see
          * {@link DatabaseWriterLike.cdcChangedTables}) — `undefined` when this

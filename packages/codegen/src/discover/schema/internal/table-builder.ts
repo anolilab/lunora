@@ -71,6 +71,7 @@ const RESERVED_TABLE_NAMES = new Set([
     "rankPageRows",
     "related",
     "relationEdges",
+    "relationWrites",
     "replace",
     "restore",
     "system",

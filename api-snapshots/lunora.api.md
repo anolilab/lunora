@@ -6481,6 +6481,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `InsertValues` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LoadWith` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6522,6 +6526,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RankResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RelationWrites` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6570,6 +6578,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `TableWriterFacade` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ToManyRelationWrite` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ToOneRelationWrite` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

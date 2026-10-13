@@ -229,6 +229,9 @@ const WRITER_METHOD_GATING = {
      * `related`'s own entry describes.
      */
     relationEdges: "ungated",
+
+    /** Schema-derived metadata for the facade's nested relation writes: names tables and columns, reaches no row. */
+    relationWrites: "ungated",
     replace: "id-gated",
     restore: "id-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */
