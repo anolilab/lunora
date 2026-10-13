@@ -104,8 +104,10 @@
         "crons": ["0 */1 * * *", "0 */6 * * *", "*/1 * * * *"],
     },
     "vars": {
-        // The Cloudflare account this cell provisions into.
-        "CLOUDFLARE_ACCOUNT_ID": "29920166f7810f9970e4ef89a71f6765",
+        // The account `lunora dev` provisions into: a development sandbox that holds no
+        // zone, no production data and no `lunora-production` dispatch namespace, so a
+        // local deploy can never converge anything in a deployed cell's account.
+        "CLOUDFLARE_ACCOUNT_ID": "71929d20992f1f7ec04e20047a737f24",
         // Cell id + the apex the dispatcher routes tenant scripts under.
         "LUNORA_CELL": "default",
         "LUNORA_APP_DOMAIN": "lunora.run",
