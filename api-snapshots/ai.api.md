@@ -477,6 +477,7 @@ interface RagVectorStore {
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
     upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>) => Promise<unknown>;
 }
 ```
 

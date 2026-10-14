@@ -71,6 +71,8 @@ interface RagVectorStore {
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
     upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+    /** Batch write of at most 1000 inputs. Optional: without it `defineRag` writes per chunk via `upsert`. */
+    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>) => Promise<unknown>;
 }
 
 /**
@@ -96,6 +98,9 @@ const VECTORIZE_CAPABILITIES: RagVectorStoreCapabilities = {
  */
 const vectorizeStore = (vectors: RagVectors, indexName: string): RagVectorStore => {
     return {
+        ...(vectors.upsertMany
+            ? { upsertMany: (inputs: ReadonlyArray<RagVectorUpsertInput>) => vectors.upsertMany?.(indexName, inputs) as Promise<unknown> }
+            : {}),
         capabilities: VECTORIZE_CAPABILITIES,
         deleteByIds: (ids, namespace) => vectors.deleteByIds(indexName, ids, namespace),
         getByIds: (ids, namespace) => vectors.getByIds(indexName, ids, namespace),

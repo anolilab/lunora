@@ -322,7 +322,18 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         return undefined;
     };
 
-    return { capabilities, deleteByIds, getByIds, query, upsert };
+    // Local statements cost no subrequests, so "batch" is just the sequential
+    // loop; the method exists so `defineRag` takes the same path on every store.
+    const upsertMany = async (inputs: ReadonlyArray<RagVectorUpsertInput>): Promise<unknown> => {
+        for (const input of inputs) {
+            // eslint-disable-next-line no-await-in-loop -- sequential local writes
+            await upsert(input);
+        }
+
+        return undefined;
+    };
+
+    return { capabilities, deleteByIds, getByIds, query, upsert, upsertMany };
 };
 
 export type { SqliteVectorStoreOptions };

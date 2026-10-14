@@ -21,6 +21,7 @@ import type {
     RagContext,
     RagSource,
     RagToolOptions,
+    RagVectorUpsertInput,
     RemoveInput,
     RetrievedChunk,
     RetrieveOptions,
@@ -33,6 +34,9 @@ const DEFAULT_CHUNK_SIZE = 1000;
 
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
+
+/** Chunks per `upsertMany` call: Vectorize's hard ceiling on one batch. */
+const UPSERT_BATCH = 1000;
 
 /**
  * Default candidate-pool multiplier when fusion or reranking is active:
@@ -80,6 +84,34 @@ const IMPORTANCE_KEY = "__ragImportance";
 const MODEL_KEY = "__ragModel";
 
 const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, MODEL_KEY, SOURCE_KEY, TEXT_KEY]);
+
+/**
+ * Write chunk records: `upsertMany` in {@link UPSERT_BATCH}-sized calls when the
+ * store has it (one subrequest per batch instead of per chunk), else one
+ * bounded-concurrent `upsert` per chunk. `notify` fires after each chunk's write.
+ * ponytail: batches run sequentially so `notify` keeps index order; add bounded concurrency if a document needs >10k chunks.
+ */
+const writeRecords = async (store: RagVectorStore, records: ReadonlyArray<RagVectorUpsertInput>, notify: (chunkIndex: number) => void): Promise<void> => {
+    if (!store.upsertMany) {
+        await concurrentMap(records, INDEX_CONCURRENCY, async (record, chunkIndex) => {
+            await store.upsert(record);
+            notify(chunkIndex);
+        });
+
+        return;
+    }
+
+    for (let start = 0; start < records.length; start += UPSERT_BATCH) {
+        const end = Math.min(start + UPSERT_BATCH, records.length);
+
+        // eslint-disable-next-line no-await-in-loop -- sequential by design, see above
+        await store.upsertMany(records.slice(start, end));
+
+        for (let chunkIndex = start; chunkIndex < end; chunkIndex += 1) {
+            notify(chunkIndex);
+        }
+    }
+};
 
 /**
  * Refuse a metadata object over Vectorize's ceiling, naming what breached it.
@@ -797,7 +829,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // `index()` on the same bound Rag can neither read it nor drop it.
             const embedChunk = async (text: string): Promise<ReadonlyArray<number>> => batch.get(text) ?? (await embedText(text));
 
-            await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
+            // Every record is built (and its metadata size-checked) before the
+            // first write, so an oversized chunk fails the call with nothing written.
+            const records = pieces.map((piece, chunkIndex) => {
                 const id = ids[chunkIndex] as string;
                 const metadata: Record<string, unknown> = {
                     ...input.metadata,
@@ -826,19 +860,16 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
                 assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
 
-                // Vector upsert
-                await store.upsert({
-                    embed: embedChunk,
-                    id,
-                    input: piece,
-                    metadata,
-                    namespace: effectiveNamespace,
-                });
-
-                // Progress callback — fires after the upsert so callers see a
-                // consistent state when the callback runs.
-                input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
+                return { embed: embedChunk, id, input: piece, metadata, namespace: effectiveNamespace };
             });
+
+            // Progress callback — fires after the write so callers see a
+            // consistent state when the callback runs.
+            const notify = (chunkIndex: number): void => {
+                input.onChunk?.({ chunkIndex, id: ids[chunkIndex] as string, text: pieces[chunkIndex] as string, total: pieces.length });
+            };
+
+            await writeRecords(store, records, notify);
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,

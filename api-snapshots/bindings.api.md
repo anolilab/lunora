@@ -2068,6 +2068,7 @@ interface VectorSearchLike {
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
     upsert: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
 }
 ```

@@ -68,6 +68,13 @@ interface VectorSearchLike {
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
     upsert: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
+
+    /**
+     * Batch form of `upsert` (at most 1000 inputs, one remote call). Optional so
+     * existing implementors keep compiling; `@lunora/ai`'s RAG indexer uses it
+     * when present.
+     */
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
 }
 
@@ -229,6 +236,18 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
                   await deferAfterCommit(async () => write(indexName, input, namespace));
               };
 
+    const upsertMany = async (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>): Promise<void> => {
+        // Resolved up front, like `upsert`: a root-instance error must reach the caller.
+        const resolved = inputs.map((input) => {
+            return { embed: input.embed, id: input.id, input: input.input, metadata: input.metadata, namespace: resolveNamespace(indexName, input.namespace) };
+        });
+        const send = async (): Promise<void> => {
+            await lunora.upsertMany(indexName, resolved);
+        };
+
+        await (deferAfterCommit === undefined ? send() : deferAfterCommit(send));
+    };
+
     // Shared by `getByIds` and `deleteByIds`: fetch the raw records and, when
     // `namespace` is resolved (non-undefined) for this call, keep only the
     // ones whose stored `namespace` matches. Vectorize's id-based operations
@@ -304,6 +323,7 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
             };
         },
         upsert,
+        upsertMany,
         upsertNow,
     };
 };

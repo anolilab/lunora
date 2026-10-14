@@ -85,6 +85,8 @@ export interface RagVectors {
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (indexName: string, input: RagVectorQueryInput) => Promise<RagVectorMatches>;
     upsert: (indexName: string, input: RagVectorUpsertInput) => Promise<unknown>;
+    /** Batch write of at most 1000 inputs. Optional: without it `defineRag` writes per chunk via `upsert`. */
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<RagVectorUpsertInput>) => Promise<unknown>;
 }
 
 /**
