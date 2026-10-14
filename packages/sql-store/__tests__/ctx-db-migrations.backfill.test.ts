@@ -1,7 +1,7 @@
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runSqlGlobalTableMigrations } from "../src/ctx-db-migrations";
+import { runSqlGlobalTableMigrations } from "../src/ctx-db-global-provisioning";
 import { createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**

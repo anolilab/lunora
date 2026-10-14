@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { byId, MIX_QUERIES, MIX_ROWS, pageAllMixed } from "../../shard-engine/__tests__/_helpers/mixed-type-paths";
 import { createSqlCtxDb } from "../src/ctx-db";
-import { runSqlGlobalTableMigrations } from "../src/ctx-db-migrations";
+import { runSqlGlobalTableMigrations } from "../src/ctx-db-global-provisioning";
 import { createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**

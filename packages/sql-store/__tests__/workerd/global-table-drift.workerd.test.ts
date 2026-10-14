@@ -23,7 +23,7 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../../src/ctx-db";
-import { runSqlGlobalTableMigrations } from "../../src/ctx-db-migrations";
+import { runSqlGlobalTableMigrations } from "../../src/ctx-db-global-provisioning";
 import type { SqlDialect } from "../../src/dialect";
 import { OCC_VERSION_COLUMN } from "../../src/sql-exec";
 

@@ -315,6 +315,32 @@ const createIndexGuarded = async (
     }
 };
 
+/** The parenthesised column list of a `CREATE INDEX` statement; comparing it keeps a shape check insensitive to how the surrounding DDL is spelled. */
+const indexColumnList = (statement: string): string | undefined => {
+    const open = statement.indexOf("(");
+
+    return open === -1 ? undefined : statement.slice(open, statement.lastIndexOf(")") + 1);
+};
+
+/** The column list `spec` would be created with, rendered for the dialect. */
+const declaredIndexColumnList = (dialect: SqlDialect, spec: { columns: SQL; name: string; table: string; unique: boolean }): string | undefined => {
+    const unique = spec.unique ? sql`UNIQUE ` : sql``;
+
+    return indexColumnList(
+        renderSql(dialect.name, sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql,
+    );
+};
+
+/**
+ * Whether the index the engine already holds (`held`, its stored `CREATE` text) has a DIFFERENT column list than
+ * `spec` would create. `false` when either side cannot be read, so an unreadable definition is left alone, not dropped.
+ */
+const indexShapeChanged = (dialect: SqlDialect, held: string, spec: { columns: SQL; name: string; table: string; unique: boolean }): boolean => {
+    const wanted = declaredIndexColumnList(dialect, spec);
+
+    return wanted !== undefined && wanted !== indexColumnList(held);
+};
+
 /**
  * Drop `name` when the engine already holds an index by that name built from a
  * DIFFERENT column list.
@@ -350,18 +376,7 @@ const dropIndexIfShapeChanged = async (
 
     // Compare the parenthesised column list rather than the whole statement, so
     // this stays insensitive to how the surrounding DDL is spelled.
-    const columnsOf = (statement: string): string | undefined => {
-        const open = statement.indexOf("(");
-
-        return open === -1 ? undefined : statement.slice(open, statement.lastIndexOf(")") + 1);
-    };
-
-    const unique = spec.unique ? sql`UNIQUE ` : sql``;
-    const wanted = columnsOf(
-        renderSql(dialect.name, sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql,
-    );
-
-    if (wanted === undefined || wanted === columnsOf(current)) {
+    if (!indexShapeChanged(dialect, current, spec)) {
         return;
     }
 
@@ -383,8 +398,24 @@ const dropIndexIfShapeChanged = async (
     await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(spec.name)}`);
 };
 
-/** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
-const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+/** One index a `.global()` table is provisioned with. */
+interface GlobalIndexSpec {
+    columns: SQL;
+    /** `declared` is a schema index (shape-checked, may be re-created); `default-order` and `unique-column` are synthesized. */
+    kind: "declared" | "default-order" | "unique-column";
+    name: string;
+    /** The columns UNJOINED, for the NULL filter on the duplicate probe in {@link assertNoDuplicatesUnder}. */
+    refs: SQL[];
+    table: string;
+    unique: boolean;
+}
+
+/**
+ * Every index a `.global()` table is provisioned with, in creation order: its declared secondary indexes, the default
+ * total-order index, then the synthesized `.unique()` column indexes. Pure (no I/O), so the sequential pass and the
+ * batched planner create exactly the same set.
+ */
+const globalTableIndexSpecs = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): GlobalIndexSpec[] => {
     assertIndexableUniqueIndexes(tableName, definition, dialect);
 
     const fullValueFields = fullValueIndexedFields(definition);
@@ -409,26 +440,21 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
     };
 
     const sortKeys = indexSortKeys(dialect);
+    const specs: GlobalIndexSpec[] = [];
 
     for (const index of definition.indexes) {
         const refs = index.fields.map((field) => indexRef(field));
         const fields = sql.join(refs, sql`, `);
         const unique = index.unique ?? false;
-        const spec = {
+
+        specs.push({
             columns: unique || sortKeys === undefined ? fields : sql`${fields}, ${sortKeys}`,
+            kind: "declared",
             name: `${tableName}_${index.name}`,
-            // The columns UNJOINED, for the NULL filter on the duplicate probe in
-            // `assertNoDuplicatesUnder` — it needs one predicate per column, which
-            // the joined list cannot be taken apart into.
             refs,
             table: tableName,
             unique,
-        };
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await dropIndexIfShapeChanged(exec, dialect, spec);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexGuarded(exec, dialect, spec);
+        });
     }
 
     // The DEFAULT total order, for the reads that name no index at all — a bare
@@ -437,7 +463,7 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
     // engine read the whole table into a temp B-tree to return the first page.
     // The DO twin creates the same index on every row table.
     if (sortKeys !== undefined) {
-        await createIndexIfNotExists(exec, dialect, { columns: sortKeys, name: `${tableName}__by_creation`, table: tableName, unique: false });
+        specs.push({ columns: sortKeys, kind: "default-order", name: `${tableName}__by_creation`, refs: [], table: tableName, unique: false });
     }
 
     // `.unique()` columns synthesize a UNIQUE index so the engine enforces the
@@ -450,14 +476,28 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
 
         const reference = indexRef(field);
 
+        specs.push({ columns: reference, kind: "unique-column", name: `${tableName}_unique_${field}`, refs: [reference], table: tableName, unique: true });
+    }
+
+    return specs;
+};
+
+/** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
+const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+    for (const spec of globalTableIndexSpecs(tableName, definition, dialect)) {
+        if (spec.kind === "default-order") {
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+            await createIndexIfNotExists(exec, dialect, spec);
+            continue;
+        }
+
+        if (spec.kind === "declared") {
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+            await dropIndexIfShapeChanged(exec, dialect, spec);
+        }
+
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexGuarded(exec, dialect, {
-            columns: reference,
-            name: `${tableName}_unique_${field}`,
-            refs: [reference],
-            table: tableName,
-            unique: true,
-        });
+        await createIndexGuarded(exec, dialect, spec);
     }
 };
 
@@ -600,6 +640,13 @@ const legacyRewriteStatements = (row: Record<string, unknown>, rewrite: LegacyCo
     return { assignments, guards };
 };
 
+/** The predicate that is true for a row still holding a legacy encoding in any of the rewrite's columns. */
+const legacyRowPredicate = (rewrite: LegacyColumnRewrite): SQL =>
+    sql.join(
+        rewrite.fields.map((field) => rewrite.probe(field)),
+        sql` OR `,
+    );
+
 /**
  * Walk one table and rewrite every column still holding a superseded storage
  * form into the one this build writes.
@@ -645,10 +692,7 @@ const runLegacyColumnRewrite = async (exec: SqlCtxExec, tableName: string, diale
         return;
     }
 
-    const legacy = sql.join(
-        rewrite.fields.map((field) => rewrite.probe(field)),
-        sql` OR `,
-    );
+    const legacy = legacyRowPredicate(rewrite);
     const selected = sql.join([columnRefSql("id"), ...rewrite.fields.map((field) => columnRefSql(field))], sql`, `);
     let cursor = "";
     let unconvertible = 0;
@@ -731,8 +775,8 @@ const untypedFields = (definition: SchemaLike["tables"][string]): string[] =>
  * earlier build stored into the order-preserving key {@link bigintSqlKey} now
  * writes. Decimal text is exact for `=` but sorts `"9"` after `"10"`.
  */
-const rewriteLegacyBigintColumns = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> =>
-    runLegacyColumnRewrite(exec, tableName, dialect, {
+const bigintRewrite = (tableName: string, definition: SchemaLike["tables"][string]): LegacyColumnRewrite => {
+    return {
         convert: (raw) => {
             if (typeof raw !== "string" || raw.length === BIGINT_KEY_LENGTH) {
                 return undefined;
@@ -748,7 +792,11 @@ const rewriteLegacyBigintColumns = async (exec: SqlCtxExec, tableName: string, d
         fields: bigintFields(definition),
         marker: `bigint-key:${tableName}`,
         probe: (field) => sql`(${columnRefSql(field)} IS NOT NULL AND LENGTH(${columnRefSql(field)}) <> ${BIGINT_KEY_LENGTH})`,
-    });
+    };
+};
+
+const rewriteLegacyBigintColumns = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> =>
+    runLegacyColumnRewrite(exec, tableName, dialect, bigintRewrite(tableName, definition));
 
 /**
  * Rewrite any untyped column still holding a number as the marked JSON an
@@ -777,8 +825,8 @@ const rewriteLegacyBigintColumns = async (exec: SqlCtxExec, tableName: string, d
  * a hard provisioning failure, not a wrong answer. See {@link likePrefixLiteral}
  * for why rendering these two is safe.
  */
-const rewriteLegacyUntypedNumbers = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> =>
-    runLegacyColumnRewrite(exec, tableName, dialect, {
+const untypedRewrite = (tableName: string, definition: SchemaLike["tables"][string]): LegacyColumnRewrite => {
+    return {
         convert: rewriteLegacyUntypedNumber,
         fields: untypedFields(definition),
         marker: `untyped-number-key:${tableName}`,
@@ -787,7 +835,11 @@ const rewriteLegacyUntypedNumbers = async (exec: SqlCtxExec, tableName: string, 
         // pattern in SQL would silently match nothing there.
         probe: (field) =>
             sql`(${columnRefSql(field)} LIKE ${sql.raw(likePrefixLiteral(UNTYPED_WIRE_PREFIX))} AND ${columnRefSql(field)} NOT LIKE ${sql.raw(likePrefixLiteral(UNTYPED_NUMBER_PREFIX))})`,
-    });
+    };
+};
+
+const rewriteLegacyUntypedNumbers = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> =>
+    runLegacyColumnRewrite(exec, tableName, dialect, untypedRewrite(tableName, definition));
 
 /**
  * `table.column` pairs {@link relaxNullAcceptingColumns} already reported in
@@ -875,6 +927,14 @@ const backfillAddedColumn = async (
     }
 };
 
+/** The columns a `.global()` table must carry beyond `id`/`_creationTime`: the OCC row version, then one per declared field. */
+const wantedGlobalColumns = (definition: SchemaLike["tables"][string], dialect: SqlDialect): [column: string, type: string, validator?: ValidatorLike][] => [
+    [OCC_VERSION_COLUMN, dialect.companionTypes.integer],
+    ...Object.entries(definition.shape)
+        .filter(([, validator]) => validator._meta?.column !== undefined)
+        .map(([field, validator]): [string, string, ValidatorLike] => [field, globalColumnAffinity(validator, dialect), validator]),
+];
+
 /**
  * Add the columns a `.global()` table is missing.
  *
@@ -921,12 +981,7 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
     // The OCC version column leads the list: a table provisioned before it
     // existed carries none, and the guarded-write CAS reads it on every
     // `patch`/`replace`/`delete`.
-    const wanted: [column: string, type: string, validator?: ValidatorLike][] = [
-        [OCC_VERSION_COLUMN, dialect.companionTypes.integer],
-        ...Object.entries(definition.shape)
-            .filter(([, validator]) => validator._meta?.column !== undefined)
-            .map(([field, validator]): [string, string, ValidatorLike] => [field, globalColumnAffinity(validator, dialect), validator]),
-    ];
+    const wanted = wantedGlobalColumns(definition, dialect);
 
     // The alias the probe's column references are qualified with; see the docblock.
     const alias = "t";
@@ -1059,39 +1114,41 @@ const relaxNullAcceptingColumns = async (exec: SqlCtxExec, tableName: string, de
 };
 
 /**
- * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
- * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
- * declared field, then its secondary and `.unique()` indexes. This is the D1
- * twin of `@lunora/do`'s `runShardMigrations` (which self-creates shard-local
- * tables) — it makes the schema the single source of truth for global tables
- * too, so a fresh database serves them without a hand-applied migration. The
- * column set and dialect match exactly what this module reads and writes
- * (`columnRef`, `serializeColumnValue`, `decodeGlobalRow`).
+ * Provision one `.global()` table statement by statement: `CREATE TABLE IF NOT EXISTS` with the physical `id` /
+ * `_creationTime` / row-version columns plus a typed column per declared field, any missing columns, then its indexes and
+ * the one-shot storage rewrites. Idempotent and additive only: it never drops or retypes an existing column, so
+ * destructive schema changes still need an explicit migration.
  *
- * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`); additive only — it never
- * drops or retypes an existing column, so destructive schema changes still need
- * an explicit migration.
+ * Every statement is its own awaited round trip; the batched provisioning module avoids that for the additive cases.
  */
-const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+const provisionGlobalTable = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+    const columns = globalTableColumnsDdl(tableName, definition, dialect);
+
+    await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
+    await alterGlobalTableDrift(exec, tableName, definition, dialect);
+    await relaxNullAcceptingColumns(exec, tableName, definition, dialect);
+    await createGlobalTableIndexes(exec, tableName, definition, dialect);
+    await rewriteLegacyBigintColumns(exec, tableName, definition, dialect);
+    await rewriteLegacyUntypedNumbers(exec, tableName, definition, dialect);
+};
+
+/** The one-shot storage rewrites that apply to a table (none for a table with no bigint / untyped column). */
+const legacyRewrites = (tableName: string, definition: SchemaLike["tables"][string]): LegacyColumnRewrite[] =>
+    [bigintRewrite(tableName, definition), untypedRewrite(tableName, definition)].filter((rewrite) => rewrite.fields.length > 0);
+
+/**
+ * Provision every `.global()` table one statement at a time: the original, engine-agnostic path. Each statement is its own
+ * awaited round trip, and later statements read what earlier ones created. Kept as the fallback for an exec with no `batch`
+ * and for any table the batched planner will not handle (drift that needs an ALTER, a changed index, an unfinished rewrite).
+ */
+const provisionGlobalTablesSequentially = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, only?: ReadonlySet<string>): Promise<void> => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind !== "global") {
+        if (definition.shardMode?.kind !== "global" || (only !== undefined && !only.has(tableName))) {
             continue;
         }
 
-        const columns = globalTableColumnsDdl(tableName, definition, dialect);
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
-        await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; the table must carry every declared column before its indexes reference them.
-        await alterGlobalTableDrift(exec, tableName, definition, dialect);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the same connection.
-        await relaxNullAcceptingColumns(exec, tableName, definition, dialect);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
-        await createGlobalTableIndexes(exec, tableName, definition, dialect);
-        // eslint-disable-next-line no-await-in-loop -- runs on the same connection, after the columns exist.
-        await rewriteLegacyBigintColumns(exec, tableName, definition, dialect);
-        // eslint-disable-next-line no-await-in-loop -- same connection, same reason; each pass records its own completion marker.
-        await rewriteLegacyUntypedNumbers(exec, tableName, definition, dialect);
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes.
+        await provisionGlobalTable(exec, tableName, definition, dialect);
     }
 };
 
@@ -1247,4 +1304,19 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
     }
 };
 
-export { runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations };
+export type { GlobalIndexSpec, LegacyColumnRewrite };
+export {
+    declaredIndexColumnList,
+    globalTableColumnsDdl,
+    globalTableIndexSpecs,
+    indexColumnList,
+    indexShapeChanged,
+    legacyRewrites,
+    legacyRowPredicate,
+    MIGRATION_STATE_TABLE,
+    provisionGlobalTable,
+    provisionGlobalTablesSequentially,
+    runSqlAggregateMigrations,
+    runSqlRankMigrations,
+    wantedGlobalColumns,
+};

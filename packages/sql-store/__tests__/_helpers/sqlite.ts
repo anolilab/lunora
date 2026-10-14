@@ -101,3 +101,54 @@ export const createSqliteHarness = (): { close: () => void; exec: SqlCtxExec } =
         },
     };
 };
+
+/**
+ * A `node:sqlite` exec WITH `batch`, shaped like D1's: the statements run in order inside one transaction, and a
+ * failure rolls the whole array back. Exposes the database so a test can read the catalog directly, and `trips`
+ * counts every call into the exec (a `batch` is one), which is the number that costs a network round trip on D1.
+ */
+export const createSqliteBatchHarness = (): { close: () => void; database: DatabaseSync; exec: SqlCtxExec; trips: () => number } => {
+    const database = new DatabaseSync(":memory:");
+    let trips = 0;
+
+    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => database.prepare(query).all(...(parameters as never[]));
+
+    return {
+        close: () => {
+            database.close();
+        },
+        database,
+        exec: {
+            all: (query, parameters) => {
+                trips += 1;
+
+                return Promise.resolve(all(query, parameters));
+            },
+            batch: (statements) => {
+                trips += 1;
+                database.exec("BEGIN");
+
+                try {
+                    for (const statement of statements) {
+                        all(statement.sql, statement.params);
+                    }
+
+                    database.exec("COMMIT");
+
+                    return Promise.resolve();
+                } catch (error) {
+                    database.exec("ROLLBACK");
+
+                    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+                }
+            },
+            run: (query, parameters) => {
+                trips += 1;
+                all(query, parameters);
+
+                return Promise.resolve();
+            },
+        },
+        trips: () => trips,
+    };
+};
