@@ -1,6 +1,6 @@
 {
     "name": "@lunora/privacy",
-    "version": "1.0.0-alpha.7",
+    "version": "1.0.0-alpha.8",
     "description": "Reusable data-subject rights for Lunora apps: export, erasure and retention holds (GDPR Art. 15, 17, 20).",
     "keywords": [
         "data-subject-rights",

@@ -28,6 +28,7 @@
             "templates": "${{ steps.changes.outputs.templates }}"
             "templates_expo": "${{ steps.changes.outputs.templates_expo }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
+            "worker_startup": "${{ steps.changes.outputs.worker_startup }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
             "celld": "${{ steps.changes.outputs.celld }}"
         "steps":
@@ -662,6 +663,46 @@
             - "name": "Weigh the reference Worker"
               "run": "pnpm run worker-size:check"
 
+    # Guards Cloudflare's 1 s startup-CPU limit (error 10021, not raisable) for a large
+    # app: counts the modules a synthetic 300-procedure app evaluates at startup (static
+    # imports only) against the ceiling in `worker-startup.json`. Deterministic, so it
+    # can gate; CPU time is printed as advisory only. See scripts/check-worker-startup.js.
+    #
+    # Its own job, not a `postinstall` gate: a failing postinstall turns every job red
+    # in its setup step, with the cause invisible in the job that reports it.
+    "worker-startup":
+        "name": "Worker startup budget"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_startup == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "worker-startup"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `:prod` for the same reason as the size gate: users install the production build.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Count what the reference Worker evaluates at startup"
+              "run": "pnpm run worker-startup:check"
+
     # The non-JS SDKs against `protocol/fixtures/*.json`, the same golden frames the
     # TypeScript client is tested against. Nothing else runs them: `sdks/` is not a pnpm
     # workspace, so `pnpm run test` cannot see it.
@@ -916,7 +957,20 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "test-celld", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
+        "needs":
+            [
+                "files-changed",
+                "test",
+                "test-workerd",
+                "test-celld",
+                "test-mysql",
+                "e2e",
+                "templates",
+                "templates-expo",
+                "worker-size",
+                "worker-startup",
+                "sdk-conformance",
+            ]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
