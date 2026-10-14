@@ -11584,13 +11584,13 @@ abstract class ShardDO {
             // the load-bearing check — a passive subscriber never sends an inbound
             // frame, so `webSocketMessage`'s check would never fire for it. Drop
             // the socket and skip its push.
-            if (this.isSocketExpired(ws)) {
+            const attachment = this.readAttachment(ws);
+
+            if (isIdentityExpired(attachment.expiresAt)) {
                 this.dropExpiredSocket(ws);
 
                 return;
             }
-
-            const attachment = this.readAttachment(ws);
 
             // Resolved once per socket per flush, not once per affected
             // subscription below — both depend only on this socket, and are
@@ -12104,13 +12104,13 @@ abstract class ShardDO {
         const pendingCursors: ShapePokeCursorRow[] = [];
 
         const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
-            if (this.isSocketExpired(ws)) {
+            const attachment = this.readAttachment(ws);
+
+            if (isIdentityExpired(attachment.expiresAt)) {
                 this.dropExpiredSocket(ws);
 
                 return;
             }
-
-            const attachment = this.readAttachment(ws);
             const { shapes } = attachment;
 
             if (!shapes) {
@@ -13483,13 +13483,13 @@ abstract class ShardDO {
         const pending: { attachment: SocketAttachment; ws: ShardSocketLike }[] = [];
 
         for (const ws of sockets) {
-            if (this.isSocketExpired(ws)) {
+            const attachment = this.readAttachment(ws);
+
+            if (isIdentityExpired(attachment.expiresAt)) {
                 this.dropExpiredSocket(ws);
 
                 continue;
             }
-
-            const attachment = this.readAttachment(ws);
 
             if (attachment.shapes) {
                 pending.push({ attachment, ws });

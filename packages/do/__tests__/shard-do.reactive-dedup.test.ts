@@ -197,6 +197,38 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
         expect(sockets.every((ws, index) => lastOwner(ws, `sub-${String(index)}`) !== undefined)).toBe(true);
     });
 
+    it("reads each socket's attachment twice per flush (expiry+fan-out share one read, plus the deliberate post-await fresh read)", async () => {
+        expect.assertions(1);
+
+        const shard = new DedupShard(createFakeState(), {});
+        const reads: { count: number }[] = [];
+
+        for (let index = 0; index < 3; index += 1) {
+            const ws = createFakeWebSocket();
+            const original = ws.deserializeAttachment.bind(ws);
+
+            const counter = { count: 0 };
+
+            reads.push(counter);
+            ws.deserializeAttachment = () => {
+                counter.count += 1;
+
+                return original();
+            };
+            shard.registerSocket(ws, attachmentFor(`user-${String(index)}`));
+            // eslint-disable-next-line no-await-in-loop -- sequential seed keeps run ordering deterministic
+            await shard.driveSubscribe(ws, `sub-${String(index)}`, "messages:list");
+        }
+
+        for (const counter of reads) {
+            counter.count = 0;
+        }
+
+        await shard.writeRpc();
+
+        expect(reads.map((counter) => counter.count)).toStrictEqual([2, 2, 2]);
+    });
+
     it("negative: an identity-dependent query runs once PER socket under its own identity (no leak)", async () => {
         expect.assertions(4);
 
