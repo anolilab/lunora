@@ -46,9 +46,12 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         onErrorRef.current = onError;
     });
 
-    const stableOnError = useCallback<SubscriptionErrorCallback>((error) => {
-        onErrorRef.current?.(error);
-    }, []);
+    const stableOnError = useCallback<SubscriptionErrorCallback>(
+        (error) => {
+            onErrorRef.current?.(error);
+        },
+        [onErrorRef],
+    );
 
     const skipped = args === "skip";
     const argsRecord = skipped ? {} : (args as Record<string, unknown>);
