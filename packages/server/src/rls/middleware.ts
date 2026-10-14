@@ -1143,6 +1143,32 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     };
 
     /**
+     * Delete the rows of `tableName` a policy-scoped read just returned. `gateById` would `locateRow` each id
+     * again (one `lookupById`, or a `get` plus a `findFirst` probe on a miss) to learn the row and its table; a
+     * chunked erase already holds both, so the delete verdict is taken on that row image instead. The verdict is
+     * still evaluated per row through `allowsWrite`, so a delete policy stricter than the read policy denies
+     * exactly as before. A table with no policy runs the guarded `base`, as `gateById` does for an unlocated row.
+     * The image is the one read in the same call: inside a mutation the DO serialises writes, and the re-read
+     * never closed the window for a `.global()` table either.
+     */
+    const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<void> => {
+        const gated = policyTables.has(tableName);
+        const writer = gated ? raw : base;
+
+        for (const row of rows) {
+            if (gated && !allowsWrite(tableName, "delete", row)) {
+                // Same table-agnostic message as `gateById`.
+                throw new LunoraError("FORBIDDEN", "delete denied by policy");
+            }
+
+            const id = String(row["_id"]);
+
+            // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
+            await writer.delete(id, tableName, hard === undefined ? undefined : { hard });
+        }
+    };
+
+    /**
      * The update gate shared by `patch`, `patchIf` and `patchMany`. It checks the post-image the patch would
      * produce against the row the gate read, then hands the store a verdict to take again on the row IT reads:
      * the two can differ, and an atomic operator (`{ increment: 1 }`) or a retry makes the post-image depend on
@@ -1239,39 +1265,20 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                     limit: chunkSize,
                     relationBaseWhere: relationReadFilter,
                 });
-                const ids = resolved.page.map((row) => String(row["_id"]));
+                const { page } = resolved;
 
-                if (ids.length === 0) {
+                if (page.length === 0) {
                     break;
                 }
 
-                for (const id of ids) {
-                    // `expectedTable` is deliberately NOT pinned. Pinning it would block
-                    // the writer's global fallback, so every delete on a `.global()`
-                    // table would be a silent no-op — inflating the count while the rows
-                    // survive. It costs nothing here: these ids came from this table's
-                    // own policy-filtered read, so they are provably its rows, and
-                    // `gateById` still resolves each row's real table and applies that
-                    // table's delete policy. Same reasoning as `deleteWhere`.
-                    //
-                    // `tableName` rides along as the PROBE scope, which pins nothing:
-                    // unpinned, a row that misses the shard-local `lookupById` seam is
-                    // probed against every policy-gated table, so a chunked erase of N
-                    // global rows costs N × (policy tables) subrequests and trips
-                    // workerd's 1000-subrequest ceiling mid-erase.
-                    // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                    await gateById(
-                        id,
-                        "delete",
-                        (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }),
-                        undefined,
-                        undefined,
-                        tableName,
-                    );
-                    deleted += 1;
-                }
+                // `deleteReadRows` pins the delete to `tableName`: the rows are provably this table's, so no
+                // per-row re-location is needed, and the engine probes only that table (a `.global()` pin
+                // falls straight through to D1) and can never land on another table's row with the same id.
+                // eslint-disable-next-line no-await-in-loop -- chunked by design: one policy-visible page at a time
+                await deleteReadRows(tableName, page, options?.hard);
+                deleted += page.length;
 
-                if (ids.length < chunkSize) {
+                if (page.length < chunkSize) {
                     break;
                 }
             }
@@ -1310,15 +1317,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
             assertBatchLimit(ids.length, options?.limit, "deleteWhere");
 
-            // Gated per id here rather than through `deleteMany` so `tableName` can
-            // ride along as the probe scope: `expectedTable` must stay unpinned (it
-            // would block the writer's global fallback and make every global delete a
-            // silent no-op), and unpinned means every policy-gated table gets probed
-            // for every row. See `locateRow`.
-            for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                await gateById(id, "delete", (writer) => writer.delete(id), undefined, undefined, tableName);
-            }
+            await deleteReadRows(tableName, resolved.page);
 
             return { deleted: ids.length };
         },

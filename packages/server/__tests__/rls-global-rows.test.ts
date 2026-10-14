@@ -286,6 +286,11 @@ describe("rls — probe scope on chunked erases", () => {
             probes,
             writer: {
                 ...database.writer,
+                get: async (id: string) => {
+                    probes.push(`get:${id}`);
+
+                    return database.writer.get(id);
+                },
                 findFirst: async (tableName: string, args?: { where?: { _id?: string } }) => {
                     probes.push(tableName);
 
@@ -295,7 +300,7 @@ describe("rls — probe scope on chunked erases", () => {
         };
     };
 
-    it("deleteAll() probes only the table it erases, once per row", async () => {
+    it("deleteAll() re-locates no row: the delete verdict runs on the rows already read", async () => {
         expect.assertions(3);
 
         const database = createSplitWriter(seed);
@@ -306,11 +311,11 @@ describe("rls — probe scope on chunked erases", () => {
 
         await expect(handler.handler(makeContext(spied.writer, "admin"), {})).resolves.toStrictEqual({ deleted: 2 });
 
-        expect(spied.probes).toStrictEqual(["profiles", "profiles"]);
+        expect(spied.probes).toStrictEqual([]);
         expect(database.rows.size).toBe(0);
     });
 
-    it("deleteWhere() probes only the matched table, once per row", async () => {
+    it("deleteWhere() re-locates no row: the delete verdict runs on the rows already read", async () => {
         expect.assertions(2);
 
         const database = createSplitWriter(seed);
@@ -321,6 +326,6 @@ describe("rls — probe scope on chunked erases", () => {
 
         await expect(handler.handler(makeContext(spied.writer, "admin"), {})).resolves.toStrictEqual({ deleted: 2 });
 
-        expect(spied.probes).toStrictEqual(["profiles", "profiles"]);
+        expect(spied.probes).toStrictEqual([]);
     });
 });

@@ -1502,6 +1502,50 @@ describe("rls — batch write path", () => {
         expect(database.calls.some((call) => call.method === "deleteAll")).toBe(false);
     });
 
+    it("deleteAll chunks without re-locating any row it already read", async () => {
+        expect.assertions(5);
+
+        const database = createFakeDatabase(
+            Array.from({ length: 300 }, (_, index) => {
+                return { _id: `d${String(index)}`, ownerId: "u1", table: "documents" };
+            }),
+        );
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([deletePolicy]))
+            .mutation(async ({ ctx }) => ctx.db.deleteAll("documents", { chunkSize: 100, hard: true }));
+
+        // The fake ignores `limit` and never drops deleted rows; serve real chunks so the loop drains.
+        const alive = new Set(Array.from({ length: 300 }, (_, index) => `d${String(index)}`));
+        const { delete: recordDelete, findMany } = database.writer;
+
+        const pinnedTables: (string | undefined)[] = [];
+
+        database.writer.delete = async (id, expectedTable, options) => {
+            alive.delete(id);
+            pinnedTables.push(expectedTable);
+
+            return recordDelete(id, expectedTable, options);
+        };
+        database.writer.findMany = async (tableName, args) => {
+            const all = await findMany(tableName, args);
+            const page = all.page.filter((row) => alive.has(String(row["_id"]))).slice(0, (args as { limit?: number } | undefined)?.limit ?? 100);
+
+            return { ...all, page };
+        };
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 300 });
+
+        const deletes = database.calls.filter((call) => call.method === "delete");
+
+        expect(deletes).toHaveLength(300);
+        expect(deletes[0]?.args).toStrictEqual({ hard: true });
+        // Every delete is pinned to the erased table, so the engine probes only that table.
+        expect(pinnedTables.every((table) => table === "documents")).toBe(true);
+        // No per-row `get` / `findFirst` probe: the verdict ran on the page the scoped read returned.
+        expect(database.calls.filter((call) => call.method === "get" || call.method === "findFirst")).toHaveLength(0);
+    });
+
     it("deleteAll denies (FORBIDDEN) when a row fails its policy, before deleting it", async () => {
         expect.assertions(2);
 
@@ -1513,7 +1557,7 @@ describe("rls — batch write path", () => {
         expect(database.calls.some((call) => call.method === "delete")).toBe(false);
     });
 
-    it("deleteAll does not pin the table, so a .global() row still routes to its backend", async () => {
+    it("deleteAll pins the erased table; the engine still reaches a .global() row through that pin", async () => {
         expect.assertions(2);
 
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
@@ -1522,10 +1566,8 @@ describe("rls — batch write path", () => {
 
         await handler.handler(makeContext(database, "u1"), {});
 
-        // Pinning `expectedTable` would block the writer's global fallback, making every
-        // delete on a `.global()` table a silent no-op. It costs nothing to omit: the ids
-        // came from this table's own policy-filtered read, and `gateById` still resolves
-        // each row's real table to pick its delete policy.
+        // The ids came from this table's own policy-filtered read, so the delete is pinned to it; the
+        // engine's global fallback honours a pin on a `.global()` table itself.
         const deletes = database.calls.filter((call) => call.method === "delete");
 
         expect(deletes).toHaveLength(1);

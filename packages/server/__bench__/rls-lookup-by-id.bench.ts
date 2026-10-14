@@ -145,3 +145,50 @@ describe("rls() get() — table discovery cost vs K policy tables", () => {
         });
     }
 });
+
+/**
+ * `deleteAll` over 100 rows with 3 policy-gated tables, on the probe-path writer
+ * (no `lookupById`, as for `.global()` rows). Each row used to be re-located
+ * (1 get + a findFirst probe) before its delete verdict; the verdict now runs on the
+ * rows the scoped read returned, so only the 100 deletes remain.
+ */
+const ERASE_ROWS = 100;
+const eraseRows = Array.from({ length: ERASE_ROWS }, (_, index) => {
+    return { _creationTime: 0, _id: `row_${String(index)}`, ownerId: "user_42" };
+});
+const eraseWriter: CountingWriter = {
+    ...makeWriter(3, false),
+    async findFirst(tableName, args) {
+        const wantsId = (args?.where as { _id?: string } | undefined)?._id;
+
+        return tableName === "t0" ? (eraseRows.find((candidate) => candidate._id === wantsId) ?? null) : null;
+    },
+    async findMany() {
+        return { continueCursor: null, isDone: true, page: eraseRows };
+    },
+    async get(id) {
+        return eraseRows.find((candidate) => candidate._id === id) ?? null;
+    },
+};
+const eraseHandler = lunora.mutation
+    .use(
+        rlsAsAny<BenchContext>([
+            ...policiesFor(3),
+            definePolicy<BenchContext>({
+                on: "delete",
+                table: "t0",
+                when: ({ auth, row }) => String((row as { ownerId?: string }).ownerId) === String(auth.userId),
+            }),
+        ]),
+    )
+    .mutation(async ({ ctx }) =>
+        (ctx.db as unknown as { deleteAll: (table: string, options: { chunkSize: number }) => Promise<unknown> }).deleteAll("t0", {
+            chunkSize: ERASE_ROWS + 1,
+        }),
+    );
+
+describe("rls() deleteAll — 100 rows, 3 policy tables", () => {
+    bench("deleteAll 100 rows", async () => {
+        await eraseHandler.handler(buildContext(eraseWriter), {});
+    });
+});
