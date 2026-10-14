@@ -1,3 +1,10 @@
+## @lunora/agent [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.203...@lunora/agent@1.0.0-alpha.204) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.199
+
 ## @lunora/agent [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.202...@lunora/agent@1.0.0-alpha.203) (2026-10-14)
 
 

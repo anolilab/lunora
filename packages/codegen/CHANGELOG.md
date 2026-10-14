@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.300...@lunora/codegen@1.0.0-alpha.301) (2026-10-14)
+
+### Bug Fixes
+
+* **codegen:** key the per-file diagnostics cache on the compiler node ([#1172](https://github.com/anolilab/lunora/issues/1172)) ([7c9af8d](https://github.com/anolilab/lunora/commit/7c9af8dfb9e8f3bf36a5d22d272da600bb2ae860))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.215
+* **@lunora/agent:** upgraded to 1.0.0-alpha.204
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.125
+* **@lunora/do:** upgraded to 1.0.0-alpha.212
+* **@lunora/server:** upgraded to 1.0.0-alpha.199
+
 ## @lunora/codegen [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.299...@lunora/codegen@1.0.0-alpha.300) (2026-10-14)
 
 ### Bug Fixes

@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.211...@lunora/do@1.0.0-alpha.212) (2026-10-14)
+
+### Performance Improvements
+
+* **do:** share a live-query re-run across sockets with an identical identity ([#1168](https://github.com/anolilab/lunora/issues/1168)) ([c19b641](https://github.com/anolilab/lunora/commit/c19b641a41432a0f96e4d9e9f2f6dc58d7f1fd68)), closes [#1169](https://github.com/anolilab/lunora/issues/1169)
+
 ## @lunora/do [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.210...@lunora/do@1.0.0-alpha.211) (2026-10-14)
 
 ### Bug Fixes

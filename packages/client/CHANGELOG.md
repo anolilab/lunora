@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.205...@lunora/client@1.0.0-alpha.206) (2026-10-14)
+
+### Performance Improvements
+
+* **react:** hash useQuery args once per render ([#1171](https://github.com/anolilab/lunora/issues/1171)) ([9e37807](https://github.com/anolilab/lunora/commit/9e37807dfe8d72471ab11b9ec6e197d491027571))
+
 ## @lunora/client [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.204...@lunora/client@1.0.0-alpha.205) (2026-10-14)
 
 
