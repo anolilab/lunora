@@ -193,6 +193,38 @@ describe("schedule-rate admission on the shard", () => {
         expect(metric).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "counter", name: "shard.schedule_rate.deferred", value: 1 }), undefined);
     });
 
+    it("logs at most once per window while steady load alternates admits and refusals", () => {
+        expect.assertions(5);
+
+        const shard = newShard({ [SCHEDULE_RATE_LIMIT_KEY]: String(SMALL_LIMIT) });
+        const spies = shard as unknown as {
+            recordMetric: (...args: unknown[]) => unknown;
+            recordUserLog: (...args: unknown[]) => unknown;
+        };
+        const log = vi.spyOn(spies, "recordUserLog");
+        const metric = vi.spyOn(spies, "recordMetric");
+        const admit = admitOf(shard);
+        const WINDOWS = 3;
+
+        // One invocation every 2 s is 30 a minute, 1.5 times the limit. The sliding estimate then hovers at the limit, so
+        // admits and refusals interleave: a flag cleared on every admit would log on each refusal that follows an admit.
+        const answers: string[] = [];
+
+        for (let at = NOW; at < NOW + WINDOWS * WINDOW; at += 2000) {
+            vi.setSystemTime(at);
+            answers.push(admit("steady:job") === undefined ? "admit" : "refuse");
+        }
+
+        const transitions = answers.filter((answer, index) => index > 0 && answer !== answers[index - 1]).length;
+
+        expect(answers).toContain("admit");
+        expect(answers).toContain("refuse");
+        expect(transitions).toBeGreaterThan(WINDOWS + 1);
+        expect(metric).toHaveBeenCalledWith(expect.objectContaining({ name: "shard.schedule_rate.deferred" }), undefined);
+        // At most one record per window per target, not one per refusal.
+        expect(log.mock.calls.length).toBeLessThanOrEqual(WINDOWS + 1);
+    });
+
     /**
      * The loop this breaker exists for: a job whose run schedules its own next run with
      * `runAfter(0)`. Each iteration is one invocation, so one admit call. A round trip of

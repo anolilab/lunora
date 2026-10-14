@@ -2310,11 +2310,12 @@ abstract class ShardDO {
     private alarmRearmTripLogged = false;
 
     /**
-     * The schedule-rate targets whose trip is already logged on this instance (see
-     * schedule-rate-breaker.ts). A target leaves the set when it is admitted again, so the
-     * next trip logs once more. Same in-memory reasoning as the alarm breaker's trip flag.
+     * When each schedule-rate target's trip was last logged on this instance (see
+     * schedule-rate-breaker.ts). A target logs at most once per window. Steady load sitting
+     * at the limit alternates admits and refusals, so a flag cleared on admit would log on
+     * every refusal. In-memory on purpose, like the alarm breaker's trip flag.
      */
-    private readonly scheduleRateTripLogged = new Set<string>();
+    private readonly scheduleRateTripLoggedAt = new Map<string, number>();
 
     /** Monotonic per-DO poke id source; correlates a poke's `pokeStart`/`pokePart`/`pokeEnd` frames. */
     private pokeSequence = 0;
@@ -12846,8 +12847,6 @@ abstract class ShardDO {
         }
 
         if (admission.admitted) {
-            this.scheduleRateTripLogged.delete(target);
-
             return undefined;
         }
 
@@ -12859,21 +12858,25 @@ abstract class ShardDO {
     }
 
     /**
-     * Count one deferred schedule and, once per trip per instance, log the trip. The deferral
-     * itself is the caller's job: this only reports it.
+     * Count one deferred schedule, and log the trip at most once per window per target. The
+     * deferral itself is the caller's job: this only reports it.
      */
     private recordScheduleRateDeferral(target: string, limit: number, invocations: number): void {
         try {
+            const now = Date.now();
+
             this.recordMetric(
-                { functionPath: "schedule:rate", kind: "counter", name: "shard.schedule_rate.deferred", ts: Date.now(), value: 1 },
+                { functionPath: "schedule:rate", kind: "counter", name: "shard.schedule_rate.deferred", ts: now, value: 1 },
                 this.lastTelemetrySink,
             );
 
-            if (this.scheduleRateTripLogged.has(target)) {
+            const loggedAt = this.scheduleRateTripLoggedAt.get(target);
+
+            if (loggedAt !== undefined && now - loggedAt < ALARM_REARM_WINDOW_MS) {
                 return;
             }
 
-            this.scheduleRateTripLogged.add(target);
+            this.scheduleRateTripLoggedAt.set(target, now);
 
             const message = `schedule rate breaker tripped: ${target} was scheduled by ${String(invocations)} invocations in the last ${String(ALARM_REARM_WINDOW_MS)} ms (limit ${String(limit)}). Its schedules are deferred one window, not dropped. Tune with LUNORA_SCHEDULE_RATE_LIMIT, or set it to 0 to disable.`;
 
