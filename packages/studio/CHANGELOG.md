@@ -1,3 +1,141 @@
+## @lunora/studio [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.290...@lunora/studio@1.0.0-alpha.291) (2026-10-14)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** RelationDefinition, RelationDefinitionLike, RelationIR and AdvisorRelation are
+now unions of the single-key relation and a through relation, which has no field, references or
+onDelete. Code reading relation.field must narrow on relation.through first.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(server): document many-to-many relations through a join table
+
+Add a Many-to-many section to the relations page: the through declaration, the unique-index rule
+checked at schema load, reads and predicates, delete behaviour inherited from the join table's own
+foreign keys, and the connect/disconnect/set writes with their refusals. List the new advisor lint
+and note the union types in the alpha upgrade guide.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(plans): record the many-to-many relation execution
+
+Mark plan 489 done, record the owner's decision and the answers to its open questions, and list
+the gates, the bench and what is left open.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(d1): run the many-to-many cases on a real D1 binding
+
+Run the shared through-relation conformance cases, including the 150-id wide ones, against a real D1
+binding on workerd, and cover the masked join-key refusal. Refresh the API snapshots for the
+relation unions, and record the final gates and what is left open in plan 489.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(server): pin read and write policies on a many-to-many join table
+
+A read policy on the join table or the target hides a link from with, some and _count, and a write
+policy on the join table refuses the insert a connect makes and the delete a disconnect makes, each
+checked against the same call with no policy. Also cover the live-shape guard for a sharded or
+memory join table, and refresh the plan's measured gates.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): close review findings on many-to-many relations
+
+Bugs and security
+- connect and set no longer fail with a unique conflict (or leak that a hidden link exists) when the
+  join table's read policy hides the existing link; the insert treats the conflict as already linked
+- disconnect needs a readable target, and set only releases links to targets the caller can read,
+  matching a one-to-many
+- the transaction gate fails closed: a writer that does not report an open transaction is refused,
+  and the in-process runtime now reports its BEGIN/COMMIT span
+- a join column the server stamps (serverDefault) no longer makes the join table unwritable
+- from and to naming the same column is rejected at schema load and at codegen
+- connect and disconnect of the same id in one write are rejected as ambiguous
+- unindexed_relation_target also checks the join table's to column
+
+Structure
+- relation write info is a discriminated union (keyed or through) in the engine and the server
+  mirror, which removes the throughOf cast and the scattered optional checks
+- one replace diff, one attach step for loaders, one unique-pair predicate shared by the schema
+  check and the advisor, and a non-escalating key reader instead of casts
+- join-table schema rules move out of schema.ts; the schema snapshot's through variant drops its
+  invented field
+
+The plan is complete, so plans/489 is deleted and its README row moves to Shipped.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): bound the many-to-many reads and validate plugin joins
+
+Reads
+- the join-row hop of a many-to-many with/_count is bounded and fails closed past 10 000 rows for a
+  page, instead of reading every link
+- both hops of a some/every/none predicate read at most one row past maxRelationKeys, so a join
+  table with many rows per key cannot be materialised before the cap is checked
+- _count counts readable targets with one grouped count when the target shares the parent's store
+  and only reads the rows for a cross-backend target
+
+Schema
+- a through relation declared by a plugin extension now merges: the join table's bare v.id targets
+  resolve to their prefixed names, while a join that points at the wrong table is still rejected
+
+Tests
+- the through conformance cases move to shared/ so no package imports another package's tests
+- cover the bounds with a stubbed store, the plugin merge, a namespaced extension through codegen,
+  and the 100/101 bound-parameter cap on a real D1 binding
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): refuse relation predicates in shard-local shapes
+
+A shard-local live shape cannot filter by a relation. Its seed and its per-flush membership probe
+compile the predicate straight to SQL over the shape's own table, so the relation key matched
+nothing and the shape seeded empty without an error; and a write that touched only the related
+table (a join row, a child) produced no changed key on the shape's table, so it never re-probed.
+The same-DO and .global() target cases were documented as allowed but never worked.
+
+assertShapeShardable now refuses such a shape with SHAPE_RELATION_PREDICATE and the remedies
+(denormalize, make the table .global(), or use a live query). A .global() shape is read through
+the store's findMany, which resolves relations, and is unaffected.
+* **server:** a shape whose predicate contains a relation operator (is, isNot, some, every,
+none) on a non-global table is now rejected at subscribe with SHAPE_RELATION_PREDICATE instead of
+silently replicating nothing.
+
+Also namespace the v.id foreign keys of a plugin extension that name a sibling extension table,
+at runtime and in codegen's IR, so the relation graph keeps their edges and generated ids point
+at the prefixed tables.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): keep non-pair conflicts and nested ids in the review follow-ups
+
+- connect and set treat a unique conflict on a join insert as "already linked" only when the
+  (from, to) pair is the join table's sole uniqueness rule; with another unique index or column the
+  conflict may be a different constraint, so it surfaces instead of reporting an unwritten link
+- the plugin extension id retarget follows an id through object fields, record values and union
+  members as well as optional and array, so no stale bare table name is left in the merged schema
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** declare many-to-many relations through a join table ([#1146](https://github.com/anolilab/lunora/issues/1146)) ([585aa4a](https://github.com/anolilab/lunora/commit/585aa4a1645814e7fa851251a67785d8db25b9fd))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.211
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.108
+* **@lunora/client:** upgraded to 1.0.0-alpha.201
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/react:** upgraded to 1.0.0-alpha.214
+* **@lunora/mail:** upgraded to 1.0.0-alpha.106
+* **@lunora/notify:** upgraded to 1.0.0-alpha.79
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.194
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.124
+
 ## @lunora/studio [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.289...@lunora/studio@1.0.0-alpha.290) (2026-10-13)
 
 
