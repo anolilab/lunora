@@ -10,10 +10,15 @@ import createSqliteExec from "../__tests__/_helpers/node-sqlite";
  * a one-to-many into the join table and a to-one out of it. Both resolve to the same two reads; the bench pins that
  * the declaration costs nothing over writing it out, and gives the cost of a `with` load of a joined set.
  *
- * Real `node:sqlite`, JSON-blob dialect, like the other relation benches. 2 000 posts, 200 tags, 6 tags per post
- * (12 000 join rows).
+ * Real `node:sqlite`, JSON-blob dialect, like the other relation benches. 1 000 posts, 200 tags, 6 tags per post
+ * (6 000 join rows, 30 per tag).
+ *
+ * The size is bounded by the join-row cap: a many-to-many hop reads at most 5 000 join rows (the relation key cap) and
+ * fails closed past it, rather than materialising a broad join table. `every` reads the rows of the targets
+ * that violate the predicate and `some` / `none` those that match it, so a predicate that splits the tags roughly in
+ * half needs both halves under the cap: the join table has to stay under twice the cap.
  */
-const POST_COUNT = 2000;
+const POST_COUNT = 1000;
 const TAG_COUNT = 200;
 const TAGS_PER_POST = 6;
 
@@ -63,7 +68,8 @@ beforeAll(async () => {
     }
 });
 
-// `contains "1"` matches ~half the tags: a broad first hop. `tag7` matches exactly one.
+// `contains "1"` matches 119 of the 200 tags (~3 600 join rows), its complement 81 (~2 400): a broad first hop that
+// stays under the join-row cap in both directions. `tag7` matches exactly one.
 describe("many-to-many `some` — through vs the hand-written two relations", () => {
     bench("through: posts where tags.some(broad label)", async () => {
         await writer.findMany("posts", { limit: 50, where: { tags: { some: { label: { contains: "1" } } } } });
