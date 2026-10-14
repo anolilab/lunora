@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.61...@lunora/platform@1.0.0-alpha.62) (2026-10-14)
+
+### Features
+
+* **do:** cap a shard's self-re-arming poll alarm ([#1151](https://github.com/anolilab/lunora/issues/1151)) ([183f13d](https://github.com/anolilab/lunora/commit/183f13d533c041823842ea860c80174aaa0c4a34))
+
 ## @lunora/platform [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.60...@lunora/platform@1.0.0-alpha.61) (2026-10-13)
 
 ### ⚠ BREAKING CHANGES
