@@ -218,9 +218,14 @@ serveStorageObject(ctx, key, request, authorize, "public, max-age=31536000, immu
 serveStorageObject(ctx, key, request, authorize, "public, max-age=300");
 ```
 
-`serveStorageObject` does not answer `If-None-Match` with `304`. When `max-age`
-expires, the cache fetches the whole object again and R2 is read again. Pick the
-longest TTL the content can tolerate, since each expiry costs a full read.
+When `max-age` expires, a cache revalidates with `If-None-Match`.
+`serveStorageObject` answers `304 Not Modified` with no body when the ETag still
+matches, after the `authorize` gate, so a refused caller gets the same 403 as
+before. The check is a `head()`. A 304 costs one R2 HEAD and no body transfer. A
+changed object costs that HEAD plus the full read, which is one extra R2 operation
+compared with a request that sent no validator. R2 bills HeadObject and GetObject
+in the same class. Pick the longest TTL the content can tolerate, since each
+expiry costs one R2 HEAD, plus a full read when the object changed.
 
 R2 also has an Infrequent Access storage class, set per object with
 `storageClass` on the binding's put options. `@lunora/storage` does not expose

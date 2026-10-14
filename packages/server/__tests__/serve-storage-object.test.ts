@@ -219,9 +219,8 @@ describe("serveStorageObject — response hardening", () => {
     it("lets an app fronting a public bucket override the default, on both representations", async () => {
         expect.assertions(4);
 
-        // `no-store` also defeats conditional revalidation, so the `etag` this
-        // helper computes can never produce a 304 and every `<video>` seek
-        // re-runs the R2 read. An app whose `authorize` is `() => true` has
+        // A shared cache can only revalidate a stored copy when the app allows
+        // one to be stored at all. An app whose `authorize` is `() => true` has
         // declared the bytes are not identity-scoped and may say so.
         const { ctx } = ctxWith(BODY, { contentType: "image/png" });
         const whole = await serveStorageObject(ctx, "k", new Request("https://x/k"), ALLOW, "public, max-age=3600");
@@ -428,6 +427,121 @@ describe("serveStorageObject", () => {
         const response = await serveStorageObject(ctx, "k", new Request("https://x/k", { headers: { range: "bytes=0-1,4-5" } }), ALLOW);
 
         expect(response.status).toBe(200);
+    });
+});
+
+describe("serveStorageObject — conditional requests", () => {
+    const withIfNoneMatch = (value: string, extra: Record<string, string> = {}) =>
+        new Request("https://x/k", { headers: { ...extra, "if-none-match": value } });
+
+    it("answers 304 with no body and no download when If-None-Match names the current etag", async () => {
+        expect.assertions(5);
+
+        const { calls, ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const response = await serveStorageObject(ctx, "k", withIfNoneMatch('"etag-1"'), ALLOW);
+
+        expect(response.status).toBe(304);
+        expect(response.body).toBeNull();
+        expect(response.headers.get("etag")).toBe('"etag-1"');
+        expect(calls.downloads).toStrictEqual([]);
+        expect(calls.heads).toBe(1);
+    });
+
+    it("answers 200 with the full body when If-None-Match names a different etag", async () => {
+        expect.assertions(4);
+
+        const { calls, ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const response = await serveStorageObject(ctx, "k", withIfNoneMatch('"etag-0"'), ALLOW);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("etag")).toBe('"etag-1"');
+        expect(calls.downloads).toStrictEqual([undefined]);
+        expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([...BODY]);
+    });
+
+    it("matches a weak validator on the request against the strong current etag", async () => {
+        expect.assertions(1);
+
+        const { ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const response = await serveStorageObject(ctx, "k", withIfNoneMatch('W/"etag-1"'), ALLOW);
+
+        expect(response.status).toBe(304);
+    });
+
+    it("matches when any entry in a multi-tag list is the current etag", async () => {
+        expect.assertions(2);
+
+        const { ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const matched = await serveStorageObject(ctx, "k", withIfNoneMatch('"stale-a", "etag-1", W/"stale-b"'), ALLOW);
+        const missed = await serveStorageObject(ctx, "k", withIfNoneMatch('"stale-a", W/"stale-b"'), ALLOW);
+
+        expect(matched.status).toBe(304);
+        expect(missed.status).toBe(200);
+    });
+
+    it("answers 304 for `*` when the object exists, and 404 when it does not", async () => {
+        expect.assertions(2);
+
+        const present = await serveStorageObject(ctxWith(BODY).ctx, "k", withIfNoneMatch("*"), ALLOW);
+        const absent = await serveStorageObject(ctxWith(null).ctx, "k", withIfNoneMatch("*"), ALLOW);
+
+        expect(present.status).toBe(304);
+        expect(absent.status).toBe(404);
+    });
+
+    it("does not treat an unquoted token as an entity-tag", async () => {
+        expect.assertions(1);
+
+        const { ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const response = await serveStorageObject(ctx, "k", withIfNoneMatch("etag-1"), ALLOW);
+
+        expect(response.status).toBe(200);
+    });
+
+    it("refuses an unauthorized caller with the same 403 and reads nothing, even with a matching validator", async () => {
+        expect.assertions(3);
+
+        // The gate runs before any validator check: a 304 here would confirm the
+        // object exists to a caller `authorize` refused.
+        const { calls, ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const response = await serveStorageObject(ctx, "k", withIfNoneMatch('"etag-1"'), () => false);
+
+        expect(response.status).toBe(403);
+        expect(calls.heads).toBe(0);
+        expect(calls.downloads).toStrictEqual([]);
+    });
+
+    it("refuses an unauthorized `*` with 403, not 304 or 404, whether or not the object exists", async () => {
+        expect.assertions(2);
+
+        const present = await serveStorageObject(ctxWith(BODY).ctx, "k", withIfNoneMatch("*"), () => false);
+        const absent = await serveStorageObject(ctxWith(null).ctx, "k", withIfNoneMatch("*"), () => false);
+
+        expect(present.status).toBe(403);
+        expect(absent.status).toBe(403);
+    });
+
+    it("answers 304 ahead of a Range the object could satisfy, since the validator is checked first", async () => {
+        expect.assertions(2);
+
+        const { calls, ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const response = await serveStorageObject(ctx, "k", withIfNoneMatch('"etag-1"', { range: "bytes=2-5" }), ALLOW);
+
+        expect(response.status).toBe(304);
+        expect(calls.downloads).toStrictEqual([]);
+    });
+
+    it("keeps a mismatched validator on the Range path: a 206 for the window, not a 304", async () => {
+        expect.assertions(4);
+
+        const { calls, ctx } = ctxWith(BODY, { etag: "etag-1" });
+        const response = await serveStorageObject(ctx, "k", withIfNoneMatch('"etag-0"', { range: "bytes=2-5" }), ALLOW);
+
+        expect(response.status).toBe(206);
+        expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
+        // One head, reused for the range: the validator check must not add a round trip.
+        expect(calls.heads).toBe(1);
+        expect(calls.downloads).toStrictEqual([{ length: 4, offset: 2 }]);
     });
 });
 
