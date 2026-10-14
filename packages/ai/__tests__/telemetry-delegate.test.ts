@@ -63,4 +63,30 @@ describe("instrumentModel lazy delegate", () => {
         expect(streamed.stream).toBeInstanceOf(ReadableStream);
         expect(model.doStream).toHaveBeenCalledTimes(1);
     });
+
+    it("reports v4 and matches wrapLanguageModel for a bring-your-own v3 model", async () => {
+        expect.assertions(3);
+
+        const v3 = () => {
+            return {
+                ...stubModel(),
+                doGenerate: async () => {
+                    return {
+                        content: [{ text: "hi", type: "text" }],
+                        finishReason: "stop",
+                        usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+                        warnings: [],
+                    };
+                },
+                specificationVersion: "v3" as const,
+            };
+        };
+        const lazy = instrumentModel(v3() as never, telemetry(), "stub/model") as unknown as ReturnType<typeof stubModel>;
+        const eager = wrapLanguageModel({ middleware: {}, model: v3() as never }) as unknown as ReturnType<typeof stubModel>;
+        const options = { prompt: [] } as never;
+
+        expect(lazy.specificationVersion).toBe("v4");
+        expect(eager.specificationVersion).toBe("v4");
+        await expect(lazy.doGenerate(options)).resolves.toStrictEqual(await eager.doGenerate(options));
+    });
 });

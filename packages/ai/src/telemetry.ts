@@ -140,7 +140,14 @@ const instrumentModel = (model: LanguageModel, telemetry: AiTelemetry | undefine
     let wrapped: Promise<Extract<LanguageModel, { specificationVersion: "v4" }>> | undefined;
 
     const resolve = async () => {
-        wrapped ??= import("ai").then(({ wrapLanguageModel }) => wrapLanguageModel({ middleware, model }) as never);
+        wrapped ??= import("ai").then(
+            ({ wrapLanguageModel }) => wrapLanguageModel({ middleware, model }) as never,
+            (error: unknown) => {
+                wrapped = undefined;
+
+                throw error;
+            },
+        );
 
         return wrapped;
     };
@@ -151,7 +158,8 @@ const instrumentModel = (model: LanguageModel, telemetry: AiTelemetry | undefine
         doStream: async (options) => resolve().then((m) => m.doStream(options)),
         modelId: base.modelId,
         provider: base.provider,
-        specificationVersion: base.specificationVersion,
+        // `wrapLanguageModel` normalises any model to v4, so the delegate reports what it returns.
+        specificationVersion: "v4",
         get supportedUrls() {
             return resolve().then((m) => m.supportedUrls);
         },
