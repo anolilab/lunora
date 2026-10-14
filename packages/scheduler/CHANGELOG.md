@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.124...@lunora/scheduler@1.0.0-alpha.125) (2026-10-14)
+
+### Performance Improvements
+
+* **scheduler:** read due job headers concurrently in the alarm tick ([#1170](https://github.com/anolilab/lunora/issues/1170)) ([cb8a74c](https://github.com/anolilab/lunora/commit/cb8a74c1ecc275c00a71d768ade545df6bac3b28))
+
 ## @lunora/scheduler [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.123...@lunora/scheduler@1.0.0-alpha.124) (2026-10-14)
 
 

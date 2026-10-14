@@ -675,20 +675,15 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
     });
 
     // -------------------------------------------------------------------------
-    // Case 6 — PROFILE: N identical subscriptions ⇒ N query runs per change
+    // Case 6 — N sockets with an identical identity share ONE run per change
     //
-    // Finding #5 (audit): the refresh path executes + serializes per socket, so
-    // N sockets subscribing to the SAME (functionPath, args) trigger N distinct
-    // `executeSubscription` calls on a single write (ReactiveCache is opt-in and
-    // off here). This test locks that fan-out factor in as a measured baseline so
-    // any future cross-socket dedup can prove it collapses N runs → 1.
-    //
-    // It is a PROFILING/characterization test, not a regression guard against an
-    // implemented optimization: today's documented behavior is N runs, and that
-    // is what we assert. If a safe dedup lands later, this assertion is the one
-    // that must flip to `toBe(1)` and gains a fan-out-frame check.
+    // N sockets (all anonymous here, so identical identity) subscribing to the
+    // SAME (functionPath, args) seed once per socket, but a single write re-runs
+    // `executeSubscription` only once for all of them; the refresh frame is still
+    // delivered to every socket. The count is `socketCount + 1`: N seed runs plus
+    // the one shared refresh run (ReactiveCache is opt-in and off here).
     // -------------------------------------------------------------------------
-    it("profile: N sockets on the same query+args ⇒ N executeSubscription runs per change (no cross-socket dedup today)", async () => {
+    it("profile: N sockets on the same query+args with an identical identity ⇒ ONE executeSubscription run per change (shared across sockets)", async () => {
         expect.assertions(3);
 
         const shard = new SubscriptionRefreshShard(state, {});
@@ -724,12 +719,11 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
         shard.changedTableOnRpc = "messages";
         await shard.writeRpc();
 
-        // The single write re-ran the IDENTICAL query once PER SOCKET — the
-        // characterized N-runs fan-out (would be 1 under cross-socket dedup).
-        expect(shard.execCounts.get("messages:list")).toBe(socketCount * 2);
+        // The single write re-ran the query ONCE for all sockets: they share the
+        // same (anonymous) identity, so the flush shares one run.
+        expect(shard.execCounts.get("messages:list")).toBe(socketCount + 1);
 
-        // Every socket still received its own refresh frame (correctness is
-        // unaffected by the fan-out; the cost is the duplicate query runs).
+        // Every socket still received its own refresh frame.
         const refreshed = sockets.every((ws, index) => subFrames(ws, `sub-${String(index)}`).length > 1);
 
         expect(refreshed).toBe(true);
