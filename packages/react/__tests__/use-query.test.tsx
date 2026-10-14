@@ -2,10 +2,11 @@ import type { FunctionReference, SubscriptionError } from "@lunora/client";
 import { QueryClient } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { lunoraQueryKey } from "../src/cache";
 import { LunoraProvider } from "../src/lunora-provider";
+import { stableWireKey } from "../src/query-key";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
 
@@ -14,6 +15,7 @@ const makeRef = (ref: string): FunctionReference => {
 };
 
 const DEFAULT_ARGS: Record<string, unknown> = {};
+const NESTED_ARGS: Record<string, unknown> = { filter: { tags: ["a", "b"], z: 1 }, limit: 10 };
 const SHARED_ARGS: Record<string, unknown> = { a: 1 };
 // Two DISTINCT objects with identical content — what a re-render produces when
 // the args are rebuilt from dependencies that changed without changing the args
@@ -36,6 +38,22 @@ const ErrorDisplay = ({ onError }: { onError: (error: SubscriptionError) => void
 };
 
 describe("useQuery", () => {
+    it("peeks the hydrated cache with the pre-encoded args key, not the raw args", () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const byKey = vi.spyOn(mock.asClient, "peekHydratedQueryByKey");
+        const byArgs = vi.spyOn(mock.asClient, "peekHydratedQuery");
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Display args={NESTED_ARGS} />
+            </LunoraProvider>,
+        );
+
+        expect(byKey).toHaveBeenCalledWith("posts:list", stableWireKey(NESTED_ARGS), undefined);
+        expect(byArgs).not.toHaveBeenCalled();
+    });
+
     it("returns undefined initially, then the resolved value", async () => {
         expect.hasAssertions();
 
@@ -388,7 +406,7 @@ describe("useQuery", () => {
             });
             const seeded = {
                 ...(mock.asClient as unknown as Record<string, unknown>),
-                peekHydratedQuery: () => {
+                peekHydratedQueryByKey: () => {
                     return { count: 99 };
                 },
             } as unknown as typeof mock.asClient;
