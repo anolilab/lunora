@@ -13,10 +13,11 @@ import createSqliteExec from "../__tests__/_helpers/node-sqlite";
  * Real `node:sqlite`, JSON-blob dialect, like the other relation benches. 1 000 posts, 200 tags, 6 tags per post
  * (6 000 join rows, 30 per tag).
  *
- * The size is bounded by the join-row cap: a many-to-many hop reads at most 5 000 join rows (the relation key cap) and
- * fails closed past it, rather than materialising a broad join table. `every` reads the rows of the targets
- * that violate the predicate and `some` / `none` those that match it, so a predicate that splits the tags roughly in
- * half needs both halves under the cap: the join table has to stay under twice the cap.
+ * The size is bounded by the key cap: a many-to-many hop fails closed once its DISTINCT keys pass 5 000 (the relation
+ * key cap), and reads the join table in pages of 5 001 rows, so a join table may hold many rows per owner. Here the
+ * owners (1 000 posts) and the targets (200 tags) both sit under the cap. `every` reads the targets that violate the
+ * predicate and `some` / `none` those that match it, so each hop's distinct keys must stay under the cap whichever
+ * side the predicate selects.
  */
 const POST_COUNT = 1000;
 const TAG_COUNT = 200;

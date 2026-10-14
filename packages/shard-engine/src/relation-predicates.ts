@@ -275,25 +275,34 @@ const readChildKeys = async (
     childWhere: WhereInput,
     projectField: string,
     context: ResolveContext,
-    rowLimit?: number,
-): Promise<{ keys: unknown[]; rows: number }> => {
+): Promise<unknown[]> => {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a child predicate may itself cross relations (multi-hop)
     const resolvedChildWhere = await resolveForTable(childWhere, relation.table, context);
     const { page } = await context.fetcher(relation.table, {
         baseWhere: context.relationBaseWhere?.(relation.table),
-        limit: rowLimit,
         relationBaseWhere: context.relationBaseWhere,
         where: resolvedChildWhere,
     });
 
-    return { keys: distinctValues(page, projectField), rows: page.length };
+    return distinctValues(page, projectField);
 };
 
 /** Fail closed rather than truncate the `IN (...)` and silently mis-match. */
-const failOverKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext, truncated = false): never => {
+const failOverKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext): never => {
     throw new LunoraError(
         "INTERNAL",
-        `relation predicate on "${relation.table}" matched ${truncated ? "at least " : ""}${String(count)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
+        `relation predicate on "${relation.table}" matched ${String(count)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
+    );
+};
+
+/**
+ * Fail closed on a many-to-many hop. The count is of DISTINCT keys, not rows, and the walk stops at the first page
+ * that crosses the cap, so the number is a lower bound. A through hop never escalates to EXISTS, so no hint is offered.
+ */
+const failOverDistinctKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `relation predicate on "${relation.table}" matched at least ${String(count)} distinct keys, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate`,
     );
 };
 
@@ -304,7 +313,7 @@ const projectChildKeys = async (
     context: ResolveContext,
     escalatable: boolean,
 ): Promise<typeof KEY_OVERFLOW | unknown[]> => {
-    const { keys } = await readChildKeys(relation, childWhere, projectField, context);
+    const keys = await readChildKeys(relation, childWhere, projectField, context);
 
     if (keys.length <= context.maxRelationKeys) {
         return keys;
@@ -317,9 +326,12 @@ const projectChildKeys = async (
 };
 
 /**
- * Read the keys of a hop that never escalates to EXISTS, as both hops of a many-to-many predicate: over the cap it
- * fails closed. The read itself is bounded to one row past the cap, not just the distinct keys: a join table can hold
- * many rows per key, and a broad predicate would otherwise materialise all of them before the cap was checked.
+ * Read the distinct keys of a hop that never escalates to EXISTS, as both hops of a many-to-many predicate. The walk is
+ * keyset-paged in pages of `maxRelationKeys + 1` rows and fails closed once the DISTINCT keys pass the cap. The cap
+ * counts owners, not join rows, so a join table with many rows per owner still resolves, and only one page plus the
+ * key set is held at a time. The walk ends only on a final page: a page larger than the limit it asked for, or a
+ * non-final page with no advancing cursor, is refused rather than trusted, because stopping short would under-match
+ * `some` and over-match `none`/`every`. The row walk is paged because `QueryArgs` has no DISTINCT projection.
  */
 const projectBoundedKeys = async (
     relation: Pick<RelationDefinitionLike, "table">,
@@ -327,9 +339,52 @@ const projectBoundedKeys = async (
     projectField: string,
     context: ResolveContext,
 ): Promise<unknown[]> => {
-    const { keys, rows } = await readChildKeys(relation, childWhere, projectField, context, context.maxRelationKeys + 1);
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a child predicate may itself cross relations (multi-hop)
+    const resolvedChildWhere = await resolveForTable(childWhere, relation.table, context);
+    const pageLimit = context.maxRelationKeys + 1;
+    const keys = new Set<unknown>();
+    let cursor: string | undefined;
 
-    return rows > context.maxRelationKeys ? failOverKeyCap(relation, rows, context, true) : keys;
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- keyset pagination: each page's cursor comes from the previous page
+        const result = await context.fetcher(relation.table, {
+            baseWhere: context.relationBaseWhere?.(relation.table),
+            // Default order: creation time with the `id` tiebreak, which makes the cursor total.
+            cursor,
+            limit: pageLimit,
+            relationBaseWhere: context.relationBaseWhere,
+            where: resolvedChildWhere,
+        });
+
+        if (result.page.length > pageLimit) {
+            throw new LunoraError(
+                "INTERNAL",
+                `relation predicate on "${relation.table}" read ${String(result.page.length)} rows for a page of at most ${String(pageLimit)}; the fetcher did not honour the page limit`,
+            );
+        }
+
+        for (const key of distinctValues(result.page, projectField)) {
+            keys.add(key);
+        }
+
+        if (keys.size > context.maxRelationKeys) {
+            failOverDistinctKeyCap(relation, keys.size, context);
+        }
+
+        if (result.isDone) {
+            return [...keys];
+        }
+
+        if (typeof result.continueCursor !== "string") {
+            throw new LunoraError("INTERNAL", `relation predicate on "${relation.table}" returned a page that is not final but has no cursor to continue from`);
+        }
+
+        if (result.continueCursor === cursor) {
+            throw new LunoraError("INTERNAL", `relation predicate on "${relation.table}" paged with a cursor that did not advance`);
+        }
+
+        cursor = result.continueCursor;
+    }
 };
 
 /**
