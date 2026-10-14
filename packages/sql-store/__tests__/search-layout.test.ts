@@ -10,6 +10,7 @@ import type { SearchLayout, SearchStage } from "../src/search-layout";
 import { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, resolveSearchLayout } from "../src/search-layout";
 import type { SourceRow } from "../src/search-writes";
 import type { SqlCtxExec } from "../src/sql-exec";
+import renderFor from "./_helpers/render-for";
 
 /**
  * The storage layouts a `.global()` search index can take, tested directly.
@@ -74,6 +75,7 @@ const sqliteDialect = (overrides: Partial<SqlDialect> = {}): SqlDialect => {
         ],
         isUniqueViolation: (error) => error instanceof Error && /unique constraint failed/iu.test(error.message),
         name: "sqlite",
+        render: renderFor(overrides.name ?? "sqlite"),
         supportsFts5: true,
         supportsReturning: true,
         tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,

@@ -78,6 +78,7 @@ interface SqlDialect {
         matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
         rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
     };
+    render: (query: SQL) => RenderedSql;
     searchBackfillHint?: string;
     supportsFts5: boolean;
     supportsReturning: boolean;

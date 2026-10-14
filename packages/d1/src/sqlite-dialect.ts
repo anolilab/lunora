@@ -12,6 +12,7 @@
  * re-export it for the CLI migration emitter, and so the Postgres/MySQL dialects
  * in `@lunora/hyperdrive/global` have a concrete template to mirror.
  */
+import { renderSql } from "@lunora/shard-engine";
 import type { SqlDialect } from "@lunora/sql-store";
 import { sql } from "drizzle-orm";
 
@@ -42,6 +43,7 @@ const sqliteDialect: SqlDialect = {
     isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
     maxTableColumns: MAX_D1_TABLE_COLUMNS,
     name: "sqlite",
+    render: (query) => renderSql("sqlite", query),
     // eslint-disable-next-line no-secrets/no-secrets -- false positive: the hint names a function, not a credential
     searchBackfillHint: "call backfillD1SearchIndexes with the store's exec from a host-side admin path",
     supportsFts5: true,
