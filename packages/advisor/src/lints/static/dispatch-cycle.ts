@@ -2,6 +2,7 @@ import { sanitizeNamespace } from "../../../../../shared/dispatch-namespace";
 import type { AdvisorCallEdge } from "../../call-edges";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import stronglyConnected from "../graph";
 
 /** One unconditional `call`/`schedule` edge between two functions, keyed `namespace:export`. */
 interface Dispatch {
@@ -36,59 +37,6 @@ const unconditionalDispatches = (edges: ReadonlyArray<AdvisorCallEdge>): Dispatc
     return dispatches;
 };
 
-/**
- * Tarjan's strongly-connected components over the dispatch graph — every
- * cluster of functions that can reach each other. Each edge inside a component
- * lies on some cycle, so a component of two or more, or one with a self-edge,
- * is a loop.
- */
-const stronglyConnected = (nodes: ReadonlyArray<string>, successors: ReadonlyMap<string, ReadonlyArray<string>>): string[][] => {
-    // Per node: its DFS discovery order and the lowest order reachable from it.
-    const visited = new Map<string, { index: number; lowLink: number }>();
-    const onStack = new Set<string>();
-    const stack: string[] = [];
-    const components: string[][] = [];
-
-    const visit = (node: string): { index: number; lowLink: number } => {
-        const state = { index: visited.size, lowLink: visited.size };
-
-        visited.set(node, state);
-        stack.push(node);
-        onStack.add(node);
-
-        for (const next of successors.get(node) ?? []) {
-            const seen = visited.get(next);
-
-            if (seen === undefined) {
-                state.lowLink = Math.min(state.lowLink, visit(next).lowLink);
-            } else if (onStack.has(next)) {
-                state.lowLink = Math.min(state.lowLink, seen.index);
-            }
-        }
-
-        if (state.lowLink === state.index) {
-            const component: string[] = [];
-
-            for (let member = stack.pop(); member !== undefined; member = member === node ? undefined : stack.pop()) {
-                onStack.delete(member);
-                component.push(member);
-            }
-
-            components.push(component);
-        }
-
-        return state;
-    };
-
-    for (const node of nodes) {
-        if (!visited.has(node)) {
-            visit(node);
-        }
-    }
-
-    return components;
-};
-
 /** How a finding's detail names one edge: `` `jobs:tick` schedules `jobs:tick` (jobs:12) ``. */
 const describeDispatch = (dispatch: Dispatch): string =>
     `\`${dispatch.from}\` ${dispatch.kind === "schedule" ? "schedules" : "calls"} \`${dispatch.to}\` (${dispatch.file}:${dispatch.line.toString()})`;
@@ -105,7 +53,7 @@ const describeDispatch = (dispatch: Dispatch): string =>
  * cancelled or rolled back, drops out. Only hops in an export's own body count
  * — a helper's call may be guarded where the helper is called — and only
  * static targets. Re-arming outside `ctx.scheduler` (a raw Durable Object
- * `setAlarm`, a queue re-enqueue) is not modelled.
+ * `setAlarm`) is not modelled; a queue re-enqueue is `queue_dispatch_cycle`'s.
  *
  * Runs only when the codegen feeder supplied call edges (`context.callEdges`
  * present); a runtime caller flags nothing.

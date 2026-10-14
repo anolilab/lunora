@@ -86,6 +86,7 @@ import procedureWithoutStructuredEvent from "./lints/static/procedure-without-st
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
 import publicTableRlsOptoutConfusion from "./lints/static/public-table-rls-optout-confusion";
+import queueDispatchCycle from "./lints/static/queue-dispatch-cycle";
 import queueWithoutDlq from "./lints/static/queue-without-dlq";
 import r2sqlOutsideAction from "./lints/static/r2sql-outside-action";
 import ratelimitDefaultMemoryStore from "./lints/static/ratelimit-default-memory-store";
@@ -238,6 +239,7 @@ export { default as procedureWithoutStructuredEvent } from "./lints/static/proce
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
 export { default as publicTableRlsOptoutConfusion } from "./lints/static/public-table-rls-optout-confusion";
+export { default as queueDispatchCycle } from "./lints/static/queue-dispatch-cycle";
 export { default as queueWithoutDlq } from "./lints/static/queue-without-dlq";
 export { default as r2sqlOutsideAction } from "./lints/static/r2sql-outside-action";
 export { default as ratelimitDefaultMemoryStore } from "./lints/static/ratelimit-default-memory-store";
@@ -351,6 +353,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     duplicateIndex,
     tableWithoutInsert,
     workflowUnused,
+    queueDispatchCycle,
     queueWithoutDlq,
     topicTooManySubscriptions,
     filterOnPrimaryKey,

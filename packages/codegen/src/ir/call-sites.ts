@@ -40,16 +40,26 @@ export type CallSiteScope = AdvisorCallSiteScope;
 export interface CallEdgeIR {
     /**
      * `true` when the hop may not take effect on every pass of its function —
-     * see `isConditionalSite` in `discover/call-edges.ts` for the rules. Set
+     * see `conditionOf` in `discover/call-edges.ts` for the rules. Set
      * only, never `false`. The `dispatch_cycle` lint's false-positive gate.
      */
     conditional?: true;
 
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
+
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call. */
     line: number;
+
+    /**
+     * `true` alongside `conditional` when a loop's body or update clause is the
+     * ONLY thing that may stop the hop — the loop may run zero times, but a
+     * queue consumer's `for (const message of batch.messages)` always has a
+     * message. Set only, never `false`. The queue cycle lint reads it; the
+     * scheduler lints still treat the hop as conditional.
+     */
+    loopOnly?: true;
     reason?: string;
 
     /**

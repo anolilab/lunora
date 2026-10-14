@@ -173,6 +173,57 @@ describe("runCodegen lint integration", () => {
         expect(names).toContain("unindexed_foreign_key");
     });
 
+    it.each([
+        [
+            "a batch loop reaches a function that re-enqueues to the same queue",
+            "for (const message of batch.messages) {",
+            "await message.run(internal.mail.requeue, { to: message.body.to });",
+            true,
+        ],
+        [
+            "the re-enqueue sits behind an if",
+            "for (const message of batch.messages) {",
+            'if (message.body.to !== "") { await message.run(internal.mail.requeue, { to: message.body.to }); }',
+            false,
+        ],
+    ])("flags a queue cycle only when nothing stops it (%s)", (_label, loopOpen, hop, flagged) => {
+        expect.assertions(1);
+
+        // `emailQueue` runs `mail.requeue` for each message it receives; `requeue` sends back to `emailQueue`.
+        writeFileSync(
+            join(workdir, "lunora", "queues.ts"),
+            `import { defineQueue } from "@lunora/queue";
+import { internal } from "./_generated/api.js";
+
+export const emailQueue = defineQueue<{ to: string }>({
+    handler: async (ctx, batch) => {
+        ${loopOpen}
+            ${hop}
+            message.ack();
+        }
+    },
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "mail.ts"),
+            `import { internalMutation } from "./_generated/server.js";
+
+export const requeue = internalMutation.mutation(async ({ ctx }) => {
+    await ctx.queues.emailQueue.send({ to: "a@example.com" });
+});
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+            (advisory) => advisory.name === "queue_dispatch_cycle",
+        );
+
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(flagged ? ["queue_dispatch_cycle:mail:requeue,queue:emailQueue"] : []);
+    });
+
     it("flags a container whose sleepAfter outlasts an hour, read from the declaration", () => {
         expect.assertions(2);
 
