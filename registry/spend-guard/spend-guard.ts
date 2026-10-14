@@ -62,9 +62,30 @@ const constantTimeEqual = (a: string, b: string): boolean => {
     return diff === 0;
 };
 
-const isPaused = async (env: SpendGuardEnv | undefined): Promise<boolean> =>
-    // ponytail: one R2 head per request while the bucket is bound; cache it per isolate with a short TTL if that read cost matters.
-    env?.SPEND_GUARD !== undefined && (await env.SPEND_GUARD.head(SPEND_PAUSED_KEY)) !== null;
+/** How long an isolate trusts its last read of the pause flag, so a request costs an R2 read at most once per window. */
+const PAUSE_CACHE_MS = 30_000;
+
+const pauseReads = new WeakMap<object, { at: number; paused: boolean }>();
+
+const isPaused = async (env: SpendGuardEnv | undefined): Promise<boolean> => {
+    const bucket = env?.SPEND_GUARD;
+
+    if (bucket === undefined) {
+        return false;
+    }
+
+    const cached = pauseReads.get(bucket);
+
+    if (cached !== undefined && Date.now() - cached.at < PAUSE_CACHE_MS) {
+        return cached.paused;
+    }
+
+    const paused = (await bucket.head(SPEND_PAUSED_KEY)) !== null;
+
+    pauseReads.set(bucket, { at: Date.now(), paused });
+
+    return paused;
+};
 
 const pausedResponse = (): Response => new Response("Service unavailable", { headers: { "retry-after": "3600" }, status: 503 });
 
@@ -128,6 +149,7 @@ const handleSpendAlert = async (request: Request, env: SpendGuardEnv): Promise<R
     }
 
     await env.SPEND_GUARD.put(SPEND_PAUSED_KEY, JSON.stringify({ pausedAt: new Date().toISOString() }));
+    pauseReads.set(env.SPEND_GUARD, { at: Date.now(), paused: true });
     console.warn("spend-alert: usage alert received; the app is paused until the spend-paused object is deleted");
 
     return new Response(null, { status: 200 });

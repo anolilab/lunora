@@ -56,6 +56,8 @@ wrangler r2 object delete lunora-spend-guard/spend-paused --remote
 
 Check the spend first. Raise the budget or fix the cause, then resume. A pause that comes back on the next alert is the alert doing its job.
 
+Each isolate caches its last read of the flag for 30 seconds, so a pause or a resume reaches every isolate within that window. The cache is what keeps the guard from costing an R2 read on every request.
+
 ## Verify before you rely on it
 
 The `alert_type` check uses `billing_usage_alert`, the value Cloudflare's Terraform provider documents for usage-alert policies. Cloudflare's webhook payload reference lists `alert_type` as the same identifier namespace but does not show a usage-alert payload. Confirm it on a real alert: a non-matching delivery is logged as `spend-alert: ignored a delivery...` in `wrangler tail`. If you see that for a real usage alert, the pause will not fire, and the value needs correcting in `spend-guard.ts`.

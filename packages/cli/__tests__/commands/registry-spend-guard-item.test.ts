@@ -44,6 +44,8 @@ type Bucket = ReturnType<typeof makeBucket>;
 const SECRET = "test-secret-0123456789abcdef";
 const USAGE_ALERT = JSON.stringify({ alert_type: "billing_usage_alert", name: "Lunora usage: Workers requests", policy_id: "p1" });
 const SCHEDULE = { cron: "0 * * * *" };
+/** The guard trusts its last read of the pause flag for 30 s; a test that flips the flag steps past it. */
+const CACHE_WINDOW_MS = 30_000;
 
 /** Build an env with the given bucket and secret. Both are explicit: `undefined` means "unset". */
 const envWith = (bucket: Bucket | undefined, secret: string | undefined) => {
@@ -65,6 +67,7 @@ describe("registry/spend-guard", () => {
     };
 
     beforeEach(async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
         vi.spyOn(console, "warn").mockImplementation(() => {});
         guard = (await import(pathToFileURL(join(registryRoot, "spend-guard", "spend-guard.ts")).href)) as SpendGuardModule;
         innerFetch = vi.fn<Fetch>(async () => new Response("app", { status: 200 }));
@@ -74,6 +77,7 @@ describe("registry/spend-guard", () => {
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.restoreAllMocks();
     });
 
@@ -225,6 +229,7 @@ describe("registry/spend-guard", () => {
         expect(innerScheduled).toHaveBeenCalledTimes(1);
 
         bucket.objects.delete(guard.SPEND_PAUSED_KEY);
+        vi.setSystemTime(Date.now() + CACHE_WINDOW_MS);
         await app.scheduled(SCHEDULE, env, {});
 
         expect(innerScheduled).toHaveBeenCalledTimes(2);
@@ -243,10 +248,31 @@ describe("registry/spend-guard", () => {
         expect(paused.status).toBe(503);
 
         bucket.objects.delete(guard.SPEND_PAUSED_KEY);
+        vi.setSystemTime(Date.now() + CACHE_WINDOW_MS);
 
         const resumed = await app.fetch(get("/posts"), env, {});
 
         expect(resumed.status).toBe(200);
+    });
+
+    it("reads the pause flag once per cache window, not once per request", async () => {
+        expect.assertions(2);
+
+        const bucket = makeBucket();
+        const head = vi.spyOn(bucket, "head");
+        const env = envWith(bucket, SECRET);
+
+        for (let request = 0; request < 20; request += 1) {
+            // eslint-disable-next-line no-await-in-loop -- requests are sequential on purpose
+            await app.fetch(get("/posts"), env, {});
+        }
+
+        expect(head).toHaveBeenCalledTimes(1);
+
+        vi.setSystemTime(Date.now() + CACHE_WINDOW_MS);
+        await app.fetch(get("/posts"), env, {});
+
+        expect(head).toHaveBeenCalledTimes(2);
     });
 
     it("keeps the first pause time when a second usage alert arrives while already paused", async () => {
