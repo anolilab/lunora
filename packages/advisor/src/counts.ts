@@ -11,6 +11,12 @@ export interface AdvisorCountRead {
     file: string;
 
     /**
+     * The fields the count's `where` tests, when it is a plain object literal of field names.
+     * Absent for a bare count and for a `where` the feeder cannot read.
+     */
+    filterFields?: string[];
+
+    /**
      * `false` only when the table is known and declares no aggregate index, so the count is a
      * `COUNT(*)` scan. A counter-backed or unknown table reads `true`.
      */

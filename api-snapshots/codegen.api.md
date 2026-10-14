@@ -2399,6 +2399,7 @@ interface ContainerOverrideIR {
 ```ts
 interface CountReadIR {
     file: string;
+    filterFields?: string[];
     indexed: boolean;
     line: number;
     scope: CallSiteScope;

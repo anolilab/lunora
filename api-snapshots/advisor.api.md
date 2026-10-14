@@ -206,6 +206,7 @@ interface AdvisorContainerOverride {
 ```ts
 interface AdvisorCountRead {
     file: string;
+    filterFields?: string[];
     indexed: boolean;
     line: number;
     scope: AdvisorCallSiteScope;

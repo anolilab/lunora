@@ -259,6 +259,42 @@ export const tally = internalMutation.mutation(async ({ ctx }) => {
         expect(findings[0]?.level).toBe("WARN");
     });
 
+    it("clears a count whose where leads with an indexed field, and flags the uncovered and bare counts", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    posts: defineTable({ status: v.string(), title: v.string() }).index("by_status", ["status"]),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "tally.ts"),
+            `import { internalMutation } from "./_generated/server.js";
+
+export const tally = internalMutation.mutation(async ({ ctx }) => {
+    await ctx.db.posts.count({ status: "open" });
+    await ctx.db.posts.count({ title: "x" });
+    await ctx.db.count("posts", { status: "open", title: "x" });
+    await ctx.db.posts.count();
+});
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+            (advisory) => advisory.name === "count_without_index",
+        );
+
+        // Line 4 is a range scan over `by_status`, and so is line 6, whose where leads with `status`.
+        // Line 5 tests only `title`, which no index leads with, and line 7 is a bare count.
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["count_without_index:tally:5:posts", "count_without_index:tally:7:posts"]);
+    });
+
     it("flags a container whose sleepAfter outlasts an hour, read from the declaration", () => {
         expect.assertions(2);
 
