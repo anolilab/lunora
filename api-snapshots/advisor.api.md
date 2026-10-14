@@ -121,6 +121,7 @@ interface AdvisorCallEdge {
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
+    loopOnly?: true;
     reason?: string;
     schedule?: {
         argKeys?: string[];
@@ -166,6 +167,7 @@ interface AdvisorConfigCall {
 interface AdvisorContainer {
     enableInternet?: boolean;
     exportName: string;
+    hardTimeout?: number | string;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
@@ -196,6 +198,18 @@ interface AdvisorContainerOverride {
     kind: "egress_relaxation" | "enable_internet";
     line: number;
     scope: AdvisorCallSiteScope;
+}
+```
+
+### `AdvisorCountRead` (interface)
+
+```ts
+interface AdvisorCountRead {
+    file: string;
+    indexed: boolean;
+    line: number;
+    scope: AdvisorCallSiteScope;
+    table: string;
 }
 ```
 
@@ -609,6 +623,11 @@ interface AdvisorQueryRead {
 ```ts
 interface AdvisorQueue {
     exportName: string;
+    filePath?: string;
+    handlerSite?: {
+        exportName: string;
+        file: string;
+    };
     mode: "pull" | "push";
     name: string;
     topic?: string;
@@ -1074,6 +1093,7 @@ interface LintContext {
     containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
     containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
     containers?: ReadonlyArray<AdvisorContainer>;
+    countReads?: ReadonlyArray<AdvisorCountRead>;
     cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
@@ -1399,6 +1419,12 @@ const compareToBaseline: (current: AdvisorMap, baseline: AdvisorMap) => Baseline
 const containerInstanceKeyFromUserInput: Lint;
 ```
 
+### `containerLongSleepAfter` (const)
+
+```ts
+const containerLongSleepAfter: Lint;
+```
+
 ### `containerOversizedInstance` (const)
 
 ```ts
@@ -1421,6 +1447,12 @@ const containerRuntimeEgressRelaxation: Lint;
 
 ```ts
 const containerStartEnableInternetOverride: Lint;
+```
+
+### `countWithoutIndex` (const)
+
+```ts
+const countWithoutIndex: Lint;
 ```
 
 ### `crossModuleTableWrite` (const)
@@ -1771,6 +1803,12 @@ const publicMutationWithoutRatelimit: Lint;
 
 ```ts
 const publicTableRlsOptoutConfusion: Lint;
+```
+
+### `queueDispatchCycle` (const)
+
+```ts
+const queueDispatchCycle: Lint;
 ```
 
 ### `queueWithoutDlq` (const)
