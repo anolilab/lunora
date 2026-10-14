@@ -31,6 +31,16 @@ const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_B
  */
 const MAX_QUEUE_DEPTH = 5;
 
+/** Incremental summary updates before the brief is rebuilt from the whole thread. */
+const SUMMARY_REBUILD_EVERY = 10;
+
+/** What `agentHistory` returns: the uncovered messages plus the summary covering the rest. */
+interface AgentHistory {
+    messages: Record<string, unknown>[];
+    runs: number;
+    summary?: string;
+}
+
 /**
  * How long a thread may sit untouched under a live-looking run before a new run
  * may take it.
@@ -172,6 +182,17 @@ const agentExtension: SchemaExtension<
              */
             state: v.optional(v.any()),
             status: v.union(v.literal("idle"), v.literal("running"), v.literal("error"), v.literal("cancelled"), v.literal("awaiting_input")),
+
+            /**
+             * Running compaction brief: a summary of every message with `seq <=
+             * summaryThroughSeq`, so a turn reads (and summarises) only what is newer.
+             * `summaryRuns` counts the incremental updates since the last from-scratch
+             * summary (see `SUMMARY_REBUILD_EVERY`). All three are optional, so
+             * pre-existing threads and agents without `compaction` are unaffected.
+             */
+            summary: v.optional(v.string()),
+            summaryRuns: v.optional(v.number()),
+            summaryThroughSeq: v.optional(v.number()),
             title: v.optional(v.string()),
             updatedAt: v.number(),
 
@@ -407,6 +428,7 @@ export interface AgentComponent {
         agentEpisodeUpsert: AgentRegisteredFunction;
         agentGraphTraverse: AgentRegisteredFunction;
         agentGraphUpsert: AgentRegisteredFunction;
+        agentHistory: AgentRegisteredFunction;
         agentMessages: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
@@ -638,6 +660,9 @@ export const agentComponent = (): AgentComponent => {
             instanceId: v.optional(v.string()),
             key: v.optional(v.string()),
             status: v.optional(v.union(v.literal("idle"), v.literal("running"), v.literal("error"), v.literal("cancelled"), v.literal("awaiting_input"))),
+            summary: v.optional(v.string()),
+            summaryRuns: v.optional(v.number()),
+            summaryThroughSeq: v.optional(v.number()),
             title: v.optional(v.string()),
             usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
         })
@@ -665,12 +690,40 @@ export const agentComponent = (): AgentComponent => {
                 updatedAt: Date.now(),
                 ...(args.error === undefined ? {} : { error: args.error }),
                 ...(args.status === undefined ? {} : { status: args.status }),
+                ...(args.summary === undefined ? {} : { summary: args.summary }),
+                ...(args.summaryRuns === undefined ? {} : { summaryRuns: args.summaryRuns }),
+                ...(args.summaryThroughSeq === undefined ? {} : { summaryThroughSeq: args.summaryThroughSeq }),
                 ...(args.title === undefined ? {} : { title: args.title }),
                 // The loop patches a per-run cumulative total; setting it (rather
                 // than adding) keeps the write idempotent under workflow replay.
                 ...(args.usage === undefined ? {} : { usage: args.usage }),
             });
         });
+
+    /**
+     * The compaction read: the stored running summary plus ONLY the messages it
+     * does not yet cover (`seq > summaryThroughSeq`), so a turn's read and
+     * summarisation input stay bounded by the uncovered tail instead of growing
+     * with the thread. Every `SUMMARY_REBUILD_EVERY`th incremental update the
+     * stored summary is withheld and the whole thread returned, so a summary of
+     * a summary cannot drift unboundedly. Internal: the loop is the only reader.
+     */
+    const agentHistory = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<AgentHistory> => {
+        const thread = await context.db
+            .query(THREADS_TABLE)
+            .withIndex("byKey", (q) => q.eq("key", args.key))
+            .first();
+        const summary = thread?.["summary"] as string | null | undefined;
+        const through = thread?.["summaryThroughSeq"] as number | null | undefined;
+        const runs = (thread?.["summaryRuns"] as number | null | undefined) ?? 0;
+        const incremental = typeof summary === "string" && summary.length > 0 && typeof through === "number" && runs < SUMMARY_REBUILD_EVERY;
+        const messages = await context.db
+            .query(MESSAGES_TABLE)
+            .withIndex("byThread", (q) => (incremental ? q.eq("threadKey", args.key).gt("seq", through) : q.eq("threadKey", args.key)))
+            .collect();
+
+        return incremental ? { messages, runs, summary } : { messages, runs: 0 };
+    });
 
     /**
      * End the owning run and, in the SAME mutation, hand the thread to the next
@@ -1144,6 +1197,7 @@ export const agentComponent = (): AgentComponent => {
             agentEpisodeUpsert: episodic.agentEpisodeUpsert,
             agentGraphTraverse: graph.agentGraphTraverse,
             agentGraphUpsert: graph.agentGraphUpsert,
+            agentHistory: asInternal(agentHistory),
             agentMessages,
             agentDeleteMessage: asInternal(agentDeleteMessage),
             agentPatchThread: asInternal(agentPatchThread),

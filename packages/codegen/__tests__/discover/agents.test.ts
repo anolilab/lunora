@@ -544,6 +544,7 @@ describe("auto-registered agent runtime functions", () => {
             "agentEpisodeUpsert",
             "agentGraphTraverse",
             "agentGraphUpsert",
+            "agentHistory",
             "agentPatchThread",
             "agentSetState",
         ]);
