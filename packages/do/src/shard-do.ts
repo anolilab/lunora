@@ -828,6 +828,8 @@ interface PendingFunctionMetric {
     errors: number;
     /** `JSON.stringify([table, index])` key -> dispatches that used the index. */
     indexHits: Map<string, number>;
+    /** Latest dispatch time for this path; a delta never spans two minute buckets. */
+    lastCalledAt: number;
     lastErrorAt: number | null;
     lastErrorMessage: string | null;
     /** table -> dispatches that full-scanned it. */
@@ -8670,6 +8672,7 @@ abstract class ShardDO {
                 durationTotalMs: 0,
                 errors: 0,
                 indexHits: new Map(),
+                lastCalledAt: now,
                 // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
                 lastErrorAt: null,
                 // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
@@ -8681,6 +8684,7 @@ abstract class ShardDO {
 
         pending.calls += 1;
         pending.durationTotalMs += durationMs;
+        pending.lastCalledAt = now;
         pending.durationMinMs = Math.min(pending.durationMinMs, durationMs);
         pending.durationMaxMs = Math.max(pending.durationMaxMs, durationMs);
         if (errorMessage !== undefined) {
@@ -8767,7 +8771,7 @@ abstract class ShardDO {
                         scanCounts: [...delta.scans].map(([table, count]) => {
                             return { count, table };
                         }),
-                        ts,
+                        ts: delta.lastCalledAt,
                     });
                 } catch {
                     // Best-effort: never let metrics persistence fail the request.

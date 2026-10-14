@@ -591,6 +591,27 @@ describe("shardDO persisted metrics", () => {
             }
         });
 
+        it("stamps each coalesced path with its own last-called time", async () => {
+            expect.assertions(2);
+
+            const { database, shard } = setup("10");
+
+            try {
+                await shard.fetch(userRequest("a:first"));
+                clock.now += 5000;
+                await shard.fetch(userRequest("b:second"));
+                shard.throwNext = true;
+                await shard.fetch(userRequest("b:second"));
+
+                const rows = readFunctionMetrics(database.sql);
+
+                expect(rows.map((row) => row.path)).toEqual(["b:second", "a:first"]);
+                expect(rows.find((row) => row.path === "a:first")?.lastCalledAt).toBe(BASE);
+            } finally {
+                database.close();
+            }
+        });
+
         it.each(["abc", "0", "2.5", "-3", ""])("treats %j as an invalid flush-every value (behaves as 1)", async (value) => {
             expect.assertions(1);
 
