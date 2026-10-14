@@ -24,7 +24,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LUNORA_FUNCTIONS } from "./fixtures/delta-sync/lunora/_generated/functions";
 import { createShardDO } from "./fixtures/delta-sync/lunora/_generated/shard";
@@ -330,5 +330,106 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         harness.makeDue();
 
         await expect(harness.retry()).resolves.toBeUndefined();
+    });
+});
+
+/**
+ * The schedule-rate budget on the same real dispatch. The facade's `admit` is the
+ * generated `buildCtx`'s `this.scheduleOutbox()`, which is `ShardDO`'s own
+ * `admitScheduleRate`, so a loop and a fan-out here exercise the shipped admission
+ * hook and the shipped facade together. The scheduler stub only records the delay it
+ * was handed, which is the one thing the deferral changes.
+ */
+describe("emitted shard — the schedule-rate budget on the real dispatch", () => {
+    /** The default `LUNORA_SCHEDULE_RATE_LIMIT`, per target per shard per window. */
+    const DEFAULT_LIMIT = 600;
+    /** A deferral moves a job one window out (60 000 ms, plus one millisecond). */
+    const DEFERRED_MIN_MS = 60_000;
+    /** More jobs than the default limit, from one invocation: one budget unit, not a deferral. */
+    const FAN_OUT = 1000;
+    const NOW = 1_700_000_000_000;
+
+    /** Each job the scheduler was asked to run, with the delay it was handed. */
+    let dispatched: { delayMs: number; target: unknown }[];
+
+    /** The slice of the generated shard this suite calls. */
+    let shard: { handleRpc: (path: string, args: Record<string, unknown>) => Promise<unknown> };
+
+    beforeAll(() => {
+        // Schedules itself: each invocation is one more iteration of the loop.
+        register("rate:step", "mutation", async (ctx) => {
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "rate:step" }, {});
+
+            return { ok: true };
+        });
+
+        register("rate:fanOut", "mutation", async (ctx) => {
+            for (let job = 0; job < FAN_OUT; job += 1) {
+                // eslint-disable-next-line no-await-in-loop -- one invocation's jobs are scheduled in declaration order
+                await ctx.scheduler.runAfter(0, { __lunoraRef: "rate:job" }, { job });
+            }
+
+            return { ok: true };
+        });
+    });
+
+    beforeEach(() => {
+        // A fixed clock: every invocation lands in one window, so the count is exact.
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+        dispatched = [];
+
+        const ShardClass = createShardDO({
+            scheduler: () => {
+                return {
+                    cancel: () => Promise.resolve({ cancelled: false }),
+                    runAfter: (delayMs: number, target: unknown): Promise<string> => {
+                        dispatched.push({ delayMs, target });
+
+                        return Promise.resolve("job");
+                    },
+                    runAt: (timestampMs: number, target: unknown): Promise<string> => {
+                        dispatched.push({ delayMs: timestampMs - Date.now(), target });
+
+                        return Promise.resolve("job");
+                    },
+                };
+            },
+        });
+
+        const { state } = createState();
+
+        shard = new (ShardClass as unknown as new (state: unknown, env: unknown) => typeof shard)(state, {});
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("defers a self-loop once the target's budget is spent, and runs the rest of it a window later", async () => {
+        expect.assertions(3);
+
+        const invocations = DEFAULT_LIMIT + 50;
+
+        for (let call = 0; call < invocations; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each invocation settles before the next, as the runtime serializes dispatches
+            await shard.handleRpc("rate:step", {});
+        }
+
+        const delays = dispatched.map((job) => job.delayMs);
+
+        expect(delays).toHaveLength(invocations);
+        expect(delays.filter((delayMs) => delayMs === 0)).toHaveLength(DEFAULT_LIMIT);
+        expect(delays.filter((delayMs) => delayMs >= DEFERRED_MIN_MS)).toHaveLength(invocations - DEFAULT_LIMIT);
+    });
+
+    it("never defers a one-invocation fan-out, however many jobs it schedules", async () => {
+        expect.assertions(2);
+
+        await shard.handleRpc("rate:fanOut", {});
+
+        const delays = dispatched.map((job) => job.delayMs);
+
+        expect(delays).toHaveLength(FAN_OUT);
+        expect(delays.every((delayMs) => delayMs === 0)).toBe(true);
     });
 });
