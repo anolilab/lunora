@@ -8486,6 +8486,12 @@ abstract class ShardDO {
      * persist is best-effort: a SQL failure (e.g. a test double without a
      * `sql` handle) must never turn a successful dispatch into a failed one,
      * so it is swallowed and the in-memory counters still advance.
+     *
+     * The durable upsert is skipped when `durable` is false: a successful
+     * dispatch sampled out by `LUNORA_METRICS_SAMPLE` (errors and conflicts
+     * always persist). The in-memory map still counts every call, so at a rate
+     * below 1 the admin readout, which reads the durable table, shows the
+     * sampled subset.
      */
     private recordFunctionCall(
         functionPath: string,
@@ -8594,11 +8600,16 @@ abstract class ShardDO {
      * real execution count through so the durable `exec_count`/`total_duration_ms`
      * still reflect every execution, not just one.
      *
+     * That holds when `durable` is true; a sampled-out success (`durable` false,
+     * see `LUNORA_METRICS_SAMPLE`) writes nothing and the samples are simply
+     * dropped by the dispatch path's `finally`.
+     *
      * Best-effort: a SQL failure (e.g. a test double without a usable `sql`
      * handle) must never fail the response, so every call is swallowed.
      * Clearing `currentStmtSamples` happens in the `finally` block of the
      * dispatch path, not here, so a partial flush (partial error) still
      * drains the correct slice.
+     * @param durable false when this dispatch was sampled out; nothing is written.
      */
     private flushStmtSamples(durable: boolean): void {
         const samples = this.currentStmtSamples;
