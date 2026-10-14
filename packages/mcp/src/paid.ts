@@ -185,7 +185,13 @@ interface RegisteredTool {
  * The SDK's eval-free JSON Schema provider. Its Ajv default compiles schemas
  * with `new Function`, which workerd refuses — this one runs on Workers.
  */
-const schemaValidator = new CfWorkerJsonSchemaValidator();
+let schemaValidator: CfWorkerJsonSchemaValidator | undefined;
+
+const getSchemaValidator = (): CfWorkerJsonSchemaValidator => {
+    schemaValidator ??= new CfWorkerJsonSchemaValidator();
+
+    return schemaValidator;
+};
 
 /**
  * The `isError` result for a call whose arguments fail the tool's
@@ -312,7 +318,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             definition.annotations = options.annotations;
         }
 
-        tools.set(options.name, { definition, handler, validate: schemaValidator.getValidator(definition.inputSchema) });
+        tools.set(options.name, { definition, handler, validate: getSchemaValidator().getValidator(definition.inputSchema) });
 
         if (price !== undefined) {
             prices.set(options.name, price);

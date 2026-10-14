@@ -47,6 +47,14 @@
             "types": "./dist/docs/index.d.ts",
             "import": "./dist/docs/index.mjs"
         },
+        "./node": {
+            "types": "./dist/node/index.d.ts",
+            "import": "./dist/node/index.mjs"
+        },
+        "./worker": {
+            "types": "./dist/worker/index.d.ts",
+            "import": "./dist/worker/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
