@@ -218,6 +218,57 @@ describe("batched .global() provisioning", () => {
         harness.close();
     });
 
+    // SQLite folds identifier case, so a table stored as "Table_0" IS the declared "table_0". Treating it as new left the
+    // `CREATE TABLE IF NOT EXISTS` a no-op and skipped the repair of its missing columns.
+    it("repairs the columns of an existing table whose stored name differs from the declared one only in case", async () => {
+        expect.assertions(2);
+
+        const harness = createSqliteBatchHarness();
+
+        harness.database.exec('CREATE TABLE "Table_0" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL)');
+
+        // No declared indexes: nothing in the new-table plan references a missing column, so a misclassified table
+        // would not even fail its batch and fall back; it would just never be repaired.
+        const bare = { tables: { table_0: { ...tableAt(1), indexes: [] } } } as unknown as SchemaLike;
+
+        await runSqlGlobalTableMigrations(harness.exec, bare, dialect);
+
+        const columns = (harness.database.prepare("SELECT name FROM pragma_table_info('table_0')").all() as { name: string }[]).map((row) => row.name);
+
+        expect(columns).toContain("title");
+        expect(columns).toContain("_version");
+
+        harness.close();
+    });
+
+    it("does not re-create an index whose stored name differs from the declared one only in case", async () => {
+        expect.assertions(1);
+
+        const harness = createSqliteBatchHarness();
+
+        await runSqlGlobalTableMigrations(harness.exec, schemaOf(2), dialect);
+        harness.database.exec('DROP INDEX "table_1_by_creator"; CREATE INDEX "TABLE_1_BY_CREATOR" ON "table_1" ("createdBy", "_creationTime", "id")');
+
+        const writes: string[] = [];
+
+        await runSqlGlobalTableMigrations(
+            {
+                ...harness.exec,
+                batch: (statements) => {
+                    writes.push(...statements.map((statement) => statement.sql));
+
+                    return harness.exec.batch?.(statements) ?? Promise.resolve();
+                },
+            },
+            schemaOf(2),
+            dialect,
+        );
+
+        expect(writes.filter((statement) => /by_creator/iu.test(statement))).toEqual([]);
+
+        harness.close();
+    });
+
     it("re-records a missing rewrite marker on an existing table instead of skipping it", async () => {
         expect.assertions(1);
 

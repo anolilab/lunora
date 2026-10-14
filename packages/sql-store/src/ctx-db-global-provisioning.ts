@@ -50,7 +50,13 @@ import { queryAll, runInOrder } from "./sql-exec";
  */
 const BATCH_STATEMENT_LIMIT = 50;
 
-/** What the database holds right now, as two catalog reads report it. */
+/**
+ * An identifier as SQLite compares it: ASCII letters folded to lower case, everything else untouched. Not `toLowerCase()`,
+ * which also folds non-ASCII letters that SQLite keeps distinct.
+ */
+const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+
+/** What the database holds right now, as two catalog reads report it. All names are {@link foldIdentifier}-folded, because SQLite treats table, column and index names case-insensitively. */
 interface Catalog {
     /** Column names per existing table, read from its stored `CREATE TABLE` text. */
     columns: ReadonlyMap<string, ReadonlySet<string>>;
@@ -176,16 +182,19 @@ const readCatalog = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<Catal
             const statement = typeof row["sql"] === "string" ? row["sql"] : undefined;
 
             if (row["type"] === "table") {
-                tables.add(name);
-                columns.set(name, statement === undefined ? new Set<string>() : columnNamesOfCreateTable(statement));
+                tables.add(foldIdentifier(name));
+                columns.set(
+                    foldIdentifier(name),
+                    new Set([...(statement === undefined ? [] : columnNamesOfCreateTable(statement))].map((column) => foldIdentifier(column))),
+                );
             } else {
-                indexes.set(name, statement);
+                indexes.set(foldIdentifier(name), statement);
             }
         }
 
         const markers = new Set<string>();
 
-        if (tables.has(MIGRATION_STATE_TABLE)) {
+        if (tables.has(foldIdentifier(MIGRATION_STATE_TABLE))) {
             for (const row of await queryAll(exec, dialect, sql`SELECT name FROM ${sql.identifier(MIGRATION_STATE_TABLE)}`)) {
                 markers.add(String(row["name"]));
             }
@@ -232,7 +241,7 @@ const planTable = (tableName: string, definition: SchemaLike["tables"][string], 
     const specs = globalTableIndexSpecs(tableName, definition, dialect);
     const rewrites = legacyRewrites(tableName, definition);
 
-    if (!catalog.tables.has(tableName)) {
+    if (!catalog.tables.has(foldIdentifier(tableName))) {
         return [
             sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columnsDdl})`,
             ...specs.map((spec) => createIndexStatement(spec)),
@@ -240,9 +249,9 @@ const planTable = (tableName: string, definition: SchemaLike["tables"][string], 
         ];
     }
 
-    const present = catalog.columns.get(tableName) ?? new Set<string>();
+    const present = catalog.columns.get(foldIdentifier(tableName)) ?? new Set<string>();
 
-    if (wantedGlobalColumns(definition, dialect).some(([column]) => !present.has(column))) {
+    if (wantedGlobalColumns(definition, dialect).some(([column]) => !present.has(foldIdentifier(column)))) {
         return undefined;
     }
 
@@ -253,12 +262,12 @@ const planTable = (tableName: string, definition: SchemaLike["tables"][string], 
     const statements: SQL[] = [];
 
     for (const spec of specs) {
-        if (!catalog.indexes.has(spec.name)) {
+        if (!catalog.indexes.has(foldIdentifier(spec.name))) {
             statements.push(createIndexStatement(spec));
             continue;
         }
 
-        const held = catalog.indexes.get(spec.name);
+        const held = catalog.indexes.get(foldIdentifier(spec.name));
 
         if (spec.kind === "declared" && typeof held === "string" && indexShapeChanged(dialect, held, spec)) {
             return undefined;
