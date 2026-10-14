@@ -71,7 +71,9 @@
         "test:celld": "pnpm exec vis run build --query \"project=platform-celld\" && LUNORA_CELLD_TESTS=1 pnpm --filter \"@lunora/platform-celld\" run test --project celld",
         "test:workerd": "./scripts/test-workerd.sh",
         "worker-size:check": "node scripts/check-worker-size.js",
-        "worker-size:update": "node scripts/check-worker-size.js --update"
+        "worker-size:update": "node scripts/check-worker-size.js --update",
+        "worker-startup:check": "node scripts/check-worker-startup.js",
+        "worker-startup:update": "node scripts/check-worker-startup.js --update"
     },
     "devDependencies": {
         "@anolilab/commitlint-config": "catalog:prod",
