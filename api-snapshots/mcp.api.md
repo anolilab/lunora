@@ -240,9 +240,7 @@ Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `connectStdio` (const)
 
-```ts
-const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createAuthedMcpFetchHandler` (const)
 
@@ -561,7 +559,9 @@ const connectLocalStdio: (options?: LocalMcpServerOptions) => Promise<Server>;
 
 ### `connectStdio` (const)
 
-Re-exported from `@lunora/mcp` — signature tracked in that section.
+```ts
+const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
+```
 
 ### `createLocalMcpServer` (const)
 
