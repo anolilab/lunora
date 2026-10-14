@@ -15,7 +15,7 @@ import {
     recordFunctionMetric,
 } from "@lunora/observability";
 import type { FunctionCallStat } from "@lunora/shard-engine";
-import { ConflictError, SCAN_DEP } from "@lunora/shard-engine";
+import { ADMIN_FUNCTIONS, ConflictError, SCAN_DEP } from "@lunora/shard-engine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parseSampleRate } from "../src/admin-rpc-args";
@@ -607,6 +607,92 @@ describe("shardDO persisted metrics", () => {
 
                 expect(rows.map((row) => row.path)).toEqual(["b:second", "a:first"]);
                 expect(rows.find((row) => row.path === "a:first")?.lastCalledAt).toBe(BASE);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("records an errored dispatch for a new path once the pending map is full, instead of dropping it", async () => {
+            expect.assertions(3);
+
+            const { database, shard } = setup("100000");
+
+            try {
+                const pending = (shard as unknown as { pendingFunctionMetrics: Map<string, unknown> }).pendingFunctionMetrics;
+
+                for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
+                    pending.set(`fill:${String(index)}`, {
+                        calls: 1,
+                        conflicts: 0,
+                        durationMaxMs: 1,
+                        durationMinMs: 1,
+                        durationTotalMs: 1,
+                        errors: 0,
+                        indexHits: new Map(),
+                        lastCalledAt: BASE,
+                        lastErrorAt: null,
+                        lastErrorMessage: null,
+                        scans: new Map(),
+                    });
+                }
+
+                // The new path arrives with the map at the cap: the full map is flushed first.
+                await shard.fetch(userRequest("late:path"));
+
+                const after = (shard as unknown as { pendingFunctionMetrics: Map<string, { calls: number }> }).pendingFunctionMetrics;
+
+                expect(database.raw(`SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}"`)).toEqual([{ c: FUNCTION_METRICS_MAX_PATHS }]);
+                expect(after.get("late:path")?.calls).toBe(1);
+                expect(after.size).toBe(1);
+            } finally {
+                database.close();
+            }
+        }, 60_000);
+
+        it.each([ADMIN_FUNCTIONS.getFunctionStats, ADMIN_FUNCTIONS.getMetrics, ADMIN_FUNCTIONS.getQueryInsights])(
+            "flushes the pending delta before the admin read %s",
+            async (functionPath) => {
+                expect.assertions(1);
+
+                const { database, shard } = setup("100");
+
+                try {
+                    await shard.fetch(userRequest("messages:list"));
+                    await shard.fetch(adminRequest(functionPath));
+
+                    expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1, path: "messages:list" }]);
+                } finally {
+                    database.close();
+                }
+            },
+        );
+
+        it("keeps a failed write's delta pending and retries it on the next flush", async () => {
+            expect.assertions(3);
+
+            const { database, shard } = setup("1");
+
+            try {
+                const realExec = database.sql.exec.bind(database.sql);
+                let failing = true;
+
+                database.sql.exec = (query: string, ...params: unknown[]) => {
+                    if (failing && query.includes("__lunora_metrics")) {
+                        throw new Error("storage hiccup");
+                    }
+
+                    return realExec(query, ...params);
+                };
+
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${FUNCTION_METRICS_TABLE}'`)).toEqual([]);
+
+                failing = false;
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 2, errors: 0, path: "messages:list" }]);
+                expect(database.raw(`SELECT calls FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"`)).toEqual([{ calls: 2 }]);
             } finally {
                 database.close();
             }

@@ -2624,8 +2624,17 @@ abstract class ShardDO {
      */
     private pendingFunctionMetrics = new Map<string, PendingFunctionMetric>();
 
-    /** Per-statement samples folded from `currentStmtSamples`, written with {@link ShardDO.pendingFunctionMetrics}. */
-    private pendingStmtSamples = new Map<string, StmtSample>();
+    /**
+     * Per-statement samples folded from `currentStmtSamples`, written with
+     * {@link ShardDO.pendingFunctionMetrics}. One entry PER DISPATCH per statement,
+     * never summed across dispatches: `recordQueryMetric` places an entry in the latency
+     * histogram by its average, so summing 19 fast and 1 slow dispatch would read as one
+     * mid-latency batch and flatten the tail percentiles.
+     */
+    private pendingStmtSamples = new Map<string, StmtSample[]>();
+
+    /** Total entries across {@link ShardDO.pendingStmtSamples}; drives the width-based flush. */
+    private pendingStmtCount = 0;
 
     /** Dispatches folded since the last flush. */
     private dispatchesSinceFlush = 0;
@@ -8405,6 +8414,8 @@ abstract class ShardDO {
         subscriptionRefreshErrors: number;
         uptimeMs: number;
     } {
+        this.flushUnwrittenMetrics();
+
         const size = this.shardHost.sql.databaseSize;
 
         // Durable totals are the source of truth; fall back to the in-memory
@@ -8616,16 +8627,15 @@ abstract class ShardDO {
         }
 
         for (const [rawSql, sample] of samples) {
-            const pending = this.pendingStmtSamples.get(rawSql);
+            const entries = this.pendingStmtSamples.get(rawSql);
 
-            if (pending === undefined) {
-                this.pendingStmtSamples.set(rawSql, { ...sample });
+            if (entries === undefined) {
+                this.pendingStmtSamples.set(rawSql, [{ ...sample }]);
             } else {
-                pending.count += sample.count;
-                pending.rowsRead += sample.rowsRead;
-                pending.rowsWritten += sample.rowsWritten;
-                pending.totalDurationMs += sample.totalDurationMs;
+                entries.push({ ...sample });
             }
+
+            this.pendingStmtCount += 1;
         }
     }
 
@@ -8648,6 +8658,19 @@ abstract class ShardDO {
             this.flushPendingMetrics();
         }
 
+        let pending = this.pendingFunctionMetrics.get(functionPath);
+
+        // A new path at the cap flushes first so this dispatch (an error included) is
+        // recorded rather than dropped. If that flush fails the restored deltas keep the
+        // map full: keep the cap and drop this path, as the durable twin would refuse it.
+        if (pending === undefined && this.pendingFunctionMetrics.size >= FUNCTION_METRICS_MAX_PATHS) {
+            this.flushPendingMetrics();
+
+            if (this.pendingFunctionMetrics.size >= FUNCTION_METRICS_MAX_PATHS) {
+                return;
+            }
+        }
+
         this.pendingStartedAt ??= now;
         this.pendingLastAt = now;
         this.dispatchesSinceFlush += 1;
@@ -8656,14 +8679,7 @@ abstract class ShardDO {
             this.pendingForceFlush = true;
         }
 
-        let pending = this.pendingFunctionMetrics.get(functionPath);
-
         if (pending === undefined) {
-            // Same distinct-path cap as the durable twin; a refused path would be refused at flush anyway.
-            if (this.pendingFunctionMetrics.size >= FUNCTION_METRICS_MAX_PATHS) {
-                return;
-            }
-
             pending = {
                 calls: 0,
                 conflicts: 0,
@@ -8717,78 +8733,108 @@ abstract class ShardDO {
      * N-1 dispatches of counters are lost if the DO is evicted before a flush.
      */
     private maybeFlushMetrics(): void {
-        if (this.dispatchesSinceFlush === 0 && this.pendingStmtSamples.size === 0) {
+        if (this.dispatchesSinceFlush === 0 && this.pendingStmtCount === 0) {
             return;
         }
 
-        if (this.pendingForceFlush || this.dispatchesSinceFlush >= this.metricsFlushEvery() || this.pendingStmtSamples.size >= MAX_STMT_SAMPLES_PER_DISPATCH) {
+        if (this.pendingForceFlush || this.dispatchesSinceFlush >= this.metricsFlushEvery() || this.pendingStmtCount >= MAX_STMT_SAMPLES_PER_DISPATCH) {
             this.flushPendingMetrics();
         }
     }
 
     /**
-     * Persist and clear the pending delta: one `recordFunctionMetric` per path
-     * and one `recordQueryMetric` per distinct statement, each carrying its exact
-     * summed counts. Best-effort: the accumulators are cleared first, so a SQL
-     * failure (e.g. a test double without a `sql` handle) drops that delta
-     * rather than retrying it, and never fails the request.
+     * Persist the pending delta: one `recordFunctionMetric` per path and one
+     * `recordQueryMetric` per statement entry (one per dispatch, so the latency
+     * histogram sees each dispatch's own average). The accumulators are swapped out
+     * first and a write that throws puts THAT path's (or entry's) whole delta back
+     * into the fresh accumulators for the next flush, so a transient failure does not
+     * lose the batch. `recordFunctionMetric` runs several statements per path and the
+     * host exposes no synchronous transaction, so a failure after a path's first
+     * upsert can double count that path on retry. Never fails the request.
      */
     private flushPendingMetrics(): void {
         const functions = this.pendingFunctionMetrics;
         const statements = this.pendingStmtSamples;
         const ts = this.pendingLastAt ?? Date.now();
+        const startedAt = this.pendingStartedAt;
 
         this.pendingFunctionMetrics = new Map();
         this.pendingStmtSamples = new Map();
+        this.pendingStmtCount = 0;
         this.pendingStartedAt = undefined;
         this.pendingLastAt = undefined;
         this.pendingForceFlush = false;
         this.dispatchesSinceFlush = 0;
 
-        try {
-            for (const [path, delta] of functions) {
-                try {
-                    recordFunctionMetric(this.shardHost.sql, {
-                        calls: delta.calls,
-                        conflicts: delta.conflicts,
-                        durationMaxMs: delta.durationMaxMs,
-                        durationMinMs: delta.durationMinMs,
-                        durationMs: delta.durationTotalMs,
-                        durationTotalMs: delta.durationTotalMs,
-                        errored: delta.errors > 0,
-                        errorMessage: delta.lastErrorMessage ?? undefined,
-                        errors: delta.errors,
-                        indexHitCounts: [...delta.indexHits]
-                            .map(([key, count]) => {
-                                return { count, hit: decodeIndexHitKey(key) };
-                            })
-                            .filter((entry): entry is { count: number; hit: IndexHit } => entry.hit !== undefined)
-                            .map(({ count, hit }) => {
-                                return { ...hit, count };
-                            }),
-                        lastErrorAt: delta.lastErrorAt,
-                        path,
-                        scanCounts: [...delta.scans].map(([table, count]) => {
-                            return { count, table };
+        let restored = false;
+
+        for (const [path, delta] of functions) {
+            try {
+                recordFunctionMetric(this.shardHost.sql, {
+                    calls: delta.calls,
+                    conflicts: delta.conflicts,
+                    durationMaxMs: delta.durationMaxMs,
+                    durationMinMs: delta.durationMinMs,
+                    durationMs: delta.durationTotalMs,
+                    durationTotalMs: delta.durationTotalMs,
+                    errored: delta.errors > 0,
+                    errorMessage: delta.lastErrorMessage ?? undefined,
+                    errors: delta.errors,
+                    indexHitCounts: [...delta.indexHits]
+                        .map(([key, count]) => {
+                            return { count, hit: decodeIndexHitKey(key) };
+                        })
+                        .filter((entry): entry is { count: number; hit: IndexHit } => entry.hit !== undefined)
+                        .map(({ count, hit }) => {
+                            return { ...hit, count };
                         }),
-                        ts: delta.lastCalledAt,
-                    });
-                } catch {
-                    // Best-effort: never let metrics persistence fail the request.
-                }
+                    lastErrorAt: delta.lastErrorAt,
+                    path,
+                    scanCounts: [...delta.scans].map(([table, count]) => {
+                        return { count, table };
+                    }),
+                    ts: delta.lastCalledAt,
+                });
+            } catch {
+                this.pendingFunctionMetrics.set(path, delta);
+                restored = true;
             }
+        }
 
-            const sqlHandle = this.shardHost.sql as unknown as SqlExec;
+        const sqlHandle = this.shardHost.sql as unknown as SqlExec;
 
-            for (const [rawSql, sample] of statements) {
+        for (const [rawSql, entries] of statements) {
+            for (const sample of entries) {
                 try {
                     recordQueryMetric(sqlHandle, rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, ts, sample.count);
                 } catch {
-                    // Per-statement failures are swallowed so a bad statement never breaks the flush.
+                    const pending = this.pendingStmtSamples.get(rawSql);
+
+                    if (pending === undefined) {
+                        this.pendingStmtSamples.set(rawSql, [sample]);
+                    } else {
+                        pending.push(sample);
+                    }
+
+                    this.pendingStmtCount += 1;
+                    restored = true;
                 }
             }
-        } catch {
-            // Best-effort: never let metrics persistence fail the request.
+        }
+
+        if (restored) {
+            // Keep the restored deltas under their original minute and make the guarded
+            // flush (and the next dispatch) pick them up.
+            this.pendingStartedAt = startedAt;
+            this.pendingLastAt = ts;
+            this.dispatchesSinceFlush = this.pendingFunctionMetrics.size;
+        }
+    }
+
+    /** Write any coalesced delta so an admin read of the durable metric tables is never stale. */
+    private flushUnwrittenMetrics(): void {
+        if (this.dispatchesSinceFlush > 0 || this.pendingStmtCount > 0) {
+            this.flushPendingMetrics();
         }
     }
 
@@ -8819,6 +8865,8 @@ abstract class ShardDO {
      * working; the rows are now backed by persisted data.
      */
     private collectFunctionStats(): FunctionStatsResult {
+        this.flushUnwrittenMetrics();
+
         try {
             const functions = readFunctionMetrics(this.shardHost.sql);
 
@@ -8837,6 +8885,8 @@ abstract class ShardDO {
      * when persistence is unavailable so the response stays well-formed.
      */
     private collectFunctionMetricBuckets(): FunctionMetricBucketsResult {
+        this.flushUnwrittenMetrics();
+
         try {
             return readFunctionMetricBuckets(this.shardHost.sql);
         } catch {
@@ -10686,6 +10736,8 @@ abstract class ShardDO {
         // The SQL linter + schema-version ledger reads live in their own module
         // and register through a lookup, so this chain does not grow an arm per
         // resolver — see `schema-history-reads.ts`.
+        this.flushUnwrittenMetrics();
+
         const schemaHistoryRead = resolveSchemaHistoryRead(functionPath, ADMIN_FUNCTION_PREFIX, sql, args, ADMIN_WILDCARD);
 
         if (schemaHistoryRead !== undefined) {
