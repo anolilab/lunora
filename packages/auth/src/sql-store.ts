@@ -166,6 +166,13 @@ const whereSuffix = (fragment: SqlFragment): string => (fragment.sql ? ` WHERE $
 
 /** A D1 prepared-statement chain — the slice of `D1Database` {@link d1Executor} needs. */
 interface D1Like {
+    /**
+     * D1's ordered, atomic multi-statement call, when the binding has it. Method syntax so the real `D1Database`
+     * (whose `batch` takes `D1PreparedStatement[]`) satisfies it: the statements it receives are the ones `prepare().bind()`
+     * returned, passed through untouched.
+     */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax is load-bearing: a function-typed property is checked contravariantly and the real `D1Database.batch(D1PreparedStatement[])` would stop satisfying this.
+    batch?(statements: unknown[]): Promise<unknown>;
     prepare: (sql: string) => {
         bind: (...values: unknown[]) => {
             all: () => Promise<{ results?: Record<string, unknown>[] }>;
@@ -182,6 +189,13 @@ interface D1Like {
  */
 export interface SqlExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Run several statements in order as one round trip and one transaction (a failure rolls all of them back). Present
+     * only when the database offers it; `@lunora/d1`'s `.global()` provisioning uses it to send its DDL in a few calls
+     * instead of one per statement, and falls back to one statement at a time without it.
+     */
+    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 
@@ -415,6 +429,14 @@ export const d1Executor = (database: D1Like): SqlExecutor => {
 
             return result.results ?? [];
         },
+        // Forwarded only when the binding has it, so a hand-rolled double without `batch` keeps the statement-at-a-time path.
+        ...(typeof database.batch === "function"
+            ? {
+                  batch: async (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>): Promise<void> => {
+                      await database.batch?.(statements.map((statement) => database.prepare(statement.sql).bind(...statement.params)));
+                  },
+              }
+            : {}),
         run: async (sql, parameters) => {
             await database
                 .prepare(sql)

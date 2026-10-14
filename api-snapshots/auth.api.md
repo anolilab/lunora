@@ -840,6 +840,10 @@ interface SignUpInvitation {
 ```ts
 interface SqlExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    batch?: (statements: ReadonlyArray<{
+        params: ReadonlyArray<unknown>;
+        sql: string;
+    }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 ```
@@ -1927,6 +1931,7 @@ interface BaseSSOUserResolutionInput {
 
 ```ts
 interface D1Like {
+    batch?(statements: unknown[]): Promise<unknown>;
     prepare: (sql: string) => {
         bind: (...values: unknown[]) => {
             all: () => Promise<{

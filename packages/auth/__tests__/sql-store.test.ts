@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { lunoraAuthAdapter } from "../src/adapter";
 import { createAuth } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
-import { createSqlAuthStore } from "../src/sql-store";
+import { createSqlAuthStore, d1Executor } from "../src/sql-store";
 import type { AuthRow, AuthStore, AuthWhereClause } from "../src/store";
 import { createMemoryAuthStore } from "../src/store";
 
@@ -572,5 +572,61 @@ describe("createSqlAuthStore — `_creationTime` on `defineTable`-backed tables"
         } finally {
             db.close();
         }
+    });
+});
+
+describe("d1Executor", () => {
+    /** A D1-shaped double that records the prepared statements and what `batch` was handed. */
+    const binding = (withBatch: boolean): { batched: unknown[][]; binding: Parameters<typeof d1Executor>[0] } => {
+        const batched: unknown[][] = [];
+        const prepared = (sql: string) => {
+            return {
+                bind: (...values: unknown[]) => {
+                    return {
+                        all: () => Promise.resolve({ results: [] }),
+                        run: () => Promise.resolve({ sql, values }),
+                        sql,
+                        values,
+                    };
+                },
+            };
+        };
+
+        return {
+            batched,
+            binding: {
+                ...(withBatch
+                    ? {
+                          batch: (statements: unknown[]) => {
+                              batched.push(statements);
+
+                              return Promise.resolve([]);
+                          },
+                      }
+                    : {}),
+                prepare: prepared,
+            },
+        };
+    };
+
+    it("forwards a batch to the binding as the prepared statements, in order", async () => {
+        expect.assertions(3);
+
+        const { batched, binding: d1 } = binding(true);
+
+        await d1Executor(d1).batch?.([
+            { params: [1], sql: "CREATE TABLE a (x)" },
+            { params: ["b"], sql: "INSERT INTO a VALUES (?)" },
+        ]);
+
+        expect(batched).toHaveLength(1);
+        expect((batched[0] as { sql: string }[]).map((statement) => statement.sql)).toEqual(["CREATE TABLE a (x)", "INSERT INTO a VALUES (?)"]);
+        expect((batched[0] as { values: unknown[] }[]).map((statement) => statement.values)).toEqual([[1], ["b"]]);
+    });
+
+    it("offers no batch when the binding has none, so callers keep the statement-at-a-time path", () => {
+        expect.assertions(1);
+
+        expect(d1Executor(binding(false).binding).batch).toBeUndefined();
     });
 });
