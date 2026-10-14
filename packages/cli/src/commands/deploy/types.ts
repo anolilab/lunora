@@ -1,4 +1,6 @@
 /** The options `lunora deploy` takes and the result it reports — shared by `build`, `prepare` and the package API. */
+import type { DiscoveryCache } from "@lunora/config";
+
 import type { ApiSpec } from "../../util/api-spec";
 import type { DockerProbe } from "../../util/docker";
 import type { HealthFetch } from "../../util/health-probe";
@@ -24,6 +26,9 @@ interface DeployCommandOptions {
     commandName?: PreDeployCommand;
     cwd?: string;
     /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
+    /** Memoises project discovery for this invocation; `executeDeploy` creates one, and codegen clears it. */
+    discoveryCache?: DiscoveryCache;
+
     dockerAvailable?: DockerProbe;
 
     /**
